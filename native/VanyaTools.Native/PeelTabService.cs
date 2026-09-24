@@ -26,10 +26,22 @@ namespace VanyaTools.Native
             try
             {
                 foreach (dynamic layer in doc.Layers)
-                    foreach (dynamic s in layer.Shapes)
-                        max = Math.Max(max, ExtractIndexRecursive(s));
+                {
+                    try
+                    {
+                        foreach (dynamic shape in layer.Shapes)
+                            max = Math.Max(max, ExtractIndexRecursive(shape));
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error("Could not scan a document layer for the next pack id.", ex);
+                    }
+                }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Error("Could not enumerate document layers for the next pack id.", ex);
+            }
             return max + 1;
         }
 
@@ -80,8 +92,8 @@ namespace VanyaTools.Native
                 {
                     try
                     {
-                        string n = (string)shape.Name ?? "";
-                        int idx = ParsePackIndex(n);
+                        string name = (string)shape.Name ?? "";
+                        int idx = ParsePackIndex(name);
                         if (idx > 0) return idx;
                     }
                     catch { }
@@ -90,14 +102,37 @@ namespace VanyaTools.Native
 
             if (allowSolePackFallback)
             {
+                // If Corel has lost the custom name, a selected magenta curve is
+                // still identifiable as a generated cut contour. Give it a fresh
+                // pack id so existing packs are never merged accidentally.
+                List<dynamic> selectedContours = CollectSelectedCutContours(app, 0);
+                if (selectedContours.Count > 0)
+                {
+                    int newIndex = NextPackIndex(app.ActiveDocument);
+                    Log.Info("Using selected magenta cut contour(s) as new pack " + newIndex + ".");
+                    return newIndex;
+                }
+
                 var indexes = new HashSet<int>();
                 try
                 {
                     foreach (dynamic layer in app.ActiveDocument.Layers)
-                        foreach (dynamic shape in layer.Shapes)
-                            CollectPackIndexes(shape, indexes);
+                    {
+                        try
+                        {
+                            foreach (dynamic shape in layer.Shapes)
+                                CollectPackIndexes(shape, indexes);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error("Could not scan a document layer while resolving the pack.", ex);
+                        }
+                    }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Log.Error("Could not enumerate document layers while resolving the pack.", ex);
+                }
 
                 if (indexes.Count == 1)
                     foreach (int idx in indexes) return idx;
@@ -111,7 +146,6 @@ namespace VanyaTools.Native
             throw new InvalidOperationException(
                 "Объект пака не найден в выделении. Выделите контур реза или маркер язычка.");
         }
-
         private static void CollectPackIndexes(dynamic shape, HashSet<int> indexes)
         {
             try
@@ -181,6 +215,67 @@ namespace VanyaTools.Native
         {
             return name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
                 && ParsePackIndex(name) == packIdx;
+        }
+        // Corel sometimes omits a selected curve from the layer shape collection.
+        // Recover generated contours from the active selection using their magenta outline.
+        private static List<dynamic> CollectSelectedCutContours(dynamic app, int packIdx)
+        {
+            var contours = new List<dynamic>();
+            try
+            {
+                dynamic range = app.ActiveSelectionRange;
+                if (range != null)
+                    foreach (dynamic shape in range.Shapes)
+                        CollectSelectedCutContoursFromShape(shape, packIdx, contours);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not inspect the current selection for cut contours.", ex);
+            }
+            return contours;
+        }
+
+        private static void CollectSelectedCutContoursFromShape(dynamic shape, int packIdx,
+                                                                 List<dynamic> contours)
+        {
+            int type;
+            try { type = (int)shape.Type; }
+            catch { return; }
+
+            if (type == CorelConstants.CdrCurveShape)
+            {
+                string name = "";
+                try { name = (string)shape.Name ?? ""; } catch { }
+                bool namedForPack = packIdx > 0 && HasPackName(name, ContourPrefix, packIdx);
+                if (namedForPack || IsMagentaCutContour(shape))
+                    contours.Add(shape);
+                return;
+            }
+
+            if (type == CorelConstants.CdrGroupShape)
+            {
+                try
+                {
+                    foreach (dynamic child in shape.Shapes)
+                        CollectSelectedCutContoursFromShape(child, packIdx, contours);
+                }
+                catch { }
+            }
+        }
+
+        private static bool IsMagentaCutContour(dynamic shape)
+        {
+            try
+            {
+                dynamic color = shape.Outline.Color;
+                return Convert.ToInt32(color.RGBRed) == 255
+                    && Convert.ToInt32(color.RGBGreen) == 0
+                    && Convert.ToInt32(color.RGBBlue) == 255;
+            }
+            catch
+            {
+                return false;
+            }
         }
         // ── Public name helpers (used by StickerCutService) ───────────────────
 
@@ -264,7 +359,30 @@ namespace VanyaTools.Native
                 List<dynamic> contours, markers0;
                 CollectPack(app, packIdx, out contours, out markers0);
                 if (contours.Count == 0)
-                    throw new InvalidOperationException($"Контур реза пака {packIdx} не найден.");
+                {
+                    contours = CollectSelectedCutContours(app, packIdx);
+                    if (contours.Count > 0)
+                    {
+                        string contourName = ContourName(packIdx);
+                        foreach (dynamic contour in contours)
+                        {
+                            try
+                            {
+                                string currentName = (string)contour.Name ?? "";
+                                if (!HasPackName(currentName, ContourPrefix, packIdx))
+                                    contour.Name = contourName;
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Error("Could not assign the pack id to a selected cut contour.", ex);
+                            }
+                        }
+                        Log.Info("Recovered " + contours.Count + " selected cut contour(s) for pack " + packIdx + ".");
+                    }
+                }
+                if (contours.Count == 0)
+                    throw new InvalidOperationException(
+                        $"Контур реза пака {packIdx} не найден. Выделите розовый контур реза и повторите.");
 
                 string mName = MarkerName(packIdx);
                 int created = 0;
