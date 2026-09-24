@@ -82,29 +82,32 @@ namespace VanyaTools.Native
 
         // ── Pack resolution ───────────────────────────────────────────────────
 
-        // Finds pack index from the current selection (any VanyaTools_* object).
+        // Finds exactly one pack from the current selection. Multiple selected packs
+        // must be handled separately so contour recovery cannot cross pack boundaries.
         private static int ResolvePackIndex(dynamic app, bool allowSolePackFallback = false)
         {
-            dynamic range = app.ActiveSelectionRange;
-            if (range != null)
+            var selectedIndexes = new HashSet<int>();
+            dynamic range = null;
+            try
             {
-                foreach (dynamic shape in range.Shapes)
-                {
-                    try
-                    {
-                        string name = (string)shape.Name ?? "";
-                        int idx = ParsePackIndex(name);
-                        if (idx > 0) return idx;
-                    }
-                    catch { }
-                }
+                range = app.ActiveSelectionRange;
+                if (range != null)
+                    foreach (dynamic shape in range.Shapes)
+                        CollectPackIndexes(shape, selectedIndexes);
             }
+            catch (Exception ex)
+            {
+                Log.Error("Could not resolve the pack from the active selection.", ex);
+            }
+            if (selectedIndexes.Count == 1)
+                foreach (int idx in selectedIndexes) return idx;
+            if (selectedIndexes.Count > 1)
+                throw new InvalidOperationException(
+                    "Выделены объекты нескольких паков. Выберите маркер или контур только одного пака.");
 
             if (allowSolePackFallback)
             {
-                // If Corel has lost the custom name, a selected magenta curve is
-                // still identifiable as a generated cut contour. Give it a fresh
-                // pack id so existing packs are never merged accidentally.
+                // A selected unnamed magenta curve is treated as a new pack.
                 List<dynamic> selectedContours = CollectSelectedCutContours(app, 0);
                 if (selectedContours.Count > 0)
                 {
@@ -113,7 +116,7 @@ namespace VanyaTools.Native
                     return newIndex;
                 }
 
-                var indexes = new HashSet<int>();
+                var documentIndexes = new HashSet<int>();
                 try
                 {
                     foreach (dynamic layer in app.ActiveDocument.Layers)
@@ -121,7 +124,7 @@ namespace VanyaTools.Native
                         try
                         {
                             foreach (dynamic shape in layer.Shapes)
-                                CollectPackIndexes(shape, indexes);
+                                CollectPackIndexes(shape, documentIndexes);
                         }
                         catch (Exception ex)
                         {
@@ -134,11 +137,11 @@ namespace VanyaTools.Native
                     Log.Error("Could not enumerate document layers while resolving the pack.", ex);
                 }
 
-                if (indexes.Count == 1)
-                    foreach (int idx in indexes) return idx;
-                if (indexes.Count > 1)
+                if (documentIndexes.Count == 1)
+                    foreach (int idx in documentIndexes) return idx;
+                if (documentIndexes.Count > 1)
                     throw new InvalidOperationException(
-                        "Найдено несколько паков. Выделите контур нужного пака и повторите.");
+                        "Найдено несколько паков. Выделите контур или маркер нужного пака.");
             }
 
             if (range == null || (int)range.Count == 0)
@@ -146,6 +149,7 @@ namespace VanyaTools.Native
             throw new InvalidOperationException(
                 "Объект пака не найден в выделении. Выделите контур реза или маркер язычка.");
         }
+
         private static void CollectPackIndexes(dynamic shape, HashSet<int> indexes)
         {
             try
@@ -295,6 +299,40 @@ namespace VanyaTools.Native
                 return false;
             }
         }
+        private static List<dynamic> CollectNearestMagentaContoursForMarkers(
+            dynamic app, int packIdx, List<dynamic> markers)
+        {
+            var candidates = CollectAllMagentaContours(app);
+            var packContours = new List<dynamic>();
+            foreach (dynamic marker in markers)
+            {
+                try
+                {
+                    double x = (double)marker.CenterX;
+                    double y = (double)marker.CenterY;
+                    var eligible = new List<dynamic>();
+                    foreach (dynamic contour in candidates)
+                    {
+                        try
+                        {
+                            string name = (string)contour.Name ?? "";
+                            int namedPack = ParsePackIndex(name);
+                            if (namedPack == 0 || namedPack == packIdx)
+                                AddUniqueShape(eligible, contour);
+                        }
+                        catch { AddUniqueShape(eligible, contour); }
+                    }
+                    dynamic nearest = FindNearestContourByCurve(eligible, x, y);
+                    if (nearest != null) AddUniqueShape(packContours, nearest);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("Could not match a magenta contour to a marker.", ex);
+                }
+            }
+            return packContours;
+        }
+
         private static List<dynamic> CollectAllMagentaContours(dynamic app)
         {
             var contours = new List<dynamic>();
@@ -503,14 +541,14 @@ namespace VanyaTools.Native
                 int packIdx = ResolvePackIndex(app);
                 List<dynamic> contours, markers;
                 CollectPack(app, packIdx, out contours, out markers);
+                if (markers.Count == 0)  throw new InvalidOperationException($"Маркеры пака {packIdx} не найдены.");
                 if (contours.Count == 0)
                 {
-                    contours = CollectAllMagentaContours(app);
+                    contours = CollectNearestMagentaContoursForMarkers(app, packIdx, markers);
                     if (contours.Count > 0)
-                        Log.Info("Recovered " + contours.Count + " magenta cut contour(s) for pack " + packIdx + ".");
+                        Log.Info("Recovered " + contours.Count + " nearby magenta contour(s) for pack " + packIdx + ".");
                 }
-                if (contours.Count == 0) throw new InvalidOperationException($"Контур реза пака {packIdx} не найден.");
-                if (markers.Count == 0)  throw new InvalidOperationException($"Маркеры пака {packIdx} не найдены.");
+                if (contours.Count == 0) throw new InvalidOperationException($"Контур реза пака {packIdx} не найден. Выделите маркер нужного пака.");
 
                 string mName = MarkerName(packIdx);
                 int moved = 0;
@@ -565,14 +603,14 @@ namespace VanyaTools.Native
                 int packIdx = ResolvePackIndex(app);
                 List<dynamic> contours, markers;
                 CollectPack(app, packIdx, out contours, out markers);
+                if (markers.Count == 0)  throw new InvalidOperationException($"Маркеры пака {packIdx} не найдены.");
                 if (contours.Count == 0)
                 {
-                    contours = CollectAllMagentaContours(app);
+                    contours = CollectNearestMagentaContoursForMarkers(app, packIdx, markers);
                     if (contours.Count > 0)
-                        Log.Info("Recovered " + contours.Count + " magenta cut contour(s) for pack " + packIdx + ".");
+                        Log.Info("Recovered " + contours.Count + " nearby magenta contour(s) for pack " + packIdx + ".");
                 }
-                if (contours.Count == 0) throw new InvalidOperationException($"Контур реза пака {packIdx} не найден.");
-                if (markers.Count == 0)  throw new InvalidOperationException($"Маркеры пака {packIdx} не найдены.");
+                if (contours.Count == 0) throw new InvalidOperationException($"Контур реза пака {packIdx} не найден. Выделите маркер нужного пака.");
 
                 string cName = ContourName(packIdx);
                 int applied = 0;
