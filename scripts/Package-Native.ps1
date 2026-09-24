@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$Configuration = "Release"
 )
@@ -59,8 +59,9 @@ Vanya Tools — аддон для CorelDRAW
    Окно > Окна настройки (Dockers) > Vanya Tools Native.
 
 ОБНОВЛЕНИЕ ЧЕРЕЗ GITHUB
-Для обновления закройте CorelDRAW и запустите «Проверить обновления» в меню
-Пуск > Vanya Tools. Updater получает последний публичный релиз
+Для обновления нажмите «Обновить Vanya Tools» в docker, сохраните документы и
+закройте CorelDRAW после загрузки. Установка продолжится автоматически.
+Также можно запустить проверку из меню Пуск > Vanya Tools. Updater получает последний публичный релиз
 zmienkoivan/corelplugin и переустанавливает аддон. Git не требуется.
 
 Не запускайте CorelDRAW во время установки. Для обновления установите пакет

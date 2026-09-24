@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 [CmdletBinding()]
-param()
+param([switch]$WaitForCorelExit)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -10,7 +10,7 @@ $workDir = Join-Path $env:TEMP ("VanyaToolsUpdate-" + [guid]::NewGuid().ToString
 
 try {
     Write-Host "Vanya Tools — проверка обновления" -ForegroundColor Cyan
-    if (Get-Process -Name "CorelDRW" -ErrorAction SilentlyContinue) {
+    if (-not $WaitForCorelExit -and (Get-Process -Name "CorelDRW" -ErrorAction SilentlyContinue)) {
         throw "Сначала закройте CorelDRAW и повторно запустите UPDATE.bat."
     }
 
@@ -43,6 +43,13 @@ try {
         throw "Загруженный архив не похож на пакет Vanya Tools."
     }
 
+    if ($WaitForCorelExit) {
+        Write-Host "Загрузка завершена. Ожидаю закрытия CorelDRAW..."
+        while (Get-Process -Name "CorelDRW" -ErrorAction SilentlyContinue) {
+            Start-Sleep -Seconds 3
+        }
+        Write-Host "CorelDRAW закрыт. Запускаю установщик..."
+    }
     New-Item -ItemType Directory -Path (Split-Path $repoFile -Parent) -Force | Out-Null
     Set-Content -LiteralPath $repoFile -Value $repository -Encoding ASCII
 

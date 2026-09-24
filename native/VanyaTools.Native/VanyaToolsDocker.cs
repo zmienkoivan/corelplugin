@@ -1,5 +1,7 @@
 using System;
 using System.Globalization;
+using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -68,6 +70,7 @@ namespace VanyaTools.Native
                 Background = new SolidColorBrush(Color.FromRgb(223, 229, 232))
             };
             root.Children.Add(_status);
+            root.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
 
             AddSectionTitle(root, "Обрезка растра");
 
@@ -220,6 +223,41 @@ namespace VanyaTools.Native
             });
         }
 
+        private void RunGitHubUpdate()
+        {
+            var answer = MessageBox.Show(
+                "Updater скачает последнюю версию. Сохраните документы. После загрузки закройте CorelDRAW — установка продолжится автоматически.",
+                "Обновление Vanya Tools",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Information);
+            if (answer != MessageBoxResult.Yes) return;
+
+            try
+            {
+                string updaterHome = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "VanyaTools");
+                string updaterPath = Path.Combine(updaterHome, "UPDATE.bat");
+                if (!File.Exists(updaterPath))
+                    throw new InvalidOperationException(
+                        "Updater не найден. Установите Vanya Tools v1.0.2 или новее, затем повторите попытку.");
+
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = updaterPath,
+                    Arguments = "-WaitForCorelExit",
+                    WorkingDirectory = updaterHome,
+                    UseShellExecute = true
+                };
+                Process.Start(startInfo);
+                SetStatus("Updater запущен. Сохраните документы и закройте CorelDRAW после загрузки.", false);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not start GitHub updater.", ex);
+                SetStatus(ex.Message, true);
+            }
+        }
         private void RefreshSelectionStatus()
         {
             RunSafe(() =>
