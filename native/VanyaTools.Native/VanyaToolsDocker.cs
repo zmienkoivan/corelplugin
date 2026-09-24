@@ -248,10 +248,13 @@ namespace VanyaTools.Native
                         resource.CopyTo(output);
                 }
 
+                string launcherPath = Path.Combine(updaterHome, "UPDATE.bat");
+                const string launcher = "@echo off\r\nchcp 65001 >nul\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0Update.ps1\" -WaitForCorelExit\r\necho.\r\npause\r\n";
+                File.WriteAllText(launcherPath, launcher, System.Text.Encoding.ASCII);
+
                 var startInfo = new ProcessStartInfo
                 {
-                    FileName = "powershell.exe",
-                    Arguments = "-NoProfile -ExecutionPolicy Bypass -File \"" + updaterPath + "\" -WaitForCorelExit",
+                    FileName = launcherPath,
                     WorkingDirectory = updaterHome,
                     UseShellExecute = true
                 };

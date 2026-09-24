@@ -81,12 +81,7 @@ finally {
     }
 }
 
-if ($WaitForCorelExit) {
-    if ($updateExitCode -eq 0) {
-        Write-Host "Обновление завершено. Перезапустите CorelDRAW."
-    } else {
-        Write-Host "Журнал диагностики: $logPath" -ForegroundColor Yellow
-    }
-    Read-Host "Нажмите Enter, чтобы закрыть это окно"
+if ($WaitForCorelExit -and $updateExitCode -ne 0) {
+    Write-Host "Журнал диагностики: $logPath" -ForegroundColor Yellow
 }
 if ($updateExitCode -ne 0) { exit $updateExitCode }
