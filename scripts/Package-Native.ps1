@@ -39,8 +39,17 @@ Get-ChildItem -LiteralPath (Join-Path $repoRoot "addon\VanyaToolsNative") -Force
     Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $packageDir $_.Name) -Recurse -Force
 }
 
-Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\Install-Standalone.ps1") -Destination $installScript -Force
-Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\Update-FromGitHub.ps1") -Destination $updaterScript -Force
+$installSource = Join-Path $repoRoot "scripts\Install-Standalone.ps1"
+$updateSource = Join-Path $repoRoot "scripts\Update-FromGitHub.ps1"
+Copy-Item -LiteralPath $installSource -Destination $installScript -Force
+Copy-Item -LiteralPath $updateSource -Destination $updaterScript -Force
+# Windows PowerShell 5.1 treats UTF-8 scripts without a BOM as ANSI. Re-save
+# distributed scripts with a UTF-8 BOM so Cyrillic text cannot break parsing.
+$utf8Bom = New-Object -TypeName System.Text.UTF8Encoding -ArgumentList @($true)
+$installText = [System.IO.File]::ReadAllText($installSource, [System.Text.Encoding]::UTF8)
+$updateText = [System.IO.File]::ReadAllText($updateSource, [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllText($installScript, $installText, $utf8Bom)
+[System.IO.File]::WriteAllText($updaterScript, $updateText, $utf8Bom)
 Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\UPDATE.bat") -Destination $updaterBat -Force
 Copy-Item -LiteralPath $updaterBuild -Destination $updaterExe -Force
 
