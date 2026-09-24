@@ -180,6 +180,7 @@ namespace VanyaTools.Native
             {
                 FormatCutContourPublic(cutShape);
                 cutShape.Name = name;
+                cutShape.CreateSelection();
                 return;
             }
 
@@ -206,6 +207,7 @@ namespace VanyaTools.Native
                 Log.Info("BreakApart returned no curve shapes; retaining original cut shape.");
                 FormatCutContourPublic(cutShape);
                 cutShape.Name = name;
+                cutShape.CreateSelection();
                 return;
             }
 
@@ -245,6 +247,20 @@ namespace VanyaTools.Native
                 {
                     try { FormatCutContourPublic(curve); curve.Name = name; } catch { }
                 }
+            }
+            // Select all retained external paths so peel-tab tools can resolve
+            // this pack immediately after contour creation.
+            bool selected = false;
+            for (int i = 0; i < curves.Count; i++)
+            {
+                if (isInner[i] && outerCount > 0) continue;
+                try
+                {
+                    if (!selected) curves[i].CreateSelection();
+                    else curves[i].AddToSelection();
+                    selected = true;
+                }
+                catch { }
             }
         }
 

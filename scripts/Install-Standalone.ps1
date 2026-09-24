@@ -112,6 +112,31 @@ try {
     $CorelAddonsPath = Resolve-InstallPath $CorelAddonsPath
     $CorelAddonsPath = [IO.Path]::GetFullPath($CorelAddonsPath)
     $installPath = Join-Path $CorelAddonsPath "VanyaToolsNative"
+    try {
+        # Create this in the signed-in user profile before a UAC relaunch.
+        # Otherwise the shortcut may belong only to another administrator account.
+        $updaterSource = Join-Path $PSScriptRoot "Update-FromGitHub.ps1"
+        $updaterBatSource = Join-Path $PSScriptRoot "UPDATE.bat"
+        if ((Test-Path -LiteralPath $updaterSource -PathType Leaf) -and
+            (Test-Path -LiteralPath $updaterBatSource -PathType Leaf)) {
+            $updaterHome = Join-Path $env:LOCALAPPDATA "VanyaTools"
+            New-Item -ItemType Directory -Path $updaterHome -Force | Out-Null
+            Copy-Item -LiteralPath $updaterSource -Destination (Join-Path $updaterHome "Update.ps1") -Force
+            Copy-Item -LiteralPath $updaterBatSource -Destination (Join-Path $updaterHome "UPDATE.bat") -Force
+
+            $startMenu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Vanya Tools"
+            New-Item -ItemType Directory -Path $startMenu -Force | Out-Null
+            $shortcutPath = Join-Path $startMenu "Проверить обновления.lnk"
+            $shell = New-Object -ComObject WScript.Shell
+            $shortcut = $shell.CreateShortcut($shortcutPath)
+            $shortcut.TargetPath = Join-Path $updaterHome "UPDATE.bat"
+            $shortcut.WorkingDirectory = $updaterHome
+            $shortcut.Description = "Проверить обновления Vanya Tools на GitHub"
+            $shortcut.Save()
+        }
+    } catch {
+        Write-Host "Не удалось подготовить пункт обновления: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
 
     # CorelDRAW is normally installed under Program Files. Elevate only when
     # the current user cannot write to the selected Addons directory.
@@ -147,29 +172,12 @@ try {
         Copy-Item -LiteralPath (Join-Path $addonSource $file) -Destination (Join-Path $installPath $file) -Force
     }
 
-    $updaterSource = Join-Path $PSScriptRoot "Update-FromGitHub.ps1"
-    $updaterBatSource = Join-Path $PSScriptRoot "UPDATE.bat"
-    if ((Test-Path -LiteralPath $updaterSource -PathType Leaf) -and
-        (Test-Path -LiteralPath $updaterBatSource -PathType Leaf)) {
-        $updaterHome = Join-Path $env:LOCALAPPDATA "VanyaTools"
-        New-Item -ItemType Directory -Path $updaterHome -Force | Out-Null
-        Copy-Item -LiteralPath $updaterSource -Destination (Join-Path $updaterHome "Update.ps1") -Force
-        Copy-Item -LiteralPath $updaterBatSource -Destination (Join-Path $updaterHome "UPDATE.bat") -Force
-
-        $startMenu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Vanya Tools"
-        New-Item -ItemType Directory -Path $startMenu -Force | Out-Null
-        $shortcutPath = Join-Path $startMenu "Проверить обновления.lnk"
-        $shell = New-Object -ComObject WScript.Shell
-        $shortcut = $shell.CreateShortcut($shortcutPath)
-        $shortcut.TargetPath = Join-Path $updaterHome "UPDATE.bat"
-        $shortcut.WorkingDirectory = $updaterHome
-        $shortcut.Description = "Проверить обновления Vanya Tools на GitHub"
-        $shortcut.Save()
-    }
 
     Write-Host ""
     Write-Host "Установка завершена:" -ForegroundColor Green
     Write-Host "  $installPath"
+    Write-Host "Обновление: Пуск > Vanya Tools > Проверить обновления"
+    Write-Host "Если ярлыка нет: $env:LOCALAPPDATA\VanyaTools\UPDATE.bat"
     Write-Host "Перезапустите CorelDRAW и откройте: Окно > Окна настройки (Dockers) > Vanya Tools Native."
 }
 catch {
