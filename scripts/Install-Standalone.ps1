@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 [CmdletBinding()]
 param(
     [string]$CorelAddonsPath
@@ -113,23 +113,34 @@ try {
     $CorelAddonsPath = [IO.Path]::GetFullPath($CorelAddonsPath)
     $installPath = Join-Path $CorelAddonsPath "VanyaToolsNative"
     try {
-        # Create this in the signed-in user profile before a UAC relaunch.
-        # Otherwise the shortcut may belong only to another administrator account.
+        # Install the update helper in the signed-in user profile before a UAC relaunch.
+        $updaterExeSource = Join-Path $PSScriptRoot "VanyaTools.Updater.exe"
         $updaterSource = Join-Path $PSScriptRoot "Update.ps1"
         $updaterBatSource = Join-Path $PSScriptRoot "UPDATE.bat"
-        if ((Test-Path -LiteralPath $updaterSource -PathType Leaf) -and
-            (Test-Path -LiteralPath $updaterBatSource -PathType Leaf)) {
-            $updaterHome = Join-Path $env:LOCALAPPDATA "VanyaTools"
-            New-Item -ItemType Directory -Path $updaterHome -Force | Out-Null
+        $updaterHome = Join-Path $env:LOCALAPPDATA "VanyaTools"
+        $updaterTarget = $null
+        New-Item -ItemType Directory -Path $updaterHome -Force | Out-Null
+
+        if (Test-Path -LiteralPath $updaterExeSource -PathType Leaf) {
+            $updaterTarget = Join-Path $updaterHome "VanyaTools.Updater.exe"
+            if (@(Get-Process -Name "VanyaTools.Updater" -ErrorAction SilentlyContinue).Count -eq 0) {
+                Copy-Item -LiteralPath $updaterExeSource -Destination $updaterTarget -Force
+            }
+        } elseif ((Test-Path -LiteralPath $updaterSource -PathType Leaf) -and
+                  (Test-Path -LiteralPath $updaterBatSource -PathType Leaf)) {
+            # Legacy package fallback for older releases.
             Copy-Item -LiteralPath $updaterSource -Destination (Join-Path $updaterHome "Update.ps1") -Force
             Copy-Item -LiteralPath $updaterBatSource -Destination (Join-Path $updaterHome "UPDATE.bat") -Force
+            $updaterTarget = Join-Path $updaterHome "UPDATE.bat"
+        }
 
+        if ($updaterTarget) {
             $startMenu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Vanya Tools"
             New-Item -ItemType Directory -Path $startMenu -Force | Out-Null
             $shortcutPath = Join-Path $startMenu "Проверить обновления.lnk"
             $shell = New-Object -ComObject WScript.Shell
             $shortcut = $shell.CreateShortcut($shortcutPath)
-            $shortcut.TargetPath = Join-Path $updaterHome "UPDATE.bat"
+            $shortcut.TargetPath = $updaterTarget
             $shortcut.WorkingDirectory = $updaterHome
             $shortcut.Description = "Проверить обновления Vanya Tools на GitHub"
             $shortcut.Save()
@@ -177,7 +188,7 @@ try {
     Write-Host "Установка завершена:" -ForegroundColor Green
     Write-Host "  $installPath"
     Write-Host "Обновление: Пуск > Vanya Tools > Проверить обновления"
-    Write-Host "Если ярлыка нет: $env:LOCALAPPDATA\VanyaTools\UPDATE.bat"
+    Write-Host "Если ярлыка нет: $env:LOCALAPPDATA\VanyaTools\VanyaTools.Updater.exe"
     Write-Host "Перезапустите CorelDRAW и откройте: Окно > Окна настройки (Dockers) > Vanya Tools Native."
 }
 catch {

@@ -12,11 +12,22 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+$updaterProject = Join-Path $repoRoot "native\VanyaTools.Updater\VanyaTools.Updater.csproj"
+& dotnet build $updaterProject --configuration $Configuration -p:Platform=x64 --no-incremental
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+$updaterBuild = Join-Path $repoRoot "native\VanyaTools.Updater\bin\x64\$Configuration\net48\VanyaTools.Updater.exe"
+if (-not (Test-Path -LiteralPath $updaterBuild -PathType Leaf)) {
+    throw "Updater build finished but executable was not found: $updaterBuild"
+}
+
 $releaseDir = Join-Path $repoRoot "release"
 $packageDir = Join-Path $releaseDir "VanyaToolsNative"
 $installScript = Join-Path $releaseDir "Install.ps1"
 $updaterScript = Join-Path $releaseDir "Update.ps1"
 $updaterBat = Join-Path $releaseDir "UPDATE.bat"
+$updaterExe = Join-Path $releaseDir "VanyaTools.Updater.exe"
 $zipPath = Join-Path $releaseDir "VanyaToolsNative.zip"
 
 if (Test-Path -LiteralPath $packageDir) {
@@ -31,6 +42,7 @@ Get-ChildItem -LiteralPath (Join-Path $repoRoot "addon\VanyaToolsNative") -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\Install-Standalone.ps1") -Destination $installScript -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\Update-FromGitHub.ps1") -Destination $updaterScript -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\UPDATE.bat") -Destination $updaterBat -Force
+Copy-Item -LiteralPath $updaterBuild -Destination $updaterExe -Force
 
 # Удобный батник: даблклик сразу запустит установку с обходом политики.
 # Имена файлов латиницей, чтобы кодировка не искажалась в распаковщике Windows.
@@ -72,7 +84,7 @@ if (Test-Path -LiteralPath $zipPath) {
     Remove-Item -LiteralPath $zipPath -Force
 }
 
-Compress-Archive -Path @($packageDir, $installScript, $batPath, $readmePath, $updaterScript, $updaterBat) -DestinationPath $zipPath
+Compress-Archive -Path @($packageDir, $installScript, $batPath, $readmePath, $updaterScript, $updaterBat, $updaterExe) -DestinationPath $zipPath
 
 Write-Host ""
 Write-Host "Пакет аддона собран:" -ForegroundColor Green

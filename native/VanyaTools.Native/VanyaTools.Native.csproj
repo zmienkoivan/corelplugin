@@ -5,17 +5,12 @@
     <OutputType>Library</OutputType>
     <RootNamespace>VanyaTools.Native</RootNamespace>
     <AssemblyName>VanyaTools.Native</AssemblyName>
-    <Version>1.0.13</Version>
+    <Version>1.0.14</Version>
     <PlatformTarget>x64</PlatformTarget>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="Microsoft.CSharp" />
-  </ItemGroup>
-  <ItemGroup>
-    <EmbeddedResource Include="..\..\scripts\Update-FromGitHub.ps1">
-      <LogicalName>VanyaTools.Native.Update-FromGitHub.ps1</LogicalName>
-    </EmbeddedResource>
   </ItemGroup>
 </Project>

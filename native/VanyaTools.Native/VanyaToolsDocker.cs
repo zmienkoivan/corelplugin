@@ -239,31 +239,18 @@ namespace VanyaTools.Native
                     "VanyaTools");
                 Directory.CreateDirectory(updaterHome);
                 string version = typeof(VanyaToolsDocker).Assembly.GetName().Version.ToString(3);
-                string updaterFileName = "Update-" + version.Replace('.', '-') + ".ps1";
-                string updaterPath = Path.Combine(updaterHome, updaterFileName);
-                const string resourceName = "VanyaTools.Native.Update-FromGitHub.ps1";
-                using (var resource = typeof(VanyaToolsDocker).Assembly.GetManifestResourceStream(resourceName))
-                {
-                    if (resource == null)
-                        throw new InvalidOperationException("В сборке не найден файл GitHub updater.");
-                    using (var output = File.Create(updaterPath))
-                        resource.CopyTo(output);
-                }
-
-                string launcherFileName = "UPDATE-" + version.Replace('.', '-') + ".bat";
-                string launcherPath = Path.Combine(updaterHome, launcherFileName);
-                string launcher = "@echo off\r\nchcp 65001 >nul\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0" +
-                    updaterFileName + "\" -WaitForCorelExit\r\necho.\r\npause\r\n";
-                File.WriteAllText(launcherPath, launcher, System.Text.Encoding.ASCII);
+                string updaterPath = Path.Combine(updaterHome, "VanyaTools.Updater.exe");
+                if (!File.Exists(updaterPath))
+                    throw new InvalidOperationException("Updater не найден. Переустановите пакет Vanya Tools версии 1.0.14 или новее.");
 
                 var startInfo = new ProcessStartInfo
                 {
-                    FileName = launcherPath,
+                    FileName = updaterPath,
                     WorkingDirectory = updaterHome,
                     UseShellExecute = true
                 };
                 Process.Start(startInfo);
-                SetStatus($"Updater {version} запущен. Сохраните документы и закройте CorelDRAW после загрузки.", false);
+                SetStatus($"Updater {version} запущен. Сохраните документы и закройте CorelDRAW.", false);
             }
             catch (Exception ex)
             {
