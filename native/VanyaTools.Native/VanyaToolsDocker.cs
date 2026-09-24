@@ -62,7 +62,7 @@ namespace VanyaTools.Native
 
             _status = new TextBlock
             {
-                Text = "Готово · сборка 2026.09.24.0001",
+                Text = "Готово · сборка " + typeof(VanyaToolsDocker).Assembly.GetName().Version.ToString(3),
                 FontSize = 11,
                 Padding = new Thickness(5, 3, 5, 3),
                 Margin = new Thickness(0, 0, 0, 6),
