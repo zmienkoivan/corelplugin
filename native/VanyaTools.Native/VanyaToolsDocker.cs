@@ -238,7 +238,9 @@ namespace VanyaTools.Native
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "VanyaTools");
                 Directory.CreateDirectory(updaterHome);
-                string updaterPath = Path.Combine(updaterHome, "Update.ps1");
+                string version = typeof(VanyaToolsDocker).Assembly.GetName().Version.ToString(3);
+                string updaterFileName = "Update-" + version.Replace('.', '-') + ".ps1";
+                string updaterPath = Path.Combine(updaterHome, updaterFileName);
                 const string resourceName = "VanyaTools.Native.Update-FromGitHub.ps1";
                 using (var resource = typeof(VanyaToolsDocker).Assembly.GetManifestResourceStream(resourceName))
                 {
@@ -248,8 +250,10 @@ namespace VanyaTools.Native
                         resource.CopyTo(output);
                 }
 
-                string launcherPath = Path.Combine(updaterHome, "UPDATE.bat");
-                const string launcher = "@echo off\r\nchcp 65001 >nul\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0Update.ps1\" -WaitForCorelExit\r\necho.\r\npause\r\n";
+                string launcherFileName = "UPDATE-" + version.Replace('.', '-') + ".bat";
+                string launcherPath = Path.Combine(updaterHome, launcherFileName);
+                string launcher = "@echo off\r\nchcp 65001 >nul\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0" +
+                    updaterFileName + "\" -WaitForCorelExit\r\necho.\r\npause\r\n";
                 File.WriteAllText(launcherPath, launcher, System.Text.Encoding.ASCII);
 
                 var startInfo = new ProcessStartInfo
@@ -259,7 +263,7 @@ namespace VanyaTools.Native
                     UseShellExecute = true
                 };
                 Process.Start(startInfo);
-                SetStatus("Updater запущен. Сохраните документы и закройте CorelDRAW после загрузки.", false);
+                SetStatus($"Updater {version} запущен. Сохраните документы и закройте CorelDRAW после загрузки.", false);
             }
             catch (Exception ex)
             {

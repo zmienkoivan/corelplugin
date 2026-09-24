@@ -128,45 +128,60 @@ namespace VanyaTools.Native
             }
             catch { }
         }
-        // Collects all contours / markers for a given pack index across ALL layers.
+        // Collects all contours / markers for a pack across all document layers.
+        // Corel may append suffixes to duplicate object names, so match the parsed pack id.
         private static void CollectPack(dynamic app, int packIdx,
                                         out List<dynamic> contours, out List<dynamic> markers)
         {
             contours = new List<dynamic>();
             markers  = new List<dynamic>();
-            string cName = ContourPrefix + packIdx;
-            string mName = MarkerPrefix  + packIdx;
             try
             {
                 foreach (dynamic layer in app.ActiveDocument.Layers)
-                    foreach (dynamic shape in layer.Shapes)
-                        CollectPackFromShape(shape, cName, mName, contours, markers);
+                {
+                    try
+                    {
+                        foreach (dynamic shape in layer.Shapes)
+                            CollectPackFromShape(shape, packIdx, contours, markers);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error("Could not scan a document layer for pack shapes.", ex);
+                    }
+                }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Error("Could not enumerate document layers while looking for pack shapes.", ex);
+            }
         }
 
-        private static void CollectPackFromShape(dynamic shape, string cName, string mName,
+        private static void CollectPackFromShape(dynamic shape, int packIdx,
                                                   List<dynamic> contours, List<dynamic> markers)
         {
             try
             {
-                string n = (string)shape.Name ?? "";
-                if (string.Equals(n, cName, StringComparison.OrdinalIgnoreCase))
+                string name = (string)shape.Name ?? "";
+                if (HasPackName(name, ContourPrefix, packIdx))
                     { contours.Add(shape); return; }
-                if (string.Equals(n, mName, StringComparison.OrdinalIgnoreCase))
+                if (HasPackName(name, MarkerPrefix, packIdx))
                     { markers.Add(shape); return; }
             }
             catch { }
-            // recurse into groups
             try
             {
                 if ((int)shape.Type == CorelConstants.CdrGroupShape)
                     foreach (dynamic child in shape.Shapes)
-                        CollectPackFromShape(child, cName, mName, contours, markers);
+                        CollectPackFromShape(child, packIdx, contours, markers);
             }
             catch { }
         }
 
+        private static bool HasPackName(string name, string prefix, int packIdx)
+        {
+            return name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                && ParsePackIndex(name) == packIdx;
+        }
         // ── Public name helpers (used by StickerCutService) ───────────────────
 
         public static string ContourName(int packIdx) => ContourPrefix + packIdx;
