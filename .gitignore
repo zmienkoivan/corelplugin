@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+**/.vs/
+*.user
+*.suo
+addon/VanyaToolsNative/VanyaTools.Native.dll
+addon/VanyaToolsNative/VanyaTools.Native.pdb
+powershell/VanyaToolsNative/VanyaTools.Native.dll
+release/**
