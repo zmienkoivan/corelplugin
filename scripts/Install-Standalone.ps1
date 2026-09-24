@@ -115,7 +115,7 @@ try {
     try {
         # Create this in the signed-in user profile before a UAC relaunch.
         # Otherwise the shortcut may belong only to another administrator account.
-        $updaterSource = Join-Path $PSScriptRoot "Update-FromGitHub.ps1"
+        $updaterSource = Join-Path $PSScriptRoot "Update.ps1"
         $updaterBatSource = Join-Path $PSScriptRoot "UPDATE.bat"
         if ((Test-Path -LiteralPath $updaterSource -PathType Leaf) -and
             (Test-Path -LiteralPath $updaterBatSource -PathType Leaf)) {

@@ -71,26 +71,63 @@ namespace VanyaTools.Native
         // ── Pack resolution ───────────────────────────────────────────────────
 
         // Finds pack index from the current selection (any VanyaTools_* object).
-        private static int ResolvePackIndex(dynamic app)
+        private static int ResolvePackIndex(dynamic app, bool allowSolePackFallback = false)
         {
             dynamic range = app.ActiveSelectionRange;
-            if (range == null || (int)range.Count == 0)
-                throw new InvalidOperationException("Ничего не выделено. Выделите объект пака.");
-
-            foreach (dynamic shape in range.Shapes)
+            if (range != null)
             {
+                foreach (dynamic shape in range.Shapes)
+                {
+                    try
+                    {
+                        string n = (string)shape.Name ?? "";
+                        int idx = ParsePackIndex(n);
+                        if (idx > 0) return idx;
+                    }
+                    catch { }
+                }
+            }
+
+            if (allowSolePackFallback)
+            {
+                var indexes = new HashSet<int>();
                 try
                 {
-                    string n = (string)shape.Name ?? "";
-                    int idx = ParsePackIndex(n);
-                    if (idx > 0) return idx;
+                    foreach (dynamic layer in app.ActiveDocument.Layers)
+                        foreach (dynamic shape in layer.Shapes)
+                            CollectPackIndexes(shape, indexes);
                 }
                 catch { }
+
+                if (indexes.Count == 1)
+                    foreach (int idx in indexes) return idx;
+                if (indexes.Count > 1)
+                    throw new InvalidOperationException(
+                        "Найдено несколько паков. Выделите контур нужного пака и повторите.");
             }
+
+            if (range == null || (int)range.Count == 0)
+                throw new InvalidOperationException("Ничего не выделено. Выделите контур пака.");
             throw new InvalidOperationException(
                 "Объект пака не найден в выделении. Выделите контур реза или маркер язычка.");
         }
 
+        private static void CollectPackIndexes(dynamic shape, HashSet<int> indexes)
+        {
+            try
+            {
+                int idx = ParsePackIndex((string)shape.Name ?? "");
+                if (idx > 0) indexes.Add(idx);
+            }
+            catch { }
+            try
+            {
+                if ((int)shape.Type == CorelConstants.CdrGroupShape)
+                    foreach (dynamic child in shape.Shapes)
+                        CollectPackIndexes(child, indexes);
+            }
+            catch { }
+        }
         // Collects all contours / markers for a given pack index across ALL layers.
         private static void CollectPack(dynamic app, int packIdx,
                                         out List<dynamic> contours, out List<dynamic> markers)
@@ -208,7 +245,7 @@ namespace VanyaTools.Native
                 doc.Unit = CorelConstants.CdrMillimeter;
                 doc.ReferencePoint = CorelConstants.CdrCenter;
 
-                int packIdx = ResolvePackIndex(app);
+                int packIdx = ResolvePackIndex(app, true);
                 List<dynamic> contours, markers0;
                 CollectPack(app, packIdx, out contours, out markers0);
                 if (contours.Count == 0)
@@ -224,6 +261,8 @@ namespace VanyaTools.Native
                     dynamic marker = BuildMarkerShape(doc, snap, tabWidthMm, tabHeightMm, tabRadiusMm);
                     marker.Name = mName;
                     FormatMarker(marker);
+                    if (created == 0) marker.CreateSelection();
+                    else marker.AddToSelection();
                     created++;
                 }
                 return created;

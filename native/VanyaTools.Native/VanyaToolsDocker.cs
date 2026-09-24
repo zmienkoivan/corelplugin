@@ -207,7 +207,7 @@ namespace VanyaTools.Native
                     ParseDouble(_tabWidthMm.Text, 4),
                     ParseDouble(_tabHeightMm.Text, 12),
                     ParseDouble(_tabRadiusMm.Text, 2));
-                SetStatus($"Добавлено маркеров: {count}. Переместите и переприкрепите.", false);
+                SetStatus($"Маркеры добавлены: {count}. Нажмите «Применить язычки».", false);
             });
         }
 
