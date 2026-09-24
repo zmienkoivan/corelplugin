@@ -7,8 +7,17 @@ $ErrorActionPreference = "Stop"
 $repoFile = Join-Path $env:LOCALAPPDATA "VanyaTools\github-repository.txt"
 $defaultRepository = "zmienkoivan/corelplugin"
 $workDir = Join-Path $env:TEMP ("VanyaToolsUpdate-" + [guid]::NewGuid().ToString("N"))
+$logPath = Join-Path $env:LOCALAPPDATA "VanyaTools\Update.log"
+$updateExitCode = 0
+$transcriptStarted = $false
 
 try {
+    try {
+        New-Item -ItemType Directory -Path (Split-Path $logPath -Parent) -Force | Out-Null
+        Start-Transcript -Path $logPath -Append | Out-Null
+        $transcriptStarted = $true
+    } catch { }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Write-Host "Vanya Tools — проверка обновления" -ForegroundColor Cyan
     if (-not $WaitForCorelExit -and (Get-Process -Name "CorelDRW" -ErrorAction SilentlyContinue)) {
         throw "Сначала закройте CorelDRAW и повторно запустите UPDATE.bat."
@@ -34,7 +43,7 @@ try {
     Write-Host "Найден релиз $($release.tag_name). Загружаю пакет..."
     New-Item -ItemType Directory -Path $workDir -Force | Out-Null
     $zipPath = Join-Path $workDir "VanyaToolsNative.zip"
-    Invoke-WebRequest -Uri $asset[0].browser_download_url -Headers $headers -OutFile $zipPath
+    Invoke-WebRequest -Uri $asset[0].browser_download_url -Headers $headers -OutFile $zipPath -UseBasicParsing
     Expand-Archive -LiteralPath $zipPath -DestinationPath $workDir -Force
 
     $installer = Join-Path $workDir "Install.ps1"
@@ -61,10 +70,23 @@ try {
 }
 catch {
     Write-Host "Обновление не выполнено: $($_.Exception.Message)" -ForegroundColor Red
-    exit 1
+    $updateExitCode = 1
 }
 finally {
     if (Test-Path -LiteralPath $workDir) {
         Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
     }
+    if ($transcriptStarted) {
+        try { Stop-Transcript | Out-Null } catch { }
+    }
 }
+
+if ($WaitForCorelExit) {
+    if ($updateExitCode -eq 0) {
+        Write-Host "Обновление завершено. Перезапустите CorelDRAW."
+    } else {
+        Write-Host "Журнал диагностики: $logPath" -ForegroundColor Yellow
+    }
+    Read-Host "Нажмите Enter, чтобы закрыть это окно"
+}
+if ($updateExitCode -ne 0) { exit $updateExitCode }
