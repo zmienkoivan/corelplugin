@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 [CmdletBinding()]
 param(
     [string]$CorelAddonsPath
@@ -61,7 +61,7 @@ function Resolve-InstallPath {
     if ($installations.Count -gt 1) {
         Write-Host "Найдено несколько установок CorelDRAW:`n"
         for ($i = 0; $i -lt $installations.Count; $i++) {
-            Write-Host ("  {0}. {1} — {2}" -f ($i + 1), $installations[$i].Product, $installations[$i].Path)
+            Write-Host "  $($i + 1). $($installations[$i].Product) — $($installations[$i].Path)"
         }
         Write-Host "  0. Указать путь вручную"
         do {
