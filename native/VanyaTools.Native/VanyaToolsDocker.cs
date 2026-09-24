@@ -237,15 +237,21 @@ namespace VanyaTools.Native
                 string updaterHome = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "VanyaTools");
-                string updaterPath = Path.Combine(updaterHome, "UPDATE.bat");
-                if (!File.Exists(updaterPath))
-                    throw new InvalidOperationException(
-                        "Updater не найден. Установите Vanya Tools v1.0.2 или новее, затем повторите попытку.");
+                Directory.CreateDirectory(updaterHome);
+                string updaterPath = Path.Combine(updaterHome, "Update.ps1");
+                const string resourceName = "VanyaTools.Native.Update-FromGitHub.ps1";
+                using (var resource = typeof(VanyaToolsDocker).Assembly.GetManifestResourceStream(resourceName))
+                {
+                    if (resource == null)
+                        throw new InvalidOperationException("В сборке не найден файл GitHub updater.");
+                    using (var output = File.Create(updaterPath))
+                        resource.CopyTo(output);
+                }
 
                 var startInfo = new ProcessStartInfo
                 {
-                    FileName = updaterPath,
-                    Arguments = "-WaitForCorelExit",
+                    FileName = "powershell.exe",
+                    Arguments = "-NoProfile -ExecutionPolicy Bypass -File \"" + updaterPath + "\" -WaitForCorelExit",
                     WorkingDirectory = updaterHome,
                     UseShellExecute = true
                 };

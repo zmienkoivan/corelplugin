@@ -12,4 +12,9 @@
   <ItemGroup>
     <Reference Include="Microsoft.CSharp" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\scripts\Update-FromGitHub.ps1">
+      <LogicalName>VanyaTools.Native.Update-FromGitHub.ps1</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
 </Project>
