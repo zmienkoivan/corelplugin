@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$Configuration = "Release"
 )
@@ -7,7 +7,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path (Split-Path -Parent $PSCommandPath) "..")).Path
-& (Join-Path $repoRoot "build-native.ps1") -Configuration $Configuration
+& (Join-Path $repoRoot "build-native.ps1") -Configuration $Configuration -SkipSign
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

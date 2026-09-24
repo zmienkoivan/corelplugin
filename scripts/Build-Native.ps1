@@ -1,6 +1,7 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
-    [string]$Configuration = "Release"
+    [string]$Configuration = "Release",
+    [switch]$SkipSign
 )
 
 Set-StrictMode -Version Latest
@@ -27,16 +28,19 @@ $addonDir = Join-Path $repoRoot "addon\VanyaToolsNative"
 $addonDll = Join-Path $addonDir "VanyaTools.Native.dll"
 Copy-Item -LiteralPath $dll -Destination $addonDll -Force
 
-# Auto-sign IF a "VanyaTools Dev" cert already exists (created earlier by Sign-Native.ps1).
-# This only reuses a cert you chose to trust; it never creates or installs one.
-$cert = Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue |
-    Where-Object { $_.Subject -eq "CN=VanyaTools Dev" -and $_.NotAfter -gt (Get-Date) } |
-    Sort-Object NotAfter -Descending | Select-Object -First 1
-if ($cert) {
-    $sig = Set-AuthenticodeSignature -FilePath $addonDll -Certificate $cert -HashAlgorithm SHA256
-    Write-Host "Signed with VanyaTools Dev cert: $($sig.Status)" -ForegroundColor Green
+if (-not $SkipSign) {
+    # A local development certificate is only used for local development installs.
+    $cert = Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue |
+        Where-Object { $_.Subject -eq "CN=VanyaTools Dev" -and $_.NotAfter -gt (Get-Date) } |
+        Sort-Object NotAfter -Descending | Select-Object -First 1
+    if ($cert) {
+        $sig = Set-AuthenticodeSignature -FilePath $addonDll -Certificate $cert -HashAlgorithm SHA256
+        Write-Host "Signed with VanyaTools Dev cert: $($sig.Status)" -ForegroundColor Green
+    } else {
+        Write-Host "Not signed (no VanyaTools Dev cert). Run scripts\Sign-Native.ps1 once to enable." -ForegroundColor Yellow
+    }
 } else {
-    Write-Host "Not signed (no VanyaTools Dev cert). Run scripts\Sign-Native.ps1 once to enable." -ForegroundColor Yellow
+    Write-Host "Skipping the local development signature for distribution." -ForegroundColor Yellow
 }
 
 Write-Host "Built native addon:" -ForegroundColor Green
