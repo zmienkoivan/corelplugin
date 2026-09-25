@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 [CmdletBinding()]
 param(
     [string]$CorelAddonsPath
@@ -94,7 +94,7 @@ function Resolve-InstallPath {
 }
 
 $addonSource = Join-Path $PSScriptRoot "VanyaToolsNative"
-$requiredFiles = @("VanyaTools.Native.dll", "AppUI.xslt", "UserUI.xslt", "Coreldrw.addon")
+$requiredFiles = @("VanyaTools.Native.dll", "VanyaTools.CutPalette.xml", "AppUI.xslt", "UserUI.xslt", "Coreldrw.addon")
 if (-not (Test-Path -LiteralPath $addonSource -PathType Container)) {
     Write-Host "Ошибка: рядом с установщиком не найдена папка VanyaToolsNative." -ForegroundColor Red
     exit 1
