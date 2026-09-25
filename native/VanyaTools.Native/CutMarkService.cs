@@ -29,6 +29,13 @@ namespace VanyaTools.Native
             if (selection == null || (int)selection.Count == 0)
                 throw new InvalidOperationException("Выделите весь стикерпак, чтобы разместить метки вокруг него.");
 
+            CutSpotColor.ValidateAvailable(app);
+            var selectedShapes = new List<dynamic>();
+            foreach (dynamic selectedShape in selection.Shapes)
+                selectedShapes.Add(selectedShape);
+            if (selectedShapes.Count == 0)
+                throw new InvalidOperationException("CorelDRAW не вернул выбранные объекты стикерпака.");
+
             int oldUnit = (int)doc.Unit;
             int oldReferencePoint = (int)doc.ReferencePoint;
             var createdMarks = new List<dynamic>();
@@ -129,20 +136,31 @@ namespace VanyaTools.Native
                 createdGuideGroup = app.ActiveSelectionRange.Group();
                 createdGuideGroup.Name = "VanyaTools_" + preset + "_InnerGuide_" + id;
 
-                selection.CreateSelection();
+                if (!TrySelectShapes(selectedShapes))
+                    Log.Info("Could not restore the sticker-pack selection after creating the guide.");
 
                 Log.Info($"Created {createdMarks.Count} inward-facing {preset} cut mark segments for {frameWidthMm:0}×{frameHeightMm:0} mm and a non-printing {innerWidth:0}×{innerHeight:0} mm guide; sticker pack scale factor {scaleFactor:0.####}; rotated to portrait: {rotatedToPortrait}.");
                 return createdMarks.Count;
             }
             catch
             {
-                if (selectionWasRotated)
+                if (selectionWasRotated || selectionWasResized)
                 {
-                    try { selection.RotateEx(rotateClockwise ? 90.0 : -90.0, originalCenterX, originalCenterY); } catch { }
-                }
-                if (selectionWasResized)
-                {
-                    try { selection.SetSize(originalSelectionWidth, originalSelectionHeight); } catch { }
+                    try
+                    {
+                        if (TrySelectShapes(selectedShapes))
+                        {
+                            dynamic rollbackSelection = app.ActiveSelectionRange;
+                            if (selectionWasRotated)
+                                rollbackSelection.RotateEx(rotateClockwise ? 90.0 : -90.0, originalCenterX, originalCenterY);
+                            if (selectionWasResized)
+                                rollbackSelection.SetSize(originalSelectionWidth, originalSelectionHeight);
+                        }
+                    }
+                    catch (Exception restoreError)
+                    {
+                        Log.Error("Could not restore the sticker-pack transform after a failed mark operation.", restoreError);
+                    }
                 }
                 foreach (dynamic shape in createdMarks)
                 {
@@ -169,6 +187,25 @@ namespace VanyaTools.Native
                 try { app.ActiveWindow.Refresh(); } catch { }
                 doc.EndCommandGroup();
             }
+        }
+
+        private static bool TrySelectShapes(List<dynamic> shapes)
+        {
+            bool selected = false;
+            foreach (dynamic shape in shapes)
+            {
+                try
+                {
+                    if (!selected) shape.CreateSelection();
+                    else shape.AddToSelection();
+                    selected = true;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("Could not restore selection of a sticker-pack shape.", ex);
+                }
+            }
+            return selected;
         }
 
         private static void AddDashedEdge(

@@ -9,18 +9,41 @@ namespace VanyaTools.Native
         private const string PaletteGuid = "7c44705b-6fe8-4dd5-9d10-8bc3ae58219f";
         private const string PaletteFileName = "VanyaTools.CutPalette.xml";
 
+        public static void ValidateAvailable(dynamic app)
+        {
+            CreateColor(app);
+        }
+
         public static void AssignToOutline(dynamic outline, dynamic app)
         {
-            string paletteIdentifier = EnsurePaletteIsOpen(app);
-            dynamic color = outline.Color;
-            color.SpotAssignByName(paletteIdentifier, ColorName, 100);
+            dynamic color = CreateColor(app);
             outline.Color = color;
 
-            if (!Convert.ToBoolean(color.IsSpot) ||
-                !string.Equals(Convert.ToString(color.SpotColorName), ColorName,
-                    StringComparison.OrdinalIgnoreCase))
+            dynamic assigned = outline.Color;
+            ValidateColor(assigned);
+            Log.Info("Applied named spot outline color CUT.");
+        }
+
+        private static dynamic CreateColor(dynamic app)
+        {
+            string paletteIdentifier = EnsurePaletteIsOpen(app);
+            dynamic color = app.CreateSpotColorByName(paletteIdentifier, ColorName, 100);
+            ValidateColor(color);
+            return color;
+        }
+
+        private static void ValidateColor(dynamic color)
+        {
+            bool isSpot = Convert.ToBoolean(color.IsSpot);
+            string name = Convert.ToString(color.SpotColorName) ?? "";
+            if (!isSpot || !string.Equals(name, ColorName, StringComparison.OrdinalIgnoreCase))
+            {
+                string type = "";
+                try { type = Convert.ToString(color.Type) ?? ""; } catch { }
                 throw new InvalidOperationException(
-                    "CorelDRAW не назначил плашечный цвет CUT контуру реза.");
+                    "CorelDRAW вернул для линии цвет " + (isSpot ? "«" + name + "»" : "не spot") +
+                    " (тип " + type + ") вместо плашечного цвета CUT.");
+            }
         }
 
         private static string EnsurePaletteIsOpen(dynamic app)
@@ -29,8 +52,13 @@ namespace VanyaTools.Native
                 Path.GetDirectoryName(typeof(CutSpotColor).Assembly.Location) ?? AppDomain.CurrentDomain.BaseDirectory,
                 PaletteFileName);
             if (!File.Exists(palettePath))
+            {
+                Log.Error("CUT palette file is missing: " + palettePath,
+                    new FileNotFoundException("VanyaTools.CutPalette.xml was not installed.", palettePath));
                 throw new InvalidOperationException(
-                    "Не найдена палитра плашечного цвета CUT. Переустановите Vanya Tools.");
+                    "Не найдена палитра плашечного цвета CUT: " + palettePath +
+                    ". Установите обновление Vanya Tools и перезапустите CorelDRAW.");
+            }
 
             dynamic palettes = app.Palettes;
             int count = Convert.ToInt32(palettes.Count);
@@ -50,7 +78,7 @@ namespace VanyaTools.Native
             string identifier = Convert.ToString(opened.Identifier);
             if (!string.Equals(identifier, PaletteGuid, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(
-                    "CorelDRAW загрузил палитру CUT с неожиданным идентификатором.");
+                    "CorelDRAW загрузил палитру CUT с неожиданным идентификатором: " + identifier);
             Log.Info("Loaded custom CUT spot-color palette: " + palettePath);
             return identifier;
         }

@@ -107,41 +107,40 @@ namespace VanyaTools.Native
 
             if (allowSolePackFallback)
             {
-                // A selected unnamed cut contour is treated as a new pack.
                 List<dynamic> selectedContours = CollectSelectedCutContours(app, 0);
                 if (selectedContours.Count > 0)
                 {
-                    int newIndex = NextPackIndex(app.ActiveDocument);
-                    Log.Info("Using selected cut contour(s) as new pack " + newIndex + ".");
-                    return newIndex;
-                }
+                    HashSet<int> documentIndexes = GetDocumentPackIndexes(app);
+                    int packIdx = 0;
+                    if (documentIndexes.Count == 1)
+                    {
+                        foreach (int idx in documentIndexes) { packIdx = idx; break; }
+                    }
+                    else if (documentIndexes.Count > 1)
+                    {
+                        throw new InvalidOperationException(
+                            "В документе несколько паков, а выбранный контур не имеет номера. " +
+                            "Выберите подписанный контур или маркер нужного пака.");
+                    }
+                    if (packIdx == 0)
+                        packIdx = NextPackIndex(app.ActiveDocument);
 
-                var documentIndexes = new HashSet<int>();
-                try
-                {
-                    foreach (dynamic layer in app.ActiveDocument.Layers)
+                    foreach (dynamic contour in selectedContours)
                     {
                         try
                         {
-                            foreach (dynamic shape in layer.Shapes)
-                                CollectPackIndexes(shape, documentIndexes);
+                            string currentName = Convert.ToString(contour.Name) ?? "";
+                            if (ParsePackIndex(currentName) == 0)
+                                contour.Name = ContourName(packIdx);
                         }
                         catch (Exception ex)
                         {
-                            Log.Error("Could not scan a document layer while resolving the pack.", ex);
+                            Log.Error("Could not assign a pack id to the selected contour.", ex);
                         }
                     }
+                    Log.Info("Resolved selected cut contour(s) as pack " + packIdx + ".");
+                    return packIdx;
                 }
-                catch (Exception ex)
-                {
-                    Log.Error("Could not enumerate document layers while resolving the pack.", ex);
-                }
-
-                if (documentIndexes.Count == 1)
-                    foreach (int idx in documentIndexes) return idx;
-                if (documentIndexes.Count > 1)
-                    throw new InvalidOperationException(
-                        "Найдено несколько паков. Выделите контур или маркер нужного пака.");
             }
 
             if (range == null || (int)range.Count == 0)
@@ -150,6 +149,30 @@ namespace VanyaTools.Native
                 "Объект пака не найден в выделении. Выделите контур реза или маркер язычка.");
         }
 
+        private static HashSet<int> GetDocumentPackIndexes(dynamic app)
+        {
+            var indexes = new HashSet<int>();
+            try
+            {
+                foreach (dynamic layer in app.ActiveDocument.Layers)
+                {
+                    try
+                    {
+                        foreach (dynamic shape in layer.Shapes)
+                            CollectPackIndexes(shape, indexes);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error("Could not scan a document layer while resolving the pack.", ex);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not enumerate document layers while resolving the pack.", ex);
+            }
+            return indexes;
+        }
         private static void CollectPackIndexes(dynamic shape, HashSet<int> indexes)
         {
             try
@@ -247,8 +270,20 @@ namespace VanyaTools.Native
             {
                 dynamic range = app.ActiveSelectionRange;
                 if (range != null)
+                {
                     foreach (dynamic shape in range.Shapes)
                         CollectSelectedCutContoursFromShape(shape, packIdx, contours);
+
+                    // Earlier builds could leave one unformatted, unfilled curve
+                    // when spot-color assignment failed. Only treat a single
+                    // explicitly selected curve as that legacy contour.
+                    if (contours.Count == 0 && (int)range.Count == 1)
+                    {
+                        dynamic candidate = range.Shapes[1];
+                        if (IsUnformattedLegacyContour(candidate))
+                            AddUniqueShape(contours, candidate);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -285,6 +320,16 @@ namespace VanyaTools.Native
             }
         }
 
+        private static bool IsUnformattedLegacyContour(dynamic shape)
+        {
+            try
+            {
+                return (int)shape.Type == CorelConstants.CdrCurveShape
+                    && Convert.ToInt32(shape.Fill.Type) == 0
+                    && Convert.ToDouble(shape.Outline.Width) > 0;
+            }
+            catch { return false; }
+        }
         private static bool IsCutContourColor(dynamic shape)
         {
             try
@@ -415,7 +460,7 @@ namespace VanyaTools.Native
             try
             {
                 doc.Unit = CorelConstants.CdrMillimeter;
-                int packIdx = ResolvePackIndex(app);
+                int packIdx = ResolvePackIndex(app, true);
                 List<dynamic> contours, markers;
                 CollectPack(app, packIdx, out contours, out markers);
                 if (contours.Count == 0)
@@ -442,7 +487,7 @@ namespace VanyaTools.Native
             try
             {
                 doc.Unit = CorelConstants.CdrMillimeter;
-                int packIdx = ResolvePackIndex(app);
+                int packIdx = ResolvePackIndex(app, true);
                 List<dynamic> contours, markers;
                 CollectPack(app, packIdx, out contours, out markers);
                 if (markers.Count == 0)
@@ -546,7 +591,7 @@ namespace VanyaTools.Native
                 doc.Unit = CorelConstants.CdrMillimeter;
                 doc.ReferencePoint = CorelConstants.CdrCenter;
 
-                int packIdx = ResolvePackIndex(app);
+                int packIdx = ResolvePackIndex(app, true);
                 List<dynamic> contours, markers;
                 CollectPack(app, packIdx, out contours, out markers);
                 if (markers.Count == 0)  throw new InvalidOperationException($"Маркеры пака {packIdx} не найдены.");
@@ -600,6 +645,11 @@ namespace VanyaTools.Native
             dynamic doc = app.ActiveDocument;
             if (doc == null) throw new InvalidOperationException("No active document.");
 
+            // Applying tabs replaces the existing contour with welded curves. Verify
+            // the CUT spot palette before changing markers or contours so a missing
+            // palette cannot leave the pack partially edited.
+            CutSpotColor.ValidateAvailable(app);
+
             int oldUnit = (int)doc.Unit;
             int oldRef  = (int)doc.ReferencePoint;
             doc.BeginCommandGroup("Vanya Tools - apply peel tabs");
@@ -608,7 +658,7 @@ namespace VanyaTools.Native
                 doc.Unit = CorelConstants.CdrMillimeter;
                 doc.ReferencePoint = CorelConstants.CdrCenter;
 
-                int packIdx = ResolvePackIndex(app);
+                int packIdx = ResolvePackIndex(app, true);
                 List<dynamic> contours, markers;
                 CollectPack(app, packIdx, out contours, out markers);
                 if (markers.Count == 0)  throw new InvalidOperationException($"Маркеры пака {packIdx} не найдены.");

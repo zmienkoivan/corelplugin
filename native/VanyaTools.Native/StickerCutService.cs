@@ -19,6 +19,7 @@ namespace VanyaTools.Native
             if (sourceRange == null || sourceRange.Count == 0)
                 throw new InvalidOperationException("Select one or more cut contour curves.");
 
+            CutSpotColor.ValidateAvailable(app);
             int oldUnit = (int)doc.Unit;
             int processed = 0;
 
@@ -63,6 +64,7 @@ namespace VanyaTools.Native
             if (sourceRange == null || sourceRange.Count == 0)
                 throw new InvalidOperationException("Выделите стикеры для создания контура реза.");
 
+            CutSpotColor.ValidateAvailable(app);
             int oldUnit = (int)doc.Unit;
             int oldRef  = (int)doc.ReferencePoint;
             dynamic workingShape  = null;
@@ -179,8 +181,8 @@ namespace VanyaTools.Native
 
             if (range == null || (int)range.Count == 0)
             {
-                FormatCutContourPublic(cutShape);
                 cutShape.Name = name;
+                FormatCutContourPublic(cutShape);
                 cutShape.CreateSelection();
                 return;
             }
@@ -206,8 +208,8 @@ namespace VanyaTools.Native
             if (curves.Count == 0)
             {
                 Log.Info("BreakApart returned no curve shapes; retaining original cut shape.");
-                FormatCutContourPublic(cutShape);
                 cutShape.Name = name;
+                FormatCutContourPublic(cutShape);
                 cutShape.CreateSelection();
                 return;
             }
@@ -227,6 +229,12 @@ namespace VanyaTools.Native
                 }
             }
 
+            // Assign pack names before formatting: if Corel rejects a color,
+            // the generated curves remain findable and removable by pack tools.
+            for (int i = 0; i < curves.Count; i++)
+                if (!isInner[i])
+                    try { curves[i].Name = name; } catch { }
+
             int outerCount = 0;
             for (int i = 0; i < curves.Count; i++)
             {
@@ -237,7 +245,6 @@ namespace VanyaTools.Native
                 }
 
                 FormatCutContourPublic(curves[i]);
-                curves[i].Name = name;
                 outerCount++;
             }
 
