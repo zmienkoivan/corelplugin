@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<palette name="Vanya Tools Cut Colors" guid="7c44705b-6fe8-4dd5-9d10-8bc3ae58219f" locked="true">
+  <colors>
+    <page width="8">
+      <color cs="CUT" tints="1.0" name="CUT" />
+    </page>
+  </colors>
+  <colorspaces>
+    <cs name="CUT" fixedID="1">
+      <color cs="CMYK" tints="0,1,0,0" />
+      <color cs="RGB" tints="1,0,1" />
+    </cs>
+  </colorspaces>
+</palette>

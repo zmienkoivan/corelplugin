@@ -165,7 +165,7 @@ namespace VanyaTools.Native
         public static void FormatCutContourPublic(dynamic cutShape)
         {
             cutShape.Fill.ApplyNoFill();
-            cutShape.Outline.Color.RGBAssign(255, 0, 255);
+            CutSpotColor.AssignToOutline(cutShape.Outline, CorelApp.Get());
             cutShape.Outline.Width = 0.1;
         }
 

@@ -107,12 +107,12 @@ namespace VanyaTools.Native
 
             if (allowSolePackFallback)
             {
-                // A selected unnamed magenta curve is treated as a new pack.
+                // A selected unnamed cut contour is treated as a new pack.
                 List<dynamic> selectedContours = CollectSelectedCutContours(app, 0);
                 if (selectedContours.Count > 0)
                 {
                     int newIndex = NextPackIndex(app.ActiveDocument);
-                    Log.Info("Using selected magenta cut contour(s) as new pack " + newIndex + ".");
+                    Log.Info("Using selected cut contour(s) as new pack " + newIndex + ".");
                     return newIndex;
                 }
 
@@ -239,7 +239,7 @@ namespace VanyaTools.Native
                 && ParsePackIndex(name) == packIdx;
         }
         // Corel sometimes omits a selected curve from the layer shape collection.
-        // Recover generated contours from the active selection using their magenta outline.
+        // Recover generated contours from the active selection using the CUT spot color or legacy magenta.
         private static List<dynamic> CollectSelectedCutContours(dynamic app, int packIdx)
         {
             var contours = new List<dynamic>();
@@ -269,7 +269,7 @@ namespace VanyaTools.Native
                 string name = "";
                 try { name = (string)shape.Name ?? ""; } catch { }
                 bool namedForPack = packIdx > 0 && HasPackName(name, ContourPrefix, packIdx);
-                if (namedForPack || IsMagentaCutContour(shape))
+                if (namedForPack || IsCutContourColor(shape))
                     contours.Add(shape);
                 return;
             }
@@ -285,8 +285,19 @@ namespace VanyaTools.Native
             }
         }
 
-        private static bool IsMagentaCutContour(dynamic shape)
+        private static bool IsCutContourColor(dynamic shape)
         {
+            try
+            {
+                dynamic color = shape.Outline.Color;
+                if (Convert.ToBoolean(color.IsSpot) &&
+                    string.Equals(Convert.ToString(color.SpotColorName), CutSpotColor.ColorName,
+                        StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            catch { }
+
+            // Keep support for contours created by earlier releases with plain RGB magenta.
             try
             {
                 dynamic color = shape.Outline.Color;
@@ -294,15 +305,12 @@ namespace VanyaTools.Native
                     && Convert.ToInt32(color.RGBGreen) == 0
                     && Convert.ToInt32(color.RGBBlue) == 255;
             }
-            catch
-            {
-                return false;
-            }
+            catch { return false; }
         }
-        private static List<dynamic> CollectNearestMagentaContoursForMarkers(
+        private static List<dynamic> CollectNearestCutContoursForMarkers(
             dynamic app, int packIdx, List<dynamic> markers)
         {
-            var candidates = CollectAllMagentaContours(app);
+            var candidates = CollectAllCutContours(app);
             var packContours = new List<dynamic>();
             foreach (dynamic marker in markers)
             {
@@ -327,13 +335,13 @@ namespace VanyaTools.Native
                 }
                 catch (Exception ex)
                 {
-                    Log.Error("Could not match a magenta contour to a marker.", ex);
+                    Log.Error("Could not match a cut contour to a marker.", ex);
                 }
             }
             return packContours;
         }
 
-        private static List<dynamic> CollectAllMagentaContours(dynamic app)
+        private static List<dynamic> CollectAllCutContours(dynamic app)
         {
             var contours = new List<dynamic>();
             try
@@ -343,39 +351,39 @@ namespace VanyaTools.Native
                     try
                     {
                         foreach (dynamic shape in layer.Shapes)
-                            CollectMagentaContoursFromShape(shape, contours);
+                            CollectCutContoursFromShape(shape, contours);
                     }
                     catch (Exception ex)
                     {
-                        Log.Error("Could not scan a layer for magenta cut contours.", ex);
+                        Log.Error("Could not scan a layer for cut contours.", ex);
                     }
                 }
             }
             catch (Exception ex)
             {
-                Log.Error("Could not enumerate layers for magenta cut contours.", ex);
+                Log.Error("Could not enumerate layers for cut contours.", ex);
             }
             try
             {
                 dynamic range = app.ActiveSelectionRange;
                 if (range != null)
                     foreach (dynamic shape in range.Shapes)
-                        CollectMagentaContoursFromShape(shape, contours);
+                        CollectCutContoursFromShape(shape, contours);
             }
             catch (Exception ex)
             {
-                Log.Error("Could not scan the active selection for magenta cut contours.", ex);
+                Log.Error("Could not scan the active selection for cut contours.", ex);
             }
             return contours;
         }
 
-        private static void CollectMagentaContoursFromShape(dynamic shape, List<dynamic> contours)
+        private static void CollectCutContoursFromShape(dynamic shape, List<dynamic> contours)
         {
             int type;
             try { type = (int)shape.Type; } catch { return; }
             if (type == CorelConstants.CdrCurveShape)
             {
-                if (IsMagentaCutContour(shape)) AddUniqueShape(contours, shape);
+                if (IsCutContourColor(shape)) AddUniqueShape(contours, shape);
                 return;
             }
             if (type == CorelConstants.CdrGroupShape)
@@ -383,7 +391,7 @@ namespace VanyaTools.Native
                 try
                 {
                     foreach (dynamic child in shape.Shapes)
-                        CollectMagentaContoursFromShape(child, contours);
+                        CollectCutContoursFromShape(child, contours);
                 }
                 catch { }
             }
@@ -544,9 +552,9 @@ namespace VanyaTools.Native
                 if (markers.Count == 0)  throw new InvalidOperationException($"Маркеры пака {packIdx} не найдены.");
                 if (contours.Count == 0)
                 {
-                    contours = CollectNearestMagentaContoursForMarkers(app, packIdx, markers);
+                    contours = CollectNearestCutContoursForMarkers(app, packIdx, markers);
                     if (contours.Count > 0)
-                        Log.Info("Recovered " + contours.Count + " nearby magenta contour(s) for pack " + packIdx + ".");
+                        Log.Info("Recovered " + contours.Count + " nearby cut contour(s) for pack " + packIdx + ".");
                 }
                 if (contours.Count == 0) throw new InvalidOperationException($"Контур реза пака {packIdx} не найден. Выделите маркер нужного пака.");
 
@@ -606,9 +614,9 @@ namespace VanyaTools.Native
                 if (markers.Count == 0)  throw new InvalidOperationException($"Маркеры пака {packIdx} не найдены.");
                 if (contours.Count == 0)
                 {
-                    contours = CollectNearestMagentaContoursForMarkers(app, packIdx, markers);
+                    contours = CollectNearestCutContoursForMarkers(app, packIdx, markers);
                     if (contours.Count > 0)
-                        Log.Info("Recovered " + contours.Count + " nearby magenta contour(s) for pack " + packIdx + ".");
+                        Log.Info("Recovered " + contours.Count + " nearby cut contour(s) for pack " + packIdx + ".");
                 }
                 if (contours.Count == 0) throw new InvalidOperationException($"Контур реза пака {packIdx} не найден. Выделите маркер нужного пака.");
 
