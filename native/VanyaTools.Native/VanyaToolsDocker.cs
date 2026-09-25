@@ -130,11 +130,12 @@ namespace VanyaTools.Native
             root.Children.Add(Button("Применить язычки", (_, __) => RunApplyPeelTabs()));
             AddSeparator(root);
             AddSectionTitle(root, "Вспомогательные метки реза");
-            AddSmallLabel(root, "Выделите весь пак. M: 142×105 мм, уголки внутрь 1×1 мм; пунктир внутри — отступ 4 мм.");
+            AddSmallLabel(root, "S 48×60 · M 105×142 · L 142×195 мм, книжная ориентация.");
+            AddSmallLabel(root, "Выделите весь пак. Уголки внутрь 1×1 мм; пунктирная рамка 4 мм не печатается.");
             var markPresetGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 5) };
-            markPresetGrid.Children.Add(Button("S", (_, __) => SetStatus("Размер S добавим позже.", false)));
-            markPresetGrid.Children.Add(Button("M", (_, __) => RunCreateMediumCutMarks()));
-            markPresetGrid.Children.Add(Button("L", (_, __) => SetStatus("Размер L добавим позже.", false)));
+            markPresetGrid.Children.Add(Button("S 48×60", (_, __) => RunCreateCutMarks("S", 48, 60)));
+            markPresetGrid.Children.Add(Button("M 105×142", (_, __) => RunCreateCutMarks("M", 105, 142)));
+            markPresetGrid.Children.Add(Button("L 142×195", (_, __) => RunCreateCutMarks("L", 142, 195)));
             root.Children.Add(markPresetGrid);
             Log.Info("VanyaToolsDocker constructor finished.");
         }
@@ -242,15 +243,14 @@ namespace VanyaTools.Native
             });
         }
 
-        private void RunCreateMediumCutMarks()
+        private void RunCreateCutMarks(string preset, double widthMm, double heightMm)
         {
             RunSafe(() =>
             {
-                int count = new CutMarkService().CreateMediumMarks();
-                SetStatus($"Метки M созданы: {count} уголков внутрь; пунктирная рамка 4 мм добавлена на непечатаемый слой.", false);
+                int count = new CutMarkService().CreateMarks(preset, widthMm, heightMm);
+                SetStatus($"Метки {preset} {widthMm:0}×{heightMm:0} мм созданы: {count} отрезков; внутренняя рамка 4 мм не печатается.", false);
             });
         }
-
         private void RunGitHubUpdate()
         {
             var answer = MessageBox.Show(
