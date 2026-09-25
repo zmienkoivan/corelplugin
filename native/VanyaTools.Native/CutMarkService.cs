@@ -33,6 +33,7 @@ namespace VanyaTools.Native
             int oldReferencePoint = (int)doc.ReferencePoint;
             var createdMarks = new List<dynamic>();
             var createdGuideDashes = new List<dynamic>();
+            dynamic createdGuideGroup = null;
             double originalSelectionWidth = 0.0;
             double originalSelectionHeight = 0.0;
             double originalCenterX = 0.0;
@@ -121,6 +122,12 @@ namespace VanyaTools.Native
                 AddDashedEdge(guideLayer, createdGuideDashes, preset, id, "Left",
                     guideLeft, guideBottom, guideLeft, guideTop);
 
+                createdGuideDashes[0].CreateSelection();
+                for (int i = 1; i < createdGuideDashes.Count; i++)
+                    createdGuideDashes[i].AddToSelection();
+                createdGuideGroup = app.ActiveSelectionRange.Group();
+                createdGuideGroup.Name = "VanyaTools_" + preset + "_InnerGuide_" + id;
+
                 selection.CreateSelection();
 
                 Log.Info($"Created {createdMarks.Count} inward-facing {preset} cut mark segments for {frameWidthMm:0}×{frameHeightMm:0} mm and a non-printing {innerWidth:0}×{innerHeight:0} mm guide; sticker pack scale factor {scaleFactor:0.####}; rotated to portrait: {rotatedToPortrait}.");
@@ -140,9 +147,16 @@ namespace VanyaTools.Native
                 {
                     try { shape.Delete(); } catch { }
                 }
-                foreach (dynamic shape in createdGuideDashes)
+                if (createdGuideGroup != null)
                 {
-                    try { shape.Delete(); } catch { }
+                    try { createdGuideGroup.Delete(); } catch { }
+                }
+                else
+                {
+                    foreach (dynamic shape in createdGuideDashes)
+                    {
+                        try { shape.Delete(); } catch { }
+                    }
                 }
                 throw;
             }
