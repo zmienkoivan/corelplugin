@@ -247,8 +247,12 @@ namespace VanyaTools.Native
         {
             RunSafe(() =>
             {
-                int count = new CutMarkService().CreateMarks(preset, widthMm, heightMm);
-                SetStatus($"Метки {preset} {widthMm:0}×{heightMm:0} мм созданы: {count} отрезков; внутренняя рамка 4 мм не печатается.", false);
+                double scaleFactor;
+                int count = new CutMarkService().CreateMarks(preset, widthMm, heightMm, out scaleFactor);
+                string resizeMessage = scaleFactor < 0.999999
+                    ? $" Пак уменьшен пропорционально до {scaleFactor * 100:0.#}%."
+                    : " Размер пака уже помещается во внутреннюю рамку.";
+                SetStatus($"Метки {preset} {widthMm:0}×{heightMm:0} мм созданы: {count} отрезков; внутренняя рамка 4 мм не печатается.{resizeMessage}", false);
             });
         }
         private void RunGitHubUpdate()

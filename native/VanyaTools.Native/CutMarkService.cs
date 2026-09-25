@@ -10,23 +10,9 @@ namespace VanyaTools.Native
         private const string CutMarkLayerName = "Vanya Tools — Метки реза";
         private const string GuideLayerName = "Vanya Tools — Внутренняя рамка (не печатать)";
 
-        public int CreateSmallMarks()
+        public int CreateMarks(string preset, double frameWidthMm, double frameHeightMm, out double scaleFactor)
         {
-            return CreateMarks("S", 48.0, 60.0);
-        }
-
-        public int CreateMediumMarks()
-        {
-            return CreateMarks("M", 105.0, 142.0);
-        }
-
-        public int CreateLargeMarks()
-        {
-            return CreateMarks("L", 142.0, 195.0);
-        }
-
-        public int CreateMarks(string preset, double frameWidthMm, double frameHeightMm)
-        {
+            scaleFactor = 1.0;
             if (frameWidthMm <= 0 || frameHeightMm <= frameWidthMm)
                 throw new InvalidOperationException("Размер рамки должен быть задан в книжной ориентации.");
 
@@ -44,6 +30,9 @@ namespace VanyaTools.Native
             int oldReferencePoint = (int)doc.ReferencePoint;
             var createdMarks = new List<dynamic>();
             dynamic guideShape = null;
+            double originalSelectionWidth = 0.0;
+            double originalSelectionHeight = 0.0;
+            bool selectionWasResized = false;
             string id = Guid.NewGuid().ToString("N").Substring(0, 8);
 
             doc.BeginCommandGroup("Vanya Tools - create " + preset + " cut marks and guide");
@@ -54,9 +43,21 @@ namespace VanyaTools.Native
 
                 double selectedWidth = (double)selection.SizeWidth;
                 double selectedHeight = (double)selection.SizeHeight;
-                if (selectedWidth > frameWidthMm || selectedHeight > frameHeightMm)
-                    throw new InvalidOperationException(
-                        $"Выделение больше рамки {preset} ({frameWidthMm:0}×{frameHeightMm:0} мм). Уменьшите выделение или выберите другой размер.");
+                if (selectedWidth <= 0 || selectedHeight <= 0)
+                    throw new InvalidOperationException("Не удалось определить размер выбранного стикерпака.");
+
+                originalSelectionWidth = selectedWidth;
+                originalSelectionHeight = selectedHeight;
+                double innerWidth = frameWidthMm - 2.0 * GuideInsetMm;
+                double innerHeight = frameHeightMm - 2.0 * GuideInsetMm;
+                scaleFactor = Math.Min(1.0, Math.Min(innerWidth / selectedWidth, innerHeight / selectedHeight));
+                if (scaleFactor < 1.0)
+                {
+                    selectionWasResized = true;
+                    selection.SetSize(selectedWidth * scaleFactor, selectedHeight * scaleFactor);
+                    selectedWidth = (double)selection.SizeWidth;
+                    selectedHeight = (double)selection.SizeHeight;
+                }
 
                 double centerX = ((double)selection.LeftX + (double)selection.RightX) / 2.0;
                 double centerY = ((double)selection.TopY + (double)selection.BottomY) / 2.0;
@@ -100,17 +101,17 @@ namespace VanyaTools.Native
                 dashStyle.set_GapLength(1, 8.0);
                 guideShape.Outline.Style = dashStyle;
 
-                for (int i = 0; i < createdMarks.Count; i++)
-                {
-                    if (i == 0) createdMarks[i].CreateSelection();
-                    else createdMarks[i].AddToSelection();
-                }
+                selection.CreateSelection();
 
-                Log.Info($"Created {createdMarks.Count} inward-facing {preset} cut mark segments for {frameWidthMm:0}×{frameHeightMm:0} mm and a non-printing {frameWidthMm - 2 * GuideInsetMm:0}×{frameHeightMm - 2 * GuideInsetMm:0} mm guide.");
+                Log.Info($"Created {createdMarks.Count} inward-facing {preset} cut mark segments for {frameWidthMm:0}×{frameHeightMm:0} mm and a non-printing {innerWidth:0}×{innerHeight:0} mm guide; sticker pack scale factor {scaleFactor:0.####}.");
                 return createdMarks.Count;
             }
             catch
             {
+                if (selectionWasResized)
+                {
+                    try { selection.SetSize(originalSelectionWidth, originalSelectionHeight); } catch { }
+                }
                 foreach (dynamic shape in createdMarks)
                 {
                     try { shape.Delete(); } catch { }
