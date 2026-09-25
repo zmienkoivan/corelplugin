@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace VanyaTools.Native
 {
@@ -73,7 +74,6 @@ namespace VanyaTools.Native
             int oldRef  = (int)doc.ReferencePoint;
             dynamic workingShape  = null;
             dynamic rasterShape   = null;
-            dynamic maskShape     = null;
             dynamic tracedRange   = null;
             dynamic boundaryShape = null;
 
@@ -96,25 +96,15 @@ namespace VanyaTools.Native
                     CorelConstants.CdrNormalAntiAliasing,
                     true);
 
-                dynamic traceShape = rasterShape;
                 if (useAlphaMask)
                 {
-                    maskShape = CreateAlphaTraceMask(doc, rasterShape, alphaThreshold);
-                    if (maskShape != null)
-                    {
-                        traceShape = maskShape;
-                        LastUsedAlphaMask = true;
-                        Log.Info($"Tracing binary alpha mask with threshold {alphaThreshold}.");
-                    }
-                    else
-                        Log.Info("Alpha mask has no transparent background; using regular color trace.");
+                    LastUsedAlphaMask = ApplyAlphaTraceMask(rasterShape, alphaThreshold);
+                    Log.Info(LastUsedAlphaMask
+                        ? $"Tracing binary alpha mask with threshold {alphaThreshold}."
+                        : "Alpha mask has no transparent background; using regular color trace.");
                 }
-                tracedRange = TraceStickerSilhouette(traceShape, smoothing, detail, mergeAdjacentObjects, maskShape != null);
-                if (!ReferenceEquals(traceShape, rasterShape))
-                {
-                    TryDelete(rasterShape);
-                    rasterShape = null;
-                }
+                tracedRange = TraceStickerSilhouette(rasterShape, smoothing, detail,
+                                                    mergeAdjacentObjects, LastUsedAlphaMask);
                 if (tracedRange == null || tracedRange.Count == 0)
                     throw new InvalidOperationException("Trace produced no curves.");
 
@@ -146,7 +136,6 @@ namespace VanyaTools.Native
                 TryDelete(boundaryShape);
                 TryDeleteRange(tracedRange);
                 TryDelete(rasterShape);
-                TryDelete(maskShape);
                 TryDelete(workingShape);
                 throw;
             }
@@ -160,41 +149,57 @@ namespace VanyaTools.Native
             }
         }
 
-        // Create a disposable black-on-white bitmap from opacity alone. PowerTRACE
-        // then sees pale and dark artwork equally; only alpha determines the silhouette.
-        private static dynamic CreateAlphaTraceMask(dynamic doc, dynamic rasterShape, int threshold)
+        // Work on the temporary raster only. Keep its RGB image type and geometry;
+        // replace RGB pixels by a binary opacity mask, then remove the softmask.
+        private static bool ApplyAlphaTraceMask(dynamic rasterShape, int threshold)
         {
             dynamic bitmap = rasterShape.Bitmap;
-            if (!Convert.ToBoolean(bitmap.Transparent)) return null;
+            if (!Convert.ToBoolean(bitmap.Transparent)) return false;
             dynamic alpha = bitmap.ImageAlpha;
-            if (alpha == null) return null;
-            dynamic mask = alpha.GetCopy();
-            if (mask == null) throw new InvalidOperationException("Не удалось скопировать альфа-канал изображения.");
+            if (alpha == null) return false;
+            dynamic mask = bitmap.Image.GetCopy();
+            if (mask == null) throw new InvalidOperationException("Не удалось скопировать временный растр.");
             try { mask.ReadOnly = false; } catch { }
 
-            bool hasVisible = false, hasBackground = false;
-            dynamic tiles = mask.Tiles;
-            int tileCount = Convert.ToInt32(tiles.Count);
-            if (tileCount == 0) throw new InvalidOperationException("Альфа-канал не содержит пикселей.");
-            for (int i = 1; i <= tileCount; i++)
+            var alphaTiles = new Dictionary<long, (int Stride, int Bpp, byte[] Data)>();
+            dynamic sourceTiles = alpha.Tiles;
+            for (int i = 1; i <= Convert.ToInt32(sourceTiles.Count); i++)
             {
-                dynamic tile = tiles.Item[i];
-                int width = Convert.ToInt32(tile.Width);
-                int height = Convert.ToInt32(tile.Height);
+                dynamic tile = sourceTiles.Item[i];
+                int left = Convert.ToInt32(tile.Left), top = Convert.ToInt32(tile.Top);
+                long key = ((long)left << 32) ^ (uint)top;
+                alphaTiles[key] = (Math.Abs(Convert.ToInt32(tile.BytesPerLine)),
+                                   Convert.ToInt32(tile.BytesPerPixel), (byte[])tile.PixelData);
+            }
+            if (alphaTiles.Count == 0) throw new InvalidOperationException("Альфа-канал не содержит пикселей.");
+
+            bool hasVisible = false, hasBackground = false;
+            dynamic colorTiles = mask.Tiles;
+            for (int i = 1; i <= Convert.ToInt32(colorTiles.Count); i++)
+            {
+                dynamic tile = colorTiles.Item[i];
+                int left = Convert.ToInt32(tile.Left), top = Convert.ToInt32(tile.Top);
+                long key = ((long)left << 32) ^ (uint)top;
+                if (!alphaTiles.TryGetValue(key, out var source))
+                    throw new InvalidOperationException("Не совпадает разбиение цветного растра и альфа-канала.");
+                int width = Convert.ToInt32(tile.Width), height = Convert.ToInt32(tile.Height);
                 int stride = Math.Abs(Convert.ToInt32(tile.BytesPerLine));
-                int bytesPerPixel = Convert.ToInt32(tile.BytesPerPixel);
+                int bpp = Convert.ToInt32(tile.BytesPerPixel);
                 byte[] pixels = (byte[])tile.PixelData;
-                if (bytesPerPixel != 1 || pixels == null || stride < width ||
-                    pixels.Length < stride * height)
-                    throw new InvalidOperationException("Неподдерживаемый формат альфа-канала.");
+                if (bpp < 3 || source.Bpp != 1 || pixels == null || source.Data == null ||
+                    stride < width * bpp || source.Stride < width ||
+                    pixels.Length < stride * height || source.Data.Length < source.Stride * height)
+                    throw new InvalidOperationException("Неподдерживаемый формат пикселей для альфа-маски.");
                 for (int y = 0; y < height; y++)
                 {
-                    int row = y * stride;
+                    int colorRow = y * stride, alphaRow = y * source.Stride;
                     for (int x = 0; x < width; x++)
                     {
-                        int index = row + x;
-                        bool visible = pixels[index] > threshold;
-                        pixels[index] = visible ? (byte)0 : (byte)255;
+                        bool visible = source.Data[alphaRow + x] > threshold;
+                        byte value = visible ? (byte)0 : (byte)255;
+                        int index = colorRow + x * bpp;
+                        pixels[index] = pixels[index + 1] = pixels[index + 2] = value;
+                        if (bpp > 3) pixels[index + 3] = 255;
                         if (visible) hasVisible = true; else hasBackground = true;
                     }
                 }
@@ -202,10 +207,9 @@ namespace VanyaTools.Native
             }
             if (!hasVisible) throw new InvalidOperationException(
                 "При выбранном пороге альфа-канал полностью прозрачный. Уменьшите порог.");
-            if (!hasBackground) return null;
-            return doc.ActiveLayer.CreateBitmap(
-                (double)rasterShape.LeftX, (double)rasterShape.TopY,
-                (double)rasterShape.RightX, (double)rasterShape.BottomY, mask);
+            if (!hasBackground) return false;
+            bitmap.SetImageData(mask, null);
+            return true;
         }
 
         private static dynamic TraceStickerSilhouette(dynamic rasterShape, int smoothing, int detail, bool mergeAdjacentObjects, bool binaryMask)
