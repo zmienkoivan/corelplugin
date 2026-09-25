@@ -10,9 +10,10 @@ namespace VanyaTools.Native
         private const string CutMarkLayerName = "Vanya Tools — Метки реза";
         private const string GuideLayerName = "Vanya Tools — Внутренняя рамка (не печатать)";
 
-        public int CreateMarks(string preset, double frameWidthMm, double frameHeightMm, out double scaleFactor)
+        public int CreateMarks(string preset, double frameWidthMm, double frameHeightMm, out double scaleFactor, out bool rotatedToPortrait)
         {
             scaleFactor = 1.0;
+            rotatedToPortrait = false;
             if (frameWidthMm <= 0 || frameHeightMm <= frameWidthMm)
                 throw new InvalidOperationException("Размер рамки должен быть задан в книжной ориентации.");
 
@@ -32,7 +33,10 @@ namespace VanyaTools.Native
             dynamic guideShape = null;
             double originalSelectionWidth = 0.0;
             double originalSelectionHeight = 0.0;
+            double originalCenterX = 0.0;
+            double originalCenterY = 0.0;
             bool selectionWasResized = false;
+            bool selectionWasRotated = false;
             string id = Guid.NewGuid().ToString("N").Substring(0, 8);
 
             doc.BeginCommandGroup("Vanya Tools - create " + preset + " cut marks and guide");
@@ -48,6 +52,21 @@ namespace VanyaTools.Native
 
                 originalSelectionWidth = selectedWidth;
                 originalSelectionHeight = selectedHeight;
+                originalCenterX = ((double)selection.LeftX + (double)selection.RightX) / 2.0;
+                originalCenterY = ((double)selection.TopY + (double)selection.BottomY) / 2.0;
+
+                // Presets are portrait. Rotate a landscape pack as one range around its own center.
+                if (selectedWidth > selectedHeight)
+                {
+                    selection.RotateEx(90.0, originalCenterX, originalCenterY);
+                    selectionWasRotated = true;
+                    rotatedToPortrait = true;
+                    selectedWidth = (double)selection.SizeWidth;
+                    selectedHeight = (double)selection.SizeHeight;
+                    if (selectedWidth > selectedHeight)
+                        throw new InvalidOperationException("Не удалось развернуть выделенный стикерпак в книжную ориентацию.");
+                }
+
                 double innerWidth = frameWidthMm - 2.0 * GuideInsetMm;
                 double innerHeight = frameHeightMm - 2.0 * GuideInsetMm;
                 scaleFactor = Math.Min(1.0, Math.Min(innerWidth / selectedWidth, innerHeight / selectedHeight));
@@ -57,6 +76,9 @@ namespace VanyaTools.Native
                     selection.SetSize(selectedWidth * scaleFactor, selectedHeight * scaleFactor);
                     selectedWidth = (double)selection.SizeWidth;
                     selectedHeight = (double)selection.SizeHeight;
+                    if (selectedWidth > innerWidth + 0.02 || selectedHeight > innerHeight + 0.02)
+                        throw new InvalidOperationException(
+                            $"CorelDRAW не уменьшил пак до внутренней рамки {innerWidth:0}×{innerHeight:0} мм. Пак остался {selectedWidth:0.##}×{selectedHeight:0.##} мм.");
                 }
 
                 double centerX = ((double)selection.LeftX + (double)selection.RightX) / 2.0;
@@ -70,7 +92,7 @@ namespace VanyaTools.Native
                 dynamic cutMarkLayer = GetOrCreateLayer(page, CutMarkLayerName, true);
                 dynamic guideLayer = GetOrCreateLayer(page, GuideLayerName, false);
 
-                // Inward-facing L marks: each pair of 1 mm legs meets at a frame corner.
+                // Each pair forms an inward-facing L: both 1 mm legs extend from the frame corner into the frame.
                 AddCorner(cutMarkLayer, createdMarks, preset, id, "TL",
                     left, top, left + MarkLegMm, top,
                     left, top - MarkLegMm, left, top);
@@ -103,11 +125,15 @@ namespace VanyaTools.Native
 
                 selection.CreateSelection();
 
-                Log.Info($"Created {createdMarks.Count} inward-facing {preset} cut mark segments for {frameWidthMm:0}×{frameHeightMm:0} mm and a non-printing {innerWidth:0}×{innerHeight:0} mm guide; sticker pack scale factor {scaleFactor:0.####}.");
+                Log.Info($"Created {createdMarks.Count} inward-facing {preset} cut mark segments for {frameWidthMm:0}×{frameHeightMm:0} mm and a non-printing {innerWidth:0}×{innerHeight:0} mm guide; sticker pack scale factor {scaleFactor:0.####}; rotated to portrait: {rotatedToPortrait}.");
                 return createdMarks.Count;
             }
             catch
             {
+                if (selectionWasRotated)
+                {
+                    try { selection.RotateEx(-90.0, originalCenterX, originalCenterY); } catch { }
+                }
                 if (selectionWasResized)
                 {
                     try { selection.SetSize(originalSelectionWidth, originalSelectionHeight); } catch { }

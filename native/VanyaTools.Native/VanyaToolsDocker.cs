@@ -248,11 +248,13 @@ namespace VanyaTools.Native
             RunSafe(() =>
             {
                 double scaleFactor;
-                int count = new CutMarkService().CreateMarks(preset, widthMm, heightMm, out scaleFactor);
+                bool rotatedToPortrait;
+                int count = new CutMarkService().CreateMarks(preset, widthMm, heightMm, out scaleFactor, out rotatedToPortrait);
+                string orientationMessage = rotatedToPortrait ? " Пак повернут на 90° в книжную ориентацию." : "";
                 string resizeMessage = scaleFactor < 0.999999
                     ? $" Пак уменьшен пропорционально до {scaleFactor * 100:0.#}%."
                     : " Размер пака уже помещается во внутреннюю рамку.";
-                SetStatus($"Метки {preset} {widthMm:0}×{heightMm:0} мм созданы: {count} отрезков; внутренняя рамка 4 мм не печатается.{resizeMessage}", false);
+                SetStatus($"Метки {preset} {widthMm:0}×{heightMm:0} мм созданы: {count} отрезков; внутренняя рамка 4 мм не печатается.{orientationMessage}{resizeMessage}", false);
             });
         }
         private void RunGitHubUpdate()
