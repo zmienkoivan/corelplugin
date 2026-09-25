@@ -130,7 +130,7 @@ namespace VanyaTools.Native
             root.Children.Add(Button("Применить язычки", (_, __) => RunApplyPeelTabs()));
             AddSeparator(root);
             AddSectionTitle(root, "Вспомогательные метки реза");
-            AddSmallLabel(root, "Выделите весь пак. M: рамка 142×105 мм, уголки 1×1 мм.");
+            AddSmallLabel(root, "Выделите весь пак. M: 142×105 мм, уголки внутрь 1×1 мм; пунктир внутри — отступ 4 мм.");
             var markPresetGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 5) };
             markPresetGrid.Children.Add(Button("S", (_, __) => SetStatus("Размер S добавим позже.", false)));
             markPresetGrid.Children.Add(Button("M", (_, __) => RunCreateMediumCutMarks()));
@@ -247,7 +247,7 @@ namespace VanyaTools.Native
             RunSafe(() =>
             {
                 int count = new CutMarkService().CreateMediumMarks();
-                SetStatus($"Метки M созданы: {count} отрезков на рамке 142×105 мм.", false);
+                SetStatus($"Метки M созданы: {count} уголков внутрь; пунктирная рамка 4 мм добавлена на непечатаемый слой.", false);
             });
         }
 

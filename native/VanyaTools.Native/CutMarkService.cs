@@ -8,12 +8,16 @@ namespace VanyaTools.Native
         private const double FrameWidthMm = 142.0;
         private const double FrameHeightMm = 105.0;
         private const double MarkLegMm = 1.0;
+        private const double GuideInsetMm = 4.0;
+        private const string CutMarkLayerName = "Vanya Tools — Метки реза";
+        private const string GuideLayerName = "Vanya Tools — Внутренняя рамка (не печатать)";
 
         public int CreateMediumMarks()
         {
             dynamic app = CorelApp.Get();
             dynamic doc = app.ActiveDocument;
             dynamic selection = app.ActiveSelectionRange;
+            dynamic oldActiveLayer = doc == null ? null : doc.ActiveLayer;
 
             if (doc == null)
                 throw new InvalidOperationException("Нет активного документа.");
@@ -22,10 +26,11 @@ namespace VanyaTools.Native
 
             int oldUnit = (int)doc.Unit;
             int oldReferencePoint = (int)doc.ReferencePoint;
-            var createdShapes = new List<dynamic>();
+            var createdMarks = new List<dynamic>();
+            dynamic guideShape = null;
             string id = Guid.NewGuid().ToString("N").Substring(0, 8);
 
-            doc.BeginCommandGroup("Vanya Tools - create M cut marks");
+            doc.BeginCommandGroup("Vanya Tools - create M cut marks and guide");
             try
             {
                 doc.Unit = CorelConstants.CdrMillimeter;
@@ -44,44 +49,93 @@ namespace VanyaTools.Native
                 double top = centerY + FrameHeightMm / 2.0;
                 double bottom = centerY - FrameHeightMm / 2.0;
 
-                dynamic layer = doc.ActiveLayer;
-                AddCorner(layer, createdShapes, id, "TL",
-                    left - MarkLegMm, top, left, top,
-                    left, top, left, top + MarkLegMm);
-                AddCorner(layer, createdShapes, id, "TR",
-                    right, top, right + MarkLegMm, top,
-                    right, top, right, top + MarkLegMm);
-                AddCorner(layer, createdShapes, id, "BL",
-                    left - MarkLegMm, bottom, left, bottom,
-                    left, bottom - MarkLegMm, left, bottom);
-                AddCorner(layer, createdShapes, id, "BR",
-                    right, bottom, right + MarkLegMm, bottom,
-                    right, bottom - MarkLegMm, right, bottom);
+                dynamic page = doc.ActivePage;
+                dynamic cutMarkLayer = GetOrCreateLayer(page, CutMarkLayerName, true);
+                dynamic guideLayer = GetOrCreateLayer(page, GuideLayerName, false);
 
-                for (int i = 0; i < createdShapes.Count; i++)
+                // Inward-facing L marks: the two 1 mm legs meet exactly at each
+                // corner of the M frame and extend toward the pack.
+                AddCorner(cutMarkLayer, createdMarks, id, "TL",
+                    left, top, left + MarkLegMm, top,
+                    left, top - MarkLegMm, left, top);
+                AddCorner(cutMarkLayer, createdMarks, id, "TR",
+                    right - MarkLegMm, top, right, top,
+                    right, top - MarkLegMm, right, top);
+                AddCorner(cutMarkLayer, createdMarks, id, "BL",
+                    left, bottom, left + MarkLegMm, bottom,
+                    left, bottom, left, bottom + MarkLegMm);
+                AddCorner(cutMarkLayer, createdMarks, id, "BR",
+                    right - MarkLegMm, bottom, right, bottom,
+                    right, bottom, right, bottom + MarkLegMm);
+
+                guideShape = guideLayer.CreateRectangle(
+                    left + GuideInsetMm,
+                    top - GuideInsetMm,
+                    right - GuideInsetMm,
+                    bottom + GuideInsetMm,
+                    0, 0, 0, 0);
+                guideShape.Name = "VanyaTools_M_InnerGuide_" + id;
+                guideShape.Fill.ApplyNoFill();
+                guideShape.Outline.Color.RGBAssign(0, 174, 239);
+                guideShape.Outline.Width = 0.15;
+
+                dynamic dashStyle = guideShape.Outline.Style;
+                dashStyle.DashCount = 1;
+                dashStyle.set_DashLength(1, 8.0);
+                dashStyle.set_GapLength(1, 8.0);
+                guideShape.Outline.Style = dashStyle;
+
+                for (int i = 0; i < createdMarks.Count; i++)
                 {
-                    if (i == 0) createdShapes[i].CreateSelection();
-                    else createdShapes[i].AddToSelection();
+                    if (i == 0) createdMarks[i].CreateSelection();
+                    else createdMarks[i].AddToSelection();
                 }
 
-                Log.Info($"Created {createdShapes.Count} M cut mark segments around selection center ({centerX:0.###}, {centerY:0.###}) mm.");
-                return createdShapes.Count;
+                Log.Info($"Created {createdMarks.Count} inward-facing M cut mark segments and a non-printing {FrameWidthMm - 2 * GuideInsetMm:0}×{FrameHeightMm - 2 * GuideInsetMm:0} mm guide.");
+                return createdMarks.Count;
             }
             catch
             {
-                foreach (dynamic shape in createdShapes)
+                foreach (dynamic shape in createdMarks)
                 {
                     try { shape.Delete(); } catch { }
                 }
+                try { guideShape?.Delete(); } catch { }
                 throw;
             }
             finally
             {
                 doc.Unit = oldUnit;
                 doc.ReferencePoint = oldReferencePoint;
+                try { oldActiveLayer?.Activate(); } catch { }
                 try { app.ActiveWindow.Refresh(); } catch { }
                 doc.EndCommandGroup();
             }
+        }
+
+        private static dynamic GetOrCreateLayer(dynamic page, string name, bool printable)
+        {
+            dynamic layer = null;
+            foreach (dynamic candidate in page.Layers)
+            {
+                try
+                {
+                    if (string.Equals((string)candidate.Name, name, StringComparison.Ordinal))
+                    {
+                        layer = candidate;
+                        break;
+                    }
+                }
+                catch { }
+            }
+
+            if (layer == null)
+                layer = page.CreateLayer(name);
+
+            layer.Visible = true;
+            layer.Printable = printable;
+            layer.Editable = true;
+            return layer;
         }
 
         private static void AddCorner(
