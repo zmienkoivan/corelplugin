@@ -28,6 +28,7 @@ namespace VanyaTools.Native
         private readonly TextBox _tabWidthMm;
         private readonly TextBox _tabHeightMm;
         private readonly TextBox _tabRadiusMm;
+        private readonly System.Windows.Controls.CheckBox _mergeAdjacentContours;
 
         public VanyaToolsDocker()
             : this(null)
@@ -72,52 +73,69 @@ namespace VanyaTools.Native
             root.Children.Add(_status);
             root.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
 
-            AddSectionTitle(root, "Обрезка растра");
+            var parameterPanel = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
+            root.Children.Add(new Expander
+            {
+                Header = "Параметры",
+                IsExpanded = false,
+                Content = parameterPanel,
+                Margin = new Thickness(0, 0, 0, 6)
+            });
 
-            AddSmallLabel(root, "По границе");
-            AddRadioButton(root, "Прозрачные пиксели", "TrimMode", true);
-            _trimModeTopLeft  = AddRadioButton(root, "Цвет верхнего-левого угла",  "TrimMode", false);
-            _trimModeBotRight = AddRadioButton(root, "Цвет нижнего-правого угла",  "TrimMode", false);
-
-            AddSmallLabel(root, "Обрезать стороны");
+            AddSectionTitle(parameterPanel, "Обрезка растра");
+            AddSmallLabel(parameterPanel, "По границе");
+            AddRadioButton(parameterPanel, "Прозрачные пиксели", "TrimMode", true);
+            _trimModeTopLeft  = AddRadioButton(parameterPanel, "Цвет верхнего-левого угла", "TrimMode", false);
+            _trimModeBotRight = AddRadioButton(parameterPanel, "Цвет нижнего-правого угла", "TrimMode", false);
+            AddSmallLabel(parameterPanel, "Обрезать стороны");
             var sidesGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 5) };
             _trimTop    = AddCheckBox(sidesGrid, "Сверху", true);
-            _trimLeft   = AddCheckBox(sidesGrid, "Слева",  true);
-            _trimBottom = AddCheckBox(sidesGrid, "Снизу",  true);
+            _trimLeft   = AddCheckBox(sidesGrid, "Слева", true);
+            _trimBottom = AddCheckBox(sidesGrid, "Снизу", true);
             _trimRight  = AddCheckBox(sidesGrid, "Справа", true);
-            root.Children.Add(sidesGrid);
+            parameterPanel.Children.Add(sidesGrid);
+            _trimPaddingPx = AddRow(parameterPanel, "Отступ, px", "2");
 
-            _trimPaddingPx = AddRow(root, "Отступ, px", "2");
+            AddSeparator(parameterPanel);
+            AddSectionTitle(parameterPanel, "Контур реза");
+            _offsetMm = AddRow(parameterPanel, "Отступ, мм", "2");
+            _rasterDpi = AddRow(parameterPanel, "Растр DPI", "300");
+            _smoothing = AddRow(parameterPanel, "Сглаживание", "70");
+            _detail = AddRow(parameterPanel, "Детализация", "35");
+            _roundSpikesMm = AddRow(parameterPanel, "Скругление, мм", "0.7");
+            _simplificationToleranceMm = AddRow(parameterPanel, "Упрощение контура, мм", "0.05");
+            _mergeAdjacentContours = AddCheckBox(parameterPanel, "Сливать соседние объекты", false);
+
+            AddSeparator(parameterPanel);
+            AddSectionTitle(parameterPanel, "Язычки отрыва");
+            _tabWidthMm = AddRow(parameterPanel, "Ширина, мм", "4");
+            _tabHeightMm = AddRow(parameterPanel, "Длина, мм", "12");
+            _tabRadiusMm = AddRow(parameterPanel, "Скругление язычка, мм", "2");
+
+            AddSectionTitle(root, "Обрезка растра");
             root.Children.Add(Button("Обрезать растр", (_, __) => RunTrim(true)));
-
             AddSeparator(root);
             AddSectionTitle(root, "Контур реза");
-
-            _offsetMm = AddRow(root, "Отступ, мм", "2");
-            _rasterDpi = AddRow(root, "Растр DPI", "300");
-            _smoothing = AddRow(root, "Сглаживание", "70");
-            _detail = AddRow(root, "Детализация", "35");
-            _roundSpikesMm = AddRow(root, "Скругление, мм", "0.7");
-            _simplificationToleranceMm = AddRow(root, "Упрощение контура, мм", "0.05");
-
             root.Children.Add(Button("Создать контур реза", (_, __) => RunCutContour()));
             root.Children.Add(Button("Сгладить выбранный контур", (_, __) => RunSmoothSelectedContour()));
-
             AddSeparator(root);
             AddSectionTitle(root, "Редактирование пака");
             root.Children.Add(Button("Удалить контуры пака", (_, __) => RunDeletePackContours()));
             root.Children.Add(Button("Удалить маркеры пака", (_, __) => RunDeletePackMarkers()));
-
             AddSeparator(root);
             AddSectionTitle(root, "Язычки отрыва");
-            _tabWidthMm = AddRow(root, "Ширина, мм", "4");
-            _tabHeightMm = AddRow(root, "Длина, мм", "12");
-            _tabRadiusMm = AddRow(root, "Скругление язычка, мм", "2");
             AddSmallLabel(root, "Язычок пересекает контур пополам.");
             root.Children.Add(Button("Добавить маркер", (_, __) => RunAddPeelMarker()));
             root.Children.Add(Button("Переприкрепить маркеры", (_, __) => RunReattachMarkers()));
             root.Children.Add(Button("Применить язычки", (_, __) => RunApplyPeelTabs()));
-
+            AddSeparator(root);
+            AddSectionTitle(root, "Вспомогательные метки реза");
+            AddSmallLabel(root, "Выделите весь пак. M: рамка 142×105 мм, уголки 1×1 мм.");
+            var markPresetGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 5) };
+            markPresetGrid.Children.Add(Button("S", (_, __) => SetStatus("Размер S добавим позже.", false)));
+            markPresetGrid.Children.Add(Button("M", (_, __) => RunCreateMediumCutMarks()));
+            markPresetGrid.Children.Add(Button("L", (_, __) => SetStatus("Размер L добавим позже.", false)));
+            root.Children.Add(markPresetGrid);
             Log.Info("VanyaToolsDocker constructor finished.");
         }
 
@@ -153,8 +171,9 @@ namespace VanyaTools.Native
                 double roundSpikes = ParseDouble(_roundSpikesMm.Text, 0.7);
                 double simplifyToleranceMm = ParseDouble(_simplificationToleranceMm.Text, 0.05);
 
-                new StickerCutService().CreateCutContour(offset, dpi, smoothing, detail, roundSpikes, simplifyToleranceMm);
-                SetStatus($"Контур реза создан: {offset:0.###} мм.", false);
+                bool mergeAdjacent = _mergeAdjacentContours.IsChecked == true;
+                new StickerCutService().CreateCutContour(offset, dpi, smoothing, detail, roundSpikes, simplifyToleranceMm, mergeAdjacent);
+                SetStatus($"Контур реза создан: {offset:0.###} мм. Слияние соседних объектов: {(mergeAdjacent ? "вкл." : "выкл.")}", false);
             });
         }
 
@@ -220,6 +239,15 @@ namespace VanyaTools.Native
                     ParseDouble(_tabHeightMm.Text, 12),
                     ParseDouble(_tabRadiusMm.Text, 2));
                 SetStatus($"Применено язычков: {count}.", false);
+            });
+        }
+
+        private void RunCreateMediumCutMarks()
+        {
+            RunSafe(() =>
+            {
+                int count = new CutMarkService().CreateMediumMarks();
+                SetStatus($"Метки M созданы: {count} отрезков на рамке 142×105 мм.", false);
             });
         }
 

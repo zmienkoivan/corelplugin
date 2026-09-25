@@ -45,7 +45,8 @@ namespace VanyaTools.Native
         }
 
         public void CreateCutContour(double offsetMm, int rasterDpi, int smoothing, int detail,
-                                     double roundSpikesMm, double simplifyToleranceMm)
+                                     double roundSpikesMm, double simplifyToleranceMm,
+                                     bool mergeAdjacentObjects = false)
         {
             if (offsetMm <= 0)
                 throw new InvalidOperationException("Offset must be greater than 0 mm.");
@@ -88,7 +89,7 @@ namespace VanyaTools.Native
                     CorelConstants.CdrNormalAntiAliasing,
                     true);
 
-                tracedRange = TraceStickerSilhouette(rasterShape, smoothing, detail);
+                tracedRange = TraceStickerSilhouette(rasterShape, smoothing, detail, mergeAdjacentObjects);
                 if (tracedRange == null || tracedRange.Count == 0)
                     throw new InvalidOperationException("Trace produced no curves.");
 
@@ -133,7 +134,7 @@ namespace VanyaTools.Native
             }
         }
 
-        private static dynamic TraceStickerSilhouette(dynamic rasterShape, int smoothing, int detail)
+        private static dynamic TraceStickerSilhouette(dynamic rasterShape, int smoothing, int detail, bool mergeAdjacentObjects)
         {
             dynamic trace = rasterShape.Bitmap.Trace(
                 CorelConstants.CdrTraceClipart,
@@ -148,7 +149,7 @@ namespace VanyaTools.Native
             trace.DeleteOriginalObject = true;
             trace.RemoveBackground = true;
             trace.RemoveEntireBackColor = true;
-            trace.MergeAdjacentObjects = true;
+            trace.MergeAdjacentObjects = mergeAdjacentObjects;
             trace.RemoveOverlap = true;
 
             return trace.Finish();
