@@ -21,6 +21,8 @@ namespace VanyaTools.Native
         private readonly System.Windows.Controls.CheckBox _trimRight;
         private readonly TextBox _offsetMm;
         private readonly TextBox _rasterDpi;
+        private readonly TextBox _alphaThreshold;
+        private readonly System.Windows.Controls.CheckBox _useAlphaMask;
         private readonly TextBox _smoothing;
         private readonly TextBox _detail;
         private readonly TextBox _roundSpikesMm;
@@ -102,6 +104,8 @@ namespace VanyaTools.Native
             AddSectionTitle(parameterPanel, "Контур реза");
             _offsetMm = AddRow(parameterPanel, "Отступ, мм", "2");
             _rasterDpi = AddRow(parameterPanel, "Растр DPI", "300");
+            _useAlphaMask = AddCheckBox(parameterPanel, "Трассировать по альфа-маске", true);
+            _alphaThreshold = AddRow(parameterPanel, "Порог альфа, 0–254", "10");
             _smoothing = AddRow(parameterPanel, "Сглаживание", "70");
             _detail = AddRow(parameterPanel, "Детализация", "35");
             _roundSpikesMm = AddRow(parameterPanel, "Скругление, мм", "0.7");
@@ -180,8 +184,12 @@ namespace VanyaTools.Native
                 double simplifyToleranceMm = ParseDouble(_simplificationToleranceMm.Text, 0.05);
 
                 bool mergeAdjacent = _mergeAdjacentContours.IsChecked == true;
-                new StickerCutService().CreateCutContour(offset, dpi, smoothing, detail, roundSpikes, simplifyToleranceMm, mergeAdjacent);
-                SetStatus($"Контур реза создан: {offset:0.###} мм. Слияние соседних объектов: {(mergeAdjacent ? "вкл." : "выкл.")}", false);
+                bool useAlphaMask = _useAlphaMask.IsChecked == true;
+                int alphaThreshold = ParseInt(_alphaThreshold.Text, 10);
+                var cutService = new StickerCutService();
+                cutService.CreateCutContour(offset, dpi, smoothing, detail, roundSpikes, simplifyToleranceMm, mergeAdjacent, useAlphaMask, alphaThreshold);
+                string maskStatus = cutService.LastUsedAlphaMask ? $"применена, порог {alphaThreshold}" : "не применена";
+                SetStatus($"Контур реза создан: {offset:0.###} мм. Альфа-маска: {maskStatus}. Слияние соседних объектов: {(mergeAdjacent ? "вкл." : "выкл.")}", false);
             });
         }
 
