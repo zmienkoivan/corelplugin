@@ -12,7 +12,7 @@ namespace VanyaTools.Native
         private const string CutMarkLayerName = "Vanya Tools — Метки реза";
         private const string GuideLayerName = "Vanya Tools — Внутренняя рамка (не печатать)";
 
-        public int CreateMarks(string preset, double frameWidthMm, double frameHeightMm, out double scaleFactor, out bool rotatedToPortrait)
+        public int CreateMarks(string preset, double frameWidthMm, double frameHeightMm, bool rotateClockwise, out double scaleFactor, out bool rotatedToPortrait)
         {
             scaleFactor = 1.0;
             rotatedToPortrait = false;
@@ -61,7 +61,8 @@ namespace VanyaTools.Native
                 // Presets are portrait. Rotate a landscape pack as one range around its own center.
                 if (selectedWidth > selectedHeight)
                 {
-                    selection.RotateEx(90.0, originalCenterX, originalCenterY);
+                    double rotationAngle = rotateClockwise ? -90.0 : 90.0;
+                    selection.RotateEx(rotationAngle, originalCenterX, originalCenterY);
                     selectionWasRotated = true;
                     rotatedToPortrait = true;
                     selectedWidth = (double)selection.SizeWidth;
@@ -137,7 +138,7 @@ namespace VanyaTools.Native
             {
                 if (selectionWasRotated)
                 {
-                    try { selection.RotateEx(-90.0, originalCenterX, originalCenterY); } catch { }
+                    try { selection.RotateEx(rotateClockwise ? 90.0 : -90.0, originalCenterX, originalCenterY); } catch { }
                 }
                 if (selectionWasResized)
                 {

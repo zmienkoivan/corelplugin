@@ -29,6 +29,8 @@ namespace VanyaTools.Native
         private readonly TextBox _tabHeightMm;
         private readonly TextBox _tabRadiusMm;
         private readonly System.Windows.Controls.CheckBox _mergeAdjacentContours;
+        private readonly System.Windows.Controls.RadioButton _rotatePackClockwise;
+        private readonly System.Windows.Controls.RadioButton _rotatePackCounterClockwise;
 
         public VanyaToolsDocker()
             : this(null)
@@ -132,6 +134,11 @@ namespace VanyaTools.Native
             AddSectionTitle(root, "Вспомогательные метки реза");
             AddSmallLabel(root, "S 48×60 · M 105×142 · L 142×195 мм, книжная ориентация.");
             AddSmallLabel(root, "Выделите весь пак. Уголки внутрь 1×1 мм; пунктирная рамка 4 мм не печатается.");
+            AddSmallLabel(root, "Поворот альбомного пака:");
+            var rotationDirectionPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 5) };
+            _rotatePackClockwise = AddRadioButton(rotationDirectionPanel, "Вправо (по часовой)", "PackRotationDirection", true);
+            _rotatePackCounterClockwise = AddRadioButton(rotationDirectionPanel, "Влево (против часовой)", "PackRotationDirection", false);
+            root.Children.Add(rotationDirectionPanel);
             var markPresetGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 5) };
             markPresetGrid.Children.Add(Button("S 48×60", (_, __) => RunCreateCutMarks("S", 48, 60)));
             markPresetGrid.Children.Add(Button("M 105×142", (_, __) => RunCreateCutMarks("M", 105, 142)));
@@ -249,8 +256,11 @@ namespace VanyaTools.Native
             {
                 double scaleFactor;
                 bool rotatedToPortrait;
-                int count = new CutMarkService().CreateMarks(preset, widthMm, heightMm, out scaleFactor, out rotatedToPortrait);
-                string orientationMessage = rotatedToPortrait ? " Пак повернут на 90° в книжную ориентацию." : "";
+                bool rotateClockwise = _rotatePackClockwise.IsChecked == true;
+                int count = new CutMarkService().CreateMarks(preset, widthMm, heightMm, rotateClockwise, out scaleFactor, out rotatedToPortrait);
+                string orientationMessage = rotatedToPortrait
+                    ? $" Пак повернут на 90° {(rotateClockwise ? "по часовой" : "против часовой")} в книжную ориентацию."
+                    : "";
                 string resizeMessage = scaleFactor < 0.999999
                     ? $" Пак уменьшен пропорционально до {scaleFactor * 100:0.#}%."
                     : " Размер пака уже помещается во внутреннюю рамку.";
