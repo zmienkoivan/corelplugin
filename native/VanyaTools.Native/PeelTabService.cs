@@ -16,6 +16,8 @@ namespace VanyaTools.Native
         private const string MarkerPrefix  = "VanyaTools_PeelMarker_";
 
         private const double JoinRadius = 1.5;   // mm  fillet at contour join
+        private const double MarkerClearance = 0.5;
+        public int LastSkippedCount { get; private set; }
 
         // ── Pack index ────────────────────────────────────────────────────────
 
@@ -431,7 +433,10 @@ namespace VanyaTools.Native
             try { type = (int)shape.Type; } catch { return; }
             if (type == CorelConstants.CdrCurveShape)
             {
-                if (IsCutContourColor(shape)) AddUniqueShape(contours, shape);
+                string name = "";
+                try { name = (string)shape.Name ?? ""; } catch { }
+                if ((ParsePackIndex(name) > 0 && name.StartsWith(ContourPrefix, StringComparison.OrdinalIgnoreCase))
+                    || IsCutContourColor(shape)) AddUniqueShape(contours, shape);
                 return;
             }
             if (type == CorelConstants.CdrGroupShape)
@@ -553,12 +558,29 @@ namespace VanyaTools.Native
                         $"Контур реза пака {packIdx} не найден. Выделите розовый контур реза и повторите.");
 
                 string mName = MarkerName(packIdx);
+                var obstacles = CollectAllCutContours(app);
+                foreach (dynamic contour in contours) AddUniqueShape(obstacles, contour);
+                double pageX = 0, pageY = 0, pageWidth = 0, pageHeight = 0;
+                try { doc.ActivePage.GetBoundingBox(ref pageX, ref pageY, ref pageWidth, ref pageHeight); }
+                catch
+                {
+                    pageX = (double)contours[0].LeftX;
+                    pageY = (double)contours[0].BottomY;
+                    pageWidth = (double)contours[0].SizeWidth;
+                    pageHeight = (double)contours[0].SizeHeight;
+                }
+                double centerX = pageX + pageWidth / 2, centerY = pageY + pageHeight / 2;
                 int created = 0;
+                LastSkippedCount = 0;
                 foreach (dynamic contour in contours)
                 {
-                    double sx = ((double)contour.LeftX + (double)contour.RightX) / 2;
-                    double sy = (double)contour.TopY;
-                    SnapInfo snap = SnapToContour(contour, sx, sy);
+                    SnapInfo snap;
+                    if (!TryChooseMarkerPosition(doc, contour, obstacles, centerX, centerY,
+                                                 tabWidthMm, tabHeightMm, out snap))
+                    {
+                        LastSkippedCount++;
+                        continue;
+                    }
                     dynamic marker = BuildMarkerShape(doc, snap, tabWidthMm, tabHeightMm, tabRadiusMm);
                     marker.Name = mName;
                     FormatMarker(marker);
@@ -566,6 +588,10 @@ namespace VanyaTools.Native
                     else marker.AddToSelection();
                     created++;
                 }
+                if (created == 0)
+                    throw new InvalidOperationException("Не найдено свободного места для язычка. Уменьшите его длину или расставьте маркер вручную.");
+                if (LastSkippedCount > 0)
+                    Log.Info("Skipped " + LastSkippedCount + " sticker contour(s): no collision-free marker position.");
                 return created;
             }
             finally
@@ -577,6 +603,100 @@ namespace VanyaTools.Native
             }
         }
 
+        // Prefer long-side corners, then try short sides.
+        private static bool TryChooseMarkerPosition(dynamic doc, dynamic contour,
+            List<dynamic> obstacles, double pageX, double pageY,
+            double width, double height, out SnapInfo best)
+        {
+            best = default(SnapInfo);
+            double left = (double)contour.LeftX, right = (double)contour.RightX;
+            double bottom = (double)contour.BottomY, top = (double)contour.TopY;
+            double shapeWidth = right - left, shapeHeight = top - bottom;
+            if (shapeWidth <= 0 || shapeHeight <= 0) return false;
+            bool vertical = shapeHeight >= shapeWidth;
+            double bestScore = double.NegativeInfinity;
+            bool found = false;
+            double[] fractions = { 0.14, 0.24, 0.36, 0.50, 0.64, 0.76, 0.86 };
+            for (int pass = 0; pass < 2; pass++)
+            {
+                foreach (double f in fractions)
+                for (int side = 0; side < 2; side++)
+                {
+                    bool onVerticalSide = vertical ? pass == 0 : pass == 1;
+                    double hintX = onVerticalSide ? (side == 0 ? left : right) : left + shapeWidth * f;
+                    double hintY = onVerticalSide ? bottom + shapeHeight * f : (side == 0 ? bottom : top);
+                    SnapInfo snap = SnapToContour(contour, hintX, hintY);
+                    if (!IsMarkerClear(doc, contour, obstacles, snap, width, height)) continue;
+                    double dx = pageX - snap.AnchorX, dy = pageY - snap.AnchorY;
+                    Normalize(ref dx, ref dy, 0, 0);
+                    double towardCenter = snap.NormalX * dx + snap.NormalY * dy;
+                    double score = towardCenter * 3 + Math.Abs(f - 0.5) * 2
+                                 + (pass == 0 ? 1.5 : 0)
+                                 - Dist(hintX, hintY, snap.AnchorX, snap.AnchorY) * 0.08;
+                    if (score <= bestScore) continue;
+                    bestScore = score;
+                    best = snap;
+                    found = true;
+                }
+            }
+            return found;
+        }
+
+        private static bool IsMarkerClear(dynamic doc, dynamic contour,
+            List<dynamic> obstacles, SnapInfo snap, double width, double height)
+        {
+            // Enlarged footprint leaves a small gap to other stickers.
+            double hw = width / 2 + MarkerClearance, hh = height / 2 + MarkerClearance;
+            double tx = snap.NormalY, ty = -snap.NormalX;
+            double[] x = new double[4], y = new double[4];
+            int[] sx = { -1, 1, 1, -1 }, sy = { -1, -1, 1, 1 };
+            double minX = double.MaxValue, maxX = double.MinValue;
+            double minY = double.MaxValue, maxY = double.MinValue;
+            for (int i = 0; i < 4; i++)
+            {
+                x[i] = snap.AnchorX + sx[i] * hw * tx + sy[i] * hh * snap.NormalX;
+                y[i] = snap.AnchorY + sx[i] * hw * ty + sy[i] * hh * snap.NormalY;
+                minX = Math.Min(minX, x[i]); maxX = Math.Max(maxX, x[i]);
+                minY = Math.Min(minY, y[i]); maxY = Math.Max(maxY, y[i]);
+            }
+            dynamic footprint = null;
+            foreach (dynamic other in obstacles)
+            {
+                if (SameShape(contour, other)) continue;
+                try
+                {
+                    if ((double)other.RightX < minX || (double)other.LeftX > maxX ||
+                        (double)other.TopY < minY || (double)other.BottomY > maxY) continue;
+                    if (footprint == null)
+                    {
+                        footprint = doc.CreateCurve();
+                        dynamic path = footprint.CreateSubPath(x[0], y[0]);
+                        for (int i = 1; i < 4; i++) path.AppendLineSegment(x[i], y[i]);
+                        path.Closed = true;
+                    }
+                    dynamic curve = other.Curve;
+                    if (Convert.ToBoolean(footprint.IntersectsWith(curve))) return false;
+                    for (int i = 0; i < 4; i++)
+                        if (Convert.ToBoolean(curve.IsPointInside(x[i], y[i]))) return false;
+                    if (Convert.ToBoolean(curve.IsPointInside(snap.AnchorX, snap.AnchorY))) return false;
+                    double cx = ((double)other.LeftX + (double)other.RightX) / 2;
+                    double cy = ((double)other.TopY + (double)other.BottomY) / 2;
+                    if (Convert.ToBoolean(footprint.IsPointInside(cx, cy))) return false;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("Could not check a marker against a neighboring contour.", ex);
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static bool SameShape(dynamic first, dynamic second)
+        {
+            try { return Convert.ToInt32(first.StaticID) == Convert.ToInt32(second.StaticID); }
+            catch { return ReferenceEquals(first, second); }
+        }
         // ── Reattach markers ──────────────────────────────────────────────────
 
         public int ReattachMarkers(double tabWidthMm, double tabHeightMm, double tabRadiusMm)

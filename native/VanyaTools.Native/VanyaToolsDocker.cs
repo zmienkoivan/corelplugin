@@ -230,11 +230,15 @@ namespace VanyaTools.Native
         {
             RunSafe(() =>
             {
-                int count = new PeelTabService().AddMarker(
+                var service = new PeelTabService();
+                int count = service.AddMarker(
                     ParseDouble(_tabWidthMm.Text, 4),
                     ParseDouble(_tabHeightMm.Text, 12),
                     ParseDouble(_tabRadiusMm.Text, 2));
-                SetStatus($"Маркеры добавлены: {count}. Нажмите «Применить язычки».", false);
+                string skipped = service.LastSkippedCount > 0
+                    ? $" Пропущено без свободного места: {service.LastSkippedCount}."
+                    : "";
+                SetStatus($"Маркеры добавлены: {count}.{skipped} Нажмите «Применить язычки».", false);
             });
         }
 
