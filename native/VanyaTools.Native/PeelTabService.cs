@@ -25,16 +25,19 @@ namespace VanyaTools.Native
             int max = 0;
             try
             {
-                foreach (dynamic layer in doc.Layers)
+                foreach (dynamic page in doc.Pages)
                 {
-                    try
+                    foreach (dynamic layer in page.Layers)
                     {
-                        foreach (dynamic shape in layer.Shapes)
-                            max = Math.Max(max, ExtractIndexRecursive(shape));
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Error("Could not scan a document layer for the next pack id.", ex);
+                        try
+                        {
+                            foreach (dynamic shape in layer.Shapes)
+                                max = Math.Max(max, ExtractIndexRecursive(shape));
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error("Could not scan a document layer for the next pack id.", ex);
+                        }
                     }
                 }
             }
@@ -154,7 +157,7 @@ namespace VanyaTools.Native
             var indexes = new HashSet<int>();
             try
             {
-                foreach (dynamic layer in app.ActiveDocument.Layers)
+                foreach (dynamic layer in app.ActiveDocument.ActivePage.Layers)
                 {
                     try
                     {
@@ -198,7 +201,7 @@ namespace VanyaTools.Native
             markers  = new List<dynamic>();
             try
             {
-                foreach (dynamic layer in app.ActiveDocument.Layers)
+                foreach (dynamic layer in app.ActiveDocument.ActivePage.Layers)
                 {
                     try
                     {
@@ -391,7 +394,7 @@ namespace VanyaTools.Native
             var contours = new List<dynamic>();
             try
             {
-                foreach (dynamic layer in app.ActiveDocument.Layers)
+                foreach (dynamic layer in app.ActiveDocument.ActivePage.Layers)
                 {
                     try
                     {
