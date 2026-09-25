@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 
 namespace VanyaTools.Native
 {
@@ -161,43 +160,67 @@ namespace VanyaTools.Native
             if (mask == null) throw new InvalidOperationException("Не удалось скопировать временный растр.");
             try { mask.ReadOnly = false; } catch { }
 
-            var alphaTiles = new Dictionary<long, (int Stride, int Bpp, byte[] Data)>();
+            int alphaWidth = Convert.ToInt32(alpha.Width);
+            int alphaHeight = Convert.ToInt32(alpha.Height);
+            int colorWidth = Convert.ToInt32(mask.Width);
+            int colorHeight = Convert.ToInt32(mask.Height);
+            if (alphaWidth <= 0 || alphaHeight <= 0 || colorWidth <= 0 || colorHeight <= 0)
+                throw new InvalidOperationException("Некорректный размер временного растра.");
+            byte[] opacity = new byte[checked(alphaWidth * alphaHeight)];
+            byte[] covered = new byte[opacity.Length];
             dynamic sourceTiles = alpha.Tiles;
-            for (int i = 1; i <= Convert.ToInt32(sourceTiles.Count); i++)
+            int alphaTileCount = Convert.ToInt32(sourceTiles.Count);
+            if (alphaTileCount == 0) throw new InvalidOperationException("Альфа-канал не содержит пикселей.");
+            for (int i = 1; i <= alphaTileCount; i++)
             {
                 dynamic tile = sourceTiles.Item[i];
-                int left = Convert.ToInt32(tile.Left), top = Convert.ToInt32(tile.Top);
-                long key = ((long)left << 32) ^ (uint)top;
-                alphaTiles[key] = (Math.Abs(Convert.ToInt32(tile.BytesPerLine)),
-                                   Convert.ToInt32(tile.BytesPerPixel), (byte[])tile.PixelData);
+                int left = Convert.ToInt32(tile.Left), bottom = Convert.ToInt32(tile.Bottom);
+                int width = Convert.ToInt32(tile.Width), height = Convert.ToInt32(tile.Height);
+                int stride = Math.Abs(Convert.ToInt32(tile.BytesPerLine));
+                int bpp = Convert.ToInt32(tile.BytesPerPixel);
+                byte[] data = (byte[])tile.PixelData;
+                if (bpp != 1 || data == null || stride < width || data.Length < stride * height)
+                    throw new InvalidOperationException("Неподдерживаемый формат альфа-канала.");
+                for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                {
+                    int px = left + x, py = bottom + y;
+                    if (px < 0 || px >= alphaWidth || py < 0 || py >= alphaHeight) continue;
+                    int index = py * alphaWidth + px;
+                    opacity[index] = data[y * stride + x];
+                    covered[index] = 1;
+                }
             }
-            if (alphaTiles.Count == 0) throw new InvalidOperationException("Альфа-канал не содержит пикселей.");
 
             bool hasVisible = false, hasBackground = false;
             dynamic colorTiles = mask.Tiles;
             for (int i = 1; i <= Convert.ToInt32(colorTiles.Count); i++)
             {
                 dynamic tile = colorTiles.Item[i];
-                int left = Convert.ToInt32(tile.Left), top = Convert.ToInt32(tile.Top);
-                long key = ((long)left << 32) ^ (uint)top;
-                if (!alphaTiles.TryGetValue(key, out var source))
-                    throw new InvalidOperationException("Не совпадает разбиение цветного растра и альфа-канала.");
+                int left = Convert.ToInt32(tile.Left), bottom = Convert.ToInt32(tile.Bottom);
                 int width = Convert.ToInt32(tile.Width), height = Convert.ToInt32(tile.Height);
                 int stride = Math.Abs(Convert.ToInt32(tile.BytesPerLine));
                 int bpp = Convert.ToInt32(tile.BytesPerPixel);
                 byte[] pixels = (byte[])tile.PixelData;
-                if (bpp < 3 || source.Bpp != 1 || pixels == null || source.Data == null ||
-                    stride < width * bpp || source.Stride < width ||
-                    pixels.Length < stride * height || source.Data.Length < source.Stride * height)
-                    throw new InvalidOperationException("Неподдерживаемый формат пикселей для альфа-маски.");
+                if (bpp < 3 || pixels == null || stride < width * bpp ||
+                    pixels.Length < stride * height)
+                    throw new InvalidOperationException("Неподдерживаемый формат цветного растра.");
                 for (int y = 0; y < height; y++)
                 {
-                    int colorRow = y * stride, alphaRow = y * source.Stride;
+                    int colorY = bottom + y;
+                    if (colorY < 0 || colorY >= colorHeight) continue;
+                    int alphaY = Math.Min(alphaHeight - 1, (int)((long)colorY * alphaHeight / colorHeight));
                     for (int x = 0; x < width; x++)
                     {
-                        bool visible = source.Data[alphaRow + x] > threshold;
+                        int colorX = left + x;
+                        if (colorX < 0 || colorX >= colorWidth) continue;
+                        int alphaX = Math.Min(alphaWidth - 1, (int)((long)colorX * alphaWidth / colorWidth));
+                        int alphaIndex = alphaY * alphaWidth + alphaX;
+                        if (covered[alphaIndex] == 0)
+                            throw new InvalidOperationException("Не удалось прочитать пиксель альфа-канала.");
+                        bool visible = opacity[alphaIndex] > threshold;
                         byte value = visible ? (byte)0 : (byte)255;
-                        int index = colorRow + x * bpp;
+                        int index = y * stride + x * bpp;
                         pixels[index] = pixels[index + 1] = pixels[index + 2] = value;
                         if (bpp > 3) pixels[index + 3] = 255;
                         if (visible) hasVisible = true; else hasBackground = true;
