@@ -97,8 +97,8 @@ namespace VanyaTools.Native
             panel.Children.Add(Note("Апскейл может изменить мелкие штрихи. По умолчанию отключён. При нескольких футболках укажите, например: принт на груди левой футболки."));
             panel.Children.Add(Label("Цветов для плашечной графики", false));
             _palette = new ComboBox { FontSize = 10, Margin = new Thickness(0, 0, 0, 4) };
-            foreach (string item in new[] { "Авто · одноцветный принт в 1 цвет, иначе до 4", "1 цвет", "2 цвета", "4 цвета" }) _palette.Items.Add(item);
-            _palette.SelectedIndex = 0;
+            foreach (string item in new[] { "Авто · одноцветный в 1 цвет, иначе до 4", "1 цвет · плоский принт", "2 цвета", "4 цвета" }) _palette.Items.Add(item);
+            _palette.SelectedIndex = 1;
             panel.Children.Add(_palette);
             panel.Children.Add(Note("PNG перед импортом готовится в A3 при 300 DPI; прозрачные края после вставки обрезает штатная функция «Обрезать растр». Плашечные цвета упрощаются, чтобы трассировка не строила градиенты."));
             _analysisText = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 180, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 10 };
