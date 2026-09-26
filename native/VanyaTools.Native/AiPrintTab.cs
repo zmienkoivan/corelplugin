@@ -17,7 +17,7 @@ namespace VanyaTools.Native
 {
     internal sealed class AiPrintTab : UserControl
     {
-        private readonly Action<string> _import;
+        private readonly Func<string, bool> _import;
         private readonly Action<string, bool> _status;
         private readonly Func<string> _captureSelection;
         private readonly ComboBox _operation;
@@ -39,7 +39,7 @@ namespace VanyaTools.Native
             public override string ToString() { return Label; }
         }
 
-        public AiPrintTab(Action<string> import, Action<string, bool> status, Func<string> captureSelection)
+        public AiPrintTab(Func<string, bool> import, Action<string, bool> status, Func<string> captureSelection)
         {
             _import = import; _status = status; _captureSelection = captureSelection;
             var panel = new StackPanel { Margin = new Thickness(7) };
@@ -48,7 +48,7 @@ namespace VanyaTools.Native
             panel.Children.Add(Note("Операции для печатной графики: восстановление принта, удаление фона, стилизация, свободный промпт."));
 
             panel.Children.Add(Button("Баланс / Billing ↗", (_, __) => OpenBilling()));
-            panel.Children.Add(Note("Рабочий сценарий: выделите графику на холсте → нажмите «Запустить AI-операцию». Вкладка захватит текущее выделение, создаст временный PNG и отправит его выбранной модели. Исходные объекты сохраняются."));
+            panel.Children.Add(Note("Выделите графику на холсте и запустите операцию. Результат автоматически появится на холсте рядом с исходником; исходные объекты сохраняются."));
 
             var previews = new UniformGrid { Columns = 2 };
             previews.Children.Add(Preview("Исходник", out _sourcePreview));
@@ -100,10 +100,6 @@ namespace VanyaTools.Native
             _activityPanel.Children.Add(_activityBar);
             panel.Children.Add(_activityPanel);
             panel.Children.Add(Note("AI-векторизация создаёт редактируемые контуры, но не восстанавливает исходный шрифт. Проверяйте надписи и мелкие детали."));
-            panel.Children.Add(Button("Импортировать PNG в Corel", (_, __) => ImportFile(_result, "PNG|*.png")));
-            panel.Children.Add(Button("Импортировать SVG в Corel", (_, __) => ImportFile(_svg, "SVG|*.svg")));
-            panel.Children.Add(Button("Сохранить PNG…", (_, __) => SaveFile(_result, "PNG|*.png")));
-            panel.Children.Add(Button("Сохранить SVG…", (_, __) => SaveFile(_svg, "SVG|*.svg")));
             SetPrompt(); UpdateCost();
         }
 
@@ -167,7 +163,12 @@ namespace VanyaTools.Native
                 await Task.Run(() => ReplicateWorkerClient.Run(model.Id, key, input, outputPath, UpdateProgress));
                 _resultPreview.Source = Bitmap(_result);
                 Log.Info("AI edit succeeded in " + operationTimer.ElapsedMilliseconds + " ms; output bytes=" + new FileInfo(_result).Length + ".");
-                Report("Готово. Сравните надписи и геометрию перед печатью.", false);
+                if (!_import(_result))
+                {
+                    Report("AI-обработка завершилась, но Corel не вставил PNG. Проверьте сообщение над вкладками.", true);
+                    return;
+                }
+                Report("Готово: результат вставлен на холст. Проверьте надписи и геометрию перед печатью.", false);
             }
             catch (WebException ex) { Log.Error("AI edit network request failed.", ex); Report("Не удалось связаться с Replicate. Выделение осталось в Corel; проверьте подключение и настройки прокси. Код: " + ex.Status + ". " + ex.Message + (ex.InnerException == null ? "" : " · " + ex.InnerException.Message), true); }
             catch (Exception ex) { Log.Error("AI edit failed.", ex); Report(ex.Message, true); }
@@ -196,7 +197,12 @@ namespace VanyaTools.Native
                 await Task.Run(() => ReplicateWorkerClient.Run("recraft-ai/recraft-vectorize", key,
                     new Dictionary<string, object> { ["image"] = data }, outputPath, UpdateProgress));
                 Log.Info("AI vectorization succeeded in " + operationTimer.ElapsedMilliseconds + " ms; output bytes=" + new FileInfo(_svg).Length + ".");
-                Report("SVG создан. Проверьте его в Corel.", false);
+                if (!_import(_svg))
+                {
+                    Report("SVG создан, но Corel не вставил его. Проверьте сообщение над вкладками.", true);
+                    return;
+                }
+                Report("Готово: векторный результат вставлен на холст.", false);
             }
             catch (WebException ex) { Log.Error("AI vectorization network request failed.", ex); Report("Не удалось связаться с Replicate. Проверьте подключение и настройки прокси. Код: " + ex.Status + ". " + ex.Message + (ex.InnerException == null ? "" : " · " + ex.InnerException.Message), true); }
             catch (Exception ex) { Log.Error("AI vectorization failed.", ex); Report(ex.Message, true); }
@@ -262,28 +268,6 @@ namespace VanyaTools.Native
         }
 
         private static BitmapSource Bitmap(string path) { using (var s = File.OpenRead(path)) { var b = BitmapFrame.Create(s, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad); b.Freeze(); return b; } }
-
-        private void ImportFile(string path, string filter)
-        {
-            if (String.IsNullOrEmpty(path) || !File.Exists(path))
-            {
-                var dialog = new Microsoft.Win32.OpenFileDialog
-                {
-                    Filter = filter,
-                    Title = "Выберите сохранённый результат AI"
-                };
-                if (dialog.ShowDialog() != true) return;
-                path = dialog.FileName;
-            }
-            _import(path);
-        }
-
-        private void SaveFile(string path, string filter)
-        {
-            if (String.IsNullOrEmpty(path) || !File.Exists(path)) { Report("Сначала создайте результат.", true); return; }
-            var d = new Microsoft.Win32.SaveFileDialog { Filter = filter };
-            if (d.ShowDialog() == true) { File.Copy(path, d.FileName, true); Report("Сохранено: " + d.FileName, false); }
-        }
 
         private void OpenBilling()
         {

@@ -174,9 +174,9 @@ namespace VanyaTools.Native
             Log.Info("VanyaToolsDocker constructor finished.");
         }
 
-        private void ImportAiResult(string path)
+        private bool ImportAiResult(string path)
         {
-            RunSafe(() =>
+            try
             {
                 if (String.IsNullOrWhiteSpace(path) || !File.Exists(path))
                     throw new FileNotFoundException("Файл результата AI не найден. Сначала выполните обработку.", path);
@@ -189,7 +189,14 @@ namespace VanyaTools.Native
                 importFilter.Finish();
                 app.ActiveWindow.Refresh();
                 SetStatus("AI-результат импортирован в Corel: " + Path.GetFileName(path), false);
-            });
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Error("AI result import failed.", ex);
+                SetStatus("Не удалось вставить AI-результат в Corel: " + ex.Message, true);
+                return false;
+            }
         }
 
         private string CaptureAiSelection()
