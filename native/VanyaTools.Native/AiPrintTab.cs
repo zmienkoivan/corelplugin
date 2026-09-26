@@ -163,7 +163,7 @@ namespace VanyaTools.Native
                 _resultPreview.Source = Bitmap(_result);
                 Report("Готово. Сравните надписи и геометрию перед печатью.", false);
             }
-            catch (WebException ex) { Report("Не удалось связаться с Replicate. Выделение осталось в Corel; проверьте подключение к интернету и повторите запрос. Подробности: " + ex.Message, true); }
+            catch (WebException ex) { Report("Не удалось связаться с Replicate. Выделение осталось в Corel; проверьте интернет и повторите запрос. Код: " + ex.Status + ". " + ex.Message, true); }
             catch (Exception ex) { Report(ex.Message, true); }
             finally { IsEnabled = true; }
         }
@@ -185,7 +185,7 @@ namespace VanyaTools.Native
                 await Task.Run(() => Download(url, _svg));
                 Report("SVG создан. Проверьте его в Corel.", false);
             }
-            catch (WebException ex) { Report("Не удалось связаться с Replicate. Проверьте подключение к интернету и повторите запрос. Подробности: " + ex.Message, true); }
+            catch (WebException ex) { Report("Не удалось связаться с Replicate. Проверьте интернет и повторите запрос. Код: " + ex.Status + ". " + ex.Message, true); }
             catch (Exception ex) { Report(ex.Message, true); }
             finally { IsEnabled = true; }
         }
@@ -225,6 +225,8 @@ namespace VanyaTools.Native
 
         private static string Predict(string token, string model, Dictionary<string, object> input)
         {
+            // Replicate requires modern TLS; explicitly enable it for older Corel/.NET setups.
+            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
             var ser = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue };
             var req = (HttpWebRequest)WebRequest.Create("https://api.replicate.com/v1/models/" + model + "/predictions");
             req.Method = "POST"; req.ContentType = "application/json"; req.Accept = "application/json";
