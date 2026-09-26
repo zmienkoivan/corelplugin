@@ -61,7 +61,7 @@ namespace VanyaTools.Native
 
             root.Children.Add(new TextBlock
             {
-                Text = "Vanya Tools",
+                Text = "Vanya Tools · " + typeof(VanyaToolsDocker).Assembly.GetName().Version.ToString(3),
                 FontSize = 14,
                 FontWeight = FontWeights.SemiBold,
                 Margin = new Thickness(0, 0, 0, 5)
@@ -69,7 +69,7 @@ namespace VanyaTools.Native
 
             _status = new TextBlock
             {
-                Text = "Готово · сборка " + typeof(VanyaToolsDocker).Assembly.GetName().Version.ToString(3),
+                Text = "Готово",
                 FontSize = 11,
                 Padding = new Thickness(5, 3, 5, 3),
                 Margin = new Thickness(0, 0, 0, 6),
