@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Net;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
@@ -56,7 +57,7 @@ namespace VanyaTools.Updater
                 using (var client = new WebClient())
                 using (var spinner = new ConsoleSpinner("Загрузка пакета обновления"))
                 {
-                    client.Headers[HttpRequestHeader.UserAgent] = "VanyaTools-Updater/1.0.18";
+                    client.Headers[HttpRequestHeader.UserAgent] = "VanyaTools-Updater/1.0.20";
                     client.DownloadProgressChanged += (_, e) => spinner.SetMessage("Загрузка пакета: " + e.ProgressPercentage + "%");
                     client.DownloadFile(release.AssetUrl, zipPath);
                 }
@@ -80,7 +81,9 @@ namespace VanyaTools.Updater
                     FileName = "powershell.exe",
                     Arguments = "-NoProfile -ExecutionPolicy Bypass -File " + QuoteArgument(installer),
                     WorkingDirectory = packageDir,
-                    UseShellExecute = true
+                    UseShellExecute = true,
+                    Verb = IsAdministrator() ? "open" : "runas",
+                    WindowStyle = ProcessWindowStyle.Hidden
                 };
 
                 using (Process process = Process.Start(startInfo))
@@ -345,7 +348,7 @@ namespace VanyaTools.Updater
         {
             string uri = "https://api.github.com/repos/" + repository + "/releases/latest";
             var request = (HttpWebRequest)WebRequest.Create(uri);
-            request.UserAgent = "VanyaTools-Updater/1.0.18";
+            request.UserAgent = "VanyaTools-Updater/1.0.20";
             request.Accept = "application/vnd.github+json";
 
             string json;
@@ -442,6 +445,12 @@ namespace VanyaTools.Updater
         private static string QuoteArgument(string value)
         {
             return "\"" + value.Replace("\"", "\\\"") + "\"";
+        }
+
+        private static bool IsAdministrator()
+        {
+            using (WindowsIdentity identity = WindowsIdentity.GetCurrent())
+                return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
         }
 
         private static void Pause()

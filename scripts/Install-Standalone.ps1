@@ -6,6 +6,15 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$installLogPath = Join-Path $env:LOCALAPPDATA "VanyaTools\Install.log"
+function Write-InstallLog {
+    param([string]$Message)
+    try {
+        New-Item -ItemType Directory -Path (Split-Path $installLogPath -Parent) -Force | Out-Null
+        Add-Content -LiteralPath $installLogPath -Value ("{0:yyyy-MM-dd HH:mm:ss.fff} [PID {1}] {2}" -f (Get-Date), $PID, $Message) -Encoding UTF8
+    } catch { }
+}
+Write-InstallLog "Installer started."
 
 function Find-CorelAddonsPaths {
     $results = @()
@@ -112,6 +121,7 @@ try {
     $CorelAddonsPath = Resolve-InstallPath $CorelAddonsPath
     $CorelAddonsPath = [IO.Path]::GetFullPath($CorelAddonsPath)
     $installPath = Join-Path $CorelAddonsPath "VanyaToolsNative"
+    Write-InstallLog "Resolved Corel add-ons path: $CorelAddonsPath"
     try {
         # Install the update helper in the signed-in user profile before a UAC relaunch.
         $updaterExeSource = Join-Path $PSScriptRoot "VanyaTools.Updater.exe"
@@ -192,14 +202,17 @@ exit 1
     } catch [System.Security.SecurityException] {
         $canWrite = $false
     }
+    Write-InstallLog "Write access check: $canWrite"
 
     if (-not $canWrite) {
+        Write-InstallLog "Requesting administrator elevation for the installer."
         Write-Host "Для установки в папку CorelDRAW нужны права администратора. Откроется запрос Windows." -ForegroundColor Yellow
         $arguments = @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"{0}"' -f $PSCommandPath),
             "-CorelAddonsPath", ('"{0}"' -f $CorelAddonsPath)
         )
         $process = Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -Verb RunAs -Wait -PassThru
+        Write-InstallLog "Elevated installer returned exit code $($process.ExitCode)."
         exit $process.ExitCode
     }
 
@@ -209,6 +222,7 @@ exit 1
     foreach ($file in $requiredFiles) {
         Copy-Item -LiteralPath (Join-Path $addonSource $file) -Destination (Join-Path $installPath $file) -Force
     }
+    Write-InstallLog "Copied add-on files to $installPath"
 
 
     Write-Host ""
@@ -217,8 +231,10 @@ exit 1
     Write-Host "Обновление: Пуск > Vanya Tools > Проверить обновления"
     Write-Host "Если ярлыка нет: $env:LOCALAPPDATA\VanyaTools\VanyaTools.Updater.exe"
     Write-Host "Перезапустите CorelDRAW и откройте: Окно > Окна настройки (Dockers) > Vanya Tools Native."
+    Write-InstallLog "Installer completed successfully."
 }
 catch {
+    Write-InstallLog "Installer failed: $($_.Exception.Message)"
     Write-Host ""
     Write-Host "Установка не выполнена: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
