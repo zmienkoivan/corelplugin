@@ -324,7 +324,7 @@ namespace VanyaTools.Native
         private void RunGitHubUpdate()
         {
             var answer = MessageBox.Show(
-                "Updater скачает последнюю версию. Сохраните документы. После загрузки закройте CorelDRAW — установка продолжится автоматически.",
+                "Updater проверит номер версии и скачает пакет, только если доступно обновление. Сохраните документы; после загрузки закройте CorelDRAW для установки.",
                 "Обновление Vanya Tools",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Information);
@@ -344,6 +344,7 @@ namespace VanyaTools.Native
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = updaterPath,
+                    Arguments = "--installed-version " + version,
                     WorkingDirectory = updaterHome,
                     UseShellExecute = true
                 };

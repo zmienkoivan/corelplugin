@@ -10,6 +10,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 
 namespace VanyaTools.Native
 {
@@ -24,6 +25,10 @@ namespace VanyaTools.Native
         private readonly TextBox _prompt, _left, _top, _right, _bottom;
         private readonly Image _sourcePreview, _resultPreview;
         private readonly TextBlock _cost;
+        private readonly StackPanel _activityPanel;
+        private readonly TextBlock _activityText;
+        private readonly ProgressBar _activityBar;
+        private readonly Button _runEditButton, _runVectorButton;
         private string _source, _result, _svg;
 
         private sealed class ModelItem
@@ -83,8 +88,16 @@ namespace VanyaTools.Native
             LoadToken();
             panel.Children.Add(_token);
             panel.Children.Add(Button("Сохранить ключ", (_, __) => SaveToken()));
-            panel.Children.Add(Button("Запустить AI-операцию", async (_, __) => await RunEdit()));
-            panel.Children.Add(Button("Векторизовать в SVG · Recraft · $0.01", async (_, __) => await RunVector()));
+            _runEditButton = Button("Запустить AI-операцию", async (_, __) => await RunEdit());
+            panel.Children.Add(_runEditButton);
+            _runVectorButton = Button("Векторизовать в SVG · Recraft · $0.01", async (_, __) => await RunVector());
+            panel.Children.Add(_runVectorButton);
+            _activityText = Note("Подготовка…");
+            _activityBar = new ProgressBar { IsIndeterminate = true, Height = 7, Margin = new Thickness(0, 2, 0, 8) };
+            _activityPanel = new StackPanel { Visibility = Visibility.Collapsed };
+            _activityPanel.Children.Add(_activityText);
+            _activityPanel.Children.Add(_activityBar);
+            panel.Children.Add(_activityPanel);
             panel.Children.Add(Note("AI-векторизация создаёт редактируемые контуры, но не восстанавливает исходный шрифт. Проверяйте надписи и мелкие детали."));
             panel.Children.Add(Button("Импортировать PNG в Corel", (_, __) => ImportFile(_result)));
             panel.Children.Add(Button("Импортировать SVG в Corel", (_, __) => ImportFile(_svg)));
@@ -132,7 +145,8 @@ namespace VanyaTools.Native
             if (MessageBox.Show("Ориентировочная цена: $" + model.Cost.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) + ". Продолжить?", "Платный запрос Replicate", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
             try
             {
-                IsEnabled = false; Report("Подготовка изображения и запрос к модели…", false);
+                SetBusy(true, "Подготавливаю изображение…");
+                Report("Подготавливаю изображение для Replicate…", false);
                 // Read WPF controls and encode the crop on the UI thread.
                 string data = CropData();
                 var input = new Dictionary<string, object> { ["prompt"] = _prompt.Text, ["output_format"] = "png" };
@@ -142,13 +156,13 @@ namespace VanyaTools.Native
                 else { input["image"] = data; input["go_fast"] = true; input["output_quality"] = 95; }
                 _result = Path.Combine(Path.GetTempPath(), "Vanya-AI-" + Guid.NewGuid().ToString("N") + ".png");
                 string outputPath = _result;
-                await Task.Run(() => ReplicateWorkerClient.Run(model.Id, key, input, outputPath));
+                await Task.Run(() => ReplicateWorkerClient.Run(model.Id, key, input, outputPath, UpdateProgress));
                 _resultPreview.Source = Bitmap(_result);
                 Report("Готово. Сравните надписи и геометрию перед печатью.", false);
             }
             catch (WebException ex) { Report("Не удалось связаться с Replicate. Выделение осталось в Corel; проверьте подключение и настройки прокси. Код: " + ex.Status + ". " + ex.Message + (ex.InnerException == null ? "" : " · " + ex.InnerException.Message), true); }
             catch (Exception ex) { Report(ex.Message, true); }
-            finally { IsEnabled = true; }
+            finally { SetBusy(false, null); }
         }
 
         private async Task RunVector()
@@ -161,17 +175,43 @@ namespace VanyaTools.Native
             if (MessageBox.Show("Recraft Vectorize стоит около $0.01 за SVG. Продолжить?", "Платный запрос Replicate", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
             try
             {
-                IsEnabled = false; Report("Создаю SVG…", false);
+                SetBusy(true, "Подготавливаю изображение для векторизации…");
+                Report("Подготавливаю изображение для векторизации…", false);
                 string data = await Task.Run(() => DataUri(Bitmap(file)));
                 _svg = Path.Combine(Path.GetTempPath(), "Vanya-AI-" + Guid.NewGuid().ToString("N") + ".svg");
                 string outputPath = _svg;
                 await Task.Run(() => ReplicateWorkerClient.Run("recraft-ai/recraft-vectorize", key,
-                    new Dictionary<string, object> { ["image"] = data }, outputPath));
+                    new Dictionary<string, object> { ["image"] = data }, outputPath, UpdateProgress));
                 Report("SVG создан. Проверьте его в Corel.", false);
             }
             catch (WebException ex) { Report("Не удалось связаться с Replicate. Проверьте подключение и настройки прокси. Код: " + ex.Status + ". " + ex.Message + (ex.InnerException == null ? "" : " · " + ex.InnerException.Message), true); }
             catch (Exception ex) { Report(ex.Message, true); }
-            finally { IsEnabled = true; }
+            finally { SetBusy(false, null); }
+        }
+
+        private void UpdateProgress(string stage)
+        {
+            string message;
+            switch (stage)
+            {
+                case "sending": message = "Отправляю изображение модели…"; break;
+                case "processing": message = "Модель обрабатывает изображение. Это может занять несколько минут…"; break;
+                case "downloading": message = "Модель готова. Загружаю результат…"; break;
+                default: message = "Выполняется запрос к Replicate…"; break;
+            }
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _activityText.Text = message;
+                Report(message, false);
+            }));
+        }
+
+        private void SetBusy(bool busy, string message)
+        {
+            _activityPanel.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+            _runEditButton.IsEnabled = !busy;
+            _runVectorButton.IsEnabled = !busy;
+            if (busy && !String.IsNullOrEmpty(message)) _activityText.Text = message;
         }
 
         private string CropData()

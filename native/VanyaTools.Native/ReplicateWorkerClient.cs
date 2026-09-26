@@ -13,7 +13,7 @@ namespace VanyaTools.Native
     /// </summary>
     internal static class ReplicateWorkerClient
     {
-        public static void Run(string model, string token, Dictionary<string, object> input, string outputPath)
+        public static void Run(string model, string token, Dictionary<string, object> input, string outputPath, Action<string> progress = null)
         {
             string exe = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -40,11 +40,18 @@ namespace VanyaTools.Native
                 CreateNoWindow = true,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
+                RedirectStandardError = true,
             };
 
             using (var process = Process.Start(start))
             {
                 if (process == null) throw new InvalidOperationException("Не удалось запустить сетевой помощник Vanya Tools.");
+                process.ErrorDataReceived += (_, e) =>
+                {
+                    if (e.Data == null || !e.Data.StartsWith("PROGRESS:", StringComparison.Ordinal)) return;
+                    try { if (progress != null) progress(e.Data.Substring("PROGRESS:".Length)); } catch { }
+                };
+                process.BeginErrorReadLine();
                 process.StandardInput.Write(encodedPayload);
                 process.StandardInput.Close();
                 var outputTask = process.StandardOutput.ReadToEndAsync();

@@ -21,6 +21,11 @@ namespace VanyaTools.Updater
                 return RunReplicateWorker();
 
             Console.OutputEncoding = Encoding.UTF8;
+            string installedVersionText = GetArgument(args, "--installed-version");
+            Version installedVersion = null;
+            if (!String.IsNullOrWhiteSpace(installedVersionText) &&
+                !Version.TryParse(installedVersionText, out installedVersion))
+                installedVersion = null;
             string workDir = Path.Combine(Path.GetTempPath(), "VanyaToolsUpdate-" + Guid.NewGuid().ToString("N"));
             int exitCode = 1;
 
@@ -29,21 +34,35 @@ namespace VanyaTools.Updater
                 ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
                 string repository = ReadRepository();
                 Console.WriteLine("Vanya Tools — проверка обновления");
-                ReleaseInfo release = GetLatestRelease(repository);
+                ReleaseInfo release;
+                using (var spinner = new ConsoleSpinner("Проверяю последнюю версию GitHub"))
+                    release = GetLatestRelease(repository);
+
+                Version latestVersion = ParseReleaseVersion(release.TagName);
+                if (installedVersion != null && latestVersion <= installedVersion)
+                {
+                    Console.WriteLine("У вас уже установлена последняя версия " + installedVersion + ". Архив не скачивался.");
+                    exitCode = 0;
+                }
+                else
+                {
 
                 Directory.CreateDirectory(workDir);
                 string zipPath = Path.Combine(workDir, "VanyaToolsNative.zip");
                 string packageDir = Path.Combine(workDir, "package");
                 Directory.CreateDirectory(packageDir);
 
-                Console.WriteLine("Найден релиз " + release.TagName + ". Загружаю пакет...");
+                Console.WriteLine("Найдено обновление " + release.TagName + ". Загружаю пакет...");
                 using (var client = new WebClient())
+                using (var spinner = new ConsoleSpinner("Загрузка пакета обновления"))
                 {
-                    client.Headers[HttpRequestHeader.UserAgent] = "VanyaTools-Updater/1.0.15";
+                    client.Headers[HttpRequestHeader.UserAgent] = "VanyaTools-Updater/1.0.16";
+                    client.DownloadProgressChanged += (_, e) => spinner.SetMessage("Загрузка пакета: " + e.ProgressPercentage + "%");
                     client.DownloadFile(release.AssetUrl, zipPath);
                 }
 
-                ZipFile.ExtractToDirectory(zipPath, packageDir);
+                using (var spinner = new ConsoleSpinner("Распаковываю пакет обновления"))
+                    ZipFile.ExtractToDirectory(zipPath, packageDir);
                 string installer = Path.Combine(packageDir, "Install.ps1");
                 string addonDll = Path.Combine(packageDir, "VanyaToolsNative", "VanyaTools.Native.dll");
                 if (!File.Exists(installer) || !File.Exists(addonDll))
@@ -52,8 +71,8 @@ namespace VanyaTools.Updater
                 SaveRepository(repository);
                 Console.WriteLine("Загрузка завершена. Сохраните документы и закройте CorelDRAW.");
 
-                while (IsCorelRunning())
-                    Thread.Sleep(2000);
+                using (var spinner = new ConsoleSpinner("Ожидаю закрытия CorelDRAW для установки"))
+                    while (IsCorelRunning()) Thread.Sleep(2000);
 
                 Console.WriteLine("CorelDRAW закрыт. Запускаю установщик...");
                 var startInfo = new ProcessStartInfo
@@ -68,13 +87,15 @@ namespace VanyaTools.Updater
                 {
                     if (process == null)
                         throw new InvalidOperationException("Не удалось запустить установщик.");
-                    process.WaitForExit();
+                    using (var spinner = new ConsoleSpinner("Устанавливаю обновление"))
+                        process.WaitForExit();
                     if (process.ExitCode != 0)
                         throw new InvalidOperationException("Установщик завершился с кодом " + process.ExitCode + ".");
                 }
 
                 Console.WriteLine("Обновление установлено из релиза " + release.TagName + ". Перезапустите CorelDRAW.");
                 exitCode = 0;
+                }
             }
             catch (Exception ex)
             {
@@ -119,6 +140,7 @@ namespace VanyaTools.Updater
                     throw new InvalidDataException("В задании Replicate отсутствуют обязательные поля.");
 
                 string outputUrl = CreatePrediction(token, model, input, serializer);
+                ReportWorkerProgress("downloading");
                 DownloadWithSystemProxy(outputUrl, outputPath);
                 WriteWorkerResponse(serializer, new Dictionary<string, object> { ["ok"] = true });
                 return 0;
@@ -140,6 +162,11 @@ namespace VanyaTools.Updater
             Console.WriteLine(Convert.ToBase64String(Encoding.UTF8.GetBytes(json)));
         }
 
+        private static void ReportWorkerProgress(string stage)
+        {
+            Console.Error.WriteLine("PROGRESS:" + stage);
+        }
+
         private static string CreatePrediction(string token, string model,
             Dictionary<string, object> input, JavaScriptSerializer serializer)
         {
@@ -148,11 +175,13 @@ namespace VanyaTools.Updater
             request.ContentType = "application/json";
             request.Accept = "application/json";
             request.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
-            request.Headers["Prefer"] = "wait=60";
+            request.Headers["Prefer"] = "wait=1";
+            ReportWorkerProgress("sending");
             byte[] bytes = Encoding.UTF8.GetBytes(serializer.Serialize(new Dictionary<string, object> { ["input"] = input }));
             using (var stream = request.GetRequestStream()) stream.Write(bytes, 0, bytes.Length);
             Dictionary<string, object> result = ReadJson(request, serializer);
             string status = Convert.ToString(result["status"]);
+            if (status == "starting" || status == "processing") ReportWorkerProgress("processing");
 
             for (int i = 0; i < 90 && (status == "starting" || status == "processing"); i++)
             {
@@ -163,6 +192,7 @@ namespace VanyaTools.Updater
                 poll.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
                 result = ReadJson(poll, serializer);
                 status = Convert.ToString(result["status"]);
+                if (status == "starting" || status == "processing") ReportWorkerProgress("processing");
             }
             if (status != "succeeded")
                 throw new InvalidOperationException(Convert.ToString(result.ContainsKey("error")
@@ -251,6 +281,25 @@ namespace VanyaTools.Updater
             return repository;
         }
 
+        private static string GetArgument(string[] args, string name)
+        {
+            if (args == null) return null;
+            for (int i = 0; i < args.Length - 1; i++)
+                if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
+                    return args[i + 1];
+            return null;
+        }
+
+        private static Version ParseReleaseVersion(string tag)
+        {
+            Version version;
+            string value = (tag ?? "").Trim();
+            if (value.StartsWith("v", StringComparison.OrdinalIgnoreCase)) value = value.Substring(1);
+            if (!Version.TryParse(value, out version))
+                throw new InvalidDataException("Невозможно определить номер версии релиза " + tag + ".");
+            return version;
+        }
+
         private static void SaveRepository(string repository)
         {
             string repoFile = GetRepositoryFile();
@@ -270,7 +319,7 @@ namespace VanyaTools.Updater
         {
             string uri = "https://api.github.com/repos/" + repository + "/releases/latest";
             var request = (HttpWebRequest)WebRequest.Create(uri);
-            request.UserAgent = "VanyaTools-Updater/1.0.15";
+            request.UserAgent = "VanyaTools-Updater/1.0.16";
             request.Accept = "application/vnd.github+json";
 
             string json;
@@ -314,6 +363,53 @@ namespace VanyaTools.Updater
             {
                 foreach (Process process in processes)
                     process.Dispose();
+            }
+        }
+
+        private sealed class ConsoleSpinner : IDisposable
+        {
+            private readonly object _sync = new object();
+            private readonly Thread _thread;
+            private volatile bool _running;
+            private string _message;
+            private int _frame;
+            private static readonly char[] Frames = { '|', '/', '-', '\\' };
+
+            public ConsoleSpinner(string message)
+            {
+                _message = message;
+                _thread = new Thread(Spin) { IsBackground = true };
+                _running = true;
+                _thread.Start();
+            }
+
+            public void SetMessage(string message)
+            {
+                lock (_sync) _message = message;
+            }
+
+            private void Spin()
+            {
+                while (_running)
+                {
+                    lock (_sync)
+                    {
+                        try { Console.Write("\r" + _message + " " + Frames[_frame++ % Frames.Length]); }
+                        catch { }
+                    }
+                    Thread.Sleep(120);
+                }
+            }
+
+            public void Dispose()
+            {
+                _running = false;
+                try { _thread.Join(500); } catch { }
+                lock (_sync)
+                {
+                    try { Console.Write("\r" + new string(' ', Math.Min(140, (_message ?? "").Length + 4)) + "\r"); }
+                    catch { }
+                }
             }
         }
 

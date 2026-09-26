@@ -3,7 +3,7 @@
     <TargetFramework>net48</TargetFramework>
     <OutputType>Exe</OutputType>
     <AssemblyName>VanyaTools.Updater</AssemblyName>
-    <Version>1.0.15</Version>
+    <Version>1.0.16</Version>
     <PlatformTarget>x64</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>
     <LangVersion>latest</LangVersion>
