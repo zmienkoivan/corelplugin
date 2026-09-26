@@ -1,6 +1,4 @@
 using System;
-using System.IO;
-using System.Runtime.InteropServices;
 
 namespace VanyaTools.Native
 {
@@ -75,8 +73,6 @@ namespace VanyaTools.Native
             int oldRef  = (int)doc.ReferencePoint;
             dynamic workingShape  = null;
             dynamic rasterShape   = null;
-            dynamic maskShape     = null;
-            string maskPngPath    = null;
             dynamic tracedRange   = null;
             dynamic boundaryShape = null;
 
@@ -99,28 +95,23 @@ namespace VanyaTools.Native
                     CorelConstants.CdrNormalAntiAliasing,
                     true);
 
-                dynamic traceShape = rasterShape;
                 if (useAlphaMask)
                 {
-                    maskPngPath = Path.Combine(Path.GetTempPath(),
-                        "VanyaToolsAlpha-" + Guid.NewGuid().ToString("N") + ".png");
-                    maskShape = CreateAlphaTraceMask(doc, app, rasterShape, alphaThreshold, maskPngPath);
-                    if (maskShape != null)
+                    tracedRange = TraceAlphaSilhouette(doc, app, rasterShape,
+                        alphaThreshold, smoothing, detail, simplifyToleranceMm,
+                        mergeAdjacentObjects);
+                    if (tracedRange != null)
                     {
-                        traceShape = maskShape;
                         LastUsedAlphaMask = true;
-                        Log.Info($"Tracing binary alpha mask with threshold {alphaThreshold}.");
+                        TryDelete(rasterShape);
+                        rasterShape = null;
                     }
                     else
                         Log.Info("Alpha mask has no transparent background; using regular color trace.");
                 }
-                tracedRange = TraceStickerSilhouette(traceShape, smoothing, detail,
-                                                    mergeAdjacentObjects, LastUsedAlphaMask);
-                if (maskShape != null)
-                {
-                    TryDelete(rasterShape);
-                    rasterShape = null;
-                }
+                if (tracedRange == null)
+                    tracedRange = TraceStickerSilhouette(rasterShape, smoothing, detail,
+                                                        mergeAdjacentObjects);
                 if (tracedRange == null || tracedRange.Count == 0)
                     throw new InvalidOperationException("Trace produced no curves.");
 
@@ -152,14 +143,11 @@ namespace VanyaTools.Native
                 TryDelete(boundaryShape);
                 TryDeleteRange(tracedRange);
                 TryDelete(rasterShape);
-                TryDelete(maskShape);
                 TryDelete(workingShape);
                 throw;
             }
             finally
             {
-                if (maskPngPath != null)
-                    try { File.Delete(maskPngPath); } catch { }
                 doc.Unit = oldUnit;
                 doc.ReferencePoint = oldRef;
                 app.Optimization = false;
@@ -168,32 +156,9 @@ namespace VanyaTools.Native
             }
         }
 
-        // Corel's COM Image cannot be passed back to CreateBitmap or SetImageData
-        // on some installations. Write an ordinary temporary PNG, then import it.
-        // Import's optional arguments are an enum and an interface in Corel's
-        // typelib. A typed call avoids failures in the dynamic COM binder.
-        [ComImport, Guid("b0580040-9aa4-44fd-9547-4f91eb757ac4"),
-         InterfaceType(ComInterfaceType.InterfaceIsIDispatch)]
-        private interface ICorelLayerImport
-        {
-            [DispId(1610743829)]
-            void Import([MarshalAs(UnmanagedType.BStr)] string fileName, int filter,
-                        [MarshalAs(UnmanagedType.Interface)] object options);
-        }
-
-        private static void ImportMask(object layer, string fileName)
-        {
-            IntPtr unknown = Marshal.GetIUnknownForObject(layer);
-            try
-            {
-                var typedLayer = (ICorelLayerImport)Marshal.GetTypedObjectForIUnknown(
-                    unknown, typeof(ICorelLayerImport));
-                typedLayer.Import(fileName, 0, null); // cdrAutoSense
-            }
-            finally { Marshal.Release(unknown); }
-        }
-        private static dynamic CreateAlphaTraceMask(dynamic doc, dynamic app,
-            dynamic rasterShape, int threshold, string pngPath)
+        private static dynamic TraceAlphaSilhouette(dynamic doc, dynamic app,
+            dynamic rasterShape, int threshold, int smoothing, int detail,
+            double simplifyToleranceMm, bool mergeAdjacent)
         {
             dynamic bitmap = rasterShape.Bitmap;
             if (!Convert.ToBoolean(bitmap.Transparent)) return null;
@@ -202,8 +167,9 @@ namespace VanyaTools.Native
             int width = Convert.ToInt32(alpha.Width), height = Convert.ToInt32(alpha.Height);
             if (width <= 0 || height <= 0)
                 throw new InvalidOperationException("Некорректный размер альфа-канала.");
-            byte[] opacity = new byte[checked(width * height)];
-            byte[] covered = new byte[opacity.Length];
+
+            bool[] visible = new bool[checked(width * height)];
+            bool[] covered = new bool[visible.Length];
             dynamic tiles = alpha.Tiles;
             if (Convert.ToInt32(tiles.Count) == 0)
                 throw new InvalidOperationException("Альфа-канал не содержит пикселей.");
@@ -224,56 +190,32 @@ namespace VanyaTools.Native
                     int px = left + x, py = bottom + y;
                     if (px < 0 || px >= width || py < 0 || py >= height) continue;
                     int index = py * width + px;
-                    opacity[index] = data[y * stride + x];
-                    covered[index] = 1;
+                    visible[index] = data[y * stride + x] > threshold;
+                    covered[index] = true;
                 }
             }
 
-            bool hasVisible = false, hasBackground = false;
-            using (var image = new System.Drawing.Bitmap(width, height,
-                       System.Drawing.Imaging.PixelFormat.Format24bppRgb))
+            int visibleCount = 0;
+            for (int i = 0; i < visible.Length; i++)
             {
-                var rect = new System.Drawing.Rectangle(0, 0, width, height);
-                var bits = image.LockBits(rect, System.Drawing.Imaging.ImageLockMode.WriteOnly,
-                                          System.Drawing.Imaging.PixelFormat.Format24bppRgb);
-                try
-                {
-                    int stride = Math.Abs(bits.Stride);
-                    byte[] pixels = new byte[checked(stride * height)];
-                    for (int y = 0; y < height; y++)
-                    for (int x = 0; x < width; x++)
-                    {
-                        int sourceIndex = (height - 1 - y) * width + x;
-                        if (covered[sourceIndex] == 0)
-                            throw new InvalidOperationException("Не удалось прочитать пиксель альфа-канала.");
-                        bool visible = opacity[sourceIndex] > threshold;
-                        byte value = visible ? (byte)0 : (byte)255;
-                        int index = y * stride + x * 3;
-                        pixels[index] = pixels[index + 1] = pixels[index + 2] = value;
-                        if (visible) hasVisible = true; else hasBackground = true;
-                    }
-                    Marshal.Copy(pixels, 0, bits.Scan0, pixels.Length);
-                }
-                finally { image.UnlockBits(bits); }
-                if (!hasVisible) throw new InvalidOperationException(
-                    "При выбранном пороге альфа-канал полностью прозрачный. Уменьшите порог.");
-                if (!hasBackground) return null;
-                image.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
+                if (!covered[i])
+                    throw new InvalidOperationException("Не удалось прочитать пиксель альфа-канала.");
+                if (visible[i]) visibleCount++;
             }
+            if (visibleCount == 0)
+                throw new InvalidOperationException(
+                    "При выбранном пороге альфа-канал полностью прозрачный. Уменьшите порог.");
+            if (visibleCount == visible.Length) return null;
 
-            double leftX = (double)rasterShape.LeftX, bottomY = (double)rasterShape.BottomY;
-            double shapeWidth = (double)rasterShape.SizeWidth;
-            double shapeHeight = (double)rasterShape.SizeHeight;
-            ImportMask(doc.ActiveLayer, pngPath);
-            dynamic selection = app.ActiveSelectionRange;
-            if (selection == null || (int)selection.Count != 1)
-                throw new InvalidOperationException("CorelDRAW не выделил импортированную альфа-маску.");
-            dynamic shape = selection.Shapes[1];
-            shape.SetBoundingBox(leftX, bottomY, shapeWidth, shapeHeight,
-                                 false, CorelConstants.CdrBottomLeft);
-            return shape;
+            Log.Info($"Alpha mask: {width}x{height} px, {visibleCount} visible pixels, " +
+                     $"threshold {threshold}.");
+            return AlphaMaskVectorizer.CreateShapes(doc, app, visible, width, height,
+                (double)rasterShape.LeftX, (double)rasterShape.BottomY,
+                (double)rasterShape.SizeWidth, (double)rasterShape.SizeHeight,
+                smoothing, detail, simplifyToleranceMm, mergeAdjacent);
         }
-        private static dynamic TraceStickerSilhouette(dynamic rasterShape, int smoothing, int detail, bool mergeAdjacentObjects, bool binaryMask)
+
+        private static dynamic TraceStickerSilhouette(dynamic rasterShape, int smoothing, int detail, bool mergeAdjacentObjects)
         {
             dynamic trace = rasterShape.Bitmap.Trace(
                 CorelConstants.CdrTraceClipart,
@@ -288,11 +230,6 @@ namespace VanyaTools.Native
             trace.DeleteOriginalObject = true;
             trace.RemoveBackground = true;
             trace.RemoveEntireBackColor = true;
-            if (binaryMask)
-            {
-                trace.BackgroundRemovalMode = 2; // cdrTraceBackgroundManual
-                trace.BackgroundColor.RGBAssign(255, 255, 255);
-            }
             trace.MergeAdjacentObjects = mergeAdjacentObjects;
             trace.RemoveOverlap = true;
 

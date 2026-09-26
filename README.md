@@ -180,4 +180,4 @@ Window > Dockers > Vanya Tools
 - CorelDRAW поддерживает VBA macro projects в `.gms` и загрузку через Scripts docker.
 - Custom dockers могут быть HTML-панелями, которые вызывают объектную модель через `window.external.Application`.
 - `Bitmap.ImageAlpha`, `Bitmap.CropEnvelope` и `Bitmap.Crop` используются для работы с прозрачным bitmap и постоянной обрезкой.
-- `ShapeRange.ConvertToBitmapEx`, `Bitmap.Trace`, `ShapeRange.CreateBoundary` и `Curve.Contour` используются для генерации contour cut из смешанных стикерпаков.
+- `ShapeRange.ConvertToBitmapEx` создаёт растр с прозрачностью; внешний контур строится напрямую по альфа-каналу. Для растра без прозрачности используется `Bitmap.Trace`; затем применяются `ShapeRange.CreateBoundary` и `Curve.Contour`.
