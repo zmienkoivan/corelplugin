@@ -27,6 +27,8 @@ namespace VanyaTools.Native
         private readonly TextBox _detail;
         private readonly TextBox _roundSpikesMm;
         private readonly TextBox _simplificationToleranceMm;
+        private readonly TextBox _smoothSelectedRadiusMm;
+        private readonly TextBox _smoothSelectedSimplificationMm;
         private readonly TextBox _tabWidthMm;
         private readonly TextBox _tabHeightMm;
         private readonly TextBox _tabRadiusMm;
@@ -142,6 +144,11 @@ namespace VanyaTools.Native
             _simplificationToleranceMm = AddRow(contourSettings, "Упрощение контура, мм", "0.05");
             _mergeAdjacentContours = AddCheckBox(contourSettings, "Сливать соседние объекты", false);
             root.Children.Add(Button("Сгладить выбранный контур", (_, __) => RunSmoothSelectedContour()));
+            var smoothingSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
+            AddSettingsExpander(root, "Настройки сглаживания", smoothingSettings);
+            _smoothSelectedRadiusMm = AddRow(smoothingSettings, "Радиус скругления, мм", "1.5");
+            _smoothSelectedSimplificationMm = AddRow(smoothingSettings, "Допуск упрощения, мм", "0.2");
+            AddSmallLabel(smoothingSettings, "Увеличьте радиус или допуск, если изменение почти не видно.");
 
             AddSeparator(root);
             AddSectionTitle(root, "3. Создайте язычки");
@@ -224,10 +231,11 @@ namespace VanyaTools.Native
         {
             RunSafe(() =>
             {
-                double roundSpikes = ParseDouble(_roundSpikesMm.Text, 0.7);
-                double simplifyToleranceMm = ParseDouble(_simplificationToleranceMm.Text, 0.05);
-                int processed = new StickerCutService().SmoothSelectedContours(roundSpikes, simplifyToleranceMm);
-                SetStatus($"Сглажено контуров: {processed}.", false);
+                double roundSpikes = ParseDouble(_smoothSelectedRadiusMm.Text, 1.5);
+                double simplifyToleranceMm = ParseDouble(_smoothSelectedSimplificationMm.Text, 0.2);
+                var service = new StickerCutService();
+                int processed = service.SmoothSelectedContours(roundSpikes, simplifyToleranceMm);
+                SetStatus($"Сглажено контуров: {processed}. Узлов: {service.LastSmoothNodesBefore} → {service.LastSmoothNodesAfter}. Имена паков сохранены.", false);
             });
         }
 

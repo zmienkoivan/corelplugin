@@ -1,10 +1,13 @@
 using System;
+using System.Collections.Generic;
 
 namespace VanyaTools.Native
 {
     internal sealed class StickerCutService
     {
         public bool LastUsedAlphaMask { get; private set; }
+        public int LastSmoothNodesBefore { get; private set; }
+        public int LastSmoothNodesAfter { get; private set; }
         public int SmoothSelectedContours(double roundSpikesMm, double simplifyToleranceMm)
         {
             if (roundSpikesMm < 0)
@@ -18,23 +21,39 @@ namespace VanyaTools.Native
             if (doc == null)
                 throw new InvalidOperationException("No active document.");
             if (sourceRange == null || sourceRange.Count == 0)
-                throw new InvalidOperationException("Select one or more cut contour curves.");
+                throw new InvalidOperationException("Выделите один или несколько контуров реза.");
+
+            var selected = new List<dynamic>();
+            foreach (dynamic shape in sourceRange.Shapes)
+                if ((int)shape.Type == CorelConstants.CdrCurveShape)
+                    selected.Add(shape);
+            if (selected.Count == 0)
+                throw new InvalidOperationException("В выделении нет кривых контуров реза.");
 
             CutSpotColor.ValidateAvailable(app);
             int oldUnit = (int)doc.Unit;
             int processed = 0;
+            LastSmoothNodesBefore = 0;
+            LastSmoothNodesAfter = 0;
+            var results = new List<dynamic>();
 
             doc.BeginCommandGroup("Vanya Tools - smooth selected cut contours");
             try
             {
                 doc.Unit = CorelConstants.CdrMillimeter;
-                foreach (dynamic shape in sourceRange.Shapes)
+                foreach (dynamic shape in selected)
                 {
-                    if ((int)shape.Type != CorelConstants.CdrCurveShape) continue;
+                    try { LastSmoothNodesBefore += (int)shape.Curve.Nodes.Count; } catch { }
                     dynamic smoothed = SmoothCutContour(shape, roundSpikesMm, simplifyToleranceMm);
                     FormatCutContourPublic(smoothed);
-                    smoothed.CreateSelection();
+                    try { LastSmoothNodesAfter += (int)smoothed.Curve.Nodes.Count; } catch { }
+                    results.Add(smoothed);
                     processed++;
+                }
+                for (int i = 0; i < results.Count; i++)
+                {
+                    if (i == 0) results[i].CreateSelection();
+                    else results[i].AddToSelection();
                 }
                 return processed;
             }
@@ -402,8 +421,8 @@ namespace VanyaTools.Native
         {
             if (cutShape == null) return cutShape;
 
-            dynamic app = CorelApp.Get();
-            dynamic doc = app.ActiveDocument;
+            string originalName = Convert.ToString(cutShape.Name) ?? string.Empty;
+            dynamic sourceLayer = cutShape.Layer;
             dynamic expandedShape = null;
             dynamic smoothedShape = null;
 
@@ -418,15 +437,16 @@ namespace VanyaTools.Native
                         CorelConstants.CdrContourOutside,
                         CorelConstants.CdrContourRoundCap,
                         CorelConstants.CdrContourCornerRound, 0);
-                    expandedShape = doc.ActiveLayer.CreateCurve(expandedCurve);
+                    expandedShape = sourceLayer.CreateCurve(expandedCurve);
 
                     dynamic closedCurve = expandedShape.Curve.Contour(
                         roundSpikesMm,
                         CorelConstants.CdrContourInside,
                         CorelConstants.CdrContourRoundCap,
                         CorelConstants.CdrContourCornerRound, 0);
-                    smoothedShape = doc.ActiveLayer.CreateCurve(closedCurve);
-                    smoothedShape.Fillet(roundSpikesMm * 0.35, true);
+                    smoothedShape = sourceLayer.CreateCurve(closedCurve);
+                    try { smoothedShape.Fillet(roundSpikesMm * 0.35, true); }
+                    catch (Exception ex) { Log.Error("Corner fillet failed; keeping contour smoothing.", ex); }
                 }
                 else
                 {
@@ -439,6 +459,8 @@ namespace VanyaTools.Native
                     catch (Exception ex) { Log.Error("Node simplification failed; keeping the generated contour.", ex); }
                 }
 
+                if (!string.IsNullOrWhiteSpace(originalName))
+                    smoothedShape.Name = originalName;
                 cutShape.Delete();
                 TryDelete(expandedShape);
                 return smoothedShape;
