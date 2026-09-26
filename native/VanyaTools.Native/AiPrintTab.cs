@@ -212,14 +212,24 @@ namespace VanyaTools.Native
 
         private static string DataUri(BitmapSource image)
         {
-            var enc = new JpegBitmapEncoder { QualityLevel = 82 };
-            enc.Frames.Add(BitmapFrame.Create(image));
-            using (var ms = new MemoryStream())
+            BitmapSource current = image;
+            for (int attempt = 0; attempt < 5; attempt++)
             {
-                enc.Save(ms);
-                if (ms.Length > 950000) throw new InvalidOperationException("Файл слишком большой: уменьшите область кадрирования.");
-                return "data:image/jpeg;base64," + Convert.ToBase64String(ms.ToArray());
+                var enc = new PngBitmapEncoder();
+                enc.Frames.Add(BitmapFrame.Create(current));
+                using (var ms = new MemoryStream())
+                {
+                    enc.Save(ms);
+                    if (ms.Length <= 950000)
+                        return "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+                }
+
+                if (attempt == 4) break;
+                double scale = Math.Min(0.8, 2048.0 / Math.Max(current.PixelWidth, current.PixelHeight));
+                if (scale >= 1.0) scale = 0.75;
+                current = new TransformedBitmap(current, new ScaleTransform(scale, scale));
             }
+            throw new InvalidOperationException("PNG больше лимита передачи даже после уменьшения. Выделите только нужную область принта.");
         }
 
         private static string Predict(string token, string model, Dictionary<string, object> input)
