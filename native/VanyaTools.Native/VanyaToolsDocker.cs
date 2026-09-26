@@ -77,6 +77,21 @@ namespace VanyaTools.Native
             root.Children.Add(_status);
             root.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
 
+            var standardTools = new StackPanel { Margin = new Thickness(5) };
+            var tabs = new TabControl { MinHeight = 430 };
+            tabs.Items.Add(new TabItem
+            {
+                Header = "Инструменты",
+                Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = standardTools }
+            });
+            tabs.Items.Add(new TabItem
+            {
+                Header = "AI-графика",
+                Content = new AiPrintTab(ImportAiResult, (message, isError) => SetStatus(message, isError))
+            });
+            outer.Children.Add(tabs);
+            root = standardTools;
+
             AddSectionTitle(root, "Простые автоматизации");
             root.Children.Add(Button("Обрезать растр", (_, __) => RunTrim(true)));
             var trimSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
@@ -152,6 +167,17 @@ namespace VanyaTools.Native
             Log.Info("VanyaToolsDocker constructor finished.");
         }
 
+        private void ImportAiResult(string path)
+        {
+            RunSafe(() =>
+            {
+                dynamic app = CorelApp.Get();
+                dynamic doc = app.ActiveDocument;
+                doc.ActiveLayer.Import(path);
+                app.ActiveWindow.Refresh();
+                SetStatus("AI-результат импортирован в Corel: " + Path.GetFileName(path), false);
+            });
+        }
         private void RunTrim(bool useTiles)
         {
             RunSafe(() =>
