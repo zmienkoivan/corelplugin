@@ -176,7 +176,7 @@ namespace VanyaTools.Native
             Log.Info("VanyaToolsDocker constructor finished.");
         }
 
-        private void ImportAiResult(string path)
+        private string ImportAiResult(string path)
         {
             try
             {
@@ -193,9 +193,24 @@ namespace VanyaTools.Native
                     BindingFlags.InvokeMethod, null, layer,
                     new object[] { new BStrWrapper(Path.GetFullPath(path)), 0, options });
                 importFilter.Finish();
+                // Imported PNG shapes are selected by Corel. Use Vanya Tools' existing
+                // alpha-aware cropper so the trimmed bounds and physical size agree.
+                string trimWarning = null;
+                try
+                {
+                    var trim = new BitmapTrimService().TrimSelected(
+                        TrimMode.TransparentPixels, TrimSides.All, 2, true);
+                    Log.Info("AI result transparent-edge trim: trimmed=" + trim.Trimmed + ", skipped=" + trim.Skipped + ".");
+                }
+                catch (Exception trimError)
+                {
+                    Log.Error("AI image inserted, but transparent-edge trimming failed.", trimError);
+                    trimWarning = "Изображение вставлено. Не удалось обрезать прозрачные поля: " + trimError.Message;
+                }
                 // A refresh failure must not turn a completed import into a retry/duplicate.
                 try { app.ActiveWindow.Refresh(); } catch { }
-                SetStatus("AI-результат импортирован в Corel: " + Path.GetFileName(path), false);
+                if (String.IsNullOrEmpty(trimWarning)) SetStatus("AI-результат импортирован в Corel: " + Path.GetFileName(path), false);
+                return trimWarning;
             }
             catch (Exception ex)
             {

@@ -18,11 +18,12 @@ namespace VanyaTools.Native
 {
     internal sealed class AiPrintTab : UserControl
     {
-        private readonly Action<string> _import;
+        private readonly Func<string, string> _import;
         private readonly Action<string, bool> _status;
         private readonly Func<string> _captureSelection;
         private readonly ComboBox _operation;
         private readonly ComboBox _model;
+        private readonly ComboBox _palette;
         private readonly PasswordBox _token;
         private readonly TextBox _prompt, _left, _top, _right, _bottom;
         private readonly Image _sourcePreview, _resultPreview;
@@ -39,6 +40,7 @@ namespace VanyaTools.Native
         private bool _busy;
         private string _lastModel, _lastOutput, _readyOutput;
         private Dictionary<string, object> _lastInput;
+        private string _importWarning;
         private string _source, _result, _svg;
         private readonly CheckBox _smartRestore, _upscalePrint;
         private readonly TextBox _printTarget, _analysisText;
@@ -51,7 +53,7 @@ namespace VanyaTools.Native
             public override string ToString() { return Label; }
         }
 
-        public AiPrintTab(Action<string> import, Action<string, bool> status, Func<string> captureSelection)
+        public AiPrintTab(Func<string, string> import, Action<string, bool> status, Func<string> captureSelection)
         {
             _import = import; _status = status; _captureSelection = captureSelection;
             var panel = new StackPanel { Margin = new Thickness(7) };
@@ -93,6 +95,12 @@ namespace VanyaTools.Native
             _upscalePrint.Checked += (_, __) => UpdateCost();
             _upscalePrint.Unchecked += (_, __) => UpdateCost();
             panel.Children.Add(Note("Апскейл может изменить мелкие штрихи. По умолчанию отключён. При нескольких футболках укажите, например: принт на груди левой футболки."));
+            panel.Children.Add(Label("Цветов для плашечной графики", false));
+            _palette = new ComboBox { FontSize = 10, Margin = new Thickness(0, 0, 0, 4) };
+            foreach (string item in new[] { "Авто · одноцветный принт в 1 цвет, иначе до 4", "1 цвет", "2 цвета", "4 цвета" }) _palette.Items.Add(item);
+            _palette.SelectedIndex = 0;
+            panel.Children.Add(_palette);
+            panel.Children.Add(Note("PNG перед импортом готовится в A3 при 300 DPI; прозрачные края после вставки обрезает штатная функция «Обрезать растр». Плашечные цвета упрощаются, чтобы трассировка не строила градиенты."));
             _analysisText = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 180, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 10 };
             panel.Children.Add(new Expander { Header = "Что увидела модель анализа", Content = _analysisText });
 
@@ -203,7 +211,7 @@ namespace VanyaTools.Native
                     _lastInput = null; _readyOutput = null; _analysisText.Text = "Анализ выполняется…";
                     _pipeline = new PrintRestorationPipeline(data, model.Id, _prompt.Text, _printTarget.Text, _upscalePrint.IsChecked == true);
                     await ExecutePipeline(key);
-                    Report("Готово: три этапа завершены, результат вставлен. Проверьте текст и форму по исходнику.", false);
+                ReportOutcome("Готово: три этапа завершены, результат вставлен. Проверьте текст и форму по исходнику.");
                     return;
                 }
                 var input = new Dictionary<string, object> { ["prompt"] = _prompt.Text, ["output_format"] = "png" };
@@ -215,7 +223,7 @@ namespace VanyaTools.Native
                 string outputPath = _result;
                 await ExecuteJob(model.Id, key, input, outputPath);
                 Log.Info("AI edit succeeded in " + operationTimer.ElapsedMilliseconds + " ms; output bytes=" + new FileInfo(_result).Length + ".");
-                Report("Готово: результат вставлен на холст. Проверьте надписи и геометрию перед печатью.", false);
+                ReportOutcome("Готово: результат вставлен на холст. Проверьте надписи и геометрию перед печатью.");
             }
             catch (OperationCanceledException) { Report("Операция остановлена. Готовый результат, если он получен, сохранён. Повтор доступен ниже.", false); }
             catch (WebException ex) { Log.Error("AI edit network request failed.", ex); Report("Не удалось связаться с Replicate. Выделение осталось в Corel; проверьте подключение и настройки прокси. Код: " + ex.Status + ". " + ex.Message + (ex.InnerException == null ? "" : " · " + ex.InnerException.Message), true); }
@@ -247,7 +255,7 @@ namespace VanyaTools.Native
                 await ExecuteJob("recraft-ai/recraft-vectorize", key,
                     new Dictionary<string, object> { ["image"] = data }, outputPath);
                 Log.Info("AI vectorization succeeded in " + operationTimer.ElapsedMilliseconds + " ms; output bytes=" + new FileInfo(_svg).Length + ".");
-                Report("Готово: векторный результат вставлен на холст.", false);
+                ReportOutcome("Готово: векторный результат вставлен на холст.");
             }
             catch (OperationCanceledException) { Report("Операция остановлена. Повтор доступен ниже.", false); }
             catch (WebException ex) { Log.Error("AI vectorization network request failed.", ex); Report("Не удалось связаться с Replicate. Проверьте подключение и настройки прокси. Код: " + ex.Status + ". " + ex.Message + (ex.InnerException == null ? "" : " · " + ex.InnerException.Message), true); }
@@ -287,7 +295,7 @@ namespace VanyaTools.Native
             _retryButton.IsEnabled = !busy;
             _retryButton.Visibility = !busy && (_pipeline != null || _lastInput != null || File.Exists(_readyOutput)) ? Visibility.Visible : Visibility.Collapsed;
             _retryButton.Content = File.Exists(_readyOutput) ? "Повторить вставку · без оплаты" : "Повторить / продолжить операцию";
-            foreach (Control control in new Control[] { _operation, _model, _prompt, _left, _top, _right, _bottom, _token, _smartRestore, _upscalePrint, _printTarget }) control.IsEnabled = !busy;
+            foreach (Control control in new Control[] { _operation, _model, _prompt, _left, _top, _right, _bottom, _token, _smartRestore, _upscalePrint, _printTarget, _palette }) control.IsEnabled = !busy;
             if (busy)
             {
                 _cancellation = new CancellationTokenSource();
@@ -306,18 +314,28 @@ namespace VanyaTools.Native
             _lastModel = model; _lastInput = input; _lastOutput = path; _readyOutput = null;
             CancellationToken cancel = _cancellation.Token;
             await Task.Run(() => ReplicateWorkerClient.Run(model, key, input, path, UpdateProgress, cancel));
-            CompleteResult(path, cancel);
+            await CompleteResult(path, cancel);
         }
 
         private async Task ExecutePipeline(string key)
         {
             CancellationToken cancel = _cancellation.Token;
             string path = await _pipeline.Run(key, cancel, UpdateProgress, text => _analysisText.Text = text);
-            CompleteResult(path, cancel);
+            await CompleteResult(path, cancel);
         }
 
-        private void CompleteResult(string path, CancellationToken cancel)
+        private async Task CompleteResult(string path, CancellationToken cancel)
         {
+            if (Path.GetExtension(path).Equals(".png", StringComparison.OrdinalIgnoreCase))
+            {
+                Report("Подготавливаю A3 · 300 DPI · палитру для печати…", false);
+                string printPath = Path.Combine(Path.GetTempPath(), "Vanya-A3-" + Guid.NewGuid().ToString("N") + ".png");
+                int palette = _palette.SelectedIndex == 1 ? 1 : _palette.SelectedIndex == 2 ? 2 : _palette.SelectedIndex == 3 ? 4 : 0;
+                await Task.Run(() => PrintOutputProcessor.Prepare(path, printPath, palette));
+                cancel.ThrowIfCancellationRequested();
+                path = printPath;
+                Log.Info("Print output prepared for A3 at 300 DPI with " + (_palette.SelectedIndex == 0 ? "automatic" : palette.ToString()) + " spot colors.");
+            }
             _readyOutput = path;
             try
             {
@@ -333,7 +351,7 @@ namespace VanyaTools.Native
 
         private void InsertReadyResult()
         {
-            try { _import(_readyOutput); }
+            try { _importWarning = _import(_readyOutput); }
             catch (Exception ex)
             {
                 throw new InvalidOperationException("Файл готов, но вставка не удалась. Нажмите «Повторить вставку» — без новой оплаты. " + ex.GetBaseException().Message, ex);
@@ -366,7 +384,7 @@ namespace VanyaTools.Native
                 if (local) InsertReadyResult();
                 else if (_pipeline != null) await ExecutePipeline(key);
                 else await ExecuteJob(_lastModel, key, _lastInput, _lastOutput);
-                Report("Готово: результат вставлен на холст.", false);
+                ReportOutcome("Готово: результат вставлен на холст.");
             }
             catch (OperationCanceledException) { Report("Операция остановлена. Повтор доступен ниже.", false); }
             catch (Exception ex) { Log.Error("AI retry failed.", ex); Report(ex.GetBaseException().Message, true); }
@@ -387,6 +405,12 @@ namespace VanyaTools.Native
                 SetBusy(false, null);
             }
             catch (Exception ex) { Log.Error("Pending AI result restore failed.", ex); }
+        }
+
+        private void ReportOutcome(string success)
+        {
+            Report(String.IsNullOrEmpty(_importWarning) ? success : _importWarning, !String.IsNullOrEmpty(_importWarning));
+            _importWarning = null;
         }
 
         private string CropData()
