@@ -178,9 +178,15 @@ namespace VanyaTools.Native
         {
             RunSafe(() =>
             {
+                if (String.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                    throw new FileNotFoundException("Файл результата AI не найден. Сначала выполните обработку.", path);
+
                 dynamic app = CorelApp.Get();
                 dynamic doc = app.ActiveDocument;
-                doc.ActiveLayer.Import(path);
+                // ImportEx returns an ImportFilter whose Finish method commits the import.
+                // Layer.Import is unreliable through late-bound COM on some Corel versions.
+                dynamic importFilter = doc.ActiveLayer.ImportEx(path);
+                importFilter.Finish();
                 app.ActiveWindow.Refresh();
                 SetStatus("AI-результат импортирован в Corel: " + Path.GetFileName(path), false);
             });

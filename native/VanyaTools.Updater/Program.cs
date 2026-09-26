@@ -56,7 +56,7 @@ namespace VanyaTools.Updater
                 using (var client = new WebClient())
                 using (var spinner = new ConsoleSpinner("Загрузка пакета обновления"))
                 {
-                    client.Headers[HttpRequestHeader.UserAgent] = "VanyaTools-Updater/1.0.17";
+                    client.Headers[HttpRequestHeader.UserAgent] = "VanyaTools-Updater/1.0.18";
                     client.DownloadProgressChanged += (_, e) => spinner.SetMessage("Загрузка пакета: " + e.ProgressPercentage + "%");
                     client.DownloadFile(release.AssetUrl, zipPath);
                 }
@@ -259,7 +259,13 @@ namespace VanyaTools.Updater
                 {
                     using (response)
                     using (var reader = new StreamReader(response.GetResponseStream()))
-                        throw new InvalidOperationException(reader.ReadToEnd());
+                    {
+                        string body = reader.ReadToEnd();
+                        if (body.Length > 2000) body = body.Substring(0, 2000) + "…";
+                        if (String.IsNullOrWhiteSpace(body)) body = "(пустое тело ответа)";
+                        throw new InvalidOperationException("Replicate вернул HTTP " +
+                            (int)response.StatusCode + " " + response.StatusDescription + ". Ответ API: " + body);
+                    }
                 }
                 throw;
             }
@@ -338,7 +344,7 @@ namespace VanyaTools.Updater
         {
             string uri = "https://api.github.com/repos/" + repository + "/releases/latest";
             var request = (HttpWebRequest)WebRequest.Create(uri);
-            request.UserAgent = "VanyaTools-Updater/1.0.17";
+            request.UserAgent = "VanyaTools-Updater/1.0.18";
             request.Accept = "application/vnd.github+json";
 
             string json;
