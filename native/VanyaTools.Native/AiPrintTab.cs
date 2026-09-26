@@ -1,12 +1,10 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
-using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -142,9 +140,9 @@ namespace VanyaTools.Native
                 else if (model.Id.Contains("kontext")) { input["input_image"] = data; input["aspect_ratio"] = "match_input_image"; input["safety_tolerance"] = 2; }
                 else if (model.Id.Contains("flux-2")) { input["input_images"] = new[] { data }; input["aspect_ratio"] = "match_input_image"; input["resolution"] = "1 MP"; }
                 else { input["image"] = data; input["go_fast"] = true; input["output_quality"] = 95; }
-                string url = await Task.Run(() => Predict(key, model.Id, input));
                 _result = Path.Combine(Path.GetTempPath(), "Vanya-AI-" + Guid.NewGuid().ToString("N") + ".png");
-                await Task.Run(() => Download(url, _result));
+                string outputPath = _result;
+                await Task.Run(() => ReplicateWorkerClient.Run(model.Id, key, input, outputPath));
                 _resultPreview.Source = Bitmap(_result);
                 Report("Готово. Сравните надписи и геометрию перед печатью.", false);
             }
@@ -165,9 +163,10 @@ namespace VanyaTools.Native
             {
                 IsEnabled = false; Report("Создаю SVG…", false);
                 string data = await Task.Run(() => DataUri(Bitmap(file)));
-                string url = await Task.Run(() => Predict(key, "recraft-ai/recraft-vectorize", new Dictionary<string, object> { ["image"] = data }));
                 _svg = Path.Combine(Path.GetTempPath(), "Vanya-AI-" + Guid.NewGuid().ToString("N") + ".svg");
-                await Task.Run(() => Download(url, _svg));
+                string outputPath = _svg;
+                await Task.Run(() => ReplicateWorkerClient.Run("recraft-ai/recraft-vectorize", key,
+                    new Dictionary<string, object> { ["image"] = data }, outputPath));
                 Report("SVG создан. Проверьте его в Corel.", false);
             }
             catch (WebException ex) { Report("Не удалось связаться с Replicate. Проверьте подключение и настройки прокси. Код: " + ex.Status + ". " + ex.Message + (ex.InnerException == null ? "" : " · " + ex.InnerException.Message), true); }
@@ -208,82 +207,6 @@ namespace VanyaTools.Native
             throw new InvalidOperationException("PNG больше лимита передачи даже после уменьшения. Выделите только нужную область принта.");
         }
 
-        private static string Predict(string token, string model, Dictionary<string, object> input)
-        {
-            // Replicate requires modern TLS; explicitly enable it for older Corel/.NET setups.
-            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            var ser = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue };
-            var req = CreateHttpRequest("https://api.replicate.com/v1/models/" + model + "/predictions");
-            req.Method = "POST"; req.ContentType = "application/json"; req.Accept = "application/json";
-            req.Headers[HttpRequestHeader.Authorization] = "Bearer " + token; req.Headers["Prefer"] = "wait=60";
-            byte[] bytes = Encoding.UTF8.GetBytes(ser.Serialize(new Dictionary<string, object> { ["input"] = input }));
-            using (var stream = req.GetRequestStream()) stream.Write(bytes, 0, bytes.Length);
-            var result = Read(req, ser);
-            string status = Convert.ToString(result["status"]);
-            for (int i = 0; i < 90 && (status == "starting" || status == "processing"); i++)
-            {
-                var urls = result["urls"] as Dictionary<string, object>;
-                if (urls == null) break;
-                Task.Delay(2000).Wait();
-                var poll = CreateHttpRequest(Convert.ToString(urls["get"]));
-                poll.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
-                result = Read(poll, ser); status = Convert.ToString(result["status"]);
-            }
-            if (status != "succeeded") throw new InvalidOperationException(Convert.ToString(result.ContainsKey("error") ? result["error"] : "Модель завершилась со статусом " + status));
-            object output = result["output"];
-            var list = output as ArrayList; if (list != null && list.Count > 0) output = list[0];
-            var array = output as object[]; if (array != null && array.Length > 0) output = array[0];
-            return Convert.ToString(output);
-        }
-
-        private static Dictionary<string, object> Read(HttpWebRequest req, JavaScriptSerializer ser)
-        {
-            try { using (var res = (HttpWebResponse)req.GetResponse()) using (var reader = new StreamReader(res.GetResponseStream())) return ser.Deserialize<Dictionary<string, object>>(reader.ReadToEnd()); }
-            catch (WebException ex)
-            {
-                var res = ex.Response as HttpWebResponse;
-                if (res != null) using (var reader = new StreamReader(res.GetResponseStream())) throw new InvalidOperationException(reader.ReadToEnd());
-                throw;
-            }
-        }
-
-        private static HttpWebRequest CreateHttpRequest(string url)
-        {
-            var req = (HttpWebRequest)WebRequest.Create(url);
-            req.Timeout = 60000;
-            req.ReadWriteTimeout = 60000;
-            try
-            {
-                // CorelDRAW hosts this library inside its own .NET process/config.
-                // Ask Windows for the signed-in user's system proxy explicitly.
-                IWebProxy proxy = WebRequest.GetSystemWebProxy();
-                if (proxy != null)
-                {
-                    proxy.Credentials = CredentialCache.DefaultCredentials;
-                    req.Proxy = proxy;
-                }
-            }
-            catch (Exception ex) { Log.Info("System proxy lookup failed; using .NET default proxy. " + ex.Message); }
-            return req;
-        }
-
-        private static void Download(string url, string file)
-        {
-            using (var wc = new WebClient())
-            {
-                try
-                {
-                    IWebProxy proxy = WebRequest.GetSystemWebProxy();
-                    if (proxy != null)
-                    {
-                        proxy.Credentials = CredentialCache.DefaultCredentials;
-                        wc.Proxy = proxy;
-                    }
-                }
-                catch (Exception ex) { Log.Info("System proxy lookup failed for download; using .NET default proxy. " + ex.Message); }
-                wc.DownloadFile(url, file);
-            }
-        }
         private static BitmapSource Bitmap(string path) { using (var s = File.OpenRead(path)) { var b = BitmapFrame.Create(s, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad); b.Freeze(); return b; } }
 
         private void ImportFile(string path)
