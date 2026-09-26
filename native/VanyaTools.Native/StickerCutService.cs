@@ -170,6 +170,28 @@ namespace VanyaTools.Native
 
         // Corel's COM Image cannot be passed back to CreateBitmap or SetImageData
         // on some installations. Write an ordinary temporary PNG, then import it.
+        // Import's optional arguments are an enum and an interface in Corel's
+        // typelib. A typed call avoids failures in the dynamic COM binder.
+        [ComImport, Guid("b0580040-9aa4-44fd-9547-4f91eb757ac4"),
+         InterfaceType(ComInterfaceType.InterfaceIsIDispatch)]
+        private interface ICorelLayerImport
+        {
+            [DispId(1610743829)]
+            void Import([MarshalAs(UnmanagedType.BStr)] string fileName, int filter,
+                        [MarshalAs(UnmanagedType.Interface)] object options);
+        }
+
+        private static void ImportMask(object layer, string fileName)
+        {
+            IntPtr unknown = Marshal.GetIUnknownForObject(layer);
+            try
+            {
+                var typedLayer = (ICorelLayerImport)Marshal.GetTypedObjectForIUnknown(
+                    unknown, typeof(ICorelLayerImport));
+                typedLayer.Import(fileName, 0, null); // cdrAutoSense
+            }
+            finally { Marshal.Release(unknown); }
+        }
         private static dynamic CreateAlphaTraceMask(dynamic doc, dynamic app,
             dynamic rasterShape, int threshold, string pngPath)
         {
@@ -242,7 +264,7 @@ namespace VanyaTools.Native
             double leftX = (double)rasterShape.LeftX, bottomY = (double)rasterShape.BottomY;
             double shapeWidth = (double)rasterShape.SizeWidth;
             double shapeHeight = (double)rasterShape.SizeHeight;
-            doc.ActiveLayer.Import(pngPath);
+            ImportMask(doc.ActiveLayer, pngPath);
             dynamic selection = app.ActiveSelectionRange;
             if (selection == null || (int)selection.Count != 1)
                 throw new InvalidOperationException("CorelDRAW не выделил импортированную альфа-маску.");
