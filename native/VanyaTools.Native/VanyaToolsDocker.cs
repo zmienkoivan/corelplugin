@@ -77,77 +77,78 @@ namespace VanyaTools.Native
             root.Children.Add(_status);
             root.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
 
-            var parameterPanel = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
-            root.Children.Add(new Expander
-            {
-                Header = "Параметры",
-                IsExpanded = false,
-                Content = parameterPanel,
-                Margin = new Thickness(0, 0, 0, 6)
-            });
-
-            AddSectionTitle(parameterPanel, "Обрезка растра");
-            AddSmallLabel(parameterPanel, "По границе");
-            AddRadioButton(parameterPanel, "Прозрачные пиксели", "TrimMode", true);
-            _trimModeTopLeft  = AddRadioButton(parameterPanel, "Цвет верхнего-левого угла", "TrimMode", false);
-            _trimModeBotRight = AddRadioButton(parameterPanel, "Цвет нижнего-правого угла", "TrimMode", false);
-            AddSmallLabel(parameterPanel, "Обрезать стороны");
-            var sidesGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 5) };
-            _trimTop    = AddCheckBox(sidesGrid, "Сверху", true);
-            _trimLeft   = AddCheckBox(sidesGrid, "Слева", true);
-            _trimBottom = AddCheckBox(sidesGrid, "Снизу", true);
-            _trimRight  = AddCheckBox(sidesGrid, "Справа", true);
-            parameterPanel.Children.Add(sidesGrid);
-            _trimPaddingPx = AddRow(parameterPanel, "Отступ, px", "2");
-
-            AddSeparator(parameterPanel);
-            AddSectionTitle(parameterPanel, "Контур реза");
-            _offsetMm = AddRow(parameterPanel, "Отступ, мм", "2");
-            _rasterDpi = AddRow(parameterPanel, "Растр DPI", "300");
-            _useAlphaMask = AddCheckBox(parameterPanel, "Трассировать по альфа-маске", true);
-            _alphaThreshold = AddRow(parameterPanel, "Порог альфа, 0–254", "10");
-            _smoothing = AddRow(parameterPanel, "Сглаживание", "70");
-            _detail = AddRow(parameterPanel, "Детализация", "35");
-            _roundSpikesMm = AddRow(parameterPanel, "Скругление, мм", "0.7");
-            _simplificationToleranceMm = AddRow(parameterPanel, "Упрощение контура, мм", "0.05");
-            _mergeAdjacentContours = AddCheckBox(parameterPanel, "Сливать соседние объекты", false);
-
-            AddSeparator(parameterPanel);
-            AddSectionTitle(parameterPanel, "Язычки отрыва");
-            _tabWidthMm = AddRow(parameterPanel, "Ширина, мм", "4");
-            _tabHeightMm = AddRow(parameterPanel, "Длина, мм", "12");
-            _tabRadiusMm = AddRow(parameterPanel, "Скругление язычка, мм", "2");
-
-            AddSectionTitle(root, "Обрезка растра");
+            AddSectionTitle(root, "Простые автоматизации");
             root.Children.Add(Button("Обрезать растр", (_, __) => RunTrim(true)));
+            var trimSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
+            AddSettingsExpander(root, "Настройки обрезки растра", trimSettings);
+            AddSmallLabel(trimSettings, "По границе");
+            AddRadioButton(trimSettings, "Прозрачные пиксели", "TrimMode", true);
+            _trimModeTopLeft = AddRadioButton(trimSettings, "Цвет верхнего-левого угла", "TrimMode", false);
+            _trimModeBotRight = AddRadioButton(trimSettings, "Цвет нижнего-правого угла", "TrimMode", false);
+            AddSmallLabel(trimSettings, "Обрезать стороны");
+            var sidesGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 5) };
+            _trimTop = AddCheckBox(sidesGrid, "Сверху", true);
+            _trimLeft = AddCheckBox(sidesGrid, "Слева", true);
+            _trimBottom = AddCheckBox(sidesGrid, "Снизу", true);
+            _trimRight = AddCheckBox(sidesGrid, "Справа", true);
+            trimSettings.Children.Add(sidesGrid);
+            _trimPaddingPx = AddRow(trimSettings, "Отступ, px", "2");
+
             AddSeparator(root);
-            AddSectionTitle(root, "Контур реза");
-            root.Children.Add(Button("Создать контур реза", (_, __) => RunCutContour()));
-            root.Children.Add(Button("Сгладить выбранный контур", (_, __) => RunSmoothSelectedContour()));
-            AddSeparator(root);
-            AddSectionTitle(root, "Редактирование пака");
-            root.Children.Add(Button("Удалить контуры пака", (_, __) => RunDeletePackContours()));
-            root.Children.Add(Button("Удалить маркеры пака", (_, __) => RunDeletePackMarkers()));
-            AddSeparator(root);
-            AddSectionTitle(root, "Язычки отрыва");
-            AddSmallLabel(root, "Язычок пересекает контур пополам.");
-            root.Children.Add(Button("Добавить маркер", (_, __) => RunAddPeelMarker()));
-            root.Children.Add(Button("Переприкрепить маркеры", (_, __) => RunReattachMarkers()));
-            root.Children.Add(Button("Применить язычки", (_, __) => RunApplyPeelTabs()));
-            AddSeparator(root);
-            AddSectionTitle(root, "Вспомогательные метки реза");
-            AddSmallLabel(root, "S 48×60 · M 105×142 · L 142×195 мм, книжная ориентация.");
-            AddSmallLabel(root, "Выделите весь пак. Уголки внутрь 1×1 мм; пунктирная рамка 4 мм не печатается.");
-            AddSmallLabel(root, "Поворот альбомного пака:");
-            var rotationDirectionPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 5) };
-            _rotatePackClockwise = AddRadioButton(rotationDirectionPanel, "Вправо (по часовой)", "PackRotationDirection", true);
-            _rotatePackCounterClockwise = AddRadioButton(rotationDirectionPanel, "Влево (против часовой)", "PackRotationDirection", false);
-            root.Children.Add(rotationDirectionPanel);
+            AddSectionTitle(root, "Подготовка стикерпака");
+
+            AddSectionTitle(root, "1. Выберите размер пака");
+            AddSmallLabel(root, "Выделите весь пак. Размер создаёт метки реза и внутреннюю рамку; при необходимости пак уменьшится.");
             var markPresetGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 5) };
             markPresetGrid.Children.Add(Button("S 48×60", (_, __) => RunCreateCutMarks("S", 48, 60)));
             markPresetGrid.Children.Add(Button("M 105×142", (_, __) => RunCreateCutMarks("M", 105, 142)));
             markPresetGrid.Children.Add(Button("L 142×195", (_, __) => RunCreateCutMarks("L", 142, 195)));
             root.Children.Add(markPresetGrid);
+            var sizeSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
+            AddSettingsExpander(root, "Настройки размера и меток", sizeSettings);
+            AddSmallLabel(sizeSettings, "Уголки 1×1 мм направлены внутрь. Пунктирная рамка с отступом 4 мм не печатается.");
+            AddSmallLabel(sizeSettings, "Поворот альбомного пака:");
+            _rotatePackClockwise = AddRadioButton(sizeSettings, "Вправо (по часовой)", "PackRotationDirection", true);
+            _rotatePackCounterClockwise = AddRadioButton(sizeSettings, "Влево (против часовой)", "PackRotationDirection", false);
+
+            AddSeparator(root);
+            AddSectionTitle(root, "2. Создайте контур пака");
+            AddSmallLabel(root, "Выделите стикеры внутри рамки.");
+            root.Children.Add(Button("Создать контур реза", (_, __) => RunCutContour()));
+            var contourSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
+            AddSettingsExpander(root, "Настройки контура", contourSettings);
+            _offsetMm = AddRow(contourSettings, "Отступ, мм", "2");
+            _rasterDpi = AddRow(contourSettings, "Растр DPI", "300");
+            _useAlphaMask = AddCheckBox(contourSettings, "Трассировать по альфа-маске", true);
+            _alphaThreshold = AddRow(contourSettings, "Порог альфа, 0–254", "10");
+            _smoothing = AddRow(contourSettings, "Сглаживание", "70");
+            _detail = AddRow(contourSettings, "Детализация", "35");
+            _roundSpikesMm = AddRow(contourSettings, "Скругление, мм", "0.7");
+            _simplificationToleranceMm = AddRow(contourSettings, "Упрощение контура, мм", "0.05");
+            _mergeAdjacentContours = AddCheckBox(contourSettings, "Сливать соседние объекты", false);
+            root.Children.Add(Button("Сгладить выбранный контур", (_, __) => RunSmoothSelectedContour()));
+
+            AddSeparator(root);
+            AddSectionTitle(root, "3. Создайте язычки");
+            AddSmallLabel(root, "Выделите контур нужного пака. Маркеры можно переместить перед применением.");
+            root.Children.Add(Button("Добавить маркеры язычков", (_, __) => RunAddPeelMarker()));
+            var tabSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
+            AddSettingsExpander(root, "Настройки язычков", tabSettings);
+            _tabWidthMm = AddRow(tabSettings, "Ширина, мм", "4");
+            _tabHeightMm = AddRow(tabSettings, "Длина, мм", "12");
+            _tabRadiusMm = AddRow(tabSettings, "Скругление язычка, мм", "2");
+            root.Children.Add(Button("Переприкрепить маркеры", (_, __) => RunReattachMarkers()));
+
+            AddSeparator(root);
+            AddSectionTitle(root, "4. Примените язычки");
+            AddSmallLabel(root, "Выделите контур или маркер нужного пака.");
+            root.Children.Add(Button("Применить язычки", (_, __) => RunApplyPeelTabs()));
+
+            AddSeparator(root);
+            var maintenance = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
+            AddSettingsExpander(root, "Дополнительные действия", maintenance);
+            maintenance.Children.Add(Button("Удалить контуры пака", (_, __) => RunDeletePackContours()));
+            maintenance.Children.Add(Button("Удалить маркеры пака", (_, __) => RunDeletePackMarkers()));
             Log.Info("VanyaToolsDocker constructor finished.");
         }
 
@@ -345,6 +346,17 @@ namespace VanyaTools.Native
                 : new SolidColorBrush(Color.FromRgb(66, 81, 91));
         }
 
+        private static void AddSettingsExpander(Panel root, string title, Panel content)
+        {
+            root.Children.Add(new Expander
+            {
+                Header = title,
+                IsExpanded = false,
+                Content = content,
+                Margin = new Thickness(0, 0, 0, 6)
+            });
+        }
+
         private static Button Button(string text, RoutedEventHandler handler)
         {
             var button = new Button
@@ -423,7 +435,8 @@ namespace VanyaTools.Native
                 Text       = text,
                 FontSize   = 10,
                 Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
-                Margin     = new Thickness(0, 3, 0, 2)
+                Margin     = new Thickness(0, 3, 0, 2),
+                TextWrapping = TextWrapping.Wrap
             });
         }
 
