@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading;
 using System.Web.Script.Serialization;
 
 namespace VanyaTools.Native
@@ -13,8 +14,11 @@ namespace VanyaTools.Native
     /// </summary>
     internal static class ReplicateWorkerClient
     {
-        public static void Run(string model, string token, Dictionary<string, object> input, string outputPath, Action<string> progress = null)
+        public static void Run(string model, string token, Dictionary<string, object> input, string outputPath, Action<string> progress = null, CancellationToken cancellation = default(CancellationToken))
         {
+            cancellation.ThrowIfCancellationRequested();
+            string cancelPath = outputPath + ".cancel";
+            if (File.Exists(cancelPath)) File.Delete(cancelPath);
             string exe = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "VanyaTools", "VanyaTools.ReplicateWorker.exe");
@@ -27,7 +31,8 @@ namespace VanyaTools.Native
                 ["token"] = token,
                 ["model"] = model,
                 ["input"] = input,
-                ["output_path"] = outputPath
+                ["output_path"] = outputPath,
+                ["cancel_path"] = cancelPath
             });
             string encodedPayload = Convert.ToBase64String(Encoding.UTF8.GetBytes(payload));
 
@@ -43,6 +48,7 @@ namespace VanyaTools.Native
                 RedirectStandardError = true,
             };
 
+            using (cancellation.Register(() => { try { File.WriteAllText(cancelPath, "cancel"); } catch (Exception ex) { Log.Error("Could not signal cancellation.", ex); } }))
             using (var process = Process.Start(start))
             {
                 if (process == null) throw new InvalidOperationException("Не удалось запустить сетевой помощник Vanya Tools.");
@@ -68,6 +74,8 @@ namespace VanyaTools.Native
                 bool ok = response != null && response.ContainsKey("ok") && Convert.ToBoolean(response["ok"]);
                 if (!ok)
                 {
+                    if (response != null && response.ContainsKey("cancelled") && Convert.ToBoolean(response["cancelled"]))
+                        throw new OperationCanceledException(Convert.ToString(response["error"]));
                     string error = response != null && response.ContainsKey("error")
                         ? Convert.ToString(response["error"]) : "Сетевой помощник завершился без результата.";
                     throw new InvalidOperationException(error);

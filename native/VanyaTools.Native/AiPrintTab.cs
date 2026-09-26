@@ -5,6 +5,7 @@ using System.IO;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -30,6 +31,14 @@ namespace VanyaTools.Native
         private readonly TextBlock _activityText;
         private readonly ProgressBar _activityBar;
         private readonly Button _runEditButton, _runVectorButton;
+        private readonly Button _cancelButton, _retryButton;
+        private CancellationTokenSource _cancellation;
+        private readonly DispatcherTimer _elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        private readonly Stopwatch _elapsed = new Stopwatch();
+        private string _stage;
+        private bool _busy;
+        private string _lastModel, _lastOutput, _readyOutput;
+        private Dictionary<string, object> _lastInput;
         private string _source, _result, _svg;
 
         private sealed class ModelItem
@@ -48,7 +57,7 @@ namespace VanyaTools.Native
             panel.Children.Add(Note("Операции для печатной графики: восстановление принта, удаление фона, стилизация, свободный промпт."));
 
             panel.Children.Add(Button("Баланс / Billing ↗", (_, __) => OpenBilling()));
-            panel.Children.Add(Note("Выделите графику на холсте и запустите операцию. Результат автоматически появится на холсте рядом с исходником; исходные объекты сохраняются."));
+            panel.Children.Add(Note("Выделите графику на холсте и запустите операцию. Результат автоматически появится на холсте; исходные объекты сохраняются."));
 
             var previews = new UniformGrid { Columns = 2 };
             previews.Children.Add(Preview("Исходник", out _sourcePreview));
@@ -93,14 +102,22 @@ namespace VanyaTools.Native
             panel.Children.Add(_runEditButton);
             _runVectorButton = Button("Векторизовать в SVG · Recraft · $0.01", async (_, __) => await RunVector());
             panel.Children.Add(_runVectorButton);
+            _cancelButton = Button("Отменить операцию", (_, __) => CancelOperation());
+            _cancelButton.Visibility = Visibility.Collapsed;
+            panel.Children.Add(_cancelButton);
+            _retryButton = Button("Повторить / продолжить операцию", async (_, __) => await RetryOperation());
+            _retryButton.Visibility = Visibility.Collapsed;
+            panel.Children.Add(_retryButton);
             _activityText = Note("Подготовка…");
             _activityBar = new ProgressBar { IsIndeterminate = true, Height = 7, Margin = new Thickness(0, 2, 0, 8) };
             _activityPanel = new StackPanel { Visibility = Visibility.Collapsed };
             _activityPanel.Children.Add(_activityText);
             _activityPanel.Children.Add(_activityBar);
             panel.Children.Add(_activityPanel);
+            _elapsedTimer.Tick += (_, __) => _activityText.Text = _stage + " · " + (int)_elapsed.Elapsed.TotalSeconds + " с";
             panel.Children.Add(Note("AI-векторизация создаёт редактируемые контуры, но не восстанавливает исходный шрифт. Проверяйте надписи и мелкие детали."));
             SetPrompt(); UpdateCost();
+            RestorePendingResult();
         }
 
         private bool EnsureSource()
@@ -135,6 +152,7 @@ namespace VanyaTools.Native
 
         private async Task RunEdit()
         {
+            if (_busy) return;
             var model = _model.SelectedItem as ModelItem;
             bool removeBackground = _operation.SelectedIndex == 1;
             if (removeBackground) model = new ModelItem("bria/remove-background", "Bria Remove Background", 0.018m);
@@ -160,12 +178,11 @@ namespace VanyaTools.Native
                 else { input["image"] = data; input["go_fast"] = true; input["output_quality"] = 95; }
                 _result = Path.Combine(Path.GetTempPath(), "Vanya-AI-" + Guid.NewGuid().ToString("N") + ".png");
                 string outputPath = _result;
-                await Task.Run(() => ReplicateWorkerClient.Run(model.Id, key, input, outputPath, UpdateProgress));
-                _resultPreview.Source = Bitmap(_result);
+                await ExecuteJob(model.Id, key, input, outputPath);
                 Log.Info("AI edit succeeded in " + operationTimer.ElapsedMilliseconds + " ms; output bytes=" + new FileInfo(_result).Length + ".");
-                _import(_result);
                 Report("Готово: результат вставлен на холст. Проверьте надписи и геометрию перед печатью.", false);
             }
+            catch (OperationCanceledException) { Report("Операция остановлена. Готовый результат, если он получен, сохранён. Повтор доступен ниже.", false); }
             catch (WebException ex) { Log.Error("AI edit network request failed.", ex); Report("Не удалось связаться с Replicate. Выделение осталось в Corel; проверьте подключение и настройки прокси. Код: " + ex.Status + ". " + ex.Message + (ex.InnerException == null ? "" : " · " + ex.InnerException.Message), true); }
             catch (Exception ex) { Log.Error("AI edit failed.", ex); Report(ex.Message, true); }
             finally { SetBusy(false, null); }
@@ -173,6 +190,7 @@ namespace VanyaTools.Native
 
         private async Task RunVector()
         {
+            if (_busy) return;
             if (!EnsureSource()) return;
             string file = File.Exists(_result) ? _result : _source;
             if (String.IsNullOrEmpty(file) || !File.Exists(file)) { Report("Не удалось подготовить изображение.", true); return; }
@@ -190,12 +208,12 @@ namespace VanyaTools.Native
                 Log.Info("AI vector input PNG prepared in " + prepareTimer.ElapsedMilliseconds + " ms; encoded chars=" + data.Length + ".");
                 _svg = Path.Combine(Path.GetTempPath(), "Vanya-AI-" + Guid.NewGuid().ToString("N") + ".svg");
                 string outputPath = _svg;
-                await Task.Run(() => ReplicateWorkerClient.Run("recraft-ai/recraft-vectorize", key,
-                    new Dictionary<string, object> { ["image"] = data }, outputPath, UpdateProgress));
+                await ExecuteJob("recraft-ai/recraft-vectorize", key,
+                    new Dictionary<string, object> { ["image"] = data }, outputPath);
                 Log.Info("AI vectorization succeeded in " + operationTimer.ElapsedMilliseconds + " ms; output bytes=" + new FileInfo(_svg).Length + ".");
-                _import(_svg);
                 Report("Готово: векторный результат вставлен на холст.", false);
             }
+            catch (OperationCanceledException) { Report("Операция остановлена. Повтор доступен ниже.", false); }
             catch (WebException ex) { Log.Error("AI vectorization network request failed.", ex); Report("Не удалось связаться с Replicate. Проверьте подключение и настройки прокси. Код: " + ex.Status + ". " + ex.Message + (ex.InnerException == null ? "" : " · " + ex.InnerException.Message), true); }
             catch (Exception ex) { Log.Error("AI vectorization failed.", ex); Report(ex.Message, true); }
             finally { SetBusy(false, null); }
@@ -209,21 +227,117 @@ namespace VanyaTools.Native
                 case "sending": message = "Отправляю изображение модели…"; break;
                 case "processing": message = "Модель обрабатывает изображение. Это может занять несколько минут…"; break;
                 case "downloading": message = "Модель готова. Загружаю результат…"; break;
+                case "cancelling": message = "Ожидаю подтверждение отмены от Replicate…"; break;
                 default: message = "Выполняется запрос к Replicate…"; break;
             }
             Dispatcher.BeginInvoke(new Action(() =>
             {
-                _activityText.Text = message;
-                Report(message, false);
+                if (!_busy) return;
+                _stage = _cancellation != null && _cancellation.IsCancellationRequested
+                    ? "Ожидаю подтверждение отмены…" : message;
+                _activityText.Text = _stage;
+                Report(_stage, false);
             }));
         }
 
         private void SetBusy(bool busy, string message)
         {
+            _busy = busy;
             _activityPanel.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             _runEditButton.IsEnabled = !busy;
             _runVectorButton.IsEnabled = !busy;
-            if (busy && !String.IsNullOrEmpty(message)) _activityText.Text = message;
+            _cancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+            _cancelButton.IsEnabled = busy;
+            _retryButton.IsEnabled = !busy;
+            _retryButton.Visibility = !busy && (_lastInput != null || File.Exists(_readyOutput)) ? Visibility.Visible : Visibility.Collapsed;
+            _retryButton.Content = File.Exists(_readyOutput) ? "Повторить вставку · без оплаты" : "Повторить / продолжить операцию";
+            foreach (Control control in new Control[] { _operation, _model, _prompt, _left, _top, _right, _bottom, _token }) control.IsEnabled = !busy;
+            if (busy)
+            {
+                _cancellation = new CancellationTokenSource();
+                _elapsed.Restart(); _elapsedTimer.Start();
+                _stage = message; _activityText.Text = message;
+            }
+            else
+            {
+                _elapsedTimer.Stop();
+                if (_cancellation != null) { _cancellation.Dispose(); _cancellation = null; }
+            }
+        }
+
+        private async Task ExecuteJob(string model, string key, Dictionary<string, object> input, string path)
+        {
+            _lastModel = model; _lastInput = input; _lastOutput = path; _readyOutput = null;
+            CancellationToken cancel = _cancellation.Token;
+            await Task.Run(() => ReplicateWorkerClient.Run(model, key, input, path, UpdateProgress, cancel));
+            _readyOutput = path;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
+                File.WriteAllText(PendingPath(), path);
+            }
+            catch (Exception ex) { Log.Error("Could not persist pending import.", ex); }
+            if (Path.GetExtension(path).Equals(".png", StringComparison.OrdinalIgnoreCase))
+                _resultPreview.Source = Bitmap(path);
+            cancel.ThrowIfCancellationRequested();
+            InsertReadyResult();
+        }
+
+        private void InsertReadyResult()
+        {
+            try { _import(_readyOutput); }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException("Файл готов, но вставка не удалась. Нажмите «Повторить вставку» — без новой оплаты. " + ex.GetBaseException().Message, ex);
+            }
+            _readyOutput = null; _lastInput = null;
+            try { if (File.Exists(PendingPath())) File.Delete(PendingPath()); } catch { }
+        }
+
+        private void CancelOperation()
+        {
+            if (!_busy || _cancellation == null) return;
+            _cancellation.Cancel();
+            _cancelButton.IsEnabled = false;
+            _stage = "Ожидаю подтверждение отмены от Replicate…";
+            Report(_stage, false);
+        }
+
+        private async Task RetryOperation()
+        {
+            if (_busy) return;
+            bool local = File.Exists(_readyOutput);
+            if (!local && _lastInput == null) return;
+            string key = CurrentToken();
+            if (!local && key.Length < 8) { Report("Введите ключ Replicate.", true); return; }
+            if (!local && MessageBox.Show("Продолжить предыдущий запрос? Если он отменён или завершился ошибкой, будет создан новый платный запрос с тем же изображением и настройками.",
+                "Повтор операции", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
+            SetBusy(true, local ? "Вставляю готовый результат…" : "Продолжаю предыдущую операцию…");
+            try
+            {
+                if (local) InsertReadyResult();
+                else await ExecuteJob(_lastModel, key, _lastInput, _lastOutput);
+                Report("Готово: результат вставлен на холст.", false);
+            }
+            catch (OperationCanceledException) { Report("Операция остановлена. Повтор доступен ниже.", false); }
+            catch (Exception ex) { Log.Error("AI retry failed.", ex); Report(ex.GetBaseException().Message, true); }
+            finally { SetBusy(false, null); }
+        }
+
+        private static string PendingPath() { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VanyaTools", "pending-ai-result.txt"); }
+
+        private void RestorePendingResult()
+        {
+            try
+            {
+                if (!File.Exists(PendingPath())) return;
+                string path = File.ReadAllText(PendingPath()).Trim();
+                if (!File.Exists(path)) return;
+                _readyOutput = path;
+                if (Path.GetExtension(path).Equals(".png", StringComparison.OrdinalIgnoreCase)) _resultPreview.Source = Bitmap(path);
+                SetBusy(false, null);
+            }
+            catch (Exception ex) { Log.Error("Pending AI result restore failed.", ex); }
         }
 
         private string CropData()

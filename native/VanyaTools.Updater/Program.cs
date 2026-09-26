@@ -57,7 +57,7 @@ namespace VanyaTools.Updater
                 using (var client = new WebClient())
                 using (var spinner = new ConsoleSpinner("Загрузка пакета обновления"))
                 {
-                    client.Headers[HttpRequestHeader.UserAgent] = "VanyaTools-Updater/1.0.20";
+                    client.Headers[HttpRequestHeader.UserAgent] = "VanyaTools-Updater/1.0.21";
                     client.DownloadProgressChanged += (_, e) => spinner.SetMessage("Загрузка пакета: " + e.ProgressPercentage + "%");
                     client.DownloadFile(release.AssetUrl, zipPath);
                 }
@@ -137,6 +137,7 @@ namespace VanyaTools.Updater
                 string token = Convert.ToString(job["token"]);
                 string model = Convert.ToString(job["model"]);
                 string outputPath = Convert.ToString(job["output_path"]);
+                string cancelPath = job.ContainsKey("cancel_path") ? Convert.ToString(job["cancel_path"]) : outputPath + ".cancel";
                 var input = job["input"] as Dictionary<string, object>;
                 if (String.IsNullOrWhiteSpace(token) || String.IsNullOrWhiteSpace(model) ||
                     String.IsNullOrWhiteSpace(outputPath) || input == null)
@@ -144,9 +145,10 @@ namespace VanyaTools.Updater
 
                 LogWorker("Replicate request started. Model=" + model + ".");
                 var timer = Stopwatch.StartNew();
-                string outputUrl = CreatePrediction(token, model, input, serializer);
+                string outputUrl = CreatePrediction(token, model, input, serializer, outputPath, cancelPath);
+                if (File.Exists(cancelPath)) throw new OperationCanceledException("Вставка отменена. Модель уже завершилась; результат можно получить повтором без новой генерации.");
                 ReportWorkerProgress("downloading");
-                DownloadWithSystemProxy(outputUrl, outputPath);
+                DownloadWithSystemProxy(outputUrl, outputPath, cancelPath);
                 LogWorker("Replicate request completed in " + timer.ElapsedMilliseconds + " ms.");
                 WriteWorkerResponse(serializer, new Dictionary<string, object> { ["ok"] = true });
                 return 0;
@@ -157,7 +159,8 @@ namespace VanyaTools.Updater
                 WriteWorkerResponse(serializer, new Dictionary<string, object>
                 {
                     ["ok"] = false,
-                    ["error"] = ex.Message
+                    ["error"] = ex.Message,
+                    ["cancelled"] = ex is OperationCanceledException
                 });
                 return 1;
             }
@@ -186,37 +189,89 @@ namespace VanyaTools.Updater
         }
 
         private static string CreatePrediction(string token, string model,
-            Dictionary<string, object> input, JavaScriptSerializer serializer)
+            Dictionary<string, object> input, JavaScriptSerializer serializer, string outputPath, string cancelPath)
         {
-            var request = CreateHttpRequest("https://api.replicate.com/v1/models/" + model + "/predictions");
-            request.Method = "POST";
-            request.ContentType = "application/json";
-            request.Accept = "application/json";
-            request.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
-            // Return the prediction handle immediately; waiting on the create request
-            // can hit short gateway timeouts before polling has a chance to begin.
-            ReportWorkerProgress("sending");
-            var requestTimer = Stopwatch.StartNew();
-            byte[] bytes = Encoding.UTF8.GetBytes(serializer.Serialize(new Dictionary<string, object> { ["input"] = input }));
-            using (var stream = request.GetRequestStream()) stream.Write(bytes, 0, bytes.Length);
-            Dictionary<string, object> result = ReadJson(request, serializer);
+            string statePath = outputPath + ".prediction.json";
+            Dictionary<string, object> result = File.Exists(statePath)
+                ? serializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(statePath)) : null;
+            string previousStatus = result == null ? "" : Convert.ToString(result["status"]);
+            if (result == null || previousStatus == "failed" || previousStatus == "canceled")
+            {
+                if (File.Exists(cancelPath)) throw new OperationCanceledException("Операция отменена до отправки в Replicate.");
+                if (result == null && File.Exists(outputPath + ".submitted"))
+                    throw new InvalidOperationException("Сервер мог принять запрос, но его номер не получен. Проверьте запрос в Replicate перед новым платным запуском; автоматический дубль заблокирован.");
+                if (File.Exists(statePath)) File.Delete(statePath);
+                var request = CreateHttpRequest("https://api.replicate.com/v1/models/" + model + "/predictions");
+                request.Method = "POST";
+                request.ContentType = "application/json";
+                request.Accept = "application/json";
+                request.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
+                // Return the prediction handle immediately; waiting on the create request
+                // can hit short gateway timeouts before polling has a chance to begin.
+                ReportWorkerProgress("sending");
+                var requestTimer = Stopwatch.StartNew();
+                byte[] bytes = Encoding.UTF8.GetBytes(serializer.Serialize(new Dictionary<string, object> { ["input"] = input }));
+                File.WriteAllText(outputPath + ".submitted", "sent");
+                using (var stream = request.GetRequestStream()) stream.Write(bytes, 0, bytes.Length);
+                try { result = ReadJson(request, serializer); }
+                catch (ReplicateApiException ex)
+                {
+                    // A definite rejection may be retried; an ambiguous response must not
+                    // create a second paid prediction automatically.
+                    if (ex.StatusCode >= 400 && ex.StatusCode < 500 && ex.StatusCode != 408)
+                        File.Delete(outputPath + ".submitted");
+                    throw;
+                }
+                SavePrediction(statePath, result, serializer);
+                LogWorker("Prediction create returned status=" + Convert.ToString(result["status"]) + " after " + requestTimer.ElapsedMilliseconds + " ms.");
+            }
             string status = Convert.ToString(result["status"]);
-            LogWorker("Prediction create returned status=" + status + " after " + requestTimer.ElapsedMilliseconds + " ms.");
             if (status == "starting" || status == "processing") ReportWorkerProgress("processing");
 
-            for (int i = 0; i < 90 && (status == "starting" || status == "processing"); i++)
+            bool cancelSent = false;
+            var pollingTimer = Stopwatch.StartNew();
+            while (status == "starting" || status == "processing")
             {
                 var urls = result["urls"] as Dictionary<string, object>;
                 if (urls == null || !urls.ContainsKey("get")) break;
-                Thread.Sleep(2000);
+                if (File.Exists(cancelPath) && !cancelSent)
+                {
+                    ReportWorkerProgress("cancelling");
+                    try
+                    {
+                        var cancel = CreateHttpRequest(Convert.ToString(urls["cancel"]));
+                        cancel.Method = "POST";
+                        cancel.ContentLength = 0;
+                        cancel.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
+                        result = ReadJson(cancel, serializer);
+                        SavePrediction(statePath, result, serializer);
+                        status = Convert.ToString(result["status"]);
+                        cancelSent = true;
+                        if (status != "starting" && status != "processing") break;
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new InvalidOperationException("Не удалось подтвердить отмену в Replicate. Запрос может продолжаться; повтор продолжит проверку того же запроса. " + ex.Message);
+                    }
+                }
+                if (pollingTimer.Elapsed > TimeSpan.FromMinutes(9))
+                    throw new TimeoutException("Модель ещё работает. Повтор продолжит этот же запрос без новой генерации.");
+                for (int delay = 0; delay < 20; delay++)
+                {
+                    if (!cancelSent && File.Exists(cancelPath)) break;
+                    Thread.Sleep(100);
+                }
+                if (!cancelSent && File.Exists(cancelPath)) continue;
                 var poll = CreateHttpRequest(Convert.ToString(urls["get"]));
                 poll.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
                 result = ReadJson(poll, serializer);
+                SavePrediction(statePath, result, serializer);
                 status = Convert.ToString(result["status"]);
             }
+            if (status == "canceled") throw new OperationCanceledException("Replicate подтвердил отмену.");
             if (status != "succeeded")
-                throw new InvalidOperationException(Convert.ToString(result.ContainsKey("error")
-                    ? result["error"] : "Модель завершилась со статусом " + status));
+                throw new InvalidOperationException("Модель завершилась со статусом " + status + ". " +
+                    (result.ContainsKey("error") ? Convert.ToString(result["error"]) : ""));
 
             object output = result["output"];
             var list = output as ArrayList;
@@ -228,6 +283,17 @@ namespace VanyaTools.Updater
             if (!Uri.TryCreate(url, UriKind.Absolute, out parsed) || parsed.Scheme != Uri.UriSchemeHttps)
                 throw new InvalidDataException("Replicate вернул некорректную ссылку на результат.");
             return url;
+        }
+
+        private static void SavePrediction(string path, Dictionary<string, object> result, JavaScriptSerializer serializer)
+        {
+            // Store only resume metadata, never the API token or input image.
+            var state = new Dictionary<string, object>();
+            foreach (string key in new[] { "id", "status", "urls", "output", "error" })
+                if (result.ContainsKey(key)) state[key] = result[key];
+            File.WriteAllText(path + ".tmp", serializer.Serialize(state));
+            if (File.Exists(path)) File.Replace(path + ".tmp", path, null);
+            else File.Move(path + ".tmp", path);
         }
 
         private static HttpWebRequest CreateHttpRequest(string url)
@@ -267,7 +333,7 @@ namespace VanyaTools.Updater
                         string body = reader.ReadToEnd();
                         if (body.Length > 2000) body = body.Substring(0, 2000) + "…";
                         if (String.IsNullOrWhiteSpace(body)) body = "(пустое тело ответа)";
-                        throw new InvalidOperationException("Replicate вернул HTTP " +
+                        throw new ReplicateApiException((int)response.StatusCode, "Replicate вернул HTTP " +
                             (int)response.StatusCode + " " + response.StatusDescription + ". Ответ API: " + body);
                     }
                 }
@@ -275,27 +341,39 @@ namespace VanyaTools.Updater
             }
         }
 
-        private static void DownloadWithSystemProxy(string url, string outputPath)
+        private static void DownloadWithSystemProxy(string url, string outputPath, string cancelPath)
         {
             var timer = Stopwatch.StartNew();
             string directory = Path.GetDirectoryName(outputPath);
             if (!String.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-            using (var client = new WebClient())
+            try
             {
-                try
+                var request = CreateHttpRequest(url);
+                using (var response = request.GetResponse())
+                using (var source = response.GetResponseStream())
+                using (var destination = File.Create(outputPath + ".part"))
                 {
-                    IWebProxy proxy = WebRequest.GetSystemWebProxy();
-                    if (proxy != null)
+                    byte[] buffer = new byte[65536];
+                    int count;
+                    while ((count = source.Read(buffer, 0, buffer.Length)) > 0)
                     {
-                        proxy.Credentials = CredentialCache.DefaultCredentials;
-                        client.Proxy = proxy;
+                        if (File.Exists(cancelPath)) throw new OperationCanceledException();
+                        destination.Write(buffer, 0, count);
                     }
                 }
-                catch { }
-                client.DownloadFile(url, outputPath);
+                if (File.Exists(cancelPath)) throw new OperationCanceledException();
+                if (File.Exists(outputPath)) File.Replace(outputPath + ".part", outputPath, null);
+                else File.Move(outputPath + ".part", outputPath);
             }
+            finally { if (File.Exists(outputPath + ".part")) File.Delete(outputPath + ".part"); }
             long size = new FileInfo(outputPath).Length;
             LogWorker("Output downloaded in " + timer.ElapsedMilliseconds + " ms; bytes=" + size + ".");
+        }
+
+        private sealed class ReplicateApiException : InvalidOperationException
+        {
+            public int StatusCode { get; private set; }
+            public ReplicateApiException(int statusCode, string message) : base(message) { StatusCode = statusCode; }
         }
 
         private static string ReadRepository()
@@ -348,7 +426,7 @@ namespace VanyaTools.Updater
         {
             string uri = "https://api.github.com/repos/" + repository + "/releases/latest";
             var request = (HttpWebRequest)WebRequest.Create(uri);
-            request.UserAgent = "VanyaTools-Updater/1.0.20";
+            request.UserAgent = "VanyaTools-Updater/1.0.21";
             request.Accept = "application/vnd.github+json";
 
             string json;

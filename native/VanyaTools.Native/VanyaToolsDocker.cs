@@ -2,6 +2,8 @@ using System;
 using System.Globalization;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -183,11 +185,16 @@ namespace VanyaTools.Native
 
                 dynamic app = CorelApp.Get();
                 dynamic doc = app.ActiveDocument;
-                // Specify all COM parameters explicitly; the late-bound Corel API rejects
-                // ImportEx(path) when its optional filter/options are omitted.
-                dynamic importFilter = doc.ActiveLayer.ImportEx(path, 0, null);
+                // Use Automation marshaling explicitly, including a real options object.
+                // The DLR call with null options fails with DISP_E_TYPEMISMATCH on Corel 27.
+                object layer = doc.ActiveLayer;
+                object options = app.CreateStructImportOptions();
+                dynamic importFilter = layer.GetType().InvokeMember("ImportEx",
+                    BindingFlags.InvokeMethod, null, layer,
+                    new object[] { new BStrWrapper(Path.GetFullPath(path)), 0, options });
                 importFilter.Finish();
-                app.ActiveWindow.Refresh();
+                // A refresh failure must not turn a completed import into a retry/duplicate.
+                try { app.ActiveWindow.Refresh(); } catch { }
                 SetStatus("AI-результат импортирован в Corel: " + Path.GetFileName(path), false);
             }
             catch (Exception ex)
