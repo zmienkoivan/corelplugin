@@ -17,7 +17,7 @@ namespace VanyaTools.Native
 {
     internal sealed class AiPrintTab : UserControl
     {
-        private readonly Func<string, bool> _import;
+        private readonly Action<string> _import;
         private readonly Action<string, bool> _status;
         private readonly Func<string> _captureSelection;
         private readonly ComboBox _operation;
@@ -39,7 +39,7 @@ namespace VanyaTools.Native
             public override string ToString() { return Label; }
         }
 
-        public AiPrintTab(Func<string, bool> import, Action<string, bool> status, Func<string> captureSelection)
+        public AiPrintTab(Action<string> import, Action<string, bool> status, Func<string> captureSelection)
         {
             _import = import; _status = status; _captureSelection = captureSelection;
             var panel = new StackPanel { Margin = new Thickness(7) };
@@ -163,11 +163,7 @@ namespace VanyaTools.Native
                 await Task.Run(() => ReplicateWorkerClient.Run(model.Id, key, input, outputPath, UpdateProgress));
                 _resultPreview.Source = Bitmap(_result);
                 Log.Info("AI edit succeeded in " + operationTimer.ElapsedMilliseconds + " ms; output bytes=" + new FileInfo(_result).Length + ".");
-                if (!_import(_result))
-                {
-                    Report("AI-обработка завершилась, но Corel не вставил PNG. Проверьте сообщение над вкладками.", true);
-                    return;
-                }
+                _import(_result);
                 Report("Готово: результат вставлен на холст. Проверьте надписи и геометрию перед печатью.", false);
             }
             catch (WebException ex) { Log.Error("AI edit network request failed.", ex); Report("Не удалось связаться с Replicate. Выделение осталось в Corel; проверьте подключение и настройки прокси. Код: " + ex.Status + ". " + ex.Message + (ex.InnerException == null ? "" : " · " + ex.InnerException.Message), true); }
@@ -197,11 +193,7 @@ namespace VanyaTools.Native
                 await Task.Run(() => ReplicateWorkerClient.Run("recraft-ai/recraft-vectorize", key,
                     new Dictionary<string, object> { ["image"] = data }, outputPath, UpdateProgress));
                 Log.Info("AI vectorization succeeded in " + operationTimer.ElapsedMilliseconds + " ms; output bytes=" + new FileInfo(_svg).Length + ".");
-                if (!_import(_svg))
-                {
-                    Report("SVG создан, но Corel не вставил его. Проверьте сообщение над вкладками.", true);
-                    return;
-                }
+                _import(_svg);
                 Report("Готово: векторный результат вставлен на холст.", false);
             }
             catch (WebException ex) { Log.Error("AI vectorization network request failed.", ex); Report("Не удалось связаться с Replicate. Проверьте подключение и настройки прокси. Код: " + ex.Status + ". " + ex.Message + (ex.InnerException == null ? "" : " · " + ex.InnerException.Message), true); }

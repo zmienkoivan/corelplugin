@@ -174,7 +174,7 @@ namespace VanyaTools.Native
             Log.Info("VanyaToolsDocker constructor finished.");
         }
 
-        private bool ImportAiResult(string path)
+        private void ImportAiResult(string path)
         {
             try
             {
@@ -183,19 +183,17 @@ namespace VanyaTools.Native
 
                 dynamic app = CorelApp.Get();
                 dynamic doc = app.ActiveDocument;
-                // ImportEx returns an ImportFilter whose Finish method commits the import.
-                // Layer.Import is unreliable through late-bound COM on some Corel versions.
-                dynamic importFilter = doc.ActiveLayer.ImportEx(path);
+                // Specify all COM parameters explicitly; the late-bound Corel API rejects
+                // ImportEx(path) when its optional filter/options are omitted.
+                dynamic importFilter = doc.ActiveLayer.ImportEx(path, 0, null);
                 importFilter.Finish();
                 app.ActiveWindow.Refresh();
                 SetStatus("AI-результат импортирован в Corel: " + Path.GetFileName(path), false);
-                return true;
             }
             catch (Exception ex)
             {
                 Log.Error("AI result import failed.", ex);
-                SetStatus("Не удалось вставить AI-результат в Corel: " + ex.Message, true);
-                return false;
+                throw;
             }
         }
 
