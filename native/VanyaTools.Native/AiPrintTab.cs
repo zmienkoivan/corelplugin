@@ -40,6 +40,9 @@ namespace VanyaTools.Native
         private string _lastModel, _lastOutput, _readyOutput;
         private Dictionary<string, object> _lastInput;
         private string _source, _result, _svg;
+        private readonly CheckBox _smartRestore, _upscalePrint;
+        private readonly TextBox _printTarget, _analysisText;
+        private PrintRestorationPipeline _pipeline;
 
         private sealed class ModelItem
         {
@@ -77,6 +80,21 @@ namespace VanyaTools.Native
             _operation.SelectedIndex = 0;
             _operation.SelectionChanged += (_, __) => { SetPrompt(); UpdateCost(); };
             panel.Children.Add(_operation);
+            _smartRestore = new CheckBox { Content = "Восстановление в 3 этапа · экспериментальный режим", IsChecked = false, FontSize = 10, Margin = new Thickness(0, 4, 0, 4) };
+            panel.Children.Add(_smartRestore);
+            _smartRestore.Checked += (_, __) => UpdateCost();
+            _smartRestore.Unchecked += (_, __) => UpdateCost();
+            panel.Children.Add(Note("Применяется только к восстановлению принта. Анализ: Gemini 2.5 Flash; рисунок: выбранная модель; фон: Bria. Анализ и удаление фона оплачиваются отдельно."));
+            panel.Children.Add(Label("Какой принт восстановить", false));
+            _printTarget = new TextBox { Text = "Основной принт на футболке. Не включать рукав и бирку.", TextWrapping = TextWrapping.Wrap, FontSize = 11 };
+            panel.Children.Add(_printTarget);
+            _upscalePrint = new CheckBox { Content = "Апскейл 2× перед восстановлением · дополнительная оплата", FontSize = 10, Margin = new Thickness(0, 4, 0, 4) };
+            panel.Children.Add(_upscalePrint);
+            _upscalePrint.Checked += (_, __) => UpdateCost();
+            _upscalePrint.Unchecked += (_, __) => UpdateCost();
+            panel.Children.Add(Note("Апскейл может изменить мелкие штрихи. По умолчанию отключён. При нескольких футболках укажите, например: принт на груди левой футболки."));
+            _analysisText = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 180, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 10 };
+            panel.Children.Add(new Expander { Header = "Что увидела модель анализа", Content = _analysisText });
 
             panel.Children.Add(Label("Модель и ориентировочная цена", false));
             _model = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 2) };
@@ -140,7 +158,12 @@ namespace VanyaTools.Native
         {
             if (_prompt == null || _operation == null) return;
             string[] prompts = {
-                "Извлеки только существующий принт с одежды. Убери футболку, ткань, складки, тени, блики, фон и перспективу. Сохрани композицию, пропорции, расположение элементов, цвета и текст посимвольно. Не добавляй и не перефразируй надписи. Верни плоский artwork на прозрачном фоне.",
+                "Extract the exact existing main print from the reference into a flat print artwork on pure white. " +
+                "Copy the visible letter shapes and illustration exactly, preserving object count, relative sizes, spacing, slant and original ink colors. " +
+                "Use one solid ink color for a single-color original. Completely remove the garment and its texture. " +
+                "No redesign, no invented details, no outlines, no white sticker border, no gradients, no glow, no shadows, no checkerboard. " +
+                "Output the print once, uniformly enlarged, with a small plain white margin. Exclude sleeve prints, labels and other shirts. " +
+                "The reference image is authoritative; do not replace its lettering with a different font, correct spelling, change line breaks or guess unreadable characters.",
                 "Удали фон. Сохрани исходный объект, все надписи, контуры, цвета, пропорции и мелкие детали. Не стилизуй и не перерисовывай объект. Прозрачный PNG.",
                 "Сохрани рисунок и надписи. Сделай края чёткими, цвета чистыми плашечными, без градиентов, теней и текстуры. Не меняй текст, композицию и пропорции.",
                 "Сделай винтажную шелкографию с ограниченной палитрой цветовых плашек. Сохрани исходные формы, композицию и все надписи посимвольно. Не добавляй элементов.",
@@ -155,12 +178,15 @@ namespace VanyaTools.Native
             if (_busy) return;
             var model = _model.SelectedItem as ModelItem;
             bool removeBackground = _operation.SelectedIndex == 1;
+            bool smart = _operation.SelectedIndex == 0 && _smartRestore.IsChecked == true;
             if (removeBackground) model = new ModelItem("bria/remove-background", "Bria Remove Background", 0.018m);
             if (model == null) { Report("Выберите модель.", true); return; }
             string key = CurrentToken();
             if (key.Length < 8) { Report("Введите ключ и сохраните его.", true); return; }
             if (!EnsureSource()) return;
-            if (MessageBox.Show("Ориентировочная цена: $" + model.Cost.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) + ". Продолжить?", "Платный запрос Replicate", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
+            string costMessage = "Операция выбранной модели: примерно $" + model.Cost.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) + ".";
+            if (smart) costMessage += "\nУдаление фона: примерно $0.018.\nАнализ Gemini — дополнительно, по числу токенов." + (_upscalePrint.IsChecked == true ? "\nАпскейл — дополнительно по тарифу Real-ESRGAN." : "") + "\nЭто несколько платных запросов, итоговая сумма будет выше цены одной генерации.";
+            if (MessageBox.Show(costMessage + "\nПродолжить?", "Платный запрос Replicate", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
             try
             {
                 var operationTimer = Stopwatch.StartNew();
@@ -171,6 +197,15 @@ namespace VanyaTools.Native
                 var prepareTimer = Stopwatch.StartNew();
                 string data = CropData();
                 Log.Info("AI input PNG prepared in " + prepareTimer.ElapsedMilliseconds + " ms; encoded chars=" + data.Length + ".");
+                _pipeline = null;
+                if (smart)
+                {
+                    _lastInput = null; _readyOutput = null; _analysisText.Text = "Анализ выполняется…";
+                    _pipeline = new PrintRestorationPipeline(data, model.Id, _prompt.Text, _printTarget.Text, _upscalePrint.IsChecked == true);
+                    await ExecutePipeline(key);
+                    Report("Готово: три этапа завершены, результат вставлен. Проверьте текст и форму по исходнику.", false);
+                    return;
+                }
                 var input = new Dictionary<string, object> { ["prompt"] = _prompt.Text, ["output_format"] = "png" };
                 if (removeBackground) { input["image"] = data; input["preserve_alpha"] = true; input["content_moderation"] = false; }
                 else if (model.Id.Contains("kontext")) { input["input_image"] = data; input["aspect_ratio"] = "match_input_image"; input["safety_tolerance"] = 2; }
@@ -201,6 +236,7 @@ namespace VanyaTools.Native
             {
                 var operationTimer = Stopwatch.StartNew();
                 Log.Info("AI vectorization started. Model=recraft-ai/recraft-vectorize.");
+                _pipeline = null;
                 SetBusy(true, "Подготавливаю изображение для векторизации…");
                 Report("Подготавливаю изображение для векторизации…", false);
                 var prepareTimer = Stopwatch.StartNew();
@@ -228,7 +264,7 @@ namespace VanyaTools.Native
                 case "processing": message = "Модель обрабатывает изображение. Это может занять несколько минут…"; break;
                 case "downloading": message = "Модель готова. Загружаю результат…"; break;
                 case "cancelling": message = "Ожидаю подтверждение отмены от Replicate…"; break;
-                default: message = "Выполняется запрос к Replicate…"; break;
+                default: message = stage; break;
             }
             Dispatcher.BeginInvoke(new Action(() =>
             {
@@ -249,9 +285,9 @@ namespace VanyaTools.Native
             _cancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             _cancelButton.IsEnabled = busy;
             _retryButton.IsEnabled = !busy;
-            _retryButton.Visibility = !busy && (_lastInput != null || File.Exists(_readyOutput)) ? Visibility.Visible : Visibility.Collapsed;
+            _retryButton.Visibility = !busy && (_pipeline != null || _lastInput != null || File.Exists(_readyOutput)) ? Visibility.Visible : Visibility.Collapsed;
             _retryButton.Content = File.Exists(_readyOutput) ? "Повторить вставку · без оплаты" : "Повторить / продолжить операцию";
-            foreach (Control control in new Control[] { _operation, _model, _prompt, _left, _top, _right, _bottom, _token }) control.IsEnabled = !busy;
+            foreach (Control control in new Control[] { _operation, _model, _prompt, _left, _top, _right, _bottom, _token, _smartRestore, _upscalePrint, _printTarget }) control.IsEnabled = !busy;
             if (busy)
             {
                 _cancellation = new CancellationTokenSource();
@@ -270,6 +306,18 @@ namespace VanyaTools.Native
             _lastModel = model; _lastInput = input; _lastOutput = path; _readyOutput = null;
             CancellationToken cancel = _cancellation.Token;
             await Task.Run(() => ReplicateWorkerClient.Run(model, key, input, path, UpdateProgress, cancel));
+            CompleteResult(path, cancel);
+        }
+
+        private async Task ExecutePipeline(string key)
+        {
+            CancellationToken cancel = _cancellation.Token;
+            string path = await _pipeline.Run(key, cancel, UpdateProgress, text => _analysisText.Text = text);
+            CompleteResult(path, cancel);
+        }
+
+        private void CompleteResult(string path, CancellationToken cancel)
+        {
             _readyOutput = path;
             try
             {
@@ -290,7 +338,7 @@ namespace VanyaTools.Native
             {
                 throw new InvalidOperationException("Файл готов, но вставка не удалась. Нажмите «Повторить вставку» — без новой оплаты. " + ex.GetBaseException().Message, ex);
             }
-            _readyOutput = null; _lastInput = null;
+            _readyOutput = null; _lastInput = null; _pipeline = null;
             try { if (File.Exists(PendingPath())) File.Delete(PendingPath()); } catch { }
         }
 
@@ -307,7 +355,7 @@ namespace VanyaTools.Native
         {
             if (_busy) return;
             bool local = File.Exists(_readyOutput);
-            if (!local && _lastInput == null) return;
+            if (!local && _lastInput == null && _pipeline == null) return;
             string key = CurrentToken();
             if (!local && key.Length < 8) { Report("Введите ключ Replicate.", true); return; }
             if (!local && MessageBox.Show("Продолжить предыдущий запрос? Если он отменён или завершился ошибкой, будет создан новый платный запрос с тем же изображением и настройками.",
@@ -316,6 +364,7 @@ namespace VanyaTools.Native
             try
             {
                 if (local) InsertReadyResult();
+                else if (_pipeline != null) await ExecutePipeline(key);
                 else await ExecuteJob(_lastModel, key, _lastInput, _lastOutput);
                 Report("Готово: результат вставлен на холст.", false);
             }
@@ -351,7 +400,7 @@ namespace VanyaTools.Native
             return DataUri(new CroppedBitmap(image, new Int32Rect(x, y, w, h)));
         }
 
-        private static string DataUri(BitmapSource image)
+        internal static string DataUri(BitmapSource image)
         {
             BitmapSource current = image;
             for (int attempt = 0; attempt < 5; attempt++)
@@ -373,7 +422,7 @@ namespace VanyaTools.Native
             throw new InvalidOperationException("PNG больше лимита передачи даже после уменьшения. Выделите только нужную область принта.");
         }
 
-        private static BitmapSource Bitmap(string path) { using (var s = File.OpenRead(path)) { var b = BitmapFrame.Create(s, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad); b.Freeze(); return b; } }
+        internal static BitmapSource Bitmap(string path) { using (var s = File.OpenRead(path)) { var b = BitmapFrame.Create(s, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad); b.Freeze(); return b; } }
 
         private void OpenBilling()
         {
@@ -404,8 +453,14 @@ namespace VanyaTools.Native
 
         private void UpdateCost()
         {
+            if (_model == null || _cost == null) return;
             var m = _model.SelectedItem as ModelItem;
-            if (_cost != null) _cost.Text = m == null ? "" : "Ориентировочно " + m.Cost.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) + " USD. Баланс смотрите в Billing (Replicate API остаток не показывает).";
+            if (m == null) { _cost.Text = ""; return; }
+            if (_operation.SelectedIndex == 1) { _cost.Text = "Удаление фона Bria: ориентировочно $0.018."; return; }
+            _cost.Text = "Рисунок: ориентировочно $" + m.Cost.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) + ".";
+            if (_operation.SelectedIndex == 0 && _smartRestore.IsChecked == true)
+                _cost.Text += " Фон: +$0.018. Анализ Gemini: дополнительно по токенам." +
+                    (_upscalePrint.IsChecked == true ? " Апскейл: дополнительно по тарифу Real-ESRGAN." : "");
         }
         private void Report(string message, bool error) { _status(message, error); }
         private static double P(string s, double fallback) { double v; return Double.TryParse((s ?? "").Replace(",", "."), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v) ? v : fallback; }

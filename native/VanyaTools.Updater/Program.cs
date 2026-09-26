@@ -57,7 +57,7 @@ namespace VanyaTools.Updater
                 using (var client = new WebClient())
                 using (var spinner = new ConsoleSpinner("Загрузка пакета обновления"))
                 {
-                    client.Headers[HttpRequestHeader.UserAgent] = "VanyaTools-Updater/1.0.21";
+                    client.Headers[HttpRequestHeader.UserAgent] = "VanyaTools-Updater/1.0.22";
                     client.DownloadProgressChanged += (_, e) => spinner.SetMessage("Загрузка пакета: " + e.ProgressPercentage + "%");
                     client.DownloadFile(release.AssetUrl, zipPath);
                 }
@@ -145,10 +145,17 @@ namespace VanyaTools.Updater
 
                 LogWorker("Replicate request started. Model=" + model + ".");
                 var timer = Stopwatch.StartNew();
-                string outputUrl = CreatePrediction(token, model, input, serializer, outputPath, cancelPath);
+                bool textOutput = Path.GetExtension(outputPath).Equals(".txt", StringComparison.OrdinalIgnoreCase);
+                string outputUrl = CreatePrediction(token, model, input, serializer, outputPath, cancelPath, textOutput);
                 if (File.Exists(cancelPath)) throw new OperationCanceledException("Вставка отменена. Модель уже завершилась; результат можно получить повтором без новой генерации.");
                 ReportWorkerProgress("downloading");
-                DownloadWithSystemProxy(outputUrl, outputPath, cancelPath);
+                if (textOutput)
+                {
+                    File.WriteAllText(outputPath + ".part", outputUrl, Encoding.UTF8);
+                    if (File.Exists(outputPath)) File.Replace(outputPath + ".part", outputPath, null);
+                    else File.Move(outputPath + ".part", outputPath);
+                }
+                else DownloadWithSystemProxy(outputUrl, outputPath, cancelPath);
                 LogWorker("Replicate request completed in " + timer.ElapsedMilliseconds + " ms.");
                 WriteWorkerResponse(serializer, new Dictionary<string, object> { ["ok"] = true });
                 return 0;
@@ -189,7 +196,7 @@ namespace VanyaTools.Updater
         }
 
         private static string CreatePrediction(string token, string model,
-            Dictionary<string, object> input, JavaScriptSerializer serializer, string outputPath, string cancelPath)
+            Dictionary<string, object> input, JavaScriptSerializer serializer, string outputPath, string cancelPath, bool textOutput)
         {
             string statePath = outputPath + ".prediction.json";
             Dictionary<string, object> result = File.Exists(statePath)
@@ -274,6 +281,16 @@ namespace VanyaTools.Updater
                     (result.ContainsKey("error") ? Convert.ToString(result["error"]) : ""));
 
             object output = result["output"];
+            if (textOutput)
+            {
+                var chunks = output as System.Collections.IEnumerable;
+                if (output is string) return (string)output;
+                if (chunks == null) throw new InvalidDataException("Модель анализа не вернула текст.");
+                var text = new StringBuilder();
+                foreach (object chunk in chunks) text.Append(Convert.ToString(chunk));
+                if (text.Length == 0) throw new InvalidDataException("Модель анализа вернула пустой текст.");
+                return text.ToString();
+            }
             var list = output as ArrayList;
             if (list != null && list.Count > 0) output = list[0];
             var array = output as object[];
@@ -289,7 +306,7 @@ namespace VanyaTools.Updater
         {
             // Store only resume metadata, never the API token or input image.
             var state = new Dictionary<string, object>();
-            foreach (string key in new[] { "id", "status", "urls", "output", "error" })
+            foreach (string key in new[] { "id", "status", "urls", "output", "error", "metrics" })
                 if (result.ContainsKey(key)) state[key] = result[key];
             File.WriteAllText(path + ".tmp", serializer.Serialize(state));
             if (File.Exists(path)) File.Replace(path + ".tmp", path, null);
@@ -426,7 +443,7 @@ namespace VanyaTools.Updater
         {
             string uri = "https://api.github.com/repos/" + repository + "/releases/latest";
             var request = (HttpWebRequest)WebRequest.Create(uri);
-            request.UserAgent = "VanyaTools-Updater/1.0.21";
+            request.UserAgent = "VanyaTools-Updater/1.0.22";
             request.Accept = "application/vnd.github+json";
 
             string json;
