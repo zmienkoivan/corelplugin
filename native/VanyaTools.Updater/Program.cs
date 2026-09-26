@@ -190,7 +190,8 @@ namespace VanyaTools.Updater
             request.ContentType = "application/json";
             request.Accept = "application/json";
             request.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
-            request.Headers["Prefer"] = "wait=1";
+            // Return the prediction handle immediately; waiting on the create request
+            // can hit short gateway timeouts before polling has a chance to begin.
             ReportWorkerProgress("sending");
             var requestTimer = Stopwatch.StartNew();
             byte[] bytes = Encoding.UTF8.GetBytes(serializer.Serialize(new Dictionary<string, object> { ["input"] = input }));

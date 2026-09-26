@@ -100,8 +100,8 @@ namespace VanyaTools.Native
             _activityPanel.Children.Add(_activityBar);
             panel.Children.Add(_activityPanel);
             panel.Children.Add(Note("AI-векторизация создаёт редактируемые контуры, но не восстанавливает исходный шрифт. Проверяйте надписи и мелкие детали."));
-            panel.Children.Add(Button("Импортировать PNG в Corel", (_, __) => ImportFile(_result)));
-            panel.Children.Add(Button("Импортировать SVG в Corel", (_, __) => ImportFile(_svg)));
+            panel.Children.Add(Button("Импортировать PNG в Corel", (_, __) => ImportFile(_result, "PNG|*.png")));
+            panel.Children.Add(Button("Импортировать SVG в Corel", (_, __) => ImportFile(_svg, "SVG|*.svg")));
             panel.Children.Add(Button("Сохранить PNG…", (_, __) => SaveFile(_result, "PNG|*.png")));
             panel.Children.Add(Button("Сохранить SVG…", (_, __) => SaveFile(_svg, "SVG|*.svg")));
             SetPrompt(); UpdateCost();
@@ -263,9 +263,18 @@ namespace VanyaTools.Native
 
         private static BitmapSource Bitmap(string path) { using (var s = File.OpenRead(path)) { var b = BitmapFrame.Create(s, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad); b.Freeze(); return b; } }
 
-        private void ImportFile(string path)
+        private void ImportFile(string path, string filter)
         {
-            if (String.IsNullOrEmpty(path) || !File.Exists(path)) { Report("Сначала создайте результат.", true); return; }
+            if (String.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                var dialog = new Microsoft.Win32.OpenFileDialog
+                {
+                    Filter = filter,
+                    Title = "Выберите сохранённый результат AI"
+                };
+                if (dialog.ShowDialog() != true) return;
+                path = dialog.FileName;
+            }
             _import(path);
         }
 
