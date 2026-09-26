@@ -45,10 +45,9 @@ namespace VanyaTools.Native
 
             var buttons = new UniformGrid { Columns = 2, Margin = new Thickness(0, 3, 0, 4) };
             buttons.Children.Add(Button("Взять выделение Corel", (_, __) => CaptureSelection()));
-            buttons.Children.Add(Button("Открыть файл…", (_, __) => OpenImage()));
             buttons.Children.Add(Button("Баланс / Billing ↗", (_, __) => OpenBilling()));
             panel.Children.Add(buttons);
-            panel.Children.Add(Note("Рабочий сценарий: выделите графику на холсте → нажмите «Взять выделение Corel» → выберите операцию и модель → запустите. В документ попадёт только временная копия для PNG; исходные объекты сохраняются."));
+            panel.Children.Add(Note("Рабочий сценарий: выделите графику на холсте → нажмите «Запустить AI-операцию». Вкладка захватит текущее выделение, создаст временный PNG и отправит его выбранной модели. Исходные объекты сохраняются."));
 
             var previews = new UniformGrid { Columns = 2 };
             previews.Children.Add(Preview("Исходник", out _sourcePreview));
@@ -99,15 +98,6 @@ namespace VanyaTools.Native
             SetPrompt(); UpdateCost();
         }
 
-        private void OpenImage()
-        {
-            var d = new Microsoft.Win32.OpenFileDialog { Filter = "Изображения|*.png;*.jpg;*.jpeg;*.bmp" };
-            if (d.ShowDialog() != true) return;
-            _source = d.FileName; _result = null; _svg = null;
-            _sourcePreview.Source = Bitmap(_source); _resultPreview.Source = null;
-            Report("Исходник загружен.", false);
-        }
-
         private void CaptureSelection()
         {
             try
@@ -122,7 +112,6 @@ namespace VanyaTools.Native
 
         private bool EnsureSource()
         {
-            if (!String.IsNullOrEmpty(_source) && File.Exists(_source)) return true;
             try
             {
                 _source = _captureSelection();
@@ -174,6 +163,7 @@ namespace VanyaTools.Native
                 _resultPreview.Source = Bitmap(_result);
                 Report("Готово. Сравните надписи и геометрию перед печатью.", false);
             }
+            catch (WebException ex) { Report("Не удалось связаться с Replicate. Выделение осталось в Corel; проверьте подключение к интернету и повторите запрос. Подробности: " + ex.Message, true); }
             catch (Exception ex) { Report(ex.Message, true); }
             finally { IsEnabled = true; }
         }
@@ -195,6 +185,7 @@ namespace VanyaTools.Native
                 await Task.Run(() => Download(url, _svg));
                 Report("SVG создан. Проверьте его в Corel.", false);
             }
+            catch (WebException ex) { Report("Не удалось связаться с Replicate. Проверьте подключение к интернету и повторите запрос. Подробности: " + ex.Message, true); }
             catch (Exception ex) { Report(ex.Message, true); }
             finally { IsEnabled = true; }
         }

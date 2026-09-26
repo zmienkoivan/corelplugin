@@ -52,11 +52,9 @@ namespace VanyaTools.Native
                 if (rasterShape == null)
                     throw new InvalidOperationException("CorelDRAW не смог растрировать выделение.");
 
-                rasterShape.CreateSelection();
-                exportFilter = doc.ExportBitmap(path, CorelConstants.CdrPng,
-                    CorelConstants.CdrSelection, CorelConstants.CdrRgbColorImage,
-                    0, 0, 300, 300, CorelConstants.CdrNormalAntiAliasing,
-                    false, true, true, false, 0);
+                // Save the generated bitmap itself. Document.ExportBitmap has
+                // version-dependent optional COM arguments and can reject late-bound calls.
+                exportFilter = rasterShape.Bitmap.SaveAs(path, CorelConstants.CdrPng);
                 if (exportFilter != null) exportFilter.Finish();
                 if (!File.Exists(path) || new FileInfo(path).Length == 0)
                     throw new InvalidOperationException("CorelDRAW не создал PNG выделения.");
