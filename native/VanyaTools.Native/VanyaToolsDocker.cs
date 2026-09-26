@@ -89,7 +89,7 @@ namespace VanyaTools.Native
             tabs.Items.Add(new TabItem
             {
                 Header = "AI-графика",
-                Content = new AiPrintTab(ImportAiResult, (message, isError) => SetStatus(message, isError))
+                Content = new AiPrintTab(ImportAiResult, (message, isError) => SetStatus(message, isError), CaptureAiSelection)
             });
             outer.Children.Add(tabs);
             root = standardTools;
@@ -184,6 +184,13 @@ namespace VanyaTools.Native
                 app.ActiveWindow.Refresh();
                 SetStatus("AI-результат импортирован в Corel: " + Path.GetFileName(path), false);
             });
+        }
+
+        private string CaptureAiSelection()
+        {
+            string path = AiSelectionCapture.Capture();
+            SetStatus("Выделение Corel подготовлено для AI · PNG 300 DPI, прозрачный фон.", false);
+            return path;
         }
         private void RunTrim(bool useTiles)
         {

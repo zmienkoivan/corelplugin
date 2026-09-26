@@ -19,6 +19,7 @@ namespace VanyaTools.Native
     {
         private readonly Action<string> _import;
         private readonly Action<string, bool> _status;
+        private readonly Func<string> _captureSelection;
         private readonly ComboBox _operation;
         private readonly ComboBox _model;
         private readonly PasswordBox _token;
@@ -34,18 +35,20 @@ namespace VanyaTools.Native
             public override string ToString() { return Label; }
         }
 
-        public AiPrintTab(Action<string> import, Action<string, bool> status)
+        public AiPrintTab(Action<string> import, Action<string, bool> status, Func<string> captureSelection)
         {
-            _import = import; _status = status;
+            _import = import; _status = status; _captureSelection = captureSelection;
             var panel = new StackPanel { Margin = new Thickness(7) };
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel };
             panel.Children.Add(Label("AI-графика · Replicate", true));
             panel.Children.Add(Note("Операции для печатной графики: восстановление принта, удаление фона, стилизация, свободный промпт."));
 
             var buttons = new UniformGrid { Columns = 2, Margin = new Thickness(0, 3, 0, 4) };
-            buttons.Children.Add(Button("Открыть изображение…", (_, __) => OpenImage()));
+            buttons.Children.Add(Button("Взять выделение Corel", (_, __) => CaptureSelection()));
+            buttons.Children.Add(Button("Открыть файл…", (_, __) => OpenImage()));
             buttons.Children.Add(Button("Баланс / Billing ↗", (_, __) => OpenBilling()));
             panel.Children.Add(buttons);
+            panel.Children.Add(Note("Рабочий сценарий: выделите графику на холсте → нажмите «Взять выделение Corel» → выберите операцию и модель → запустите. В документ попадёт только временная копия для PNG; исходные объекты сохраняются."));
 
             var previews = new UniformGrid { Columns = 2 };
             previews.Children.Add(Preview("Исходник", out _sourcePreview));
@@ -105,6 +108,32 @@ namespace VanyaTools.Native
             Report("Исходник загружен.", false);
         }
 
+        private void CaptureSelection()
+        {
+            try
+            {
+                _source = _captureSelection();
+                _result = null; _svg = null;
+                _sourcePreview.Source = Bitmap(_source); _resultPreview.Source = null;
+                Report("Выделение скопировано и растрировано: " + Path.GetFileName(_source), false);
+            }
+            catch (Exception ex) { Report(ex.Message, true); }
+        }
+
+        private bool EnsureSource()
+        {
+            if (!String.IsNullOrEmpty(_source) && File.Exists(_source)) return true;
+            try
+            {
+                _source = _captureSelection();
+                _sourcePreview.Source = Bitmap(_source);
+                _result = null; _svg = null;
+                Report("Выделение Corel скопировано, растрировано и подготовлено с прозрачностью.", false);
+                return true;
+            }
+            catch (Exception ex) { Report(ex.Message, true); return false; }
+        }
+
         private void SetPrompt()
         {
             if (_prompt == null || _operation == null) return;
@@ -124,14 +153,16 @@ namespace VanyaTools.Native
             var model = _model.SelectedItem as ModelItem;
             bool removeBackground = _operation.SelectedIndex == 1;
             if (removeBackground) model = new ModelItem("bria/remove-background", "Bria Remove Background", 0.018m);
-            if (model == null || String.IsNullOrEmpty(_source)) { Report("Сначала загрузите изображение.", true); return; }
+            if (model == null) { Report("Выберите модель.", true); return; }
             string key = CurrentToken();
             if (key.Length < 8) { Report("Введите ключ и сохраните его.", true); return; }
+            if (!EnsureSource()) return;
             if (MessageBox.Show("Ориентировочная цена: $" + model.Cost.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) + ". Продолжить?", "Платный запрос Replicate", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
             try
             {
                 IsEnabled = false; Report("Подготовка изображения и запрос к модели…", false);
-                string data = await Task.Run(() => CropData());
+                // Read WPF controls and encode the crop on the UI thread.
+                string data = CropData();
                 var input = new Dictionary<string, object> { ["prompt"] = _prompt.Text, ["output_format"] = "png" };
                 if (removeBackground) { input["image"] = data; input["preserve_alpha"] = true; input["content_moderation"] = false; }
                 else if (model.Id.Contains("kontext")) { input["input_image"] = data; input["aspect_ratio"] = "match_input_image"; input["safety_tolerance"] = 2; }
@@ -149,8 +180,9 @@ namespace VanyaTools.Native
 
         private async Task RunVector()
         {
+            if (!EnsureSource()) return;
             string file = File.Exists(_result) ? _result : _source;
-            if (String.IsNullOrEmpty(file) || !File.Exists(file)) { Report("Сначала загрузите изображение.", true); return; }
+            if (String.IsNullOrEmpty(file) || !File.Exists(file)) { Report("Не удалось подготовить изображение.", true); return; }
             string key = CurrentToken();
             if (key.Length < 8) { Report("Введите ключ и сохраните его.", true); return; }
             if (MessageBox.Show("Recraft Vectorize стоит около $0.01 за SVG. Продолжить?", "Платный запрос Replicate", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
