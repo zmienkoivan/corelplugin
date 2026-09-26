@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Security.Cryptography;
@@ -108,15 +109,18 @@ namespace VanyaTools.Native
 
         private bool EnsureSource()
         {
+            var timer = Stopwatch.StartNew();
             try
             {
                 _source = _captureSelection();
-                _sourcePreview.Source = Bitmap(_source);
+                BitmapSource captured = Bitmap(_source);
+                _sourcePreview.Source = captured;
                 _result = null; _svg = null;
+                Log.Info("AI selection prepared in " + timer.ElapsedMilliseconds + " ms; image=" + captured.PixelWidth + "x" + captured.PixelHeight + ", bytes=" + new FileInfo(_source).Length + ".");
                 Report("Выделение Corel скопировано, растрировано и подготовлено с прозрачностью.", false);
                 return true;
             }
-            catch (Exception ex) { Report(ex.Message, true); return false; }
+            catch (Exception ex) { Log.Error("AI selection preparation failed after " + timer.ElapsedMilliseconds + " ms.", ex); Report(ex.Message, true); return false; }
         }
 
         private void SetPrompt()
@@ -145,10 +149,14 @@ namespace VanyaTools.Native
             if (MessageBox.Show("Ориентировочная цена: $" + model.Cost.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) + ". Продолжить?", "Платный запрос Replicate", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
             try
             {
+                var operationTimer = Stopwatch.StartNew();
+                Log.Info("AI edit started. Model=" + model.Id + ".");
                 SetBusy(true, "Подготавливаю изображение…");
                 Report("Подготавливаю изображение для Replicate…", false);
                 // Read WPF controls and encode the crop on the UI thread.
+                var prepareTimer = Stopwatch.StartNew();
                 string data = CropData();
+                Log.Info("AI input PNG prepared in " + prepareTimer.ElapsedMilliseconds + " ms; encoded chars=" + data.Length + ".");
                 var input = new Dictionary<string, object> { ["prompt"] = _prompt.Text, ["output_format"] = "png" };
                 if (removeBackground) { input["image"] = data; input["preserve_alpha"] = true; input["content_moderation"] = false; }
                 else if (model.Id.Contains("kontext")) { input["input_image"] = data; input["aspect_ratio"] = "match_input_image"; input["safety_tolerance"] = 2; }
@@ -158,10 +166,11 @@ namespace VanyaTools.Native
                 string outputPath = _result;
                 await Task.Run(() => ReplicateWorkerClient.Run(model.Id, key, input, outputPath, UpdateProgress));
                 _resultPreview.Source = Bitmap(_result);
+                Log.Info("AI edit succeeded in " + operationTimer.ElapsedMilliseconds + " ms; output bytes=" + new FileInfo(_result).Length + ".");
                 Report("Готово. Сравните надписи и геометрию перед печатью.", false);
             }
-            catch (WebException ex) { Report("Не удалось связаться с Replicate. Выделение осталось в Corel; проверьте подключение и настройки прокси. Код: " + ex.Status + ". " + ex.Message + (ex.InnerException == null ? "" : " · " + ex.InnerException.Message), true); }
-            catch (Exception ex) { Report(ex.Message, true); }
+            catch (WebException ex) { Log.Error("AI edit network request failed.", ex); Report("Не удалось связаться с Replicate. Выделение осталось в Corel; проверьте подключение и настройки прокси. Код: " + ex.Status + ". " + ex.Message + (ex.InnerException == null ? "" : " · " + ex.InnerException.Message), true); }
+            catch (Exception ex) { Log.Error("AI edit failed.", ex); Report(ex.Message, true); }
             finally { SetBusy(false, null); }
         }
 
@@ -175,17 +184,22 @@ namespace VanyaTools.Native
             if (MessageBox.Show("Recraft Vectorize стоит около $0.01 за SVG. Продолжить?", "Платный запрос Replicate", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
             try
             {
+                var operationTimer = Stopwatch.StartNew();
+                Log.Info("AI vectorization started. Model=recraft-ai/recraft-vectorize.");
                 SetBusy(true, "Подготавливаю изображение для векторизации…");
                 Report("Подготавливаю изображение для векторизации…", false);
+                var prepareTimer = Stopwatch.StartNew();
                 string data = await Task.Run(() => DataUri(Bitmap(file)));
+                Log.Info("AI vector input PNG prepared in " + prepareTimer.ElapsedMilliseconds + " ms; encoded chars=" + data.Length + ".");
                 _svg = Path.Combine(Path.GetTempPath(), "Vanya-AI-" + Guid.NewGuid().ToString("N") + ".svg");
                 string outputPath = _svg;
                 await Task.Run(() => ReplicateWorkerClient.Run("recraft-ai/recraft-vectorize", key,
                     new Dictionary<string, object> { ["image"] = data }, outputPath, UpdateProgress));
+                Log.Info("AI vectorization succeeded in " + operationTimer.ElapsedMilliseconds + " ms; output bytes=" + new FileInfo(_svg).Length + ".");
                 Report("SVG создан. Проверьте его в Corel.", false);
             }
-            catch (WebException ex) { Report("Не удалось связаться с Replicate. Проверьте подключение и настройки прокси. Код: " + ex.Status + ". " + ex.Message + (ex.InnerException == null ? "" : " · " + ex.InnerException.Message), true); }
-            catch (Exception ex) { Report(ex.Message, true); }
+            catch (WebException ex) { Log.Error("AI vectorization network request failed.", ex); Report("Не удалось связаться с Replicate. Проверьте подключение и настройки прокси. Код: " + ex.Status + ". " + ex.Message + (ex.InnerException == null ? "" : " · " + ex.InnerException.Message), true); }
+            catch (Exception ex) { Log.Error("AI vectorization failed.", ex); Report(ex.Message, true); }
             finally { SetBusy(false, null); }
         }
 

@@ -139,14 +139,18 @@ namespace VanyaTools.Updater
                     String.IsNullOrWhiteSpace(outputPath) || input == null)
                     throw new InvalidDataException("В задании Replicate отсутствуют обязательные поля.");
 
+                LogWorker("Replicate request started. Model=" + model + ".");
+                var timer = Stopwatch.StartNew();
                 string outputUrl = CreatePrediction(token, model, input, serializer);
                 ReportWorkerProgress("downloading");
                 DownloadWithSystemProxy(outputUrl, outputPath);
+                LogWorker("Replicate request completed in " + timer.ElapsedMilliseconds + " ms.");
                 WriteWorkerResponse(serializer, new Dictionary<string, object> { ["ok"] = true });
                 return 0;
             }
             catch (Exception ex)
             {
+                LogWorker("Replicate request failed: " + ex);
                 WriteWorkerResponse(serializer, new Dictionary<string, object>
                 {
                     ["ok"] = false,
@@ -164,7 +168,18 @@ namespace VanyaTools.Updater
 
         private static void ReportWorkerProgress(string stage)
         {
+            LogWorker("Replicate stage: " + stage + ".");
             Console.Error.WriteLine("PROGRESS:" + stage);
+        }
+
+        private static void LogWorker(string message)
+        {
+            try
+            {
+                string path = Path.Combine(Path.GetTempPath(), "VanyaTools.Native.log");
+                File.AppendAllText(path, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " [AI-WORKER] " + message + Environment.NewLine);
+            }
+            catch { }
         }
 
         private static string CreatePrediction(string token, string model,
@@ -177,10 +192,12 @@ namespace VanyaTools.Updater
             request.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
             request.Headers["Prefer"] = "wait=1";
             ReportWorkerProgress("sending");
+            var requestTimer = Stopwatch.StartNew();
             byte[] bytes = Encoding.UTF8.GetBytes(serializer.Serialize(new Dictionary<string, object> { ["input"] = input }));
             using (var stream = request.GetRequestStream()) stream.Write(bytes, 0, bytes.Length);
             Dictionary<string, object> result = ReadJson(request, serializer);
             string status = Convert.ToString(result["status"]);
+            LogWorker("Prediction create returned status=" + status + " after " + requestTimer.ElapsedMilliseconds + " ms.");
             if (status == "starting" || status == "processing") ReportWorkerProgress("processing");
 
             for (int i = 0; i < 90 && (status == "starting" || status == "processing"); i++)
@@ -192,7 +209,6 @@ namespace VanyaTools.Updater
                 poll.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
                 result = ReadJson(poll, serializer);
                 status = Convert.ToString(result["status"]);
-                if (status == "starting" || status == "processing") ReportWorkerProgress("processing");
             }
             if (status != "succeeded")
                 throw new InvalidOperationException(Convert.ToString(result.ContainsKey("error")
@@ -251,6 +267,7 @@ namespace VanyaTools.Updater
 
         private static void DownloadWithSystemProxy(string url, string outputPath)
         {
+            var timer = Stopwatch.StartNew();
             string directory = Path.GetDirectoryName(outputPath);
             if (!String.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
             using (var client = new WebClient())
@@ -267,6 +284,8 @@ namespace VanyaTools.Updater
                 catch { }
                 client.DownloadFile(url, outputPath);
             }
+            long size = new FileInfo(outputPath).Length;
+            LogWorker("Output downloaded in " + timer.ElapsedMilliseconds + " ms; bytes=" + size + ".");
         }
 
         private static string ReadRepository()
