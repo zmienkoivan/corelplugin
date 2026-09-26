@@ -17,9 +17,9 @@ namespace VanyaTools.Native
         {
             string exe = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "VanyaTools", "VanyaTools.Updater.exe");
+                "VanyaTools", "VanyaTools.ReplicateWorker.exe");
             if (!File.Exists(exe))
-                throw new InvalidOperationException("Не найден сетевой помощник Vanya Tools. Обновите или переустановите пакет.");
+                throw new InvalidOperationException("Не найден сетевой помощник Vanya Tools. Завершите обновление до версии 1.0.52 и перезапустите CorelDRAW.");
 
             var serializer = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue };
             string payload = serializer.Serialize(new Dictionary<string, object>

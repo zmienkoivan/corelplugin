@@ -56,7 +56,7 @@ namespace VanyaTools.Updater
                 using (var client = new WebClient())
                 using (var spinner = new ConsoleSpinner("Загрузка пакета обновления"))
                 {
-                    client.Headers[HttpRequestHeader.UserAgent] = "VanyaTools-Updater/1.0.16";
+                    client.Headers[HttpRequestHeader.UserAgent] = "VanyaTools-Updater/1.0.17";
                     client.DownloadProgressChanged += (_, e) => spinner.SetMessage("Загрузка пакета: " + e.ProgressPercentage + "%");
                     client.DownloadFile(release.AssetUrl, zipPath);
                 }
@@ -338,7 +338,7 @@ namespace VanyaTools.Updater
         {
             string uri = "https://api.github.com/repos/" + repository + "/releases/latest";
             var request = (HttpWebRequest)WebRequest.Create(uri);
-            request.UserAgent = "VanyaTools-Updater/1.0.16";
+            request.UserAgent = "VanyaTools-Updater/1.0.17";
             request.Accept = "application/vnd.github+json";
 
             string json;
@@ -442,8 +442,8 @@ namespace VanyaTools.Updater
             try
             {
                 Console.WriteLine();
-                Console.WriteLine("Нажмите любую клавишу для закрытия окна...");
-                Console.ReadKey(true);
+                Console.WriteLine("Это окно закроется через 8 секунд.");
+                Thread.Sleep(8000);
             }
             catch { }
         }

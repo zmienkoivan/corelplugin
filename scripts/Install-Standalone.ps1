@@ -123,8 +123,35 @@ try {
 
         if (Test-Path -LiteralPath $updaterExeSource -PathType Leaf) {
             $updaterTarget = Join-Path $updaterHome "VanyaTools.Updater.exe"
+            # The Replicate worker uses a separate filename so replacing or
+            # running the updater cannot leave the AI tab bound to an old binary.
+            $workerTarget = Join-Path $updaterHome "VanyaTools.ReplicateWorker.exe"
+            Copy-Item -LiteralPath $updaterExeSource -Destination $workerTarget -Force
+
             if (@(Get-Process -Name "VanyaTools.Updater" -ErrorAction SilentlyContinue).Count -eq 0) {
                 Copy-Item -LiteralPath $updaterExeSource -Destination $updaterTarget -Force
+            } else {
+                # The updater is installing this package and has its own EXE
+                # loaded, so stage the replacement and apply it after exit.
+                $stagedUpdater = Join-Path $updaterHome "VanyaTools.Updater.pending.exe"
+                $replaceScriptPath = Join-Path $updaterHome "Replace-VanyaUpdater.ps1"
+                Copy-Item -LiteralPath $updaterExeSource -Destination $stagedUpdater -Force
+                $replaceScript = @'
+param([string]$PendingPath, [string]$TargetPath)
+for ($i = 0; $i -lt 3600; $i++) {
+    if (@(Get-Process -Name "VanyaTools.Updater" -ErrorAction SilentlyContinue).Count -eq 0) {
+        try {
+            Move-Item -LiteralPath $PendingPath -Destination $TargetPath -Force
+            exit 0
+        } catch { }
+    }
+    Start-Sleep -Seconds 1
+}
+exit 1
+'@
+                Set-Content -LiteralPath $replaceScriptPath -Value $replaceScript -Encoding UTF8
+                $replaceArgs = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $replaceScriptPath + '" -PendingPath "' + $stagedUpdater + '" -TargetPath "' + $updaterTarget + '"'
+                Start-Process -FilePath "powershell.exe" -ArgumentList $replaceArgs -WindowStyle Hidden
             }
         } elseif ((Test-Path -LiteralPath $updaterSource -PathType Leaf) -and
                   (Test-Path -LiteralPath $updaterBatSource -PathType Leaf)) {
