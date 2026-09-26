@@ -43,10 +43,7 @@ namespace VanyaTools.Native
             panel.Children.Add(Label("AI-графика · Replicate", true));
             panel.Children.Add(Note("Операции для печатной графики: восстановление принта, удаление фона, стилизация, свободный промпт."));
 
-            var buttons = new UniformGrid { Columns = 2, Margin = new Thickness(0, 3, 0, 4) };
-            buttons.Children.Add(Button("Взять выделение Corel", (_, __) => CaptureSelection()));
-            buttons.Children.Add(Button("Баланс / Billing ↗", (_, __) => OpenBilling()));
-            panel.Children.Add(buttons);
+            panel.Children.Add(Button("Баланс / Billing ↗", (_, __) => OpenBilling()));
             panel.Children.Add(Note("Рабочий сценарий: выделите графику на холсте → нажмите «Запустить AI-операцию». Вкладка захватит текущее выделение, создаст временный PNG и отправит его выбранной модели. Исходные объекты сохраняются."));
 
             var previews = new UniformGrid { Columns = 2 };
@@ -96,18 +93,6 @@ namespace VanyaTools.Native
             panel.Children.Add(Button("Сохранить PNG…", (_, __) => SaveFile(_result, "PNG|*.png")));
             panel.Children.Add(Button("Сохранить SVG…", (_, __) => SaveFile(_svg, "SVG|*.svg")));
             SetPrompt(); UpdateCost();
-        }
-
-        private void CaptureSelection()
-        {
-            try
-            {
-                _source = _captureSelection();
-                _result = null; _svg = null;
-                _sourcePreview.Source = Bitmap(_source); _resultPreview.Source = null;
-                Report("Выделение скопировано и растрировано: " + Path.GetFileName(_source), false);
-            }
-            catch (Exception ex) { Report(ex.Message, true); }
         }
 
         private bool EnsureSource()
