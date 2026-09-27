@@ -58,18 +58,32 @@ namespace VanyaTools.Native
         public AiPrintTab(Func<string, string> import, Action<string, bool> status, Func<string> captureSelection)
         {
             _import = import; _status = status; _captureSelection = captureSelection;
+            var subtabs = new TabControl { MinHeight = 430 };
+            Content = subtabs;
             var panel = new StackPanel { Margin = new Thickness(7) };
-            Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel };
+            subtabs.Items.Add(new TabItem
+            {
+                Header = "AI-графика",
+                Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel }
+            });
+            var fontPanel = new StackPanel { Margin = new Thickness(7) };
+            subtabs.Items.Add(new TabItem
+            {
+                Header = "Определение шрифта",
+                Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = fontPanel }
+            });
             panel.Children.Add(Label("AI-графика · Replicate", true));
             panel.Children.Add(Note("Операции для печатной графики: восстановление принта, удаление фона, стилизация, свободный промпт."));
 
             panel.Children.Add(Button("Баланс / Billing ↗", (_, __) => OpenBilling()));
             panel.Children.Add(Note("Выделите графику на холсте и запустите операцию. Результат автоматически появится на холсте; исходные объекты сохраняются."));
-            _fontAnalysisButton = Button("Определить шрифт выделенного текста", async (_, __) => await AnalyzeFont());
-            panel.Children.Add(_fontAnalysisButton);
-            panel.Children.Add(Note("Выделите текст на холсте: плагин растрирует его и попросит Gemini предложить вероятный шрифт и похожие варианты. Это визуальная оценка, а не гарантированное точное определение."));
+            fontPanel.Children.Add(Label("Определение шрифта по выделенному объекту", true));
+            fontPanel.Children.Add(Note("Выделите текст, растр или кривые с буквами на холсте, затем запустите анализ. Gemini предложит вероятный шрифт и похожие варианты. Для кривых и растра результат — визуальная оценка, точное совпадение не гарантируется."));
+            _fontAnalysisButton = Button("Определить шрифт выделенного объекта", async (_, __) => await AnalyzeFont());
+            fontPanel.Children.Add(_fontAnalysisButton);
             _fontAnalysisText = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 150, MinHeight = 42, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 10, Text = "Здесь появится результат анализа шрифта." };
-            panel.Children.Add(new Expander { Header = "Результат определения шрифта", IsExpanded = true, Content = _fontAnalysisText });
+            fontPanel.Children.Add(new Expander { Header = "Результат определения шрифта", IsExpanded = true, Content = _fontAnalysisText });
+            fontPanel.Children.Add(Note("Ключ Replicate хранится в настройках AI-графики и используется обеими вкладками. Анализ оплачивается по тарифу Gemini; перед запуском появится подтверждение."));
 
             var previews = new UniformGrid { Columns = 2 };
             previews.Children.Add(Preview("Исходник", out _sourcePreview));

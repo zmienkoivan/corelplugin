@@ -23,7 +23,22 @@ namespace VanyaTools.Native
             _sourceData = sourceData; _model = model; _prompt = prompt; _target = target; _upscale = upscale;
             _directory = Path.Combine(Path.GetTempPath(), "Vanya-Print-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_directory);
-            File.WriteAllBytes(Path.Combine(_directory, "source.png"), Convert.FromBase64String(sourceData.Substring(sourceData.IndexOf(',') + 1)));
+            string sourcePath = Path.Combine(_directory, "source.png");
+            const string filePrefix = "replicate-file:";
+            if (sourceData != null && sourceData.StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                string uploadedPath = sourceData.Substring(filePrefix.Length);
+                if (!File.Exists(uploadedPath)) throw new FileNotFoundException("Не найден временный PNG выделения.", uploadedPath);
+                File.Copy(uploadedPath, sourcePath, true);
+            }
+            else
+            {
+                int comma = sourceData == null ? -1 : sourceData.IndexOf(',');
+                if (comma < 0 || !sourceData.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Не удалось прочитать изображение выделения для восстановления принта.");
+                try { File.WriteAllBytes(sourcePath, Convert.FromBase64String(sourceData.Substring(comma + 1))); }
+                catch (FormatException ex) { throw new InvalidDataException("Временное изображение выделения повреждено.", ex); }
+            }
         }
 
         public async Task<string> Run(string key, CancellationToken cancellation, Action<string> progress, Action<string> analysisReady)
