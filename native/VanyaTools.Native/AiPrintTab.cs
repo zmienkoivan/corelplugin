@@ -104,10 +104,10 @@ namespace VanyaTools.Native
             panel.Children.Add(Note("Два прохода Real-ESRGAN: первый подготавливает низкое разрешение до генерации, второй увеличивает готовый рисунок перед удалением фона."));
             panel.Children.Add(Label("Цветов для плашечной графики", false));
             _palette = new ComboBox { FontSize = 10, Margin = new Thickness(0, 0, 0, 4) };
-            foreach (string item in new[] { "Авто · одноцветный в 1 цвет, иначе до 4", "1 цвет · плоский принт", "2 цвета", "4 цвета" }) _palette.Items.Add(item);
+            foreach (string item in new[] { "Авто · до 8 оттенков", "Сохранить все цвета и градиенты", "1 цвет · плоский принт", "2 цвета", "4 цвета", "6 цветов", "8 цветов" }) _palette.Items.Add(item);
             _palette.SelectedIndex = 0;
             panel.Children.Add(_palette);
-            panel.Children.Add(Note("Выделение захватывается в Corel при 400 DPI; исходная PNG не уменьшается ради лимита JSON, а передаётся через файловую загрузку. Для AI-входа используется до 4 MP. Готовый файл готовится в A3 при 300 DPI; прозрачные края обрезает штатная функция Corel."));
+            panel.Children.Add(Note("Выделение захватывается в Corel при 400 DPI; исходная PNG не уменьшается ради лимита JSON, а передаётся через файловую загрузку. Для AI-входа используется до 4 MP. Результат масштабируется качественным фильтром в A3 · 300 DPI. Авто-палитра сохраняет до 8 значимых оттенков; для полноцвета выберите соседний режим, для плашек — ограниченное число цветов. Прозрачные края обрезает штатная функция Corel."));
             _analysisText = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 180, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 10 };
             panel.Children.Add(new Expander { Header = "Что увидела модель анализа", Content = _analysisText });
 
@@ -411,11 +411,11 @@ namespace VanyaTools.Native
             {
                 Report("Подготавливаю A3 · 300 DPI · палитру для печати…", false);
                 string printPath = Path.Combine(Path.GetTempPath(), "Vanya-A3-" + Guid.NewGuid().ToString("N") + ".png");
-                int palette = _palette.SelectedIndex == 1 ? 1 : _palette.SelectedIndex == 2 ? 2 : _palette.SelectedIndex == 3 ? 4 : 0;
+                int palette = _palette.SelectedIndex == 0 ? 0 : _palette.SelectedIndex == 1 ? -1 : _palette.SelectedIndex == 2 ? 1 : _palette.SelectedIndex == 3 ? 2 : _palette.SelectedIndex == 4 ? 4 : _palette.SelectedIndex == 5 ? 6 : 8;
                 await Task.Run(() => PrintOutputProcessor.Prepare(path, printPath, palette));
                 cancel.ThrowIfCancellationRequested();
                 path = printPath;
-                Log.Info("Print output prepared for A3 at 300 DPI with " + (_palette.SelectedIndex == 0 ? "automatic" : palette.ToString()) + " spot colors.");
+                Log.Info("Print output prepared for A3 at 300 DPI with " + (_palette.SelectedIndex == 1 ? "full color preserved" : _palette.SelectedIndex == 0 ? "automatic palette up to 8 colors" : palette + " spot colors") + ".");
             }
             _readyOutput = path;
             try
