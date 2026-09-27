@@ -10,6 +10,7 @@
 - `addon/VanyaToolsNative` - CorelDRAW addon, который загружает `VanyaTools.Native.dll`.
 - `build-native.ps1` - сборка DLL.
 - `install-native.ps1` - установка в CorelDRAW `Programs64\Addons`.
+- В AI-вкладке можно выделить текст и нажать «Определить шрифт выделенного текста»: растр отправляется в Gemini 2.5 Flash, а результат показывает предполагаемую гарнитуру, похожие варианты и уверенность модели.
 
 Сборка и установка:
 
