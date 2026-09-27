@@ -175,6 +175,8 @@ namespace VanyaTools.Native
             string[] prompts = {
                 "Extract the exact existing main print from the reference into a flat print artwork on pure white. " +
                 "Copy the visible letter shapes and illustration exactly, preserving object count, relative sizes, spacing, slant and original ink colors. " +
+                "Preserve fine visual detail: keep separate brush slashes, small fragments, internal cutouts, edge breaks and overlaps as distinct shapes; do not collapse a detailed illustration into a simple silhouette or a few generic strokes. " +
+                "Retain the original line weight and lettering weight, especially bold titles; do not make lettering thinner or more delicate. " +
                 "Use one solid ink color for a single-color original. Completely remove the garment and its texture. " +
                 "No redesign, no invented details, no outlines, no white sticker border, no gradients, no glow, no shadows, no checkerboard. " +
                 "Output the print once, uniformly enlarged, with a small plain white margin. Exclude sleeve prints, labels and other shirts. " +
