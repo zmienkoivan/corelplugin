@@ -29,7 +29,8 @@ namespace VanyaTools.Native
         public async Task<string> Run(string key, CancellationToken cancellation, Action<string> progress, Action<string> analysisReady)
         {
             string reportPath = Path.Combine(_directory, "analysis.txt");
-            await Stage("1/3 · Анализ принта", "google/gemini-2.5-flash", key,
+            string totalStages = _upscale ? "5" : "3";
+            await Stage("1/" + totalStages + " · Анализ принта", "google/gemini-2.5-flash", key,
                 new Dictionary<string, object>
                 {
                     ["images"] = new[] { _sourceData }, ["temperature"] = 0,
@@ -52,7 +53,7 @@ namespace VanyaTools.Native
             try { facts = serializer.Deserialize<Dictionary<string, object>>(json); }
             catch (Exception ex) { analysisReady("Не удалось прочитать ответ анализатора. Исходник и ответ сохранены; генерация не запускалась."); throw new InvalidDataException("Анализатор вернул некорректный ответ. Можно отключить режим трёх этапов и указать кадрирование вручную.", ex); }
             if (facts == null || !facts.ContainsKey("bbox_percent") || !(facts["bbox_percent"] is System.Collections.IList box) || box.Count != 4)
-                throw new InvalidDataException("Анализатор не определил область принта. Уточните, какой принт нужен, или задайте область вручную и отключите три этапа.");
+                throw new InvalidDataException("Анализатор не определил область принта. Уточните нужный принт или задайте область кадрирования вручную.");
             analysisReady("Рисунок: " + (facts.ContainsKey("description_ru") ? Convert.ToString(facts["description_ru"]) : "—") +
                 "\n\nЧитаемый текст: " + (facts.ContainsKey("visible_text") ? Convert.ToString(facts["visible_text"]) : "—") +
                 "\n\nСомнения: " + (facts.ContainsKey("uncertainties_ru") ? Convert.ToString(facts["uncertainties_ru"]) : "не указаны") +
@@ -87,26 +88,38 @@ namespace VanyaTools.Native
             string referencePath = cropPath;
             if (_upscale)
             {
-                string largePath = Path.Combine(_directory, "upscale.png");
-                await Stage("1/3 · Апскейл 2×", "nightmareai/real-esrgan", key,
+                string preUpscaledPath = Path.Combine(_directory, "pre-upscale.png");
+                await Stage("2/5 · Подготовка мелких краёв 2×", "nightmareai/real-esrgan", key,
                     new Dictionary<string, object> { ["image"] = AiPrintTab.DataUri(AiPrintTab.Bitmap(cropPath)), ["scale"] = 2, ["face_enhance"] = false },
-                    largePath, cancellation, progress);
-                referencePath = largePath;
+                    preUpscaledPath, cancellation, progress);
+                referencePath = preUpscaledPath;
             }
             string observations = "\nНаблюдения анализатора (могут быть неточными; при расхождении ориентируйся на исходное изображение):\n";
             foreach (string field in new[] { "description_ru", "visible_text", "uncertainties_ru" })
                 if (facts.ContainsKey(field)) observations += field + ": " + Convert.ToString(facts[field]) + "\n";
             observations += "Не заменяй неразборчивые символы догадками анализатора. Сохраняй видимые штрихи исходника.";
             string reconstructed = Path.Combine(_directory, "restored.png");
-            await Stage("2/3 · Восстановление рисунка", _model, key,
+            await Stage((_upscale ? "3/5" : "2/3") + " · Восстановление рисунка в максимальном доступном разрешении", _model, key,
                 ImageInput(_model, AiPrintTab.DataUri(AiPrintTab.Bitmap(referencePath)), _prompt + observations),
                 reconstructed, cancellation, progress);
+            referencePath = reconstructed;
+            if (_upscale)
+            {
+                string largePath = Path.Combine(_directory, "upscale.png");
+                await Stage("4/5 · Финишное увеличение результата 2×", "nightmareai/real-esrgan", key,
+                    new Dictionary<string, object> { ["image"] = AiPrintTab.DataUri(AiPrintTab.Bitmap(reconstructed)), ["scale"] = 2, ["face_enhance"] = false },
+                    largePath, cancellation, progress);
+                referencePath = largePath;
+            }
             string final = Path.Combine(_directory, "transparent.png");
-            await Stage("3/3 · Удаление фона", "bria/remove-background", key,
-                new Dictionary<string, object> { ["image"] = AiPrintTab.DataUri(AiPrintTab.Bitmap(reconstructed)), ["preserve_alpha"] = true, ["content_moderation"] = false },
+            await Stage((_upscale ? "5/5" : "3/3") + " · Удаление фона и маскирование", "bria/remove-background", key,
+                new Dictionary<string, object> { ["image"] = AiPrintTab.DataUri(AiPrintTab.Bitmap(referencePath), 4096, 16000000), ["preserve_alpha"] = true, ["content_moderation"] = false },
                 final, cancellation, progress);
             cancellation.ThrowIfCancellationRequested();
-            return final;
+            string cleaned = Path.Combine(_directory, "edge-cleaned.png");
+            await Task.Run(() => PrintEdgeCleanup.Clean(referencePath, final, cleaned), cancellation);
+            cancellation.ThrowIfCancellationRequested();
+            return cleaned;
         }
 
         private static async Task Stage(string name, string model, string key, Dictionary<string, object> input,
@@ -139,7 +152,7 @@ namespace VanyaTools.Native
         {
             var input = new Dictionary<string, object> { ["prompt"] = prompt, ["output_format"] = "png" };
             if (model.Contains("kontext")) { input["input_image"] = data; input["aspect_ratio"] = "match_input_image"; input["safety_tolerance"] = 2; }
-            else if (model.Contains("flux-2")) { input["input_images"] = new[] { data }; input["aspect_ratio"] = "match_input_image"; input["resolution"] = "1 MP"; }
+            else if (model.Contains("flux-2")) { input["input_images"] = new[] { data }; input["aspect_ratio"] = "match_input_image"; input["resolution"] = "4 MP"; }
             else { input["image"] = data; input["go_fast"] = true; }
             return input;
         }

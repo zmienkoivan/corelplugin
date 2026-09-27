@@ -146,6 +146,7 @@ namespace VanyaTools.Updater
                 LogWorker("Replicate request started. Model=" + model + ".");
                 var timer = Stopwatch.StartNew();
                 bool textOutput = Path.GetExtension(outputPath).Equals(".txt", StringComparison.OrdinalIgnoreCase);
+                var localInputFiles = CollectLocalInputFiles(input);
                 string outputUrl = CreatePrediction(token, model, input, serializer, outputPath, cancelPath, textOutput);
                 if (File.Exists(cancelPath)) throw new OperationCanceledException("Вставка отменена. Модель уже завершилась; результат можно получить повтором без новой генерации.");
                 ReportWorkerProgress("downloading");
@@ -156,6 +157,8 @@ namespace VanyaTools.Updater
                     else File.Move(outputPath + ".part", outputPath);
                 }
                 else DownloadWithSystemProxy(outputUrl, outputPath, cancelPath);
+                foreach (string inputFile in localInputFiles)
+                    try { if (File.Exists(inputFile)) File.Delete(inputFile); } catch { }
                 LogWorker("Replicate request completed in " + timer.ElapsedMilliseconds + " ms.");
                 WriteWorkerResponse(serializer, new Dictionary<string, object> { ["ok"] = true });
                 return 0;
@@ -216,6 +219,8 @@ namespace VanyaTools.Updater
                 // Return the prediction handle immediately; waiting on the create request
                 // can hit short gateway timeouts before polling has a chance to begin.
                 ReportWorkerProgress("sending");
+                input = ResolveUploadedInputs(input, token, cancelPath, serializer) as Dictionary<string, object>;
+                if (input == null) throw new InvalidDataException("Не удалось подготовить входные данные для Replicate.");
                 var requestTimer = Stopwatch.StartNew();
                 byte[] bytes = Encoding.UTF8.GetBytes(serializer.Serialize(new Dictionary<string, object> { ["input"] = input }));
                 File.WriteAllText(outputPath + ".submitted", "sent");
@@ -299,6 +304,108 @@ namespace VanyaTools.Updater
             Uri parsed;
             if (!Uri.TryCreate(url, UriKind.Absolute, out parsed) || parsed.Scheme != Uri.UriSchemeHttps)
                 throw new InvalidDataException("Replicate вернул некорректную ссылку на результат.");
+            return url;
+        }
+
+        private static object ResolveUploadedInputs(object value, string token, string cancelPath, JavaScriptSerializer serializer)
+        {
+            var text = value as string;
+            if (text != null)
+            {
+                if (text.StartsWith("replicate-file:", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (File.Exists(cancelPath)) throw new OperationCanceledException("Операция отменена до загрузки изображения.");
+                    string path = text.Substring("replicate-file:".Length);
+                    var info = new FileInfo(path);
+                    if (!info.Exists) throw new FileNotFoundException("Не найден временный PNG для отправки в Replicate.", path);
+                    if (info.Length > 100L * 1024 * 1024) throw new InvalidDataException("Изображение превышает лимит загрузки Replicate 100 МБ.");
+                    return UploadReplicateFile(token, File.ReadAllBytes(path), info.Name, "image/png", serializer);
+                }
+                if (text.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
+                {
+                    int comma = text.IndexOf(',');
+                    if (comma > 0 && text.Length > 350000)
+                    {
+                        byte[] bytes = Convert.FromBase64String(text.Substring(comma + 1));
+                        string mime = text.Substring(5, text.IndexOf(';') - 5);
+                        return UploadReplicateFile(token, bytes, "input", mime, serializer);
+                    }
+                }
+                return text;
+            }
+
+            var dictionary = value as Dictionary<string, object>;
+            if (dictionary != null)
+            {
+                var keys = new List<string>(dictionary.Keys);
+                foreach (string key in keys) dictionary[key] = ResolveUploadedInputs(dictionary[key], token, cancelPath, serializer);
+                return dictionary;
+            }
+            var list = value as IList;
+            if (list != null)
+            {
+                for (int i = 0; i < list.Count; i++) list[i] = ResolveUploadedInputs(list[i], token, cancelPath, serializer);
+                return list;
+            }
+            return value;
+        }
+
+        private static List<string> CollectLocalInputFiles(object value)
+        {
+            var files = new List<string>();
+            CollectLocalInputFiles(value, files);
+            return files;
+        }
+
+        private static void CollectLocalInputFiles(object value, List<string> files)
+        {
+            var text = value as string;
+            if (text != null)
+            {
+                if (text.StartsWith("replicate-file:", StringComparison.OrdinalIgnoreCase))
+                {
+                    string path = text.Substring("replicate-file:".Length);
+                    if (!files.Contains(path)) files.Add(path);
+                }
+                return;
+            }
+            var dictionary = value as Dictionary<string, object>;
+            if (dictionary != null) { foreach (object item in dictionary.Values) CollectLocalInputFiles(item, files); return; }
+            var list = value as IList;
+            if (list != null) foreach (object item in list) CollectLocalInputFiles(item, files);
+        }
+
+        private static string UploadReplicateFile(string token, byte[] content, string filename, string contentType, JavaScriptSerializer serializer)
+        {
+            const string endpoint = "https://api.replicate.com/v1/files";
+            string boundary = "----VanyaTools" + Guid.NewGuid().ToString("N");
+            string safeName = Path.GetFileName(filename ?? "input.png").Replace("\"", "");
+            byte[] header = Encoding.UTF8.GetBytes("--" + boundary + "\r\n" +
+                "Content-Disposition: form-data; name=\"content\"; filename=\"" + safeName + "\"\r\n" +
+                "Content-Type: " + (String.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType) + "\r\n\r\n");
+            byte[] footer = Encoding.UTF8.GetBytes("\r\n--" + boundary + "--\r\n");
+            var request = CreateHttpRequest(endpoint);
+            request.Method = "POST";
+            request.ContentType = "multipart/form-data; boundary=" + boundary;
+            request.Accept = "application/json";
+            request.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
+            request.Timeout = 180000;
+            request.ReadWriteTimeout = 180000;
+            request.ContentLength = header.Length + (long)content.Length + footer.Length;
+            using (var stream = request.GetRequestStream())
+            {
+                stream.Write(header, 0, header.Length);
+                stream.Write(content, 0, content.Length);
+                stream.Write(footer, 0, footer.Length);
+            }
+            var response = ReadJson(request, serializer);
+            var urls = response.ContainsKey("urls") ? response["urls"] as Dictionary<string, object> : null;
+            if (urls == null || !urls.ContainsKey("get")) throw new InvalidDataException("Replicate загрузил файл без ссылки urls.get.");
+            string url = Convert.ToString(urls["get"]);
+            Uri parsed;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out parsed) || parsed.Scheme != Uri.UriSchemeHttps)
+                throw new InvalidDataException("Replicate вернул некорректную ссылку для загруженного файла.");
+            LogWorker("Input uploaded to temporary Replicate storage; bytes=" + content.Length + ".");
             return url;
         }
 

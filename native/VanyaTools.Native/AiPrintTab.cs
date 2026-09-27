@@ -89,31 +89,31 @@ namespace VanyaTools.Native
             _operation.SelectedIndex = 0;
             _operation.SelectionChanged += (_, __) => { SetPrompt(); UpdateCost(); };
             panel.Children.Add(_operation);
-            _smartRestore = new CheckBox { Content = "Восстановление в 3 этапа · экспериментальный режим", IsChecked = false, FontSize = 10, Margin = new Thickness(0, 4, 0, 4) };
+            _smartRestore = new CheckBox { Content = "Полное восстановление · анализ, максимум деталей, апскейл и очистка края", IsChecked = true, FontSize = 10, Margin = new Thickness(0, 4, 0, 4) };
             panel.Children.Add(_smartRestore);
             _smartRestore.Checked += (_, __) => UpdateCost();
             _smartRestore.Unchecked += (_, __) => UpdateCost();
-            panel.Children.Add(Note("Применяется только к восстановлению принта. Анализ: Gemini 2.5 Flash; рисунок: выбранная модель; фон: Bria. Анализ и удаление фона оплачиваются отдельно."));
+            panel.Children.Add(Note("Режим анализирует выбранную область, восстанавливает рисунок в максимальном доступном разрешении, затем увеличивает результат и очищает цветную кайму на прозрачном крае."));
             panel.Children.Add(Label("Какой принт восстановить", false));
             _printTarget = new TextBox { Text = "Основной принт на футболке. Не включать рукав и бирку.", TextWrapping = TextWrapping.Wrap, FontSize = 11 };
             panel.Children.Add(_printTarget);
-            _upscalePrint = new CheckBox { Content = "Апскейл 2× перед восстановлением · дополнительная оплата", FontSize = 10, Margin = new Thickness(0, 4, 0, 4) };
+            _upscalePrint = new CheckBox { Content = "Смягчить лесенку на входе и увеличить результат · 2× + 2× · около $0.004", IsChecked = true, FontSize = 10, Margin = new Thickness(0, 4, 0, 4) };
             panel.Children.Add(_upscalePrint);
             _upscalePrint.Checked += (_, __) => UpdateCost();
             _upscalePrint.Unchecked += (_, __) => UpdateCost();
-            panel.Children.Add(Note("Апскейл может изменить мелкие штрихи. По умолчанию отключён. При нескольких футболках укажите, например: принт на груди левой футболки."));
+            panel.Children.Add(Note("Два прохода Real-ESRGAN: первый подготавливает низкое разрешение до генерации, второй увеличивает готовый рисунок перед удалением фона."));
             panel.Children.Add(Label("Цветов для плашечной графики", false));
             _palette = new ComboBox { FontSize = 10, Margin = new Thickness(0, 0, 0, 4) };
             foreach (string item in new[] { "Авто · одноцветный в 1 цвет, иначе до 4", "1 цвет · плоский принт", "2 цвета", "4 цвета" }) _palette.Items.Add(item);
-            _palette.SelectedIndex = 1;
+            _palette.SelectedIndex = 0;
             panel.Children.Add(_palette);
-            panel.Children.Add(Note("PNG перед импортом готовится в A3 при 300 DPI; прозрачные края после вставки обрезает штатная функция «Обрезать растр». Плашечные цвета упрощаются, чтобы трассировка не строила градиенты."));
+            panel.Children.Add(Note("Выделение захватывается в Corel при 400 DPI; исходная PNG не уменьшается ради лимита JSON, а передаётся через файловую загрузку. Для AI-входа используется до 4 MP. Готовый файл готовится в A3 при 300 DPI; прозрачные края обрезает штатная функция Corel."));
             _analysisText = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 180, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 10 };
             panel.Children.Add(new Expander { Header = "Что увидела модель анализа", Content = _analysisText });
 
             panel.Children.Add(Label("Модель и ориентировочная цена", false));
             _model = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 2) };
-            _model.Items.Add(new ModelItem("black-forest-labs/flux-2-pro", "FLUX.2 Pro · около $0.045 за 1MP запуск", 0.045m));
+            _model.Items.Add(new ModelItem("black-forest-labs/flux-2-pro", "FLUX.2 Pro · до 4MP · около $0.10–0.14", 0.14m));
             _model.Items.Add(new ModelItem("black-forest-labs/flux-kontext-max", "FLUX.1 Kontext Max · $0.08 / изображение", 0.08m));
             _model.Items.Add(new ModelItem("qwen/qwen-image-edit", "Qwen Image Edit · $0.03 / изображение", 0.03m));
             _model.SelectedIndex = 0;
@@ -202,7 +202,7 @@ namespace VanyaTools.Native
             if (key.Length < 8) { Report("Введите ключ и сохраните его.", true); return; }
             if (!EnsureSource()) return;
             string costMessage = "Операция выбранной модели: примерно $" + model.Cost.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) + ".";
-            if (smart) costMessage += "\nУдаление фона: примерно $0.018.\nАнализ Gemini — дополнительно, по числу токенов." + (_upscalePrint.IsChecked == true ? "\nАпскейл — дополнительно по тарифу Real-ESRGAN." : "") + "\nЭто несколько платных запросов, итоговая сумма будет выше цены одной генерации.";
+            if (smart) costMessage += "\nУдаление фона: примерно $0.018.\nАнализ Gemini — дополнительно, по числу токенов." + (_upscalePrint.IsChecked == true ? "\nДва прохода апскейла: примерно $0.004." : "") + "\nЦена FLUX зависит от размера изображения; для высокого разрешения итог может быть выше указанной ориентировочной цены.";
             if (MessageBox.Show(costMessage + "\nПродолжить?", "Платный запрос Replicate", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
             try
             {
@@ -220,13 +220,13 @@ namespace VanyaTools.Native
                     _lastInput = null; _readyOutput = null; _analysisText.Text = "Анализ выполняется…";
                     _pipeline = new PrintRestorationPipeline(data, model.Id, _prompt.Text, _printTarget.Text, _upscalePrint.IsChecked == true);
                     await ExecutePipeline(key);
-                ReportOutcome("Готово: три этапа завершены, результат вставлен. Проверьте текст и форму по исходнику.");
+                ReportOutcome("Восстановление принта завершено; результат вставлен на холст. Проверьте текст и края по исходнику.");
                     return;
                 }
                 var input = new Dictionary<string, object> { ["prompt"] = _prompt.Text, ["output_format"] = "png" };
                 if (removeBackground) { input["image"] = data; input["preserve_alpha"] = true; input["content_moderation"] = false; }
                 else if (model.Id.Contains("kontext")) { input["input_image"] = data; input["aspect_ratio"] = "match_input_image"; input["safety_tolerance"] = 2; }
-                else if (model.Id.Contains("flux-2")) { input["input_images"] = new[] { data }; input["aspect_ratio"] = "match_input_image"; input["resolution"] = "1 MP"; }
+                else if (model.Id.Contains("flux-2")) { input["input_images"] = new[] { data }; input["aspect_ratio"] = "match_input_image"; input["resolution"] = "4 MP"; }
                 else { input["image"] = data; input["go_fast"] = true; input["output_quality"] = 95; }
                 _result = Path.Combine(Path.GetTempPath(), "Vanya-AI-" + Guid.NewGuid().ToString("N") + ".png");
                 string outputPath = _result;
@@ -507,26 +507,27 @@ namespace VanyaTools.Native
             return DataUri(new CroppedBitmap(image, new Int32Rect(x, y, w, h)));
         }
 
-        internal static string DataUri(BitmapSource image)
+        internal static string DataUri(BitmapSource image, int maxDimension = 2048, int maxPixels = 4000000)
         {
             BitmapSource current = image;
-            for (int attempt = 0; attempt < 5; attempt++)
-            {
-                var enc = new PngBitmapEncoder();
-                enc.Frames.Add(BitmapFrame.Create(current));
-                using (var ms = new MemoryStream())
-                {
-                    enc.Save(ms);
-                    if (ms.Length <= 950000)
-                        return "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
-                }
-
-                if (attempt == 4) break;
-                double scale = Math.Min(0.8, 2048.0 / Math.Max(current.PixelWidth, current.PixelHeight));
-                if (scale >= 1.0) scale = 0.75;
+            double scale = Math.Min(1.0, Math.Min((double)maxDimension / Math.Max(current.PixelWidth, current.PixelHeight),
+                Math.Sqrt((double)maxPixels / ((double)current.PixelWidth * current.PixelHeight))));
+            if (scale < 1.0)
                 current = new TransformedBitmap(current, new ScaleTransform(scale, scale));
+
+            string path = Path.Combine(Path.GetTempPath(), "Vanya-AI-Input-" + Guid.NewGuid().ToString("N") + ".png");
+            var enc = new PngBitmapEncoder();
+            enc.Frames.Add(BitmapFrame.Create(current));
+            using (var stream = File.Create(path)) enc.Save(stream);
+            var info = new FileInfo(path);
+            if (info.Length <= 256 * 1024)
+            {
+                byte[] bytes = File.ReadAllBytes(path);
+                File.Delete(path);
+                return "data:image/png;base64," + Convert.ToBase64String(bytes);
             }
-            throw new InvalidOperationException("PNG больше лимита передачи даже после уменьшения. Выделите только нужную область принта.");
+            Log.Info("AI input preserved at " + current.PixelWidth + "x" + current.PixelHeight + " (" + info.Length + " bytes); using Replicate file upload instead of reducing to fit the JSON request.");
+            return "replicate-file:" + path;
         }
 
         internal static BitmapSource Bitmap(string path) { using (var s = File.OpenRead(path)) { var b = BitmapFrame.Create(s, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad); b.Freeze(); return b; } }
@@ -567,7 +568,7 @@ namespace VanyaTools.Native
             _cost.Text = "Рисунок: ориентировочно $" + m.Cost.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) + ".";
             if (_operation.SelectedIndex == 0 && _smartRestore.IsChecked == true)
                 _cost.Text += " Фон: +$0.018. Анализ Gemini: дополнительно по токенам." +
-                    (_upscalePrint.IsChecked == true ? " Апскейл: дополнительно по тарифу Real-ESRGAN." : "");
+                    (_upscalePrint.IsChecked == true ? " Два прохода апскейла: около $0.004." : "");
         }
         private void Report(string message, bool error) { _status(message, error); }
         private static double P(string s, double fallback) { double v; return Double.TryParse((s ?? "").Replace(",", "."), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v) ? v : fallback; }

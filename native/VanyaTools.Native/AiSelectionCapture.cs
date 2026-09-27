@@ -11,6 +11,8 @@ namespace VanyaTools.Native
     /// </summary>
     internal static class AiSelectionCapture
     {
+        private const int CaptureDpi = 400;
+
         public static string Capture()
         {
             dynamic app = CorelApp.Get();
@@ -63,7 +65,7 @@ namespace VanyaTools.Native
                     CorelConstants.CdrRgbColorImage,
                     true,  // transparent background
                     true,  // anti-aliasing
-                    300,
+                    CaptureDpi,
                     CorelConstants.CdrNormalAntiAliasing,
                     true);
                 if (rasterShape == null)
@@ -128,7 +130,7 @@ namespace VanyaTools.Native
             CopyTiles(colorImage, pixels, width, height, false);
             if (alphaImage != null) CopyTiles(alphaImage, pixels, width, height, true);
 
-            var image = BitmapSource.Create(width, height, 300, 300,
+            var image = BitmapSource.Create(width, height, CaptureDpi, CaptureDpi,
                 PixelFormats.Bgra32, null, pixels, width * 4);
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(image));
