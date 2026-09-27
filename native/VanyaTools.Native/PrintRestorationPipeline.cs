@@ -16,6 +16,7 @@ namespace VanyaTools.Native
     {
         private readonly string _sourceData, _model, _prompt, _target, _directory;
         private readonly bool _upscale;
+        private const int UpscalerInputMaxPixels = 1900000;
         public string Analysis { get; private set; }
 
         public PrintRestorationPipeline(string sourceData, string model, string prompt, string target, bool upscale)
@@ -105,7 +106,7 @@ namespace VanyaTools.Native
             {
                 string preUpscaledPath = Path.Combine(_directory, "pre-upscale.png");
                 await Stage("2/5 · Подготовка мелких краёв 2×", "nightmareai/real-esrgan", key,
-                    new Dictionary<string, object> { ["image"] = AiPrintTab.DataUri(AiPrintTab.Bitmap(cropPath)), ["scale"] = 2, ["face_enhance"] = false },
+                    new Dictionary<string, object> { ["image"] = AiPrintTab.DataUri(AiPrintTab.Bitmap(cropPath), 2048, UpscalerInputMaxPixels), ["scale"] = 2, ["face_enhance"] = false },
                     preUpscaledPath, cancellation, progress);
                 referencePath = preUpscaledPath;
             }
@@ -122,7 +123,7 @@ namespace VanyaTools.Native
             {
                 string largePath = Path.Combine(_directory, "upscale.png");
                 await Stage("4/5 · Финишное увеличение результата 2×", "nightmareai/real-esrgan", key,
-                    new Dictionary<string, object> { ["image"] = AiPrintTab.DataUri(AiPrintTab.Bitmap(reconstructed)), ["scale"] = 2, ["face_enhance"] = false },
+                    new Dictionary<string, object> { ["image"] = AiPrintTab.DataUri(AiPrintTab.Bitmap(reconstructed), 2048, UpscalerInputMaxPixels), ["scale"] = 2, ["face_enhance"] = false },
                     largePath, cancellation, progress);
                 referencePath = largePath;
             }

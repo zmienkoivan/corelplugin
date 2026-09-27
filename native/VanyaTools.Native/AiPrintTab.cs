@@ -115,7 +115,7 @@ namespace VanyaTools.Native
             panel.Children.Add(_upscalePrint);
             _upscalePrint.Checked += (_, __) => UpdateCost();
             _upscalePrint.Unchecked += (_, __) => UpdateCost();
-            panel.Children.Add(Note("Два прохода Real-ESRGAN: первый подготавливает низкое разрешение до генерации, второй увеличивает готовый рисунок перед удалением фона."));
+            panel.Children.Add(Note("Два прохода Real-ESRGAN: вход каждого ограничивается примерно 1.9 MP для стабильной работы модели; первый подготавливает изображение до генерации, второй увеличивает готовый рисунок перед удалением фона."));
             panel.Children.Add(Label("Цветов для плашечной графики", false));
             _palette = new ComboBox { FontSize = 10, Margin = new Thickness(0, 0, 0, 4) };
             foreach (string item in new[] { "Авто · до 8 оттенков", "Сохранить все цвета и градиенты", "1 цвет · плоский принт", "2 цвета", "4 цвета", "6 цветов", "8 цветов" }) _palette.Items.Add(item);
