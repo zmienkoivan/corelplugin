@@ -37,8 +37,13 @@ namespace VanyaTools.Native
             // nearest-pixel sampling copied jagged source pixels into the A3 file.
             var visual = new DrawingVisual();
             RenderOptions.SetBitmapScalingMode(visual, BitmapScalingMode.HighQuality);
+            // DrawingVisual uses 96-DPI device-independent units, while the
+            // destination bitmap is 300 DPI. Convert pixel coordinates before
+            // drawing or the artwork is enlarged 300/96 times and clipped.
+            double dipPerPixel = 96.0 / Dpi;
             using (var context = visual.RenderOpen())
-                context.DrawImage(source, new Rect(left, top, width, height));
+                context.DrawImage(source, new Rect(left * dipPerPixel, top * dipPerPixel,
+                    width * dipPerPixel, height * dipPerPixel));
             var rendered = new RenderTargetBitmap(canvasWidth, canvasHeight, Dpi, Dpi, PixelFormats.Pbgra32);
             rendered.Render(visual);
 
