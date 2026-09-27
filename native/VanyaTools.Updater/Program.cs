@@ -211,7 +211,12 @@ namespace VanyaTools.Updater
                 if (result == null && File.Exists(outputPath + ".submitted"))
                     throw new InvalidOperationException("Сервер мог принять запрос, но его номер не получен. Проверьте запрос в Replicate перед новым платным запуском; автоматический дубль заблокирован.");
                 if (File.Exists(statePath)) File.Delete(statePath);
-                var request = CreateHttpRequest("https://api.replicate.com/v1/models/" + model + "/predictions");
+                // Community models require a pinned version on /v1/predictions;
+                // official models support the owner/name predictions endpoint.
+                bool versionedModel = model.IndexOf(':') >= 0;
+                var request = CreateHttpRequest(versionedModel
+                    ? "https://api.replicate.com/v1/predictions"
+                    : "https://api.replicate.com/v1/models/" + model + "/predictions");
                 request.Method = "POST";
                 request.ContentType = "application/json";
                 request.Accept = "application/json";
@@ -222,7 +227,9 @@ namespace VanyaTools.Updater
                 input = ResolveUploadedInputs(input, token, cancelPath, serializer) as Dictionary<string, object>;
                 if (input == null) throw new InvalidDataException("Не удалось подготовить входные данные для Replicate.");
                 var requestTimer = Stopwatch.StartNew();
-                byte[] bytes = Encoding.UTF8.GetBytes(serializer.Serialize(new Dictionary<string, object> { ["input"] = input }));
+                var body = new Dictionary<string, object> { ["input"] = input };
+                if (versionedModel) body["version"] = model;
+                byte[] bytes = Encoding.UTF8.GetBytes(serializer.Serialize(body));
                 File.WriteAllText(outputPath + ".submitted", "sent");
                 using (var stream = request.GetRequestStream()) stream.Write(bytes, 0, bytes.Length);
                 try { result = ReadJson(request, serializer); }

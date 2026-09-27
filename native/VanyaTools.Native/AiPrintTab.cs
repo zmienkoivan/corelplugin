@@ -13,6 +13,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using System.Web.Script.Serialization;
 
 namespace VanyaTools.Native
 {
@@ -82,7 +83,7 @@ namespace VanyaTools.Native
             fontPanel.Children.Add(Label("Модель анализа", false));
             _fontModel = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 4) };
             _fontModel.Items.Add(new ModelItem("anthropic/claude-4.5-sonnet", "Claude 4.5 Sonnet · $3/1M входных и $15/1M выходных токенов", 0m));
-            _fontModel.Items.Add(new ModelItem("deepseek-ai/deepseek-vl2", "DeepSeek-VL2 · примерно $0.015 за запуск", 0.015m));
+            _fontModel.Items.Add(new ModelItem("deepseek-ai/deepseek-vl2:e5caf557dd9e5dcee46442e1315291ef1867f027991ede8ff95e304d4f734200", "DeepSeek-VL2 · примерно $0.015 за запуск", 0.015m));
             _fontModel.SelectedIndex = 0;
             fontPanel.Children.Add(_fontModel);
             _fontAnalysisButton = Button("Определить шрифт выделенного объекта", async (_, __) => await AnalyzeFont());
@@ -95,7 +96,7 @@ namespace VanyaTools.Native
             fontPanel.Children.Add(_fontRetryButton);
             _fontAnalysisText = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 150, MinHeight = 42, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 10, Text = "Здесь появится результат анализа шрифта." };
             fontPanel.Children.Add(new Expander { Header = "Результат определения шрифта", IsExpanded = true, Content = _fontAnalysisText });
-            fontPanel.Children.Add(Note("Ключ Replicate хранится в настройках AI-графики. Цена Claude зависит от числа токенов; цена DeepSeek зависит от времени обработки. Перед платным запросом появится подтверждение."));
+            fontPanel.Children.Add(Note("Ключ Replicate хранится в настройках AI-графики. Для определения шрифта начните с Claude; DeepSeek может ограничиться чтением надписи. Перед платным запросом появится подтверждение."));
 
             var previews = new UniformGrid { Columns = 2 };
             previews.Children.Add(Preview("Исходник", out _sourcePreview));
@@ -307,9 +308,19 @@ namespace VanyaTools.Native
             if (!EnsureSource()) return;
             string key = CurrentToken();
             if (key.Length < 8) { Report("Введите ключ Replicate и сохраните его.", true); return; }
-            string price = model.Id.StartsWith("anthropic/", StringComparison.Ordinal)
-                ? "Тариф: $3 за 1 млн входных и $15 за 1 млн выходных токенов; итог зависит от размера изображения и ответа."
-                : "Ориентир Replicate: около $0.015 за запуск; итог зависит от времени обработки.";
+            string price;
+            if (model.Id.StartsWith("anthropic/", StringComparison.Ordinal))
+            {
+                BitmapSource selected = Bitmap(_source);
+                double scale = Math.Min(1.0, Math.Min(2048.0 / Math.Max(selected.PixelWidth, selected.PixelHeight),
+                    Math.Sqrt(2000000.0 / ((double)selected.PixelWidth * selected.PixelHeight))));
+                int imageTokens = (int)Math.Ceiling(selected.PixelWidth * selected.PixelHeight * scale * scale / 750.0);
+                double inputCost = (imageTokens + 200) * 3.0 / 1000000.0;
+                price = "Для этого снимка ≈" + imageTokens + " токенов изображения + около 200 токенов запроса. " +
+                    "При ответе 250–1024 токена цена примерно $" + (inputCost + 250 * 15.0 / 1000000.0).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) +
+                    "–$" + (inputCost + 1024 * 15.0 / 1000000.0).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) + ".";
+            }
+            else price = "Ориентир Replicate: около $0.015 за запуск; итог зависит от времени обработки.";
             if (MessageBox.Show(model.Label + " проанализирует растр выделенного текста.\n" + price + "\nПродолжить?",
                 "Платный анализ шрифта", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
 
@@ -373,7 +384,26 @@ namespace VanyaTools.Native
             cancel.ThrowIfCancellationRequested();
             string result = File.ReadAllText(resultPath, Encoding.UTF8).Trim();
             if (String.IsNullOrWhiteSpace(result)) throw new InvalidDataException("Анализатор вернул пустой ответ.");
-            _fontAnalysisText.Text = _fontPendingModel + "\n\n" + result;
+            string usage = "";
+            if (_fontPendingModel.StartsWith("anthropic/", StringComparison.Ordinal))
+            {
+                try
+                {
+                    var prediction = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
+                        File.ReadAllText(resultPath + ".prediction.json", Encoding.UTF8));
+                    var metrics = prediction["metrics"] as Dictionary<string, object>;
+                    if (metrics != null && metrics.ContainsKey("input_token_count") && metrics.ContainsKey("output_token_count"))
+                    {
+                        int inputTokens = Convert.ToInt32(metrics["input_token_count"]);
+                        int outputTokens = Convert.ToInt32(metrics["output_token_count"]);
+                        decimal estimatedCost = (inputTokens * 3m + outputTokens * 15m) / 1000000m;
+                        usage = "\nТокены: " + inputTokens + " входных, " + outputTokens + " выходных · оценка $" +
+                            estimatedCost.ToString("0.0000", System.Globalization.CultureInfo.InvariantCulture) + ".";
+                    }
+                }
+                catch (Exception ex) { Log.Info("Font token usage is unavailable: " + ex.Message); }
+            }
+            _fontAnalysisText.Text = _fontPendingModel.Split(':')[0] + usage + "\n\n" + result;
             Log.Info("Font analysis succeeded; response bytes=" + new FileInfo(resultPath).Length + ".");
             Report("Анализ шрифта готов. Название и похожие варианты — оценка по изображению, а не гарантированное совпадение.", false);
             foreach (string path in new[] { resultPath, resultPath + ".prediction.json", resultPath + ".submitted", resultPath + ".cancel" })
