@@ -167,7 +167,9 @@ namespace VanyaTools.Native
         {
             var input = new Dictionary<string, object> { ["prompt"] = prompt, ["output_format"] = "png" };
             if (model.Contains("kontext")) { input["input_image"] = data; input["aspect_ratio"] = "match_input_image"; input["safety_tolerance"] = 2; }
-            else if (model.Contains("flux-2")) { input["input_images"] = new[] { data }; input["aspect_ratio"] = "match_input_image"; input["resolution"] = "4 MP"; }
+            // Keep headroom below FLUX.2's hard 2048x2048 output cap: aspect-ratio
+            // matching can round a 4 MP target slightly over the service limit.
+            else if (model.Contains("flux-2")) { input["input_images"] = new[] { data }; input["aspect_ratio"] = "match_input_image"; input["resolution"] = "2 MP"; }
             else { input["image"] = data; input["go_fast"] = true; }
             return input;
         }

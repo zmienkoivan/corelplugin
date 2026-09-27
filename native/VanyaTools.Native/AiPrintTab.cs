@@ -127,7 +127,7 @@ namespace VanyaTools.Native
 
             panel.Children.Add(Label("Модель и ориентировочная цена", false));
             _model = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 2) };
-            _model.Items.Add(new ModelItem("black-forest-labs/flux-2-pro", "FLUX.2 Pro · до 4MP · около $0.10–0.14", 0.14m));
+            _model.Items.Add(new ModelItem("black-forest-labs/flux-2-pro", "FLUX.2 Pro · 2MP · до $0.14 ориентировочно", 0.14m));
             _model.Items.Add(new ModelItem("black-forest-labs/flux-kontext-max", "FLUX.1 Kontext Max · $0.08 / изображение", 0.08m));
             _model.Items.Add(new ModelItem("qwen/qwen-image-edit", "Qwen Image Edit · $0.03 / изображение", 0.03m));
             _model.SelectedIndex = 0;
@@ -240,7 +240,7 @@ namespace VanyaTools.Native
                 var input = new Dictionary<string, object> { ["prompt"] = _prompt.Text, ["output_format"] = "png" };
                 if (removeBackground) { input["image"] = data; input["preserve_alpha"] = true; input["content_moderation"] = false; }
                 else if (model.Id.Contains("kontext")) { input["input_image"] = data; input["aspect_ratio"] = "match_input_image"; input["safety_tolerance"] = 2; }
-                else if (model.Id.Contains("flux-2")) { input["input_images"] = new[] { data }; input["aspect_ratio"] = "match_input_image"; input["resolution"] = "4 MP"; }
+                else if (model.Id.Contains("flux-2")) { input["input_images"] = new[] { data }; input["aspect_ratio"] = "match_input_image"; input["resolution"] = "2 MP"; }
                 else { input["image"] = data; input["go_fast"] = true; input["output_quality"] = 95; }
                 _result = Path.Combine(Path.GetTempPath(), "Vanya-AI-" + Guid.NewGuid().ToString("N") + ".png");
                 string outputPath = _result;
