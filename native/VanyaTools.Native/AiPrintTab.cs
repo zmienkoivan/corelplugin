@@ -73,6 +73,11 @@ namespace VanyaTools.Native
                 Header = "Определение шрифта",
                 Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = fontPanel }
             });
+            subtabs.Items.Add(new TabItem
+            {
+                Header = "Развёртка формы",
+                Content = new SublimationTab(_import, _status, _captureSelection, () => CurrentToken())
+            });
             panel.Children.Add(Label("AI-графика · Replicate", true));
             panel.Children.Add(Note("Операции для печатной графики: восстановление принта, удаление фона, стилизация, свободный промпт."));
 
