@@ -57,7 +57,7 @@ namespace VanyaTools.Native
             var panel = new StackPanel { Margin = new Thickness(7) };
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel };
             panel.Children.Add(Label("Развёртка спортивной формы", true));
-            panel.Children.Add(Note("Выделите мокап на холсте. За один запуск создаётся одна плоская прямоугольная деталь. Контур лекала добавьте затем в CorelDRAW."));
+            panel.Children.Add(Note("Выделите мокап. Один запуск — одна деталь."));
 
             var previews = new UniformGrid { Columns = 2 };
             previews.Children.Add(Preview("Выделение", out _sourcePreview));
@@ -79,24 +79,21 @@ namespace VanyaTools.Native
             panel.Children.Add(dimensions);
             _size = Note(""); panel.Children.Add(_size);
             UpdateSize();
-            panel.Children.Add(Note("PNG будет полноцветным и непрозрачным, в указанном размере при 300 dpi. Белые участки ткани станут белыми участками прямоугольника. AI может приблизительно продолжить рисунок там, где он скрыт складкой или швом."));
+            panel.Children.Add(Note("PNG 300 dpi, без прозрачности. Лекало добавьте в CorelDRAW."));
 
             panel.Children.Add(Label("Уточнение композиции (необязательно)", false));
             _hint = new TextBox { MinHeight = 65, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 11 };
             panel.Children.Add(_hint);
-            panel.Children.Add(Note("Если на мокапе несколько вариантов, укажите нужный. Сохраните видимые надписи, цвета, масштаб элементов и направление мазков."));
             _upscale = new CheckBox { Content = "Детальное увеличение ×4 по 4 фрагментам", IsChecked = true,
                 FontSize = 10, Margin = new Thickness(0, 3, 0, 4) };
             panel.Children.Add(_upscale);
-            panel.Children.Add(Note("Правый и левый рукав определяются со стороны человека, который носит форму."));
-            panel.Children.Add(Note("Модели Replicate: Gemini 2.5 Flash анализирует деталь, FLUX.2 Pro создаёт рисунок, Real-ESRGAN увеличивает четыре перекрывающихся фрагмента."));
-            _price = Note("Ориентир за полный запуск: около $0.10–0.15. Точнее покажем после захвата выделения.");
+            panel.Children.Add(Note("Рукава — со стороны носителя."));
+            _price = Note("Цена: ~$0.10–0.15 за запуск.");
             panel.Children.Add(_price);
 
             _run = Button("Создать развёртку из выделения", async (_, __) => await Start());
             panel.Children.Add(_run);
-            panel.Children.Add(Note("При изменении размера создайте новую развёртку из мокапа. Растягивание старой детали меняет пропорции и не добавляет чёткости."));
             _cancel = Button("Отменить", (_, __) => Cancel()); _cancel.Visibility = Visibility.Collapsed;
             panel.Children.Add(_cancel);
             _retry = Button("Продолжить / повторить вставку", async (_, __) => await Resume()); _retry.Visibility = Visibility.Collapsed;
@@ -105,9 +102,8 @@ namespace VanyaTools.Native
             _progress = new ProgressBar { IsIndeterminate = true, Height = 7, Visibility = Visibility.Collapsed };
             panel.Children.Add(_progress);
             _analysis = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MinHeight = 70, MaxHeight = 180,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 10, Text = "Анализ появится после запуска." };
-            panel.Children.Add(new Expander { Header = "Анализ выделенной детали", Content = _analysis });
-            panel.Children.Add(Note("Результат автоматически вставляется рядом с исходником. Проверьте текст, геометрию и скрытые участки перед печатью. Ключ Replicate задаётся во вкладке «AI-графика»."));
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 10, Text = "Анализ появится здесь." };
+            panel.Children.Add(new Expander { Header = "Анализ AI", Content = _analysis });
             _timer.Tick += (_, __) => _activity.Text = _stage + " · " + (int)_elapsed.Elapsed.TotalSeconds + " с";
             RestorePending();
         }
@@ -341,8 +337,7 @@ namespace VanyaTools.Native
             PixelSize model = ModelSize(w, h);
             int detailDpi = Math.Min(300, (int)Math.Floor(300.0 * Math.Min(
                 model.Width * 4.0 / pixelsWide, model.Height * 4.0 / pixelsHigh)));
-            _size.Text = "300 dpi · " + pixelsWide + " × " + pixelsHigh +
-                " пикселей. Плотность изображения после AI ×4: около " + detailDpi + " dpi.";
+            _size.Text = pixelsWide + " × " + pixelsHigh + " px · 300 dpi. AI ×4: ~" + detailDpi + " dpi.";
         }
 
         private void UpdatePrice(BitmapSource source)
@@ -354,9 +349,9 @@ namespace VanyaTools.Native
             double outputMp = (double)output.Width * output.Height / 1000000.0;
             double flux = 0.015 + 0.015 * (inputMp + outputMp);
             double upscale = _job.Upscale ? 0.008 : 0;
-            _price.Text = "Оценка Replicate: FLUX.2 Pro ≈$" + flux.ToString("0.000", CultureInfo.InvariantCulture) +
-                ", 4 фрагмента Real-ESRGAN ≈$" + upscale.ToString("0.000", CultureInfo.InvariantCulture) +
-                ", анализ Gemini — по токенам (обычно несколько тысячных доллара).";
+            _price.Text = "Цена: FLUX ~$" + flux.ToString("0.000", CultureInfo.InvariantCulture) +
+                " · AI ×4 ~$" + upscale.ToString("0.000", CultureInfo.InvariantCulture) +
+                " · анализ Gemini по токенам.";
         }
 
         private void SetBusy(bool value)
@@ -401,7 +396,7 @@ namespace VanyaTools.Native
                         _resultPreview.Source = AiPrintTab.Bitmap(path);
                         _retry.Visibility = Visibility.Visible;
                         _activity.Visibility = Visibility.Visible;
-                        _activity.Text = "Готовая развёртка ожидает вставки в CorelDRAW.";
+                        _activity.Text = "Развёртка готова к вставке.";
                         return;
                     }
                 }
@@ -449,7 +444,7 @@ namespace VanyaTools.Native
                         if (File.Exists(candidate.FinalPath)) _resultPreview.Source = AiPrintTab.Bitmap(candidate.FinalPath);
                         _retry.Visibility = Visibility.Visible;
                         _activity.Visibility = Visibility.Visible;
-                        _activity.Text = "Незавершённая развёртка найдена. Нажмите «Продолжить»; готовые этапы не запускаются повторно.";
+                        _activity.Text = "Развёртка не завершена. Нажмите «Продолжить».";
                         return;
                     }
                     catch (Exception ex) { Log.Error("Could not restore sublimation job in " + directory, ex); }

@@ -117,7 +117,7 @@ namespace VanyaTools.Native
             AddSectionTitle(root, "Подготовка стикерпака");
 
             AddSectionTitle(root, "1. Выберите размер пака");
-            AddSmallLabel(root, "Выделите весь пак. Размер создаёт метки реза и внутреннюю рамку; при необходимости пак уменьшится.");
+            AddSmallLabel(root, "Выделите весь пак.");
             var markPresetGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 5) };
             markPresetGrid.Children.Add(Button("S 48×60", (_, __) => RunCreateCutMarks("S", 48, 60)));
             markPresetGrid.Children.Add(Button("M 105×142", (_, __) => RunCreateCutMarks("M", 105, 142)));
@@ -125,14 +125,14 @@ namespace VanyaTools.Native
             root.Children.Add(markPresetGrid);
             var sizeSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
             AddSettingsExpander(root, "Настройки размера и меток", sizeSettings);
-            AddSmallLabel(sizeSettings, "Уголки 1×1 мм направлены внутрь. Пунктирная рамка с отступом 4 мм не печатается.");
+            AddSmallLabel(sizeSettings, "Метки 1×1 мм; рамка 4 мм не печатается.");
             AddSmallLabel(sizeSettings, "Поворот альбомного пака:");
             _rotatePackClockwise = AddRadioButton(sizeSettings, "Вправо (по часовой)", "PackRotationDirection", true);
             _rotatePackCounterClockwise = AddRadioButton(sizeSettings, "Влево (против часовой)", "PackRotationDirection", false);
 
             AddSeparator(root);
             AddSectionTitle(root, "2. Создайте контур пака");
-            AddSmallLabel(root, "Выделите стикеры внутри рамки.");
+            AddSmallLabel(root, "Выделите стикеры.");
             root.Children.Add(Button("Создать контур реза", (_, __) => RunCutContour()));
             var contourSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
             AddSettingsExpander(root, "Настройки контура", contourSettings);
@@ -150,11 +150,11 @@ namespace VanyaTools.Native
             AddSettingsExpander(root, "Настройки сглаживания", smoothingSettings);
             _smoothSelectedRadiusMm = AddRow(smoothingSettings, "Радиус скругления, мм", "1.5");
             _smoothSelectedSimplificationMm = AddRow(smoothingSettings, "Допуск упрощения, мм", "0.2");
-            AddSmallLabel(smoothingSettings, "Увеличьте радиус или допуск, если изменение почти не видно.");
+            AddSmallLabel(smoothingSettings, "Слабый эффект — увеличьте радиус или допуск.");
 
             AddSeparator(root);
             AddSectionTitle(root, "3. Создайте язычки");
-            AddSmallLabel(root, "Выделите контур нужного пака. Маркеры можно переместить перед применением.");
+            AddSmallLabel(root, "Выделите контур. Маркеры можно двигать.");
             root.Children.Add(Button("Добавить маркеры язычков", (_, __) => RunAddPeelMarker()));
             var tabSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
             AddSettingsExpander(root, "Настройки язычков", tabSettings);
@@ -165,7 +165,7 @@ namespace VanyaTools.Native
 
             AddSeparator(root);
             AddSectionTitle(root, "4. Примените язычки");
-            AddSmallLabel(root, "Выделите контур или маркер нужного пака.");
+            AddSmallLabel(root, "Выделите контур или маркер.");
             root.Children.Add(Button("Применить язычки", (_, __) => RunApplyPeelTabs()));
 
             AddSeparator(root);

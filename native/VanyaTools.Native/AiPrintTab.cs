@@ -80,19 +80,17 @@ namespace VanyaTools.Native
                     () => AiSelectionCapture.Capture(2048, 4000000), () => CurrentToken())
             });
             panel.Children.Add(Label("AI-графика · Replicate", true));
-            panel.Children.Add(Note("Операции для печатной графики: восстановление принта, удаление фона, стилизация, свободный промпт."));
-
             panel.Children.Add(Button("Баланс / Billing ↗", (_, __) => OpenBilling()));
-            panel.Children.Add(Note("Выделите графику на холсте и запустите операцию. Результат автоматически появится на холсте; исходные объекты сохраняются."));
+            panel.Children.Add(Note("Выделите объект и запустите. Результат появится на холсте."));
             fontPanel.Children.Add(Label("Определение шрифта по выделенному объекту", true));
-            fontPanel.Children.Add(Note("Выделите текст, растр или кривые с буквами на холсте. Модель сравнит форму знаков и предложит вероятные шрифты. Для кривых и растра это визуальная оценка, точное совпадение не гарантируется."));
+            fontPanel.Children.Add(Note("Выделите буквы. Результат — вероятные шрифты."));
             fontPanel.Children.Add(Label("Модель анализа", false));
             _fontModel = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 4) };
             _fontModel.Items.Add(new ModelItem("anthropic/claude-4.5-sonnet", "Claude 4.5 Sonnet · $3/1M входных и $15/1M выходных токенов", 0m));
             _fontModel.Items.Add(new ModelItem("deepseek-ai/deepseek-vl2:e5caf557dd9e5dcee46442e1315291ef1867f027991ede8ff95e304d4f734200", "DeepSeek-VL2 · примерно $0.015 за запуск", 0.015m));
             _fontModel.SelectedIndex = 0;
             fontPanel.Children.Add(_fontModel);
-            _fontAnalysisButton = Button("Определить шрифт выделенного объекта", async (_, __) => await AnalyzeFont());
+            _fontAnalysisButton = Button("Определить шрифт", async (_, __) => await AnalyzeFont());
             fontPanel.Children.Add(_fontAnalysisButton);
             _fontCancelButton = Button("Отменить анализ", (_, __) => CancelOperation());
             _fontCancelButton.Visibility = Visibility.Collapsed;
@@ -100,9 +98,8 @@ namespace VanyaTools.Native
             _fontRetryButton = Button("Повторить анализ", async (_, __) => await RetryOperation());
             _fontRetryButton.Visibility = Visibility.Collapsed;
             fontPanel.Children.Add(_fontRetryButton);
-            _fontAnalysisText = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 150, MinHeight = 42, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 10, Text = "Здесь появится результат анализа шрифта." };
-            fontPanel.Children.Add(new Expander { Header = "Результат определения шрифта", IsExpanded = true, Content = _fontAnalysisText });
-            fontPanel.Children.Add(Note("Ключ Replicate хранится в настройках AI-графики. Для определения шрифта начните с Claude; DeepSeek может ограничиться чтением надписи. Перед платным запросом появится подтверждение."));
+            _fontAnalysisText = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 150, MinHeight = 42, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 10, Text = "Результат появится здесь." };
+            fontPanel.Children.Add(new Expander { Header = "Результат", IsExpanded = true, Content = _fontAnalysisText });
 
             var previews = new UniformGrid { Columns = 2 };
             previews.Children.Add(Preview("Исходник", out _sourcePreview));
@@ -114,7 +111,6 @@ namespace VanyaTools.Native
             _left = CropField(crop, "0"); _top = CropField(crop, "0");
             _right = CropField(crop, "100"); _bottom = CropField(crop, "100");
             panel.Children.Add(crop);
-            panel.Children.Add(Note("Для заранее обрезанного artwork оставьте 0 / 0 / 100 / 100."));
 
             panel.Children.Add(Label("Заготовка операции", false));
             _operation = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 5) };
@@ -122,27 +118,25 @@ namespace VanyaTools.Native
             _operation.SelectedIndex = 0;
             _operation.SelectionChanged += (_, __) => { SetPrompt(); UpdateCost(); };
             panel.Children.Add(_operation);
-            _smartRestore = new CheckBox { Content = "Полное восстановление · анализ, максимум деталей, апскейл и очистка края", IsChecked = true, FontSize = 10, Margin = new Thickness(0, 4, 0, 4) };
+            _smartRestore = new CheckBox { Content = "Полное восстановление", IsChecked = true, FontSize = 10, Margin = new Thickness(0, 4, 0, 4) };
             panel.Children.Add(_smartRestore);
             _smartRestore.Checked += (_, __) => UpdateCost();
             _smartRestore.Unchecked += (_, __) => UpdateCost();
-            panel.Children.Add(Note("Режим анализирует выбранную область, восстанавливает рисунок в максимальном доступном разрешении, затем увеличивает результат и очищает цветную кайму на прозрачном крае."));
             panel.Children.Add(Label("Какой принт восстановить", false));
-            _printTarget = new TextBox { Text = "Основной принт на футболке. Не включать рукав и бирку.", TextWrapping = TextWrapping.Wrap, FontSize = 11 };
+            _printTarget = new TextBox { Text = "Основной принт; без рукава и бирки.", TextWrapping = TextWrapping.Wrap, FontSize = 11 };
             panel.Children.Add(_printTarget);
-            _upscalePrint = new CheckBox { Content = "Смягчить лесенку на входе и увеличить результат · 2× + 2× · около $0.004", IsChecked = true, FontSize = 10, Margin = new Thickness(0, 4, 0, 4) };
+            _upscalePrint = new CheckBox { Content = "Апскейл 2× + 2× · ~$0.004", IsChecked = true, FontSize = 10, Margin = new Thickness(0, 4, 0, 4) };
             panel.Children.Add(_upscalePrint);
             _upscalePrint.Checked += (_, __) => UpdateCost();
             _upscalePrint.Unchecked += (_, __) => UpdateCost();
-            panel.Children.Add(Note("Два прохода Real-ESRGAN: вход каждого ограничивается примерно 1.9 MP для стабильной работы модели; первый подготавливает изображение до генерации, второй увеличивает готовый рисунок перед удалением фона."));
             panel.Children.Add(Label("Цветов для плашечной графики", false));
             _palette = new ComboBox { FontSize = 10, Margin = new Thickness(0, 0, 0, 4) };
             foreach (string item in new[] { "Авто · до 8 оттенков", "Сохранить все цвета и градиенты", "1 цвет · плоский принт", "2 цвета", "4 цвета", "6 цветов", "8 цветов" }) _palette.Items.Add(item);
             _palette.SelectedIndex = 0;
             panel.Children.Add(_palette);
-            panel.Children.Add(Note("Выделение захватывается в Corel при 400 DPI; исходная PNG не уменьшается ради лимита JSON, а передаётся через файловую загрузку. Для AI-входа используется до 4 MP. Результат масштабируется качественным фильтром в A3 · 300 DPI. Авто-палитра сохраняет до 8 значимых оттенков; для полноцвета выберите соседний режим, для плашек — ограниченное число цветов. Прозрачные края обрезает штатная функция Corel."));
+            panel.Children.Add(Note("Выход: A3 · 300 dpi. Авто: до 8 оттенков."));
             _analysisText = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 180, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 10 };
-            panel.Children.Add(new Expander { Header = "Что увидела модель анализа", Content = _analysisText });
+            panel.Children.Add(new Expander { Header = "Анализ AI", Content = _analysisText });
 
             panel.Children.Add(Label("Модель и ориентировочная цена", false));
             _model = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 2) };
@@ -155,16 +149,16 @@ namespace VanyaTools.Native
             _cost = Note("");
             panel.Children.Add(_cost);
 
-            panel.Children.Add(Label("Промпт (можно редактировать)", false));
+            panel.Children.Add(Label("Промпт", false));
             _prompt = new TextBox { MinHeight = 110, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontSize = 11, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             panel.Children.Add(_prompt);
 
-            panel.Children.Add(Label("Ключ Replicate · шифруется средствами Windows", false));
+            panel.Children.Add(Label("Ключ Replicate", false));
             _token = new PasswordBox { Margin = new Thickness(0, 0, 0, 4) };
             LoadToken();
             panel.Children.Add(_token);
             panel.Children.Add(Button("Сохранить ключ", (_, __) => SaveToken()));
-            _runEditButton = Button("Запустить AI-операцию", async (_, __) => await RunEdit());
+            _runEditButton = Button("Запустить", async (_, __) => await RunEdit());
             panel.Children.Add(_runEditButton);
             _runVectorButton = Button("Векторизовать в SVG · Recraft · $0.01", async (_, __) => await RunVector());
             panel.Children.Add(_runVectorButton);
@@ -181,7 +175,6 @@ namespace VanyaTools.Native
             _activityPanel.Children.Add(_activityBar);
             panel.Children.Add(_activityPanel);
             _elapsedTimer.Tick += (_, __) => _activityText.Text = _stage + " · " + (int)_elapsed.Elapsed.TotalSeconds + " с";
-            panel.Children.Add(Note("AI-векторизация создаёт редактируемые контуры, но не восстанавливает исходный шрифт. Проверяйте надписи и мелкие детали."));
             SetPrompt(); UpdateCost();
             RestorePendingResult();
         }
