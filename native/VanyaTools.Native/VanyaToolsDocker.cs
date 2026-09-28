@@ -222,7 +222,7 @@ namespace VanyaTools.Native
         private string CaptureAiSelection()
         {
             string path = AiSelectionCapture.Capture();
-            SetStatus("Выделение Corel подготовлено для AI · PNG 400 DPI, прозрачный фон.", false);
+            SetStatus("Выделение Corel подготовлено для AI · PNG, прозрачный фон.", false);
             return path;
         }
         private void RunTrim(bool useTiles)

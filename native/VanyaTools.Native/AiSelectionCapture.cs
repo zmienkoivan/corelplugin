@@ -13,7 +13,7 @@ namespace VanyaTools.Native
     {
         private const int CaptureDpi = 400;
 
-        public static string Capture()
+        public static string Capture(int maxDimension = 0, int maxPixels = 32000000)
         {
             dynamic app = CorelApp.Get();
             dynamic doc = app.ActiveDocument;
@@ -61,11 +61,12 @@ namespace VanyaTools.Native
                 if (workingShape == null)
                     throw new InvalidOperationException("Не удалось получить временную копию объекта CorelDRAW.");
                 step = "растрирование копии";
+                int captureDpi = ChooseDpi(doc, workingShape, maxDimension, maxPixels);
                 rasterShape = workingShape.ConvertToBitmapEx(
                     CorelConstants.CdrRgbColorImage,
                     true,  // transparent background
                     true,  // anti-aliasing
-                    CaptureDpi,
+                    captureDpi,
                     CorelConstants.CdrNormalAntiAliasing,
                     true);
                 if (rasterShape == null)
@@ -74,7 +75,7 @@ namespace VanyaTools.Native
                 // Read the bitmap tiles directly. Corel export filters can return E_FAIL
                 // even after rasterisation succeeds; WPF writes the PNG instead.
                 step = "чтение пикселей и сохранение PNG";
-                WritePng(rasterShape.Bitmap, path);
+                WritePng(rasterShape.Bitmap, path, captureDpi);
                 if (!File.Exists(path) || new FileInfo(path).Length == 0)
                     throw new InvalidOperationException("CorelDRAW не создал PNG выделения.");
                 return path;
@@ -106,7 +107,28 @@ namespace VanyaTools.Native
             }
         }
 
-        private static void WritePng(dynamic bitmap, string path)
+        private static int ChooseDpi(dynamic doc, dynamic shape, int maxDimension, int maxPixels)
+        {
+            int oldUnit = Convert.ToInt32(doc.Unit);
+            try
+            {
+                doc.Unit = CorelConstants.CdrMillimeter;
+                double widthMm = Convert.ToDouble(shape.SizeWidth);
+                double heightMm = Convert.ToDouble(shape.SizeHeight);
+                if (widthMm <= 0 || heightMm <= 0 || Double.IsNaN(widthMm) || Double.IsNaN(heightMm))
+                    throw new InvalidOperationException("Не удалось определить размер выделения CorelDRAW.");
+                double widthPx = widthMm * CaptureDpi / 25.4;
+                double heightPx = heightMm * CaptureDpi / 25.4;
+                double scale = 1.0;
+                if (maxDimension > 0) scale = Math.Min(scale, maxDimension / Math.Max(widthPx, heightPx));
+                if (maxPixels > 0) scale = Math.Min(scale, Math.Sqrt(maxPixels / (widthPx * heightPx)));
+                if (scale < 1.0) scale *= 0.97; // Room for Corel's edge rounding and anti-aliasing.
+                return Math.Max(1, Math.Min(CaptureDpi, (int)Math.Floor(CaptureDpi * scale)));
+            }
+            finally { doc.Unit = oldUnit; }
+        }
+
+        private static void WritePng(dynamic bitmap, string path, int captureDpi)
         {
             dynamic colorImage = bitmap.Image;
             if (colorImage == null)
@@ -130,7 +152,7 @@ namespace VanyaTools.Native
             CopyTiles(colorImage, pixels, width, height, false);
             if (alphaImage != null) CopyTiles(alphaImage, pixels, width, height, true);
 
-            var image = BitmapSource.Create(width, height, CaptureDpi, CaptureDpi,
+            var image = BitmapSource.Create(width, height, captureDpi, captureDpi,
                 PixelFormats.Bgra32, null, pixels, width * 4);
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(image));

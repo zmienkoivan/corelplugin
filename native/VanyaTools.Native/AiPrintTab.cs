@@ -76,7 +76,8 @@ namespace VanyaTools.Native
             subtabs.Items.Add(new TabItem
             {
                 Header = "Развёртка формы",
-                Content = new SublimationTab(_import, _status, _captureSelection, () => CurrentToken())
+                Content = new SublimationTab(_import, _status,
+                    () => AiSelectionCapture.Capture(2048, 4000000), () => CurrentToken())
             });
             panel.Children.Add(Label("AI-графика · Replicate", true));
             panel.Children.Add(Note("Операции для печатной графики: восстановление принта, удаление фона, стилизация, свободный промпт."));
