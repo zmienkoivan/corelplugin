@@ -40,12 +40,12 @@ namespace VanyaTools.Native
 
         private sealed class Job
         {
-            public string Directory, Source, Part, Hint;
+            public string Directory, Source, Part, Hint, ReadyPath;
             public int Width, Height;
             public bool Upscale;
             public string AnalysisPath { get { return Path.Combine(Directory, "analysis.txt"); } }
             public string GeneratedPath { get { return Path.Combine(Directory, "generated.png"); } }
-            public string FinalPath { get { return Path.Combine(Directory, "panel-300dpi.png"); } }
+            public string FinalPath { get { return ReadyPath ?? Path.Combine(Directory, "panel-300dpi.png"); } }
             public string MetadataPath { get { return Path.Combine(Directory, "job.json"); } }
             public string TilePath(int index) { return Path.Combine(Directory, "upscale-" + index + ".png"); }
         }
@@ -72,7 +72,7 @@ namespace VanyaTools.Native
 
             panel.Children.Add(Label("Размер прямоугольника, мм: ширина × высота", false));
             var dimensions = new UniformGrid { Columns = 2 };
-            _width = Field("297"); _height = Field("420");
+            _width = Field("550"); _height = Field("750");
             _width.TextChanged += (_, __) => UpdateSize();
             _height.TextChanged += (_, __) => UpdateSize();
             dimensions.Children.Add(_width); dimensions.Children.Add(_height);
@@ -96,6 +96,7 @@ namespace VanyaTools.Native
 
             _run = Button("Создать развёртку из выделения", async (_, __) => await Start());
             panel.Children.Add(_run);
+            panel.Children.Add(Note("При изменении размера создайте новую развёртку из мокапа. Растягивание старой детали меняет пропорции и не добавляет чёткости."));
             _cancel = Button("Отменить", (_, __) => Cancel()); _cancel.Visibility = Visibility.Collapsed;
             panel.Children.Add(_cancel);
             _retry = Button("Продолжить / повторить вставку", async (_, __) => await Resume()); _retry.Visibility = Visibility.Collapsed;
@@ -208,7 +209,9 @@ namespace VanyaTools.Native
                     }
                     cancellation.ThrowIfCancellationRequested();
                     SetStage("4/4 · Сборка PNG · 300 dpi");
-                    SublimationOutputProcessor.Prepare(_job.GeneratedPath, _job.FinalPath, _job.Width, _job.Height, tiles);
+                    string generatedPath = _job.GeneratedPath, finalPath = _job.FinalPath;
+                    int width = _job.Width, height = _job.Height;
+                    await RunSta(() => SublimationOutputProcessor.Prepare(generatedPath, finalPath, width, height, tiles));
                 }
                 cancellation.ThrowIfCancellationRequested();
                 _resultPreview.Source = AiPrintTab.Bitmap(_job.FinalPath);
@@ -243,6 +246,20 @@ namespace VanyaTools.Native
                 progress => Dispatcher.BeginInvoke(new Action(() =>
                     _activity.Text = name + " · " + ProgressName(progress) + " · " + (int)_elapsed.Elapsed.TotalSeconds + " с")),
                 cancellation), cancellation);
+        }
+
+        private static Task RunSta(Action work)
+        {
+            var completion = new TaskCompletionSource<bool>();
+            var thread = new Thread(() =>
+            {
+                try { work(); completion.SetResult(true); }
+                catch (Exception ex) { completion.SetException(ex); }
+            });
+            thread.IsBackground = true;
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            return completion.Task;
         }
 
         private static string AnalysisPrompt(Job job)
@@ -298,11 +315,11 @@ namespace VanyaTools.Native
         {
             width = height = 0;
             if (!Int32.TryParse(_width.Text.Trim(), out width) || !Int32.TryParse(_height.Text.Trim(), out height) ||
-                width < 50 || height < 50 || width > 800 || height > 800 ||
+                width < 50 || height < 50 || width > 1000 || height > 1000 ||
                 (double)width / height < 0.33 || (double)width / height > 3.0)
-            { Report("Задайте ширину и высоту от 50 до 800 мм, без слишком вытянутого формата.", true); return false; }
+            { Report("Задайте ширину и высоту от 50 до 1000 мм, без слишком вытянутого формата.", true); return false; }
             long pixels = (long)Math.Round(width * 300.0 / 25.4) * (long)Math.Round(height * 300.0 / 25.4);
-            if (pixels > 60000000) { Report("Размер превышает 60 млн пикселей при 300 dpi. Уменьшите прямоугольник.", true); return false; }
+            if (pixels > 80000000) { Report("Размер превышает 80 млн пикселей при 300 dpi. Уменьшите прямоугольник.", true); return false; }
             return true;
         }
 
@@ -310,8 +327,8 @@ namespace VanyaTools.Native
         {
             if (_width == null || _height == null) return;
             bool sleeve = _part.SelectedIndex >= 2;
-            _width.Text = sleeve ? "420" : "297";
-            _height.Text = sleeve ? "297" : "420";
+            _width.Text = sleeve ? "450" : "550";
+            _height.Text = sleeve ? "300" : "750";
         }
 
         private void UpdateSize()
@@ -319,7 +336,13 @@ namespace VanyaTools.Native
             if (_size == null || _width == null || _height == null) return;
             if (!Int32.TryParse(_width.Text, out int w) || !Int32.TryParse(_height.Text, out int h) || w <= 0 || h <= 0)
             { _size.Text = "Укажите размер в миллиметрах."; return; }
-            _size.Text = "300 dpi · " + Math.Round(w * 300.0 / 25.4) + " × " + Math.Round(h * 300.0 / 25.4) + " пикселей.";
+            int pixelsWide = (int)Math.Round(w * 300.0 / 25.4);
+            int pixelsHigh = (int)Math.Round(h * 300.0 / 25.4);
+            PixelSize model = ModelSize(w, h);
+            int detailDpi = Math.Min(300, (int)Math.Floor(300.0 * Math.Min(
+                model.Width * 4.0 / pixelsWide, model.Height * 4.0 / pixelsHigh)));
+            _size.Text = "300 dpi · " + pixelsWide + " × " + pixelsHigh +
+                " пикселей. Плотность изображения после AI ×4: около " + detailDpi + " dpi.";
         }
 
         private void UpdatePrice(BitmapSource source)
@@ -338,7 +361,8 @@ namespace VanyaTools.Native
 
         private void SetBusy(bool value)
         {
-            _busy = value; _run.IsEnabled = !value; _part.IsEnabled = !value;
+            _busy = value; _run.IsEnabled = !value;
+            _part.IsEnabled = !value;
             _width.IsEnabled = _height.IsEnabled = _hint.IsEnabled = _upscale.IsEnabled = !value;
             _cancel.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
             _cancel.IsEnabled = value;
@@ -373,7 +397,7 @@ namespace VanyaTools.Native
                     string path = File.ReadAllText(PendingPath()).Trim();
                     if (File.Exists(path))
                     {
-                        _job = new Job { Directory = Path.GetDirectoryName(path) };
+                        _job = new Job { Directory = Path.GetDirectoryName(path), ReadyPath = path };
                         _resultPreview.Source = AiPrintTab.Bitmap(path);
                         _retry.Visibility = Visibility.Visible;
                         _activity.Visibility = Visibility.Visible;
@@ -401,7 +425,7 @@ namespace VanyaTools.Native
                             candidate.Height = Convert.ToInt32(details["height"]);
                             candidate.Upscale = Convert.ToBoolean(details["upscale"]);
                         }
-                        else if (File.Exists(candidate.GeneratedPath) && File.Exists(candidate.AnalysisPath))
+                        else if (!File.Exists(candidate.FinalPath) && File.Exists(candidate.GeneratedPath) && File.Exists(candidate.AnalysisPath))
                         {
                             // Recover an unfinished 1.0.72 job, which had no metadata.
                             // Its detail and size use the visible UI defaults; the user can
