@@ -351,7 +351,7 @@ namespace VanyaTools.Native
         private void SetStage(string stage) { _stage = stage; _activity.Text = stage; Report(stage, false); }
         private void Cancel() { if (_busy && _cancellation != null) { _cancellation.Cancel(); _cancel.IsEnabled = false; SetStage("Останавливаю запрос…"); } }
         private void Report(string message, bool error) { _status(message, error); }
-        private static string ProgressName(string value) { return value == "sending" ? "отправка" : value == "processing" ? "обработка" : value == "cancelling" ? "отмена" : value == "retrying-download" ? "повтор скачивания готового файла" : "получение"; }
+        private static string ProgressName(string value) { return value == "sending" ? "отправка" : value == "processing" ? "обработка" : value == "cancelling" ? "отмена" : value == "retrying-download" ? "повтор скачивания готового файла" : value == "retrying-upload" ? "повтор загрузки входного фрагмента" : value == "retrying-status" ? "повтор проверки запроса" : "получение"; }
         private static string PendingPath() { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VanyaTools", "pending-sublimation-result.txt"); }
 
         private static void SaveJob(Job job)

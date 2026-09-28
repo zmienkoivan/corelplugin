@@ -230,8 +230,14 @@ namespace VanyaTools.Updater
                 var body = new Dictionary<string, object> { ["input"] = input };
                 if (versionedModel) body["version"] = model;
                 byte[] bytes = Encoding.UTF8.GetBytes(serializer.Serialize(body));
-                File.WriteAllText(outputPath + ".submitted", "sent");
-                using (var stream = request.GetRequestStream()) stream.Write(bytes, 0, bytes.Length);
+                using (var stream = request.GetRequestStream())
+                {
+                    // A connection failure before obtaining the request stream
+                    // cannot have submitted a paid prediction. Mark it only when
+                    // the request body is about to be written.
+                    File.WriteAllText(outputPath + ".submitted", "sent");
+                    stream.Write(bytes, 0, bytes.Length);
+                }
                 try { result = ReadJson(request, serializer); }
                 catch (ReplicateApiException ex)
                 {
@@ -281,9 +287,7 @@ namespace VanyaTools.Updater
                     Thread.Sleep(100);
                 }
                 if (!cancelSent && File.Exists(cancelPath)) continue;
-                var poll = CreateHttpRequest(Convert.ToString(urls["get"]));
-                poll.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
-                result = ReadJson(poll, serializer);
+                result = GetPredictionWithRetry(Convert.ToString(urls["get"]), token, serializer);
                 SavePrediction(statePath, result, serializer);
                 status = Convert.ToString(result["status"]);
             }
@@ -314,6 +318,26 @@ namespace VanyaTools.Updater
             return url;
         }
 
+        private static Dictionary<string, object> GetPredictionWithRetry(string url, string token, JavaScriptSerializer serializer)
+        {
+            for (int attempt = 1; attempt <= 4; attempt++)
+            {
+                try
+                {
+                    var poll = CreateHttpRequest(url);
+                    poll.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
+                    return ReadJson(poll, serializer);
+                }
+                catch (WebException ex) when (attempt < 4 && IsTransientNetworkError(ex))
+                {
+                    LogWorker("Prediction status attempt " + attempt + "/4 failed: " + ex.Status + ". Retrying the same prediction.");
+                    ReportWorkerProgress("retrying-status");
+                    Thread.Sleep(attempt * 2000);
+                }
+            }
+            throw new InvalidOperationException("Не удалось получить статус запроса Replicate.");
+        }
+
         private static object ResolveUploadedInputs(object value, string token, string cancelPath, JavaScriptSerializer serializer)
         {
             var text = value as string;
@@ -326,7 +350,7 @@ namespace VanyaTools.Updater
                     var info = new FileInfo(path);
                     if (!info.Exists) throw new FileNotFoundException("Не найден временный PNG для отправки в Replicate.", path);
                     if (info.Length > 100L * 1024 * 1024) throw new InvalidDataException("Изображение превышает лимит загрузки Replicate 100 МБ.");
-                    return UploadReplicateFile(token, File.ReadAllBytes(path), info.Name, "image/png", serializer);
+                    return UploadReplicateFile(token, File.ReadAllBytes(path), info.Name, "image/png", serializer, cancelPath);
                 }
                 if (text.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
                 {
@@ -335,7 +359,7 @@ namespace VanyaTools.Updater
                     {
                         byte[] bytes = Convert.FromBase64String(text.Substring(comma + 1));
                         string mime = text.Substring(5, text.IndexOf(';') - 5);
-                        return UploadReplicateFile(token, bytes, "input", mime, serializer);
+                        return UploadReplicateFile(token, bytes, "input", mime, serializer, cancelPath);
                     }
                 }
                 return text;
@@ -382,7 +406,35 @@ namespace VanyaTools.Updater
             if (list != null) foreach (object item in list) CollectLocalInputFiles(item, files);
         }
 
-        private static string UploadReplicateFile(string token, byte[] content, string filename, string contentType, JavaScriptSerializer serializer)
+        private static string UploadReplicateFile(string token, byte[] content, string filename, string contentType,
+            JavaScriptSerializer serializer, string cancelPath)
+        {
+            // Uploading a temporary input file does not start or bill a model.
+            // Retry transient connection failures before creating the prediction.
+            for (int attempt = 1; attempt <= 4; attempt++)
+            {
+                if (File.Exists(cancelPath)) throw new OperationCanceledException("Операция отменена до загрузки изображения.");
+                try { return UploadReplicateFileOnce(token, content, filename, contentType, serializer); }
+                catch (WebException ex) when (attempt < 4 && IsTransientNetworkError(ex))
+                {
+                    LogWorker("Input upload attempt " + attempt + "/4 failed: " + ex.Status + ". Retrying without submitting a prediction.");
+                    ReportWorkerProgress("retrying-upload");
+                    int delayMs = attempt * 2000;
+                    for (int waited = 0; waited < delayMs; waited += 250)
+                    {
+                        if (File.Exists(cancelPath)) throw new OperationCanceledException("Операция отменена до загрузки изображения.");
+                        Thread.Sleep(250);
+                    }
+                }
+                catch (WebException ex) when (IsTransientNetworkError(ex))
+                {
+                    throw new InvalidOperationException("Не удалось загрузить входной фрагмент в Replicate после нескольких попыток. Готовые этапы сохранены; нажмите «Продолжить» позже.", ex);
+                }
+            }
+            throw new InvalidOperationException("Не удалось загрузить временный файл в Replicate.");
+        }
+
+        private static string UploadReplicateFileOnce(string token, byte[] content, string filename, string contentType, JavaScriptSerializer serializer)
         {
             const string endpoint = "https://api.replicate.com/v1/files";
             string boundary = "----VanyaTools" + Guid.NewGuid().ToString("N");
@@ -398,6 +450,7 @@ namespace VanyaTools.Updater
             request.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
             request.Timeout = 180000;
             request.ReadWriteTimeout = 180000;
+            request.KeepAlive = false;
             request.ContentLength = header.Length + (long)content.Length + footer.Length;
             using (var stream = request.GetRequestStream())
             {
@@ -505,7 +558,7 @@ namespace VanyaTools.Updater
                     LogWorker("Output downloaded in " + timer.ElapsedMilliseconds + " ms; bytes=" + size + ".");
                     return;
                 }
-                catch (WebException ex) when (attempt < 4 && IsTransientDownloadError(ex))
+                catch (WebException ex) when (attempt < 4 && IsTransientNetworkError(ex))
                 {
                     LogWorker("Output download attempt " + attempt + "/4 failed: " + ex.Status + ". Retrying the same finished prediction.");
                     ReportWorkerProgress("retrying-download");
@@ -516,11 +569,15 @@ namespace VanyaTools.Updater
                         Thread.Sleep(250);
                     }
                 }
+                catch (WebException ex) when (IsTransientNetworkError(ex))
+                {
+                    throw new InvalidOperationException("Не удалось скачать готовый результат Replicate после нескольких попыток. Новый запрос к модели не нужен; нажмите «Продолжить» позже.", ex);
+                }
                 finally { if (File.Exists(outputPath + ".part")) File.Delete(outputPath + ".part"); }
             }
         }
 
-        private static bool IsTransientDownloadError(WebException error)
+        private static bool IsTransientNetworkError(WebException error)
         {
             if (error.Status == WebExceptionStatus.ConnectFailure || error.Status == WebExceptionStatus.Timeout ||
                 error.Status == WebExceptionStatus.ReceiveFailure || error.Status == WebExceptionStatus.SendFailure ||
@@ -587,7 +644,7 @@ namespace VanyaTools.Updater
         {
             string uri = "https://api.github.com/repos/" + repository + "/releases/latest";
             var request = (HttpWebRequest)WebRequest.Create(uri);
-            request.UserAgent = "VanyaTools-Updater/1.0.25";
+            request.UserAgent = "VanyaTools-Updater/1.0.26";
             request.Accept = "application/vnd.github+json";
 
             string json;
