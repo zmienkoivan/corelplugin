@@ -477,28 +477,58 @@ namespace VanyaTools.Updater
             var timer = Stopwatch.StartNew();
             string directory = Path.GetDirectoryName(outputPath);
             if (!String.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-            try
+            // The prediction is already paid for and its URL is stored on disk.
+            // Retry only the file transfer; never submit a second prediction here.
+            for (int attempt = 1; attempt <= 4; attempt++)
             {
-                var request = CreateHttpRequest(url);
-                using (var response = request.GetResponse())
-                using (var source = response.GetResponseStream())
-                using (var destination = File.Create(outputPath + ".part"))
+                if (File.Exists(cancelPath)) throw new OperationCanceledException();
+                try
                 {
-                    byte[] buffer = new byte[65536];
-                    int count;
-                    while ((count = source.Read(buffer, 0, buffer.Length)) > 0)
+                    var request = CreateHttpRequest(url);
+                    request.KeepAlive = false;
+                    using (var response = request.GetResponse())
+                    using (var source = response.GetResponseStream())
+                    using (var destination = File.Create(outputPath + ".part"))
+                    {
+                        byte[] buffer = new byte[65536];
+                        int count;
+                        while ((count = source.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            if (File.Exists(cancelPath)) throw new OperationCanceledException();
+                            destination.Write(buffer, 0, count);
+                        }
+                    }
+                    if (File.Exists(cancelPath)) throw new OperationCanceledException();
+                    if (File.Exists(outputPath)) File.Replace(outputPath + ".part", outputPath, null);
+                    else File.Move(outputPath + ".part", outputPath);
+                    long size = new FileInfo(outputPath).Length;
+                    LogWorker("Output downloaded in " + timer.ElapsedMilliseconds + " ms; bytes=" + size + ".");
+                    return;
+                }
+                catch (WebException ex) when (attempt < 4 && IsTransientDownloadError(ex))
+                {
+                    LogWorker("Output download attempt " + attempt + "/4 failed: " + ex.Status + ". Retrying the same finished prediction.");
+                    ReportWorkerProgress("retrying-download");
+                    int delayMs = attempt * 2000;
+                    for (int waited = 0; waited < delayMs; waited += 250)
                     {
                         if (File.Exists(cancelPath)) throw new OperationCanceledException();
-                        destination.Write(buffer, 0, count);
+                        Thread.Sleep(250);
                     }
                 }
-                if (File.Exists(cancelPath)) throw new OperationCanceledException();
-                if (File.Exists(outputPath)) File.Replace(outputPath + ".part", outputPath, null);
-                else File.Move(outputPath + ".part", outputPath);
+                finally { if (File.Exists(outputPath + ".part")) File.Delete(outputPath + ".part"); }
             }
-            finally { if (File.Exists(outputPath + ".part")) File.Delete(outputPath + ".part"); }
-            long size = new FileInfo(outputPath).Length;
-            LogWorker("Output downloaded in " + timer.ElapsedMilliseconds + " ms; bytes=" + size + ".");
+        }
+
+        private static bool IsTransientDownloadError(WebException error)
+        {
+            if (error.Status == WebExceptionStatus.ConnectFailure || error.Status == WebExceptionStatus.Timeout ||
+                error.Status == WebExceptionStatus.ReceiveFailure || error.Status == WebExceptionStatus.SendFailure ||
+                error.Status == WebExceptionStatus.ConnectionClosed || error.Status == WebExceptionStatus.KeepAliveFailure ||
+                error.Status == WebExceptionStatus.NameResolutionFailure) return true;
+            var response = error.Response as HttpWebResponse;
+            return response != null && ((int)response.StatusCode >= 500 ||
+                response.StatusCode == HttpStatusCode.RequestTimeout || (int)response.StatusCode == 429);
         }
 
         private sealed class ReplicateApiException : InvalidOperationException
@@ -557,7 +587,7 @@ namespace VanyaTools.Updater
         {
             string uri = "https://api.github.com/repos/" + repository + "/releases/latest";
             var request = (HttpWebRequest)WebRequest.Create(uri);
-            request.UserAgent = "VanyaTools-Updater/1.0.24";
+            request.UserAgent = "VanyaTools-Updater/1.0.25";
             request.Accept = "application/vnd.github+json";
 
             string json;
