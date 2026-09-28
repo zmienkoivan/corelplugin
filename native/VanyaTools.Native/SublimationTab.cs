@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -45,6 +46,7 @@ namespace VanyaTools.Native
             public string AnalysisPath { get { return Path.Combine(Directory, "analysis.txt"); } }
             public string GeneratedPath { get { return Path.Combine(Directory, "generated.png"); } }
             public string FinalPath { get { return Path.Combine(Directory, "panel-300dpi.png"); } }
+            public string MetadataPath { get { return Path.Combine(Directory, "job.json"); } }
             public string TilePath(int index) { return Path.Combine(Directory, "upscale-" + index + ".png"); }
         }
 
@@ -126,6 +128,7 @@ namespace VanyaTools.Native
                 File.Copy(selected, source, true);
                 _job = new Job { Directory = directory, Source = source, Part = Convert.ToString(_part.SelectedItem),
                     Hint = _hint.Text.Trim(), Width = width, Height = height, Upscale = _upscale.IsChecked == true };
+                SaveJob(_job);
                 _sourcePreview.Source = AiPrintTab.Bitmap(source);
                 UpdatePrice(AiPrintTab.Bitmap(source));
                 _resultPreview.Source = null;
@@ -214,6 +217,7 @@ namespace VanyaTools.Native
                 SetStage("Вставляю результат в CorelDRAW");
                 string warning = _import(_job.FinalPath);
                 try { File.Delete(PendingPath()); } catch { }
+                try { File.Delete(_job.MetadataPath); } catch { }
                 _job = null;
                 Report(String.IsNullOrWhiteSpace(warning)
                     ? "Развёртка вставлена на холст. Проверьте надписи, стыки и размер перед печатью."
@@ -350,18 +354,82 @@ namespace VanyaTools.Native
         private static string ProgressName(string value) { return value == "sending" ? "отправка" : value == "processing" ? "обработка" : value == "cancelling" ? "отмена" : value == "retrying-download" ? "повтор скачивания готового файла" : "получение"; }
         private static string PendingPath() { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VanyaTools", "pending-sublimation-result.txt"); }
 
+        private static void SaveJob(Job job)
+        {
+            var details = new Dictionary<string, object>
+            {
+                ["part"] = job.Part, ["hint"] = job.Hint, ["width"] = job.Width,
+                ["height"] = job.Height, ["upscale"] = job.Upscale
+            };
+            File.WriteAllText(job.MetadataPath, new JavaScriptSerializer().Serialize(details));
+        }
+
         private void RestorePending()
         {
             try
             {
-                if (!File.Exists(PendingPath())) return;
-                string path = File.ReadAllText(PendingPath()).Trim();
-                if (!File.Exists(path)) return;
-                _job = new Job { Directory = Path.GetDirectoryName(path) };
-                _resultPreview.Source = AiPrintTab.Bitmap(path);
-                _retry.Visibility = Visibility.Visible;
-                _activity.Visibility = Visibility.Visible;
-                _activity.Text = "Готовая развёртка ожидает вставки в CorelDRAW.";
+                if (File.Exists(PendingPath()))
+                {
+                    string path = File.ReadAllText(PendingPath()).Trim();
+                    if (File.Exists(path))
+                    {
+                        _job = new Job { Directory = Path.GetDirectoryName(path) };
+                        _resultPreview.Source = AiPrintTab.Bitmap(path);
+                        _retry.Visibility = Visibility.Visible;
+                        _activity.Visibility = Visibility.Visible;
+                        _activity.Text = "Готовая развёртка ожидает вставки в CorelDRAW.";
+                        return;
+                    }
+                }
+                string[] directories = Directory.GetDirectories(Path.GetTempPath(), "Vanya-Sublimation-*");
+                Array.Sort(directories, (a, b) => Directory.GetLastWriteTimeUtc(b).CompareTo(Directory.GetLastWriteTimeUtc(a)));
+                foreach (string directory in directories)
+                {
+                    if (DateTime.UtcNow - Directory.GetLastWriteTimeUtc(directory) > TimeSpan.FromDays(7)) continue;
+                    string source = Path.Combine(directory, "selected-mockup.png");
+                    if (!File.Exists(source)) continue;
+                    try
+                    {
+                        Job candidate = new Job { Directory = directory, Source = source };
+                        if (File.Exists(candidate.MetadataPath))
+                        {
+                            var details = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
+                                File.ReadAllText(candidate.MetadataPath));
+                            candidate.Part = Convert.ToString(details["part"]);
+                            candidate.Hint = Convert.ToString(details["hint"]);
+                            candidate.Width = Convert.ToInt32(details["width"]);
+                            candidate.Height = Convert.ToInt32(details["height"]);
+                            candidate.Upscale = Convert.ToBoolean(details["upscale"]);
+                        }
+                        else if (File.Exists(candidate.GeneratedPath) && File.Exists(candidate.AnalysisPath))
+                        {
+                            // Recover an unfinished 1.0.72 job, which had no metadata.
+                            // Its detail and size use the visible UI defaults; the user can
+                            // inspect the image before resuming the remaining paid stages.
+                            candidate.Part = Convert.ToString(_part.SelectedItem);
+                            candidate.Hint = _hint.Text.Trim();
+                            candidate.Width = Int32.Parse(_width.Text);
+                            candidate.Height = Int32.Parse(_height.Text);
+                            candidate.Upscale = _upscale.IsChecked == true;
+                            SaveJob(candidate);
+                        }
+                        else continue;
+                        _job = candidate;
+                        _part.SelectedItem = candidate.Part;
+                        _width.Text = candidate.Width.ToString(CultureInfo.InvariantCulture);
+                        _height.Text = candidate.Height.ToString(CultureInfo.InvariantCulture);
+                        _hint.Text = candidate.Hint ?? "";
+                        _upscale.IsChecked = candidate.Upscale;
+                        _sourcePreview.Source = AiPrintTab.Bitmap(source);
+                        if (File.Exists(candidate.AnalysisPath)) _analysis.Text = File.ReadAllText(candidate.AnalysisPath);
+                        if (File.Exists(candidate.FinalPath)) _resultPreview.Source = AiPrintTab.Bitmap(candidate.FinalPath);
+                        _retry.Visibility = Visibility.Visible;
+                        _activity.Visibility = Visibility.Visible;
+                        _activity.Text = "Незавершённая развёртка найдена. Нажмите «Продолжить»; готовые этапы не запускаются повторно.";
+                        return;
+                    }
+                    catch (Exception ex) { Log.Error("Could not restore sublimation job in " + directory, ex); }
+                }
             }
             catch (Exception ex) { Log.Error("Pending sublimation result restore failed.", ex); }
         }
