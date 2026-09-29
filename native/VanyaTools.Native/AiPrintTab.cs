@@ -67,6 +67,12 @@ namespace VanyaTools.Native
                 Header = "AI-графика",
                 Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel }
             });
+            subtabs.Items.Add(new TabItem
+            {
+                Header = "Простые AI",
+                Content = new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
+                    () => CurrentToken(), _import, _status)
+            });
             var fontPanel = new StackPanel { Margin = new Thickness(7) };
             subtabs.Items.Add(new TabItem
             {
