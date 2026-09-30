@@ -20,6 +20,8 @@ namespace VanyaTools.Updater
         {
             if (args != null && args.Length == 1 && args[0] == "--replicate-worker")
                 return RunReplicateWorker();
+            if (args != null && args.Length == 1 && args[0] == "--openai-image-worker")
+                return OpenAiImageWorker.Run();
 
             Console.OutputEncoding = Encoding.UTF8;
             string installedVersionText = GetArgument(args, "--installed-version");

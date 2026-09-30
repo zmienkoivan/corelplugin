@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
-using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -10,6 +12,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Input;
 using System.Windows.Threading;
 
 namespace VanyaTools.Native
@@ -22,10 +25,16 @@ namespace VanyaTools.Native
         private readonly Action<string, bool> _status;
         private readonly ComboBox _model;
         private readonly TextBox _prompt;
+        private readonly TextBox _alphaThreshold;
+        private readonly TextBox _edgeRadius, _edgeExpansion, _underlayHex;
+        private readonly PasswordBox _openAiKey;
+        private readonly Border _underlaySwatch;
         private readonly Image _sourcePreview, _resultPreview;
         private readonly TextBlock _progress;
         private readonly ProgressBar _progressBar;
-        private readonly Button _removeButton, _upscaleButton, _editButton, _cancelButton, _retryButton;
+        private readonly Button _removeButton, _upscaleButton, _alphaButton, _smoothButton, _pipetteButton,
+            _editButton, _cancelButton, _retryButton;
+        private readonly List<RadioButton> _styleButtons = new List<RadioButton>();
         private readonly DispatcherTimer _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         private readonly Stopwatch _elapsed = new Stopwatch();
         private CancellationTokenSource _cancellation;
@@ -33,6 +42,11 @@ namespace VanyaTools.Native
         private string _stage, _lastModel, _lastOutput, _readyOutput;
         private string _importWarning;
         private Dictionary<string, object> _lastInput;
+        private string _lastSourcePath, _lastStylePath, _lastPrompt;
+        private StyleChoice _selectedStyle;
+        private bool _samplingColor;
+
+        private const string TiledUpscaler = "xinntao/realesrgan:1b976a4d456ed9e4d1a846597b7614e79eadad3032e9124fa63859db0fd59b56";
 
         private sealed class ModelChoice
         {
@@ -64,10 +78,43 @@ namespace VanyaTools.Native
             _upscaleButton = Button("Апскейл ×2", async (_, __) => await Run("upscale"));
             quick.Children.Add(_removeButton); quick.Children.Add(_upscaleButton);
             panel.Children.Add(quick);
+            var alphaRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 5) };
+            _alphaButton = Button("Убрать полупрозрачные пиксели", async (_, __) => await RemoveSemiTransparent());
+            alphaRow.Children.Add(_alphaButton);
+            alphaRow.Children.Add(new TextBlock { Text = "Порог:", VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 10, Margin = new Thickness(6, 0, 3, 0) });
+            _alphaThreshold = new TextBox { Text = "150", Width = 40, FontSize = 11,
+                VerticalContentAlignment = VerticalAlignment.Center };
+            alphaRow.Children.Add(_alphaThreshold);
+            panel.Children.Add(alphaRow);
+
+            var edgeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 5) };
+            _smoothButton = Button("Сгладить край", async (_, __) => await SmoothEdge());
+            edgeRow.Children.Add(_smoothButton);
+            edgeRow.Children.Add(new TextBlock { Text = "Радиус, px", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
+            _edgeRadius = new TextBox { Text = "2", Width = 28, FontSize = 11, Margin = new Thickness(3, 0, 5, 0) };
+            edgeRow.Children.Add(_edgeRadius);
+            edgeRow.Children.Add(new TextBlock { Text = "Расширить, px", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
+            _edgeExpansion = new TextBox { Text = "0", Width = 28, FontSize = 11, Margin = new Thickness(3, 0, 0, 0) };
+            edgeRow.Children.Add(_edgeExpansion);
+            panel.Children.Add(edgeRow);
+            var colorRow = new StackPanel { Orientation = Orientation.Horizontal };
+            colorRow.Children.Add(new TextBlock { Text = "Подложка", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
+            _underlayHex = new TextBox { Text = "#FFFFFF", Width = 72, FontSize = 11,
+                Margin = new Thickness(5, 0, 2, 0) };
+            colorRow.Children.Add(_underlayHex);
+            _underlaySwatch = new Border { Width = 18, Height = 18, Background = Brushes.White,
+                BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Margin = new Thickness(2) };
+            colorRow.Children.Add(_underlaySwatch);
+            _pipetteButton = Button("Пипетка", (_, __) => BeginColorPick());
+            colorRow.Children.Add(_pipetteButton);
+            _underlayHex.TextChanged += (_, __) => UpdateUnderlaySwatch();
+            panel.Children.Add(colorRow);
 
             var previews = new UniformGrid { Columns = 2 };
             previews.Children.Add(Preview("Выделение", out _sourcePreview));
             previews.Children.Add(Preview("Результат", out _resultPreview));
+            _sourcePreview.MouseLeftButtonDown += SampleUnderlayColor;
             panel.Children.Add(previews);
 
             panel.Children.Add(Label("Стилизация", true));
@@ -78,16 +125,25 @@ namespace VanyaTools.Native
                 new StyleChoice("Наивная иллюстрация", "naive", "Transform the selected image into a playful handmade naive illustration with simple shapes, uneven ink outlines and flat warm colors."),
                 new StyleChoice("Пиксар-персонаж", "animated3d", "Transform the selected subject into a friendly, expressive 3D animated feature-film character with rounded forms and soft studio lighting."),
                 new StyleChoice("Акварель", "watercolor", "Transform the selected image into a delicate hand-painted watercolor illustration with soft pigment washes and natural paper texture."),
-                new StyleChoice("Комикс", "comic", "Transform the selected image into modern comic-book art with bold ink outlines, halftone shadows and vivid flat color blocks.")
+                new StyleChoice("Комикс", "comic", "Transform the selected image into modern comic-book art with bold ink outlines, halftone shadows and vivid flat color blocks."),
+                new StyleChoice("Городская иллюстрация", "street-illustration", "Render the selected subject as a playful hand-painted editorial street illustration: irregular thick black ink outlines, flat warm peach and cream areas, vivid cobalt blue and orange accents, simplified expressive figures and subtle painted-paper texture. Preserve the source subject and composition.")
             }) styles.Children.Add(StyleCard(style));
             panel.Children.Add(styles);
+            panel.Children.Add(Button("Свой промпт без образца стиля", (_, __) => ClearStyle()));
             panel.Children.Add(Label("Модель", false));
             _model = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 5) };
+            _model.Items.Add(new ModelChoice("gpt-image-2.5-sunburst", "OpenAI · GPT Image 2.5 Sunburst", 0m));
+            _model.Items.Add(new ModelChoice("gpt-image-2.5-flare", "OpenAI · GPT Image 2.5 Flare", 0m));
             _model.Items.Add(new ModelChoice("black-forest-labs/flux-2-pro", "FLUX.2 Pro", 0.14m));
             _model.Items.Add(new ModelChoice("black-forest-labs/flux-kontext-max", "FLUX.1 Kontext Max", 0.08m));
             _model.Items.Add(new ModelChoice("qwen/qwen-image-edit", "Qwen Image Edit", 0.03m));
             _model.SelectedIndex = 0;
             panel.Children.Add(_model);
+            panel.Children.Add(Label("Ключ OpenAI API · для моделей OpenAI", false));
+            _openAiKey = new PasswordBox { Margin = new Thickness(0, 0, 0, 3) };
+            LoadOpenAiKey();
+            panel.Children.Add(_openAiKey);
+            panel.Children.Add(Button("Сохранить ключ OpenAI", (_, __) => SaveOpenAiKey()));
             panel.Children.Add(Label("Промпт", false));
             _prompt = new TextBox { MinHeight = 75, MaxHeight = 160, AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 11 };
@@ -119,14 +175,22 @@ namespace VanyaTools.Native
                 TextWrapping = TextWrapping.Wrap, FontSize = 10, MaxWidth = 130 });
             var choice = new RadioButton { GroupName = "VanyaSimpleAiStyle", Content = content,
                 HorizontalAlignment = HorizontalAlignment.Center };
+            _styleButtons.Add(choice);
             var border = new Border { BorderBrush = Brushes.LightGray, BorderThickness = new Thickness(1),
                 Margin = new Thickness(2), Padding = new Thickness(3), Child = choice };
-            choice.Checked += (_, __) => { _prompt.Text = style.Prompt +
-                " Preserve the main subject, pose and composition of the input image. Do not add text.";
+            choice.Checked += (_, __) => { _selectedStyle = style;
+                _prompt.Text = style.Prompt +
+                " Preserve the main subject, pose and composition of the input image. Do not invent text.";
                 border.BorderBrush = Brushes.SteelBlue; border.BorderThickness = new Thickness(2); };
             choice.Unchecked += (_, __) => { border.BorderBrush = Brushes.LightGray;
                 border.BorderThickness = new Thickness(1); };
             return border;
+        }
+
+        private void ClearStyle()
+        {
+            foreach (var choice in _styleButtons) choice.IsChecked = false;
+            _selectedStyle = null;
         }
 
         private static BitmapSource Thumbnail(string asset)
@@ -141,23 +205,38 @@ namespace VanyaTools.Native
             }
         }
 
+        private static string SaveStyleReference(string asset)
+        {
+            string resource = "VanyaTools.Native.Assets.styles." + asset + ".png";
+            string path = Path.Combine(Path.GetTempPath(), "Vanya-Style-" + Guid.NewGuid().ToString("N") + ".png");
+            using (Stream source = typeof(SimpleAiTab).Assembly.GetManifestResourceStream(resource))
+            {
+                if (source == null) throw new InvalidDataException("Не найден образец стиля: " + asset);
+                using (Stream output = File.Create(path)) source.CopyTo(output);
+            }
+            return path;
+        }
+
         private async Task Run(string action)
         {
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
             { Report("Сначала вставьте готовый результат кнопкой «Повторить вставку».", true); return; }
-            string key = _token();
-            if (key.Length < 8) { Report("Укажите ключ Replicate во вкладке «AI-графика».", true); return; }
             var selectedModel = _model.SelectedItem as ModelChoice;
             if (selectedModel == null) { Report("Выберите модель.", true); return; }
             string prompt = _prompt.Text.Trim();
             if (action == "edit" && prompt.Length == 0) { Report("Выберите стиль или введите промпт.", true); return; }
             string model = action == "background" ? "bria/remove-background" :
-                action == "upscale" ? "nightmareai/real-esrgan" : selectedModel.Id;
-            decimal cost = action == "background" ? 0.018m : action == "upscale" ? 0.002m : selectedModel.EstimatedCost;
-            if (MessageBox.Show("Платный запрос Replicate · ориентировочно $" +
-                cost.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) +
-                ". Продолжить?", "Vanya Tools", MessageBoxButton.YesNo,
+                action == "upscale" ? TiledUpscaler : selectedModel.Id;
+            bool openAi = model.StartsWith("gpt-image-", StringComparison.Ordinal);
+            string key = openAi ? CurrentOpenAiKey() : _token();
+            if (key.Length < 8) { Report(openAi ? "Укажите ключ OpenAI API ниже." :
+                "Укажите ключ Replicate во вкладке «AI-графика».", true); return; }
+            decimal cost = action == "background" ? 0.018m : action == "upscale" ? 0.006m : selectedModel.EstimatedCost;
+            string price = openAi ? "Платный запрос OpenAI. Цена зависит от размера и качества изображения." :
+                "Платный запрос Replicate · ориентировочно $" +
+                cost.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) + ".";
+            if (MessageBox.Show(price + " Продолжить?", "Vanya Tools", MessageBoxButton.YesNo,
                 MessageBoxImage.Information) != MessageBoxResult.Yes) return;
             SetBusy(true, "Подготавливаю выделение…");
             try
@@ -177,8 +256,16 @@ namespace VanyaTools.Native
                     input = new Dictionary<string, object> { ["image"] = image,
                         ["preserve_alpha"] = true, ["content_moderation"] = false };
                 else if (action == "upscale")
-                    input = new Dictionary<string, object> { ["image"] = image,
-                        ["scale"] = 2, ["face_enhance"] = false };
+                    input = new Dictionary<string, object> { ["img"] = image,
+                        ["scale"] = 2, ["tile"] = 200, ["version"] = "General - v3", ["face_enhance"] = false };
+                else if (openAi)
+                {
+                    _lastSourcePath = LocalImage(image);
+                    _lastStylePath = _selectedStyle == null ? null : SaveStyleReference(_selectedStyle.Asset);
+                    _lastPrompt = prompt + (_lastStylePath == null ? "" :
+                        " Use image 1 for the subject and composition. Use image 2 only as a visual style reference. Do not copy its people, text, logos, or objects.");
+                    input = new Dictionary<string, object> { ["prompt"] = _lastPrompt };
+                }
                 else input = PrintRestorationPipeline.ImageInput(model, image, prompt);
                 _lastModel = model; _lastInput = input;
                 _lastOutput = Path.Combine(Path.GetTempPath(), "Vanya-Simple-AI-" + Guid.NewGuid().ToString("N") + ".png");
@@ -190,12 +277,309 @@ namespace VanyaTools.Native
             finally { SetBusy(false, null); }
         }
 
+        private static string LocalImage(string data)
+        {
+            const string filePrefix = "replicate-file:";
+            if (data.StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase)) return data.Substring(filePrefix.Length);
+            int comma = data.IndexOf(',');
+            if (comma < 0 || !data.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Не удалось подготовить PNG для OpenAI.");
+            string path = Path.Combine(Path.GetTempPath(), "Vanya-OpenAI-Input-" + Guid.NewGuid().ToString("N") + ".png");
+            File.WriteAllBytes(path, Convert.FromBase64String(data.Substring(comma + 1)));
+            return path;
+        }
+
+        private async Task RemoveSemiTransparent()
+        {
+            if (_busy) return;
+            if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
+            { Report("Сначала вставьте готовый результат.", true); return; }
+            int threshold;
+            if (!Int32.TryParse(_alphaThreshold.Text, out threshold) || threshold < 0 || threshold > 255)
+            { Report("Порог должен быть от 0 до 255.", true); return; }
+            SetBusy(true, "Удаляю полупрозрачные пиксели…");
+            try
+            {
+                _importWarning = null;
+                // Local processing can retain the full capture resolution; the AI
+                // actions above limit pixels to each remote model's practical range.
+                string source = AiSelectionCapture.Capture();
+                _sourcePreview.Source = AiPrintTab.Bitmap(source);
+                _resultPreview.Source = null;
+                string output = Path.Combine(Path.GetTempPath(), "Vanya-Alpha-" + Guid.NewGuid().ToString("N") + ".png");
+                CancellationToken cancellation = _cancellation.Token;
+                await Task.Run(() => ThresholdAlpha(source, output, threshold, cancellation), cancellation);
+                cancellation.ThrowIfCancellationRequested();
+                _readyOutput = output;
+                Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
+                File.WriteAllText(PendingPath(), output);
+                _resultPreview.Source = AiPrintTab.Bitmap(output);
+                InsertReady();
+                ReportOutcome();
+            }
+            catch (OperationCanceledException) { Report("Операция отменена.", false); }
+            catch (Exception ex) { Log.Error("Alpha threshold failed.", ex); Report(ex.GetBaseException().Message, true); }
+            finally { SetBusy(false, null); }
+        }
+
+        private static void ThresholdAlpha(string source, string output, int threshold, CancellationToken cancellation)
+        {
+            BitmapSource input = AiPrintTab.Bitmap(source);
+            var bgra = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
+            int stride = checked(bgra.PixelWidth * 4);
+            byte[] pixels = new byte[checked(stride * bgra.PixelHeight)];
+            bgra.CopyPixels(pixels, stride, 0);
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                if ((i & 0x3fffff) == 0) cancellation.ThrowIfCancellationRequested();
+                bool keep = pixels[i + 3] > 0 && pixels[i + 3] >= threshold;
+                pixels[i + 3] = keep ? (byte)255 : (byte)0;
+                if (!keep) pixels[i] = pixels[i + 1] = pixels[i + 2] = 0;
+            }
+            var result = BitmapSource.Create(bgra.PixelWidth, bgra.PixelHeight,
+                input.DpiX, input.DpiY, PixelFormats.Bgra32, null, pixels, stride);
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(result));
+            using (var stream = File.Create(output)) encoder.Save(stream);
+        }
+
+        private async Task SmoothEdge()
+        {
+            if (_busy) return;
+            if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
+            { Report("Сначала вставьте готовый результат.", true); return; }
+            int threshold, radius, expansion;
+            if (!Int32.TryParse(_alphaThreshold.Text, out threshold) || threshold < 0 || threshold > 255 ||
+                !Int32.TryParse(_edgeRadius.Text, out radius) || radius < 0 || radius > 12 ||
+                !Int32.TryParse(_edgeExpansion.Text, out expansion) || expansion < 0 || expansion > 20)
+            { Report("Порог: 0–255, радиус: 0–12, расширение: 0–20 пикселей.", true); return; }
+            Color fill;
+            if (!TryUnderlayColor(out fill)) { Report("Введите цвет подложки в формате #RRGGBB.", true); return; }
+            SetBusy(true, "Сглаживаю край…");
+            try
+            {
+                _importWarning = null;
+                string source = AiSelectionCapture.Capture();
+                _sourcePreview.Source = AiPrintTab.Bitmap(source);
+                _resultPreview.Source = null;
+                string output = Path.Combine(Path.GetTempPath(), "Vanya-Edge-" + Guid.NewGuid().ToString("N") + ".png");
+                CancellationToken cancellation = _cancellation.Token;
+                await Task.Run(() => SmoothAlphaEdge(source, output, threshold, radius,
+                    expansion, fill, cancellation), cancellation);
+                cancellation.ThrowIfCancellationRequested();
+                _readyOutput = output;
+                Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
+                File.WriteAllText(PendingPath(), output);
+                _resultPreview.Source = AiPrintTab.Bitmap(output);
+                InsertReady();
+                ReportOutcome();
+            }
+            catch (OperationCanceledException) { Report("Операция отменена.", false); }
+            catch (Exception ex) { Log.Error("Edge smoothing failed.", ex); Report(ex.GetBaseException().Message, true); }
+            finally { SetBusy(false, null); }
+        }
+
+        private static void SmoothAlphaEdge(string source, string output, int threshold,
+            int radius, int expansion, Color fill, CancellationToken cancellation)
+        {
+            BitmapSource input = AiPrintTab.Bitmap(source);
+            var bgra = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
+            int width = bgra.PixelWidth, height = bgra.PixelHeight;
+            int stride = checked(width * 4), length = checked(width * height);
+            byte[] pixels = new byte[checked(stride * height)];
+            byte[] mask = new byte[length];
+            byte[] work = new byte[length];
+            bgra.CopyPixels(pixels, stride, 0);
+            for (int p = 0; p < length; p++)
+                mask[p] = pixels[p * 4 + 3] > 0 && pixels[p * 4 + 3] >= threshold ? (byte)255 : (byte)0;
+            if (expansion > 0)
+            {
+                DilateHorizontal(mask, work, width, height, expansion, cancellation);
+                DilateVertical(work, mask, width, height, expansion, cancellation);
+            }
+            if (radius > 0)
+            {
+                GaussianHorizontal(mask, work, width, height, radius, cancellation);
+                GaussianVertical(work, mask, width, height, radius, cancellation);
+            }
+            for (int p = 0; p < length; p++)
+            {
+                if ((p & 0xfffff) == 0) cancellation.ThrowIfCancellationRequested();
+                int i = p * 4;
+                if (pixels[i + 3] > 0 && pixels[i + 3] >= threshold)
+                    pixels[i + 3] = 255;
+                else
+                {
+                    byte coverage = mask[p];
+                    pixels[i] = coverage == 0 ? (byte)0 : fill.B;
+                    pixels[i + 1] = coverage == 0 ? (byte)0 : fill.G;
+                    pixels[i + 2] = coverage == 0 ? (byte)0 : fill.R;
+                    pixels[i + 3] = coverage;
+                }
+            }
+            var result = BitmapSource.Create(width, height, input.DpiX, input.DpiY,
+                PixelFormats.Bgra32, null, pixels, stride);
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(result));
+            using (var stream = File.Create(output)) encoder.Save(stream);
+        }
+
+        private static void DilateHorizontal(byte[] source, byte[] target, int width,
+            int height, int radius, CancellationToken cancellation)
+        {
+            for (int y = 0; y < height; y++)
+            {
+                if ((y & 127) == 0) cancellation.ThrowIfCancellationRequested();
+                int row = y * width, count = 0;
+                for (int x = 0; x <= Math.Min(radius, width - 1); x++)
+                    if (source[row + x] != 0) count++;
+                for (int x = 0; x < width; x++)
+                {
+                    target[row + x] = count > 0 ? (byte)255 : (byte)0;
+                    if (x - radius >= 0 && source[row + x - radius] != 0) count--;
+                    if (x + radius + 1 < width && source[row + x + radius + 1] != 0) count++;
+                }
+            }
+        }
+
+        private static void DilateVertical(byte[] source, byte[] target, int width,
+            int height, int radius, CancellationToken cancellation)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                if ((x & 127) == 0) cancellation.ThrowIfCancellationRequested();
+                int count = 0;
+                for (int y = 0; y <= Math.Min(radius, height - 1); y++)
+                    if (source[y * width + x] != 0) count++;
+                for (int y = 0; y < height; y++)
+                {
+                    target[y * width + x] = count > 0 ? (byte)255 : (byte)0;
+                    if (y - radius >= 0 && source[(y - radius) * width + x] != 0) count--;
+                    if (y + radius + 1 < height && source[(y + radius + 1) * width + x] != 0) count++;
+                }
+            }
+        }
+
+        private static double[] GaussianWeights(int radius)
+        {
+            var weights = new double[radius * 2 + 1];
+            double sigma = Math.Max(0.7, radius / 1.5), total = 0;
+            for (int i = -radius; i <= radius; i++)
+            {
+                double value = Math.Exp(-(i * i) / (2 * sigma * sigma));
+                weights[i + radius] = value; total += value;
+            }
+            for (int i = 0; i < weights.Length; i++) weights[i] /= total;
+            return weights;
+        }
+
+        private static void GaussianHorizontal(byte[] source, byte[] target, int width,
+            int height, int radius, CancellationToken cancellation)
+        {
+            double[] weights = GaussianWeights(radius);
+            for (int y = 0; y < height; y++)
+            {
+                if ((y & 63) == 0) cancellation.ThrowIfCancellationRequested();
+                int row = y * width;
+                for (int x = 0; x < width; x++)
+                {
+                    double value = 0;
+                    for (int k = -radius; k <= radius; k++)
+                    {
+                        int sample = x + k;
+                        if (sample >= 0 && sample < width) value += source[row + sample] * weights[k + radius];
+                    }
+                    target[row + x] = (byte)Math.Min(255, Math.Round(value));
+                }
+            }
+        }
+
+        private static void GaussianVertical(byte[] source, byte[] target, int width,
+            int height, int radius, CancellationToken cancellation)
+        {
+            double[] weights = GaussianWeights(radius);
+            for (int y = 0; y < height; y++)
+            {
+                if ((y & 63) == 0) cancellation.ThrowIfCancellationRequested();
+                int row = y * width;
+                for (int x = 0; x < width; x++)
+                {
+                    double value = 0;
+                    for (int k = -radius; k <= radius; k++)
+                    {
+                        int sample = y + k;
+                        if (sample >= 0 && sample < height) value += source[sample * width + x] * weights[k + radius];
+                    }
+                    target[row + x] = (byte)Math.Min(255, Math.Round(value));
+                }
+            }
+        }
+
+        private bool TryUnderlayColor(out Color color)
+        {
+            color = Colors.White;
+            string hex = _underlayHex.Text.Trim().TrimStart('#');
+            if (hex.Length != 6) return false;
+            int value;
+            if (!Int32.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out value)) return false;
+            color = Color.FromRgb((byte)(value >> 16), (byte)(value >> 8), (byte)value);
+            return true;
+        }
+
+        private void UpdateUnderlaySwatch()
+        {
+            Color color;
+            _underlaySwatch.Background = TryUnderlayColor(out color) ?
+                new SolidColorBrush(color) : Brushes.Transparent;
+        }
+
+        private void BeginColorPick()
+        {
+            if (_busy) return;
+            try
+            {
+                _sourcePreview.Source = AiPrintTab.Bitmap(AiSelectionCapture.Capture(2048, 4000000));
+                _samplingColor = true;
+                Report("Нажмите на нужный цвет в превью выделения.", false);
+            }
+            catch (Exception ex) { Report(ex.GetBaseException().Message, true); }
+        }
+
+        private void SampleUnderlayColor(object sender, MouseButtonEventArgs e)
+        {
+            if (!_samplingColor || _busy) return;
+            var image = _sourcePreview.Source as BitmapSource;
+            if (image == null) return;
+            Point point = e.GetPosition(_sourcePreview);
+            double scale = Math.Min(_sourcePreview.ActualWidth / image.PixelWidth,
+                _sourcePreview.ActualHeight / image.PixelHeight);
+            if (scale <= 0) return;
+            double left = (_sourcePreview.ActualWidth - image.PixelWidth * scale) / 2;
+            double top = (_sourcePreview.ActualHeight - image.PixelHeight * scale) / 2;
+            int x = (int)Math.Floor((point.X - left) / scale);
+            int y = (int)Math.Floor((point.Y - top) / scale);
+            if (x < 0 || y < 0 || x >= image.PixelWidth || y >= image.PixelHeight) return;
+            var bgra = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0);
+            byte[] pixel = new byte[4];
+            bgra.CopyPixels(new Int32Rect(x, y, 1, 1), pixel, 4, 0);
+            if (pixel[3] == 0) { Report("Выберите непрозрачный пиксель.", true); return; }
+            _underlayHex.Text = String.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}",
+                pixel[2], pixel[1], pixel[0]);
+            _samplingColor = false;
+            Report("Цвет подложки: " + _underlayHex.Text, false);
+            e.Handled = true;
+        }
+
         private async Task Execute(string key)
         {
             CancellationToken cancellation = _cancellation.Token;
             SetStage("Отправляю изображение…");
-            await Task.Run(() => ReplicateWorkerClient.Run(_lastModel, key, _lastInput,
-                _lastOutput, UpdateProgress, cancellation));
+            if (_lastModel.StartsWith("gpt-image-", StringComparison.Ordinal))
+                await Task.Run(() => OpenAiImageWorkerClient.Run(_lastModel, key, _lastPrompt,
+                    _lastSourcePath, _lastStylePath, _lastOutput, UpdateProgress, cancellation));
+            else
+                await Task.Run(() => ReplicateWorkerClient.Run(_lastModel, key, _lastInput,
+                    _lastOutput, UpdateProgress, cancellation));
             cancellation.ThrowIfCancellationRequested();
             SetStage("Подготавливаю результат…");
             string png = Path.Combine(Path.GetTempPath(), "Vanya-Simple-Ready-" + Guid.NewGuid().ToString("N") + ".png");
@@ -224,6 +608,11 @@ namespace VanyaTools.Native
                 _importWarning = warning;
                 _readyOutput = null; _lastInput = null;
                 try { if (File.Exists(PendingPath())) File.Delete(PendingPath()); } catch { }
+                if (!String.IsNullOrEmpty(_lastSourcePath))
+                    try { File.Delete(_lastSourcePath); } catch { }
+                if (!String.IsNullOrEmpty(_lastStylePath))
+                    try { File.Delete(_lastStylePath); } catch { }
+                _lastSourcePath = _lastStylePath = _lastPrompt = null;
             }
             catch (Exception ex)
             {
@@ -237,8 +626,11 @@ namespace VanyaTools.Native
             if (_busy) return;
             bool ready = !String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput);
             if (!ready && (_lastInput == null || String.IsNullOrEmpty(_lastOutput))) return;
-            string key = ready ? "" : _token();
-            if (!ready && key.Length < 8) { Report("Укажите ключ Replicate.", true); return; }
+            bool openAi = !String.IsNullOrEmpty(_lastModel) &&
+                _lastModel.StartsWith("gpt-image-", StringComparison.Ordinal);
+            string key = ready ? "" : openAi ? CurrentOpenAiKey() : _token();
+            if (!ready && key.Length < 8) { Report(openAi ? "Укажите ключ OpenAI API." :
+                "Укажите ключ Replicate.", true); return; }
             if (!ready && MessageBox.Show("Продолжить запрос? При необходимости будет создан новый платный запуск.",
                 "Vanya Tools", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
             SetBusy(true, ready ? "Вставляю результат…" : "Продолжаю запрос…");
@@ -276,8 +668,13 @@ namespace VanyaTools.Native
         private void SetBusy(bool busy, string stage)
         {
             _busy = busy;
-            _removeButton.IsEnabled = _upscaleButton.IsEnabled = _editButton.IsEnabled = !busy;
-            _model.IsEnabled = _prompt.IsEnabled = !busy;
+            _removeButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
+                _smoothButton.IsEnabled = _pipetteButton.IsEnabled =
+                _editButton.IsEnabled = !busy;
+            _model.IsEnabled = _prompt.IsEnabled = _alphaThreshold.IsEnabled =
+                _edgeRadius.IsEnabled = _edgeExpansion.IsEnabled = _underlayHex.IsEnabled =
+                _openAiKey.IsEnabled = !busy;
+            foreach (var choice in _styleButtons) choice.IsEnabled = !busy;
             _cancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             _cancelButton.IsEnabled = busy;
             _retryButton.Visibility = !busy && ((!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput)) ||
@@ -301,6 +698,41 @@ namespace VanyaTools.Native
         {
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "VanyaTools", "pending-simple-ai-result.txt");
+        }
+
+        private static string OpenAiKeyPath()
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "VanyaTools", "openai-token.bin");
+        }
+
+        private string CurrentOpenAiKey()
+        {
+            if (!String.IsNullOrWhiteSpace(_openAiKey.Password)) return _openAiKey.Password.Trim();
+            try { return Encoding.UTF8.GetString(ProtectedData.Unprotect(
+                File.ReadAllBytes(OpenAiKeyPath()), null, DataProtectionScope.CurrentUser)); }
+            catch { return ""; }
+        }
+
+        private void LoadOpenAiKey()
+        {
+            try { _openAiKey.Password = Encoding.UTF8.GetString(ProtectedData.Unprotect(
+                File.ReadAllBytes(OpenAiKeyPath()), null, DataProtectionScope.CurrentUser)); }
+            catch { }
+        }
+
+        private void SaveOpenAiKey()
+        {
+            try
+            {
+                string key = _openAiKey.Password.Trim();
+                if (key.Length < 8) { Report("Введите ключ OpenAI API.", true); return; }
+                Directory.CreateDirectory(Path.GetDirectoryName(OpenAiKeyPath()));
+                File.WriteAllBytes(OpenAiKeyPath(), ProtectedData.Protect(
+                    Encoding.UTF8.GetBytes(key), null, DataProtectionScope.CurrentUser));
+                Report("Ключ OpenAI сохранён для этого пользователя Windows.", false);
+            }
+            catch (Exception ex) { Report(ex.Message, true); }
         }
 
         private void RestorePending()
