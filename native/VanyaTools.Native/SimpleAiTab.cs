@@ -364,7 +364,7 @@ namespace VanyaTools.Native
                 _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Edge-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
-                await Task.Run(() => SmoothAlphaEdge(source, output, threshold, radius,
+                await Task.Run(() => SmoothBinaryEdge(source, output, threshold, radius,
                     expansion, fill, cancellation), cancellation);
                 cancellation.ThrowIfCancellationRequested();
                 _readyOutput = output;
@@ -379,7 +379,7 @@ namespace VanyaTools.Native
             finally { SetBusy(false, null); }
         }
 
-        private static void SmoothAlphaEdge(string source, string output, int threshold,
+        private static void SmoothBinaryEdge(string source, string output, int threshold,
             int radius, int expansion, Color fill, CancellationToken cancellation)
         {
             BitmapSource input = AiPrintTab.Bitmap(source);
@@ -406,15 +406,17 @@ namespace VanyaTools.Native
             {
                 if ((p & 0xfffff) == 0) cancellation.ThrowIfCancellationRequested();
                 int i = p * 4;
-                if (pixels[i + 3] > 0 && pixels[i + 3] >= threshold)
+                // Blur changes only the outline. The exported alpha remains binary.
+                if (mask[p] < 128)
+                {
+                    pixels[i] = pixels[i + 1] = pixels[i + 2] = pixels[i + 3] = 0;
+                }
+                else if (pixels[i + 3] > 0 && pixels[i + 3] >= threshold)
                     pixels[i + 3] = 255;
                 else
                 {
-                    byte coverage = mask[p];
-                    pixels[i] = coverage == 0 ? (byte)0 : fill.B;
-                    pixels[i + 1] = coverage == 0 ? (byte)0 : fill.G;
-                    pixels[i + 2] = coverage == 0 ? (byte)0 : fill.R;
-                    pixels[i + 3] = coverage;
+                    pixels[i] = fill.B; pixels[i + 1] = fill.G; pixels[i + 2] = fill.R;
+                    pixels[i + 3] = 255;
                 }
             }
             var result = BitmapSource.Create(width, height, input.DpiX, input.DpiY,
