@@ -24,6 +24,26 @@ npm start
 `https://evpmerch.com:9443`; контейнер слушает только `127.0.0.1:4173`
 за Nginx. Локальный `compose.yaml` остаётся для разработки.
 
+## Обновление сервера из GitHub
+
+Код сайта хранится в `main` репозитория `zmienkoivan/corelplugin`. На сервере
+его checkout находится в `/opt/vanya-preview/repo`. Рабочие публикации и ключ
+лежат отдельно в `/opt/vanya-preview/data` и `/opt/vanya-preview/.env.production`.
+Из каталога checkout выполните:
+
+```sh
+sh preview-site/deploy/update-from-git.sh
+```
+
+Скрипт получает `main` с GitHub, принимает только обновление без конфликтов и
+пересобирает только контейнер `vanya-preview`. Docker сам собирает интерфейс из
+исходников Git, поэтому передача архива и установленный Node.js на сервере не
+нужны. Для ручного первоначального размещения checkout:
+
+```sh
+git clone --branch main https://github.com/zmienkoivan/corelplugin.git /opt/vanya-preview/repo
+```
+
 Чистый файл временно передаётся на сервер и удаляется после создания копии
 с водяным знаком. Водяной знак и фрагменты затрудняют использование превью,
 но не исключают снимки экрана.

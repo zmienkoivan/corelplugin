@@ -4,14 +4,14 @@ services:
     ports:
       - "127.0.0.1:4173:4173"
     env_file:
-      - .env.production
+      - ${PREVIEW_ENV_FILE:-.env.production}
     environment:
       PREVIEW_HOST: 0.0.0.0
       PREVIEW_PORT: 4173
       PREVIEW_PUBLIC_URL: https://evpmerch.com:9443
       PREVIEW_DATA_DIR: /app/data
     volumes:
-      - ./data:/app/data
+      - ${PREVIEW_DATA_PATH:-./data}:/app/data
     mem_limit: 1g
     cpus: 1.0
     pids_limit: 128
