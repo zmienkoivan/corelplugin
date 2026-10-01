@@ -67,8 +67,6 @@ function openToken(sealed) {
   return Buffer.concat([decipher.update(Buffer.from(sealed.data, 'hex')), decipher.final()]).toString('utf8');
 }
 const validAdmin = req => safeEqual(req.headers['x-admin-key'], adminKey);
-const xml = value => String(value).replace(/[&<>"']/g, c =>
-  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]);
 const cleanText = (value, limit) => String(value || '').trim().slice(0, limit);
 
 function optionsFromHeader(req) {
@@ -88,17 +86,38 @@ function optionsFromHeader(req) {
   return { title, watermark, recipient, days, opacity, dpi, pin };
 }
 
-function watermarkTile(text, recipient, opacity, width, height) {
-  const tileWidth = Math.min(width, 500);
-  const tileHeight = Math.min(height, 280);
-  const fontSize = Math.max(22, Math.min(48, Math.floor(tileWidth / 12)));
+const watermarkGlyphs = {
+  e: ['00000', '01110', '10001', '11111', '10000', '01111', '00000'],
+  v: ['00000', '10001', '10001', '10001', '01010', '00100', '00000'],
+  p: ['00000', '11110', '10001', '11110', '10000', '10000', '10000'],
+  m: ['00000', '11011', '10101', '10101', '10101', '10101', '00000'],
+  r: ['00000', '10110', '11001', '10000', '10000', '10000', '00000'],
+  c: ['00000', '01111', '10000', '10000', '10000', '01111', '00000'],
+  h: ['10000', '10000', '11110', '10001', '10001', '10001', '00000'],
+  '.': ['00000', '00000', '00000', '00000', '00000', '00100', '00000'],
+  o: ['00000', '01110', '10001', '10001', '10001', '01110', '00000'],
+};
+
+function watermarkTile(text, _recipient, opacity, width, height) {
+  const tileWidth = Math.min(width, 430);
+  const tileHeight = Math.min(height, 220);
+  const letters = [...text.toLowerCase()];
+  const columns = letters.length * 6 - 1;
+  const unit = Math.max(1, Math.min(5, tileWidth * 0.82 / columns, tileHeight * 0.35 / 7));
+  const rectangles = [];
+  letters.forEach((letter, index) => {
+    const rows = watermarkGlyphs[letter];
+    if (!rows) throw new Error(`Unsupported watermark character: ${letter}`);
+    rows.forEach((row, y) => {
+      for (let x = 0; x < row.length; x++) {
+        if (row[x] === '1') rectangles.push(`<rect x="${(index * 6 + x) * unit}" y="${y * unit}" width="${unit}" height="${unit}"/>`);
+      }
+    });
+  });
   return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${tileWidth}" height="${tileHeight}">
-    <g transform="translate(${tileWidth / 2} ${tileHeight / 2}) rotate(-25)" text-anchor="middle"
-       font-family="DejaVu Sans, Arial, sans-serif" font-weight="800" fill="#fff"
-       fill-opacity="${opacity}" stroke="#111827" stroke-opacity="${(opacity * 0.8).toFixed(3)}"
-       stroke-width="2" paint-order="stroke fill">
-      <text y="${Math.round(fontSize * 0.3)}" font-size="${fontSize}">${xml(text)}</text>
-    </g>
+    <g transform="translate(${tileWidth / 2} ${tileHeight / 2}) rotate(-25) translate(${-columns * unit / 2} ${-7 * unit / 2})"
+       fill="#fff" fill-opacity="${opacity}" stroke="#111827" stroke-opacity="${(opacity * 0.8).toFixed(3)}"
+       stroke-width="0.8" paint-order="stroke fill">${rectangles.join('')}</g>
   </svg>`);
 }
 
@@ -181,9 +200,10 @@ async function publish(req, res) {
       .tile({ size: 512, overlap: 0, layout: 'dz' })
       .toFile(path.join(staging, 'image.dz'));
     if (res.destroyed) throw new Error('Клиент отменил публикацию.');
+    const sizeBytes = (await fsp.stat(marked)).size;
     const manifest = {
       id, title: options.title, recipient: options.recipient,
-      width, height, dpi: options.dpi,
+      width, height, dpi: options.dpi, sizeBytes,
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + options.days * 86400000).toISOString(),
       tokenHash: hash(token),
@@ -197,7 +217,7 @@ async function publish(req, res) {
     await fsp.writeFile(path.join(staging, 'preview.json'), JSON.stringify(manifest), { mode: 0o600 });
     await fsp.rename(staging, path.join(previewsRoot, id));
     json(res, 201, { id, link: `${publicUrl}/p/${id}#token=${token}`,
-      width, height, dpi: options.dpi, expiresAt: manifest.expiresAt });
+      width, height, dpi: options.dpi, sizeBytes, expiresAt: manifest.expiresAt });
   } catch (error) {
     await fsp.rm(staging, { recursive: true, force: true });
     if (!res.headersSent && !res.destroyed) json(res, 400, { error: error.message });
@@ -212,10 +232,17 @@ async function listPreviews(res) {
   const found = [];
   for (const id of ids) {
     const entry = await readManifest(id);
-    if (entry && Date.parse(entry.expiresAt) > Date.now()) found.push({ id: entry.id, title: entry.title, recipient: entry.recipient,
-      width: entry.width, height: entry.height, createdAt: entry.createdAt,
-      expiresAt: entry.expiresAt,
-      link: entry.sealedToken ? `${publicUrl}/p/${entry.id}#token=${openToken(entry.sealedToken)}` : null });
+    if (entry && Date.parse(entry.expiresAt) > Date.now()) {
+      let sizeBytes = entry.sizeBytes;
+      if (sizeBytes == null) {
+        try { sizeBytes = (await fsp.stat(path.join(previewsRoot, id, 'marked.png'))).size; }
+        catch { sizeBytes = null; }
+      }
+      found.push({ id: entry.id, title: entry.title, recipient: entry.recipient,
+        width: entry.width, height: entry.height, dpi: entry.dpi, sizeBytes,
+        createdAt: entry.createdAt, expiresAt: entry.expiresAt,
+        link: entry.sealedToken ? `${publicUrl}/p/${entry.id}#token=${openToken(entry.sealedToken)}` : null });
+    }
   }
   json(res, 200, found.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
 }
@@ -270,7 +297,8 @@ const server = http.createServer(async (req, res) => {
     if (detail && req.method === 'GET') {
       const entry = await authorize(req, res, detail[1]);
       if (entry) json(res, 200, { title: entry.title, width: entry.width,
-        height: entry.height, dpi: entry.dpi, expiresAt: entry.expiresAt });
+        height: entry.height, dpi: entry.dpi, sizeBytes: entry.sizeBytes,
+        expiresAt: entry.expiresAt });
       return;
     }
     const tile = pathname.match(/^\/api\/previews\/([0-9a-f-]{36})\/tile\/(\d{1,2})\/(\d{1,5})_(\d{1,5})\.webp$/);

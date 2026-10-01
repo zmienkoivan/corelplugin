@@ -48,7 +48,7 @@ namespace VanyaTools.Native
             _cancel = Button("Отменить", (_, __) => _cancellation?.Cancel());
             _cancel.Visibility = Visibility.Collapsed;
             panel.Children.Add(_cancel);
-            _size = Note("300 DPI по размеру выделения · максимум 70 Мп.");
+            _size = Note("Размер сохраняется. Большие макеты: 150 или 72 DPI.");
             panel.Children.Add(_size);
             _activity = Note("");
             panel.Children.Add(_activity);
@@ -91,16 +91,23 @@ namespace VanyaTools.Native
         {
             if (_busy) return;
             if (!Credentials()) return;
-            const int dpi = 300;
+            int dpi;
             long pixels;
             double widthMm, heightMm;
-            try { pixels = AiSelectionCapture.EstimatePublishPixels(dpi, out widthMm, out heightMm); }
+            long pixels300;
+            try { pixels300 = AiSelectionCapture.EstimatePublishPixels(300, out widthMm, out heightMm); }
             catch (Exception error) { _status(error.Message, true); return; }
+            dpi = pixels300 <= 35000000 && FitsSide(widthMm, heightMm, 300) ? 300
+                : pixels300 <= 70000000 && FitsSide(widthMm, heightMm, 150) ? 150 : 72;
+            pixels = PixelCount(widthMm, heightMm, dpi);
             _size.Text = String.Format(CultureInfo.CurrentCulture,
-                "{0:0} × {1:0} мм · {2:0.0} Мп · 300 DPI{3}", widthMm, heightMm,
-                pixels / 1000000.0, pixels > 35000000 ? " · большой макет" : "");
-            if (pixels > 70000000)
-            { _status("Макет больше 70 Мп. Уменьшите выделение.", true); return; }
+                "{0:0} × {1:0} мм · публикация {2} DPI ({3:0.0} Мп).\n" +
+                "Без сжатия: 300 / 150 / 72 DPI — {4} / {5} / {6} МБ.",
+                widthMm, heightMm, dpi, pixels / 1000000.0,
+                RawSize(widthMm, heightMm, 300), RawSize(widthMm, heightMm, 150),
+                RawSize(widthMm, heightMm, 72));
+            if (pixels > 70000000 || !FitsSide(widthMm, heightMm, dpi))
+            { _status("Макет слишком велик даже при 72 DPI. Уменьшите выделение.", true); return; }
             string title = "Принт";
             try
             {
@@ -123,6 +130,9 @@ namespace VanyaTools.Native
             {
                 source = AiSelectionCapture.CaptureForPublish(dpi);
                 _cancellation.Token.ThrowIfCancellationRequested();
+                long uploadBytes = new FileInfo(source).Length;
+                if (uploadBytes > 350L * 1024 * 1024)
+                    throw new InvalidOperationException("PNG больше 350 МБ. Уменьшите выделение.");
                 _stage = "Отправка изображения";
                 string captured = source, server = _server.Text.Trim(), key = _key.Password;
                 string link = await Task.Run(() => PreviewPublishWorkerClient.Run(server, key,
@@ -163,13 +173,17 @@ namespace VanyaTools.Native
             {
                 string id = Value(item, "id"), link = Value(item, "link");
                 string title = Value(item, "title"), expires = Value(item, "expiresAt");
+                string dpiText = Value(item, "dpi"), bytesText = Value(item, "sizeBytes");
                 DateTime date;
                 string until = DateTime.TryParse(expires, CultureInfo.InvariantCulture,
                     DateTimeStyles.AdjustToUniversal, out date) ? date.ToLocalTime().ToString("dd.MM.yyyy HH:mm") : expires;
                 var row = new StackPanel { Margin = new Thickness(0, 5, 0, 5) };
                 row.Children.Add(new TextBlock { Text = title, TextWrapping = TextWrapping.Wrap,
                     FontSize = 11, FontWeight = FontWeights.SemiBold });
-                row.Children.Add(Note("До " + until));
+                long sizeBytes;
+                string size = Int64.TryParse(bytesText, out sizeBytes) && sizeBytes >= 0
+                    ? FormatFileSize(sizeBytes) : "вес неизвестен";
+                row.Children.Add(Note("Готовый PNG: " + size + " · " + dpiText + " DPI · до " + until));
                 var actions = new System.Windows.Controls.Primitives.UniformGrid { Columns = 3 };
                 actions.Children.Add(Button("Ссылка", (_, __) => Copy(link)));
                 actions.Children.Add(Button("Открыть", (_, __) => Open(link)));
@@ -248,6 +262,19 @@ namespace VanyaTools.Native
 
         private static string Value(Dictionary<string, object> item, string name) =>
             item.ContainsKey(name) ? Convert.ToString(item[name]) : "";
+        private static long PixelCount(double widthMm, double heightMm, int dpi) =>
+            checked((long)Math.Ceiling(widthMm * dpi / 25.4) *
+                (long)Math.Ceiling(heightMm * dpi / 25.4));
+        private static bool FitsSide(double widthMm, double heightMm, int dpi) =>
+            Math.Ceiling(widthMm * dpi / 25.4) <= 20000 &&
+            Math.Ceiling(heightMm * dpi / 25.4) <= 20000;
+        private static string RawSize(double widthMm, double heightMm, int dpi) =>
+            FormatMegabytes(PixelCount(widthMm, heightMm, dpi) * 4);
+        private static string FormatMegabytes(long bytes) =>
+            (bytes / 1048576.0).ToString("0.0", CultureInfo.CurrentCulture);
+        private static string FormatFileSize(long bytes) => bytes < 1048576
+            ? (bytes / 1024.0).ToString("0.0", CultureInfo.CurrentCulture) + " КБ"
+            : FormatMegabytes(bytes) + " МБ";
         private void Copy(string link)
         {
             if (String.IsNullOrWhiteSpace(link)) { _status("Ссылка недоступна.", true); return; }
