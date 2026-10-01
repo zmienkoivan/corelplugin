@@ -378,11 +378,17 @@ namespace VanyaTools.Native
                 string updaterPath = Path.Combine(updaterHome, "VanyaTools.Updater.exe");
                 if (!File.Exists(updaterPath))
                     throw new InvalidOperationException("Updater не найден. Переустановите пакет Vanya Tools версии 1.0.14 или новее.");
+                string corelExecutable = Process.GetCurrentProcess().MainModule.FileName;
+                string programsPath = Path.GetDirectoryName(corelExecutable);
+                if (!String.Equals(Path.GetFileName(corelExecutable), "CorelDRW.exe", StringComparison.OrdinalIgnoreCase) ||
+                    !String.Equals(Path.GetFileName(programsPath), "Programs64", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Не удалось определить папку запущенного CorelDRAW.");
+                string addonsPath = Path.Combine(programsPath, "Addons");
 
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = updaterPath,
-                    Arguments = "--installed-version " + version,
+                    Arguments = "--installed-version " + version + " --corel-addons-path \"" + addonsPath + "\"",
                     WorkingDirectory = updaterHome,
                     UseShellExecute = true
                 };

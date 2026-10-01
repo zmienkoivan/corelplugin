@@ -58,10 +58,20 @@ function Resolve-InstallPath {
         if (-not (Test-Path -LiteralPath $programs64 -PathType Container)) {
             throw "Папка CorelDRAW Programs64 не найдена: $programs64"
         }
+        if (-not (Test-Path -LiteralPath (Join-Path $programs64 "CorelDRW.exe") -PathType Leaf)) {
+            throw "В указанной папке не найден CorelDRW.exe: $programs64"
+        }
         return $fullPath
     }
 
     $installations = @(Find-CorelAddonsPaths)
+    $installedAddons = @($installations | Where-Object {
+        Test-Path -LiteralPath (Join-Path $_.Path "VanyaToolsNative\VanyaTools.Native.dll") -PathType Leaf
+    })
+    if ($installedAddons.Count -eq 1) {
+        Write-Host "Обновляю найденный Vanya Tools: $($installedAddons[0].Product)"
+        return $installedAddons[0].Path
+    }
     if ($installations.Count -eq 1) {
         Write-Host "Найден CorelDRAW: $($installations[0].Product)"
         return $installations[0].Path

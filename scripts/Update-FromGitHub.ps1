@@ -1,6 +1,6 @@
 ﻿#Requires -Version 5.1
 [CmdletBinding()]
-param([switch]$WaitForCorelExit)
+param([switch]$WaitForCorelExit, [string]$CorelAddonsPath)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -63,6 +63,9 @@ try {
     Set-Content -LiteralPath $repoFile -Value $repository -Encoding ASCII
 
     $installerArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"{0}"' -f $installer))
+    if ($CorelAddonsPath) {
+        $installerArgs += @("-CorelAddonsPath", ('"{0}"' -f $CorelAddonsPath))
+    }
     $process = Start-Process -FilePath "powershell.exe" -ArgumentList $installerArgs -Wait -PassThru
     if ($process.ExitCode -ne 0) { throw "Установщик завершился с кодом $($process.ExitCode)." }
 

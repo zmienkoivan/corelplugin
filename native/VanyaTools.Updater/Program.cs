@@ -32,14 +32,17 @@ namespace VanyaTools.Updater
             if (!String.IsNullOrWhiteSpace(installedVersionText) &&
                 !Version.TryParse(installedVersionText, out installedVersion))
                 installedVersion = null;
+            string targetAddonsPath = GetArgument(args, "--corel-addons-path");
             string workDir = Path.Combine(Path.GetTempPath(), "VanyaToolsUpdate-" + Guid.NewGuid().ToString("N"));
             int exitCode = 1;
 
             try
             {
                 ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+                targetAddonsPath = ValidateCorelAddonsPath(targetAddonsPath);
                 string repository = ReadRepository();
                 Console.WriteLine("Vanya Tools — проверка обновления");
+                if (targetAddonsPath != null) Console.WriteLine("Папка текущего CorelDRAW: " + targetAddonsPath);
                 ReleaseInfo release;
                 using (var spinner = new ConsoleSpinner("Проверяю последнюю версию GitHub"))
                     release = GetLatestRelease(repository);
@@ -78,13 +81,14 @@ namespace VanyaTools.Updater
                 Console.WriteLine("Загрузка завершена. Сохраните документы и закройте CorelDRAW.");
 
                 using (var spinner = new ConsoleSpinner("Ожидаю закрытия CorelDRAW для установки"))
-                    while (IsCorelRunning()) Thread.Sleep(2000);
+                    while (IsCorelRunning(targetAddonsPath)) Thread.Sleep(2000);
 
                 Console.WriteLine("CorelDRAW закрыт. Запускаю установщик...");
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = "powershell.exe",
-                    Arguments = "-NoProfile -ExecutionPolicy Bypass -File " + QuoteArgument(installer),
+                    Arguments = "-NoProfile -ExecutionPolicy Bypass -File " + QuoteArgument(installer) +
+                        (targetAddonsPath == null ? "" : " -CorelAddonsPath " + QuoteArgument(targetAddonsPath)),
                     WorkingDirectory = packageDir,
                     UseShellExecute = true,
                     Verb = IsAdministrator() ? "open" : "runas",
@@ -650,6 +654,18 @@ namespace VanyaTools.Updater
             return null;
         }
 
+        private static string ValidateCorelAddonsPath(string value)
+        {
+            if (String.IsNullOrWhiteSpace(value)) return null;
+            string path = Path.GetFullPath(value).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string programsPath = Path.GetDirectoryName(path);
+            if (!String.Equals(Path.GetFileName(path), "Addons", StringComparison.OrdinalIgnoreCase) ||
+                !String.Equals(Path.GetFileName(programsPath), "Programs64", StringComparison.OrdinalIgnoreCase) ||
+                !File.Exists(Path.Combine(programsPath, "CorelDRW.exe")))
+                throw new InvalidDataException("Путь обновления не указывает на Programs64\\Addons запущенного CorelDRAW.");
+            return path;
+        }
+
         private static Version ParseReleaseVersion(string tag)
         {
             Version version;
@@ -715,10 +731,24 @@ namespace VanyaTools.Updater
             throw new InvalidDataException("В последнем GitHub Release нет файла VanyaToolsNative.zip.");
         }
 
-        private static bool IsCorelRunning()
+        private static bool IsCorelRunning(string targetAddonsPath)
         {
             Process[] processes = Process.GetProcessesByName("CorelDRW");
-            try { return processes.Length > 0; }
+            try
+            {
+                if (targetAddonsPath == null) return processes.Length > 0;
+                string targetExe = Path.Combine(Path.GetDirectoryName(targetAddonsPath), "CorelDRW.exe");
+                foreach (Process process in processes)
+                {
+                    try
+                    {
+                        if (String.Equals(process.MainModule.FileName, targetExe, StringComparison.OrdinalIgnoreCase))
+                            return true;
+                    }
+                    catch { return true; }
+                }
+                return false;
+            }
             finally
             {
                 foreach (Process process in processes)
