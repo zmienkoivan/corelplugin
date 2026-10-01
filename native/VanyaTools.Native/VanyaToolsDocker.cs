@@ -93,6 +93,11 @@ namespace VanyaTools.Native
                 Header = "AI-графика",
                 Content = new AiPrintTab(ImportAiResult, (message, isError) => SetStatus(message, isError), CaptureAiSelection)
             });
+            tabs.Items.Add(new TabItem
+            {
+                Header = "Публикация",
+                Content = new PreviewLibraryTab((message, isError) => SetStatus(message, isError))
+            });
             outer.Children.Add(tabs);
             root = standardTools;
 

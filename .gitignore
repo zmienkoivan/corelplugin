@@ -7,3 +7,8 @@ addon/VanyaToolsNative/VanyaTools.Native.dll
 addon/VanyaToolsNative/VanyaTools.Native.pdb
 powershell/VanyaToolsNative/VanyaTools.Native.dll
 release/**
+preview-site/node_modules/
+preview-site/dist/
+preview-site/data/
+preview-site/.env
+preview-site/.env.production

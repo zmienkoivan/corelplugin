@@ -15,6 +15,50 @@ namespace VanyaTools.Native
 
         public static string Capture(int maxDimension = 0, int maxPixels = 32000000)
         {
+            return CaptureCore(CaptureDpi, maxDimension, maxPixels, false);
+        }
+
+        public static int EstimateDefaultCaptureDpi()
+        {
+            dynamic app = CorelApp.Get();
+            dynamic doc = app.ActiveDocument;
+            if (doc == null) throw new InvalidOperationException("Документ не открыт.");
+            dynamic selected = app.ActiveSelectionRange;
+            if (selected == null || Convert.ToInt32(selected.Count) == 0)
+                throw new InvalidOperationException("Объект не выделен.");
+            return ChooseDpi(doc, selected, CaptureDpi, 0, 32000000);
+        }
+
+        public static string CaptureForPublish(int dpi = 300)
+        {
+            if (dpi < 72 || dpi > 300) throw new InvalidOperationException("DPI публикации: от 72 до 300.");
+            return CaptureCore(dpi, 0, 70000000, true);
+        }
+
+        public static long EstimatePublishPixels(int dpi, out double widthMm, out double heightMm)
+        {
+            dynamic app = CorelApp.Get();
+            dynamic doc = app.ActiveDocument;
+            if (doc == null) throw new InvalidOperationException("Сначала откройте документ CorelDRAW.");
+            dynamic selected = app.ActiveSelectionRange;
+            if (selected == null || Convert.ToInt32(selected.Count) == 0)
+                throw new InvalidOperationException("Выделите макет для публикации.");
+            int oldUnit = Convert.ToInt32(doc.Unit);
+            try
+            {
+                doc.Unit = CorelConstants.CdrMillimeter;
+                widthMm = Convert.ToDouble(selected.SizeWidth);
+                heightMm = Convert.ToDouble(selected.SizeHeight);
+                if (widthMm <= 0 || heightMm <= 0 || Double.IsNaN(widthMm) || Double.IsNaN(heightMm))
+                    throw new InvalidOperationException("Не удалось определить размер выделения CorelDRAW.");
+                return checked((long)Math.Ceiling(widthMm * dpi / 25.4) *
+                    (long)Math.Ceiling(heightMm * dpi / 25.4));
+            }
+            finally { doc.Unit = oldUnit; }
+        }
+
+        private static string CaptureCore(int desiredDpi, int maxDimension, int maxPixels, bool exactDpi)
+        {
             dynamic app = CorelApp.Get();
             dynamic doc = app.ActiveDocument;
             if (doc == null) throw new InvalidOperationException("Сначала откройте документ CorelDRAW.");
@@ -61,7 +105,9 @@ namespace VanyaTools.Native
                 if (workingShape == null)
                     throw new InvalidOperationException("Не удалось получить временную копию объекта CorelDRAW.");
                 step = "растрирование копии";
-                int captureDpi = ChooseDpi(doc, workingShape, maxDimension, maxPixels);
+                int captureDpi = ChooseDpi(doc, workingShape, desiredDpi, maxDimension, maxPixels);
+                if (exactDpi && captureDpi != desiredDpi)
+                    throw new InvalidOperationException("Макет слишком велик для экспорта с заданным DPI (предел 70 Мп).");
                 rasterShape = workingShape.ConvertToBitmapEx(
                     CorelConstants.CdrRgbColorImage,
                     true,  // transparent background
@@ -75,7 +121,7 @@ namespace VanyaTools.Native
                 // Read the bitmap tiles directly. Corel export filters can return E_FAIL
                 // even after rasterisation succeeds; WPF writes the PNG instead.
                 step = "чтение пикселей и сохранение PNG";
-                WritePng(rasterShape.Bitmap, path, captureDpi);
+                WritePng(rasterShape.Bitmap, path, captureDpi, maxPixels);
                 if (!File.Exists(path) || new FileInfo(path).Length == 0)
                     throw new InvalidOperationException("CorelDRAW не создал PNG выделения.");
                 return path;
@@ -107,7 +153,7 @@ namespace VanyaTools.Native
             }
         }
 
-        private static int ChooseDpi(dynamic doc, dynamic shape, int maxDimension, int maxPixels)
+        private static int ChooseDpi(dynamic doc, dynamic shape, int desiredDpi, int maxDimension, int maxPixels)
         {
             int oldUnit = Convert.ToInt32(doc.Unit);
             try
@@ -117,25 +163,25 @@ namespace VanyaTools.Native
                 double heightMm = Convert.ToDouble(shape.SizeHeight);
                 if (widthMm <= 0 || heightMm <= 0 || Double.IsNaN(widthMm) || Double.IsNaN(heightMm))
                     throw new InvalidOperationException("Не удалось определить размер выделения CorelDRAW.");
-                double widthPx = widthMm * CaptureDpi / 25.4;
-                double heightPx = heightMm * CaptureDpi / 25.4;
+                double widthPx = widthMm * desiredDpi / 25.4;
+                double heightPx = heightMm * desiredDpi / 25.4;
                 double scale = 1.0;
                 if (maxDimension > 0) scale = Math.Min(scale, maxDimension / Math.Max(widthPx, heightPx));
                 if (maxPixels > 0) scale = Math.Min(scale, Math.Sqrt(maxPixels / (widthPx * heightPx)));
                 if (scale < 1.0) scale *= 0.97; // Room for Corel's edge rounding and anti-aliasing.
-                return Math.Max(1, Math.Min(CaptureDpi, (int)Math.Floor(CaptureDpi * scale)));
+                return Math.Max(1, Math.Min(desiredDpi, (int)Math.Floor(desiredDpi * scale)));
             }
             finally { doc.Unit = oldUnit; }
         }
 
-        private static void WritePng(dynamic bitmap, string path, int captureDpi)
+        private static void WritePng(dynamic bitmap, string path, int captureDpi, int maxPixels)
         {
             dynamic colorImage = bitmap.Image;
             if (colorImage == null)
                 throw new InvalidOperationException("CorelDRAW не вернул цветовые пиксели растра.");
             int width = Convert.ToInt32(colorImage.Width);
             int height = Convert.ToInt32(colorImage.Height);
-            if (width <= 0 || height <= 0 || (long)width * height > 32000000)
+            if (width <= 0 || height <= 0 || (long)width * height > maxPixels)
                 throw new InvalidOperationException("Размер выделения слишком велик для обработки. Выделите только нужную графику.");
 
             dynamic alphaImage = null;

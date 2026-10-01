@@ -22,6 +22,8 @@ namespace VanyaTools.Updater
                 return RunReplicateWorker();
             if (args != null && args.Length == 1 && args[0] == "--openai-image-worker")
                 return OpenAiImageWorker.Run();
+            if (args != null && args.Length == 1 && args[0] == "--preview-publish-worker")
+                return PreviewPublishWorker.Run();
 
             Console.OutputEncoding = Encoding.UTF8;
             string installedVersionText = GetArgument(args, "--installed-version");

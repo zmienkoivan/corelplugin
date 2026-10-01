@@ -1,0 +1,10 @@
+services:
+  preview:
+    build: .
+    ports:
+      - "127.0.0.1:4173:4173"
+    environment:
+      PREVIEW_PUBLIC_URL: http://127.0.0.1:4173
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

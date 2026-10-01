@@ -29,6 +29,7 @@ namespace VanyaTools.Native
         private readonly TextBox _edgeRadius, _edgeExpansion, _underlayHex;
         private readonly PasswordBox _openAiKey;
         private readonly Border _underlaySwatch;
+        private readonly TextBlock _edgeUnits;
         private readonly Image _sourcePreview, _resultPreview;
         private readonly TextBlock _progress;
         private readonly ProgressBar _progressBar;
@@ -88,28 +89,32 @@ namespace VanyaTools.Native
             alphaRow.Children.Add(_alphaThreshold);
             panel.Children.Add(alphaRow);
 
-            var edgeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 5) };
+            var edgeRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 3) };
             _smoothButton = Button("Сгладить край", async (_, __) => await SmoothEdge());
             edgeRow.Children.Add(_smoothButton);
-            edgeRow.Children.Add(new TextBlock { Text = "Радиус, px", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
-            _edgeRadius = new TextBox { Text = "2", Width = 28, FontSize = 11, Margin = new Thickness(3, 0, 5, 0) };
+            edgeRow.Children.Add(new TextBlock { Text = "Радиус px", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
+            _edgeRadius = new TextBox { Text = "2", Width = 30, FontSize = 11, Margin = new Thickness(3, 0, 6, 0) };
             edgeRow.Children.Add(_edgeRadius);
-            edgeRow.Children.Add(new TextBlock { Text = "Расширить, px", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
-            _edgeExpansion = new TextBox { Text = "0", Width = 28, FontSize = 11, Margin = new Thickness(3, 0, 0, 0) };
+            edgeRow.Children.Add(new TextBlock { Text = "Обводка px", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
+            _edgeExpansion = new TextBox { Text = "0", Width = 30, FontSize = 11, Margin = new Thickness(3, 0, 6, 0) };
             edgeRow.Children.Add(_edgeExpansion);
-            panel.Children.Add(edgeRow);
-            var colorRow = new StackPanel { Orientation = Orientation.Horizontal };
-            colorRow.Children.Add(new TextBlock { Text = "Подложка", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
+            edgeRow.Children.Add(new TextBlock { Text = "Цвет", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
             _underlayHex = new TextBox { Text = "#FFFFFF", Width = 72, FontSize = 11,
                 Margin = new Thickness(5, 0, 2, 0) };
-            colorRow.Children.Add(_underlayHex);
+            edgeRow.Children.Add(_underlayHex);
             _underlaySwatch = new Border { Width = 18, Height = 18, Background = Brushes.White,
                 BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Margin = new Thickness(2) };
-            colorRow.Children.Add(_underlaySwatch);
+            edgeRow.Children.Add(_underlaySwatch);
             _pipetteButton = Button("Пипетка", (_, __) => BeginColorPick());
-            colorRow.Children.Add(_pipetteButton);
+            edgeRow.Children.Add(_pipetteButton);
             _underlayHex.TextChanged += (_, __) => UpdateUnderlaySwatch();
-            panel.Children.Add(colorRow);
+            panel.Children.Add(edgeRow);
+            _edgeUnits = Note("");
+            panel.Children.Add(_edgeUnits);
+            _edgeRadius.TextChanged += (_, __) => UpdateEdgeUnits();
+            _edgeExpansion.TextChanged += (_, __) => UpdateEdgeUnits();
+            edgeRow.MouseEnter += (_, __) => UpdateEdgeUnits();
+            UpdateEdgeUnits();
 
             var previews = new UniformGrid { Columns = 2 };
             previews.Children.Add(Preview("Выделение", out _sourcePreview));
@@ -341,6 +346,24 @@ namespace VanyaTools.Native
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(result));
             using (var stream = File.Create(output)) encoder.Save(stream);
+        }
+
+        private void UpdateEdgeUnits()
+        {
+            if (_edgeUnits == null) return;
+            int radius, expansion;
+            if (!Int32.TryParse(_edgeRadius.Text, out radius) ||
+                !Int32.TryParse(_edgeExpansion.Text, out expansion))
+            { _edgeUnits.Text = "Введите радиус и обводку в пикселях."; return; }
+            try
+            {
+                int dpi = AiSelectionCapture.EstimateDefaultCaptureDpi();
+                double mmPerPixel = 25.4 / dpi;
+                _edgeUnits.Text = String.Format(CultureInfo.CurrentCulture,
+                    "Радиус ≈ {0:0.00} мм · обводка ≈ {1:0.00} мм · {2} DPI",
+                    radius * mmPerPixel, expansion * mmPerPixel, dpi);
+            }
+            catch { _edgeUnits.Text = "Выделите объект для расчёта мм."; }
         }
 
         private async Task SmoothEdge()
