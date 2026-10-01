@@ -3,8 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Security.Cryptography;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -27,7 +25,6 @@ namespace VanyaTools.Native
         private readonly TextBox _prompt;
         private readonly TextBox _alphaThreshold;
         private readonly TextBox _edgeRadius, _edgeExpansion, _underlayHex;
-        private readonly PasswordBox _openAiKey;
         private readonly Border _underlaySwatch;
         private readonly TextBlock _edgeUnits;
         private readonly Image _sourcePreview, _resultPreview;
@@ -43,7 +40,6 @@ namespace VanyaTools.Native
         private string _stage, _lastModel, _lastOutput, _readyOutput;
         private string _importWarning;
         private Dictionary<string, object> _lastInput;
-        private string _lastSourcePath, _lastStylePath, _lastPrompt;
         private StyleChoice _selectedStyle;
         private bool _samplingColor;
 
@@ -137,18 +133,11 @@ namespace VanyaTools.Native
             panel.Children.Add(Button("Свой промпт без образца стиля", (_, __) => ClearStyle()));
             panel.Children.Add(Label("Модель", false));
             _model = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 5) };
-            _model.Items.Add(new ModelChoice("gpt-image-2.5-sunburst", "OpenAI · GPT Image 2.5 Sunburst", 0m));
-            _model.Items.Add(new ModelChoice("gpt-image-2.5-flare", "OpenAI · GPT Image 2.5 Flare", 0m));
             _model.Items.Add(new ModelChoice("black-forest-labs/flux-2-pro", "FLUX.2 Pro", 0.14m));
             _model.Items.Add(new ModelChoice("black-forest-labs/flux-kontext-max", "FLUX.1 Kontext Max", 0.08m));
             _model.Items.Add(new ModelChoice("qwen/qwen-image-edit", "Qwen Image Edit", 0.03m));
             _model.SelectedIndex = 0;
             panel.Children.Add(_model);
-            panel.Children.Add(Label("Ключ OpenAI API · для моделей OpenAI", false));
-            _openAiKey = new PasswordBox { Margin = new Thickness(0, 0, 0, 3) };
-            LoadOpenAiKey();
-            panel.Children.Add(_openAiKey);
-            panel.Children.Add(Button("Сохранить ключ OpenAI", (_, __) => SaveOpenAiKey()));
             panel.Children.Add(Label("Промпт", false));
             _prompt = new TextBox { MinHeight = 75, MaxHeight = 160, AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 11 };
@@ -210,18 +199,6 @@ namespace VanyaTools.Native
             }
         }
 
-        private static string SaveStyleReference(string asset)
-        {
-            string resource = "VanyaTools.Native.Assets.styles." + asset + ".png";
-            string path = Path.Combine(Path.GetTempPath(), "Vanya-Style-" + Guid.NewGuid().ToString("N") + ".png");
-            using (Stream source = typeof(SimpleAiTab).Assembly.GetManifestResourceStream(resource))
-            {
-                if (source == null) throw new InvalidDataException("Не найден образец стиля: " + asset);
-                using (Stream output = File.Create(path)) source.CopyTo(output);
-            }
-            return path;
-        }
-
         private async Task Run(string action)
         {
             if (_busy) return;
@@ -233,13 +210,10 @@ namespace VanyaTools.Native
             if (action == "edit" && prompt.Length == 0) { Report("Выберите стиль или введите промпт.", true); return; }
             string model = action == "background" ? "bria/remove-background" :
                 action == "upscale" ? TiledUpscaler : selectedModel.Id;
-            bool openAi = model.StartsWith("gpt-image-", StringComparison.Ordinal);
-            string key = openAi ? CurrentOpenAiKey() : _token();
-            if (key.Length < 8) { Report(openAi ? "Укажите ключ OpenAI API ниже." :
-                "Укажите ключ Replicate во вкладке «AI-графика».", true); return; }
+            string key = _token();
+            if (key.Length < 8) { Report("Укажите ключ Replicate во вкладке «AI-графика».", true); return; }
             decimal cost = action == "background" ? 0.018m : action == "upscale" ? 0.006m : selectedModel.EstimatedCost;
-            string price = openAi ? "Платный запрос OpenAI. Цена зависит от размера и качества изображения." :
-                "Платный запрос Replicate · ориентировочно $" +
+            string price = "Платный запрос Replicate · ориентировочно $" +
                 cost.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) + ".";
             if (MessageBox.Show(price + " Продолжить?", "Vanya Tools", MessageBoxButton.YesNo,
                 MessageBoxImage.Information) != MessageBoxResult.Yes) return;
@@ -263,14 +237,6 @@ namespace VanyaTools.Native
                 else if (action == "upscale")
                     input = new Dictionary<string, object> { ["img"] = image,
                         ["scale"] = 2, ["tile"] = 200, ["version"] = "General - v3", ["face_enhance"] = false };
-                else if (openAi)
-                {
-                    _lastSourcePath = LocalImage(image);
-                    _lastStylePath = _selectedStyle == null ? null : SaveStyleReference(_selectedStyle.Asset);
-                    _lastPrompt = prompt + (_lastStylePath == null ? "" :
-                        " Use image 1 for the subject and composition. Use image 2 only as a visual style reference. Do not copy its people, text, logos, or objects.");
-                    input = new Dictionary<string, object> { ["prompt"] = _lastPrompt };
-                }
                 else input = PrintRestorationPipeline.ImageInput(model, image, prompt);
                 _lastModel = model; _lastInput = input;
                 _lastOutput = Path.Combine(Path.GetTempPath(), "Vanya-Simple-AI-" + Guid.NewGuid().ToString("N") + ".png");
@@ -278,20 +244,8 @@ namespace VanyaTools.Native
                 ReportOutcome();
             }
             catch (OperationCanceledException) { Report("Операция отменена.", false); }
-            catch (Exception ex) { Log.Error("Simple AI operation failed.", ex); Report(ex.GetBaseException().Message, true); }
+            catch (Exception ex) { Log.Error("Simple AI operation failed.", ex); Report(ex.Message, true); }
             finally { SetBusy(false, null); }
-        }
-
-        private static string LocalImage(string data)
-        {
-            const string filePrefix = "replicate-file:";
-            if (data.StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase)) return data.Substring(filePrefix.Length);
-            int comma = data.IndexOf(',');
-            if (comma < 0 || !data.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("Не удалось подготовить PNG для OpenAI.");
-            string path = Path.Combine(Path.GetTempPath(), "Vanya-OpenAI-Input-" + Guid.NewGuid().ToString("N") + ".png");
-            File.WriteAllBytes(path, Convert.FromBase64String(data.Substring(comma + 1)));
-            return path;
         }
 
         private async Task RemoveSemiTransparent()
@@ -599,12 +553,8 @@ namespace VanyaTools.Native
         {
             CancellationToken cancellation = _cancellation.Token;
             SetStage("Отправляю изображение…");
-            if (_lastModel.StartsWith("gpt-image-", StringComparison.Ordinal))
-                await Task.Run(() => OpenAiImageWorkerClient.Run(_lastModel, key, _lastPrompt,
-                    _lastSourcePath, _lastStylePath, _lastOutput, UpdateProgress, cancellation));
-            else
-                await Task.Run(() => ReplicateWorkerClient.Run(_lastModel, key, _lastInput,
-                    _lastOutput, UpdateProgress, cancellation));
+            await Task.Run(() => ReplicateWorkerClient.Run(_lastModel, key, _lastInput,
+                _lastOutput, UpdateProgress, cancellation));
             cancellation.ThrowIfCancellationRequested();
             SetStage("Подготавливаю результат…");
             string png = Path.Combine(Path.GetTempPath(), "Vanya-Simple-Ready-" + Guid.NewGuid().ToString("N") + ".png");
@@ -633,11 +583,6 @@ namespace VanyaTools.Native
                 _importWarning = warning;
                 _readyOutput = null; _lastInput = null;
                 try { if (File.Exists(PendingPath())) File.Delete(PendingPath()); } catch { }
-                if (!String.IsNullOrEmpty(_lastSourcePath))
-                    try { File.Delete(_lastSourcePath); } catch { }
-                if (!String.IsNullOrEmpty(_lastStylePath))
-                    try { File.Delete(_lastStylePath); } catch { }
-                _lastSourcePath = _lastStylePath = _lastPrompt = null;
             }
             catch (Exception ex)
             {
@@ -651,11 +596,8 @@ namespace VanyaTools.Native
             if (_busy) return;
             bool ready = !String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput);
             if (!ready && (_lastInput == null || String.IsNullOrEmpty(_lastOutput))) return;
-            bool openAi = !String.IsNullOrEmpty(_lastModel) &&
-                _lastModel.StartsWith("gpt-image-", StringComparison.Ordinal);
-            string key = ready ? "" : openAi ? CurrentOpenAiKey() : _token();
-            if (!ready && key.Length < 8) { Report(openAi ? "Укажите ключ OpenAI API." :
-                "Укажите ключ Replicate.", true); return; }
+            string key = ready ? "" : _token();
+            if (!ready && key.Length < 8) { Report("Укажите ключ Replicate.", true); return; }
             if (!ready && MessageBox.Show("Продолжить запрос? При необходимости будет создан новый платный запуск.",
                 "Vanya Tools", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
             SetBusy(true, ready ? "Вставляю результат…" : "Продолжаю запрос…");
@@ -667,7 +609,7 @@ namespace VanyaTools.Native
                 ReportOutcome();
             }
             catch (OperationCanceledException) { Report("Операция отменена.", false); }
-            catch (Exception ex) { Log.Error("Simple AI retry failed.", ex); Report(ex.GetBaseException().Message, true); }
+            catch (Exception ex) { Log.Error("Simple AI retry failed.", ex); Report(ex.Message, true); }
             finally { SetBusy(false, null); }
         }
 
@@ -697,8 +639,7 @@ namespace VanyaTools.Native
                 _smoothButton.IsEnabled = _pipetteButton.IsEnabled =
                 _editButton.IsEnabled = !busy;
             _model.IsEnabled = _prompt.IsEnabled = _alphaThreshold.IsEnabled =
-                _edgeRadius.IsEnabled = _edgeExpansion.IsEnabled = _underlayHex.IsEnabled =
-                _openAiKey.IsEnabled = !busy;
+                _edgeRadius.IsEnabled = _edgeExpansion.IsEnabled = _underlayHex.IsEnabled = !busy;
             foreach (var choice in _styleButtons) choice.IsEnabled = !busy;
             _cancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             _cancelButton.IsEnabled = busy;
@@ -723,41 +664,6 @@ namespace VanyaTools.Native
         {
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "VanyaTools", "pending-simple-ai-result.txt");
-        }
-
-        private static string OpenAiKeyPath()
-        {
-            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "VanyaTools", "openai-token.bin");
-        }
-
-        private string CurrentOpenAiKey()
-        {
-            if (!String.IsNullOrWhiteSpace(_openAiKey.Password)) return _openAiKey.Password.Trim();
-            try { return Encoding.UTF8.GetString(ProtectedData.Unprotect(
-                File.ReadAllBytes(OpenAiKeyPath()), null, DataProtectionScope.CurrentUser)); }
-            catch { return ""; }
-        }
-
-        private void LoadOpenAiKey()
-        {
-            try { _openAiKey.Password = Encoding.UTF8.GetString(ProtectedData.Unprotect(
-                File.ReadAllBytes(OpenAiKeyPath()), null, DataProtectionScope.CurrentUser)); }
-            catch { }
-        }
-
-        private void SaveOpenAiKey()
-        {
-            try
-            {
-                string key = _openAiKey.Password.Trim();
-                if (key.Length < 8) { Report("Введите ключ OpenAI API.", true); return; }
-                Directory.CreateDirectory(Path.GetDirectoryName(OpenAiKeyPath()));
-                File.WriteAllBytes(OpenAiKeyPath(), ProtectedData.Protect(
-                    Encoding.UTF8.GetBytes(key), null, DataProtectionScope.CurrentUser));
-                Report("Ключ OpenAI сохранён для этого пользователя Windows.", false);
-            }
-            catch (Exception ex) { Report(ex.Message, true); }
         }
 
         private void RestorePending()

@@ -9,7 +9,7 @@ const apiError = async response => {
 };
 
 function Logo() {
-  return <div className="brand"><span className="brand-mark">V</span><span>VANYA<span className="brand-light">/</span>PREVIEW</span></div>;
+  return <div className="brand"><span className="brand-mark">Е</span><span>Ель Мерч<span className="brand-light"> / </span>Превью</span></div>;
 }
 
 function Button({ children, variant = 'secondary', ...props }) {
@@ -25,6 +25,10 @@ function toBase64Url(value) {
 
 function date(value) {
   return new Date(value).toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function centimeters(pixels, dpi) {
+  return (pixels * 2.54 / dpi).toLocaleString('ru-RU', { maximumFractionDigits: 1 });
 }
 
 function Publisher() {
@@ -159,6 +163,9 @@ function PreviewViewer({ id }) {
   const [error, setError] = useState('');
   const [needPin, setNeedPin] = useState(false);
   const [zoom, setZoom] = useState(0);
+  const [tilesLoading, setTilesLoading] = useState(true);
+  const [backdrop, setBackdrop] = useState('checks');
+  const [backdropColor, setBackdropColor] = useState('#668a80');
   const [copied, setCopied] = useState(false);
   const elementRef = useRef(null);
   const viewerRef = useRef(null);
@@ -190,7 +197,8 @@ function PreviewViewer({ id }) {
         getTileUrl: (level, x, y) => `/api/previews/${id}/tile/${level}/${x}_${y}.webp` },
     });
     viewer.addHandler('zoom', () => setZoom(Math.round(viewer.viewport.viewportToImageZoom(viewer.viewport.getZoom()) * 100)));
-    viewer.addHandler('open', () => setZoom(Math.round(viewer.viewport.viewportToImageZoom(viewer.viewport.getZoom()) * 100)));
+    viewer.addHandler('open', () => { setTilesLoading(true); setZoom(Math.round(viewer.viewport.viewportToImageZoom(viewer.viewport.getZoom()) * 100)); });
+    viewer.addHandler('fully-loaded-change', event => setTilesLoading(!event.fullyLoaded));
     viewerRef.current = viewer;
     return () => { viewer.destroy(); viewerRef.current = null; };
   }, [meta, token, pin, id]);
@@ -202,17 +210,26 @@ function PreviewViewer({ id }) {
 
   return <div className="viewer-page">
     <header className="viewer-header"><Logo /><div className="viewer-header-title"><strong>{meta?.title || 'Защищённое превью'}</strong><span>{meta ? `${meta.width} × ${meta.height} px · ${meta.dpi} DPI` : 'Загрузка…'}</span></div><Button onClick={copy}>{copied ? 'Ссылка скопирована' : 'Поделиться ссылкой'}</Button></header>
-    <div className="viewer-stage">
+    <div className={`viewer-stage viewer-stage-${backdrop}`}
+      style={backdrop === 'custom' ? { background: backdropColor } : undefined}>
       {meta ? <div ref={elementRef} className="deep-zoom" /> : <div className="viewer-wait">{needPin ? <form onSubmit={e => { e.preventDefault(); const entered = e.currentTarget.elements.pin.value; setPin(entered); }}><span className="lock-icon">↳</span><h1>Доступ по PIN</h1><p>Введите код, полученный вместе со ссылкой.</p><input name="pin" type="password" inputMode="numeric" autoFocus placeholder="PIN" /><Button variant="primary" type="submit">Открыть превью</Button></form> : <div><span className="loading-ring"/><p>{error || 'Загружаю превью…'}</p></div>}</div>}
+      {meta && <><div className="dimension-label dimension-top">Ширина {centimeters(meta.width, meta.dpi)} см</div>
+        <div className="dimension-label dimension-side">Высота {centimeters(meta.height, meta.dpi)} см</div>
+        {tilesLoading && <div className="tile-loading"><span className="loading-ring"/><span>Загружаю фрагменты…</span></div>}</>}
     </div>
-    {meta && <div className="viewer-controls"><div className="viewer-hint">Колесо мыши или жест двумя пальцами — масштаб</div><div className="zoom-actions"><Button onClick={() => zoomBy(1 / 1.4)}>−</Button><span>{zoom}%</span><Button onClick={() => zoomBy(1.4)}>+</Button><Button onClick={zoomOne}>1:1</Button><Button onClick={home}>Вписать</Button></div><div className="viewer-expiry">Доступ до {date(meta.expiresAt)}</div></div>}
+    {meta && <div className="viewer-controls"><div className="backdrop-actions"><span>Фон</span>
+      <button className={backdrop === 'checks' ? 'active' : ''} onClick={() => setBackdrop('checks')}>Шашки</button>
+      <button className={backdrop === 'dark' ? 'active' : ''} onClick={() => setBackdrop('dark')}>Тёмный</button>
+      <button className={backdrop === 'light' ? 'active' : ''} onClick={() => setBackdrop('light')}>Светлый</button>
+      <label className={backdrop === 'custom' ? 'active' : ''} onClick={() => setBackdrop('custom')}>Свой <input type="color" value={backdropColor} onChange={e => { setBackdropColor(e.target.value); setBackdrop('custom'); }} /></label>
+    </div><div className="zoom-actions"><Button onClick={() => zoomBy(1 / 1.4)}>−</Button><span>{zoom}%</span><Button onClick={() => zoomBy(1.4)}>+</Button><Button onClick={zoomOne}>1:1</Button><Button onClick={home}>Вписать</Button></div><div className="viewer-expiry">Доступ до {date(meta.expiresAt)}</div></div>}
   </div>;
 }
 
 function VisitorHome() {
   return <div className="viewer-page"><header className="viewer-header"><Logo /></header>
     <div className="viewer-wait"><div><h1>Просмотр превью</h1>
-      <p>Откройте ссылку, созданную в Vanya Tools для CorelDRAW.</p></div></div></div>;
+      <p>Откройте ссылку на опубликованный макет.</p></div></div></div>;
 }
 
 const match = location.pathname.match(/^\/p\/([0-9a-f-]{36})$/);

@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Net;
+using System.Net.Sockets;
 using System.Security.Principal;
 using System.Text;
 using System.Threading;
@@ -234,15 +235,18 @@ namespace VanyaTools.Updater
                 var body = new Dictionary<string, object> { ["input"] = input };
                 if (versionedModel) body["version"] = model;
                 byte[] bytes = Encoding.UTF8.GetBytes(serializer.Serialize(body));
-                using (var stream = request.GetRequestStream())
+                try
                 {
-                    // A connection failure before obtaining the request stream
-                    // cannot have submitted a paid prediction. Mark it only when
-                    // the request body is about to be written.
-                    File.WriteAllText(outputPath + ".submitted", "sent");
-                    stream.Write(bytes, 0, bytes.Length);
+                    using (var stream = request.GetRequestStream())
+                    {
+                        // A connection failure before obtaining the request stream
+                        // cannot have submitted a paid prediction. Mark it only when
+                        // the request body is about to be written.
+                        File.WriteAllText(outputPath + ".submitted", "sent");
+                        stream.Write(bytes, 0, bytes.Length);
+                    }
+                    result = ReadJson(request, serializer);
                 }
-                try { result = ReadJson(request, serializer); }
                 catch (ReplicateApiException ex)
                 {
                     // A definite rejection may be retried; an ambiguous response must not
@@ -250,6 +254,13 @@ namespace VanyaTools.Updater
                     if (ex.StatusCode >= 400 && ex.StatusCode < 500 && ex.StatusCode != 408)
                         File.Delete(outputPath + ".submitted");
                     throw;
+                }
+                catch (Exception ex) when (IsTransientNetworkError(ex))
+                {
+                    bool submitted = File.Exists(outputPath + ".submitted");
+                    throw new InvalidOperationException(submitted
+                        ? "Соединение оборвалось при создании запроса. Сервер мог принять платный запуск; автоматический дубль заблокирован. Проверьте запрос в Replicate."
+                        : "Соединение оборвалось до отправки запроса. Нажмите «Повторить запрос».", ex);
                 }
                 SavePrediction(statePath, result, serializer);
                 LogWorker("Prediction create returned status=" + Convert.ToString(result["status"]) + " after " + requestTimer.ElapsedMilliseconds + " ms.");
@@ -332,11 +343,15 @@ namespace VanyaTools.Updater
                     poll.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
                     return ReadJson(poll, serializer);
                 }
-                catch (WebException ex) when (attempt < 4 && IsTransientNetworkError(ex))
+                catch (Exception ex) when (attempt < 4 && IsTransientNetworkError(ex))
                 {
-                    LogWorker("Prediction status attempt " + attempt + "/4 failed: " + ex.Status + ". Retrying the same prediction.");
+                    LogWorker("Prediction status attempt " + attempt + "/4 failed: " + ex.GetType().Name + ". Retrying the same prediction.");
                     ReportWorkerProgress("retrying-status");
                     Thread.Sleep(attempt * 2000);
+                }
+                catch (Exception ex) when (IsTransientNetworkError(ex))
+                {
+                    throw new InvalidOperationException("Связь оборвалась при проверке запроса. Нажмите «Повторить запрос»: продолжится тот же запуск без новой оплаты.", ex);
                 }
             }
             throw new InvalidOperationException("Не удалось получить статус запроса Replicate.");
@@ -419,9 +434,9 @@ namespace VanyaTools.Updater
             {
                 if (File.Exists(cancelPath)) throw new OperationCanceledException("Операция отменена до загрузки изображения.");
                 try { return UploadReplicateFileOnce(token, content, filename, contentType, serializer); }
-                catch (WebException ex) when (attempt < 4 && IsTransientNetworkError(ex))
+                catch (Exception ex) when (attempt < 4 && IsTransientNetworkError(ex))
                 {
-                    LogWorker("Input upload attempt " + attempt + "/4 failed: " + ex.Status + ". Retrying without submitting a prediction.");
+                    LogWorker("Input upload attempt " + attempt + "/4 failed: " + ex.GetType().Name + ". Retrying without submitting a prediction.");
                     ReportWorkerProgress("retrying-upload");
                     int delayMs = attempt * 2000;
                     for (int waited = 0; waited < delayMs; waited += 250)
@@ -430,7 +445,7 @@ namespace VanyaTools.Updater
                         Thread.Sleep(250);
                     }
                 }
-                catch (WebException ex) when (IsTransientNetworkError(ex))
+                catch (Exception ex) when (IsTransientNetworkError(ex))
                 {
                     throw new InvalidOperationException("Не удалось загрузить входной фрагмент в Replicate после нескольких попыток. Готовые этапы сохранены; нажмите «Продолжить» позже.", ex);
                 }
@@ -489,6 +504,7 @@ namespace VanyaTools.Updater
             var request = (HttpWebRequest)WebRequest.Create(url);
             request.Timeout = 60000;
             request.ReadWriteTimeout = 60000;
+            request.KeepAlive = false;
             try
             {
                 IWebProxy proxy = WebRequest.GetSystemWebProxy();
@@ -562,9 +578,9 @@ namespace VanyaTools.Updater
                     LogWorker("Output downloaded in " + timer.ElapsedMilliseconds + " ms; bytes=" + size + ".");
                     return;
                 }
-                catch (WebException ex) when (attempt < 4 && IsTransientNetworkError(ex))
+                catch (Exception ex) when (attempt < 4 && IsTransientNetworkError(ex))
                 {
-                    LogWorker("Output download attempt " + attempt + "/4 failed: " + ex.Status + ". Retrying the same finished prediction.");
+                    LogWorker("Output download attempt " + attempt + "/4 failed: " + ex.GetType().Name + ". Retrying the same finished prediction.");
                     ReportWorkerProgress("retrying-download");
                     int delayMs = attempt * 2000;
                     for (int waited = 0; waited < delayMs; waited += 250)
@@ -573,7 +589,7 @@ namespace VanyaTools.Updater
                         Thread.Sleep(250);
                     }
                 }
-                catch (WebException ex) when (IsTransientNetworkError(ex))
+                catch (Exception ex) when (IsTransientNetworkError(ex))
                 {
                     throw new InvalidOperationException("Не удалось скачать готовый результат Replicate после нескольких попыток. Новый запрос к модели не нужен; нажмите «Продолжить» позже.", ex);
                 }
@@ -581,15 +597,30 @@ namespace VanyaTools.Updater
             }
         }
 
-        private static bool IsTransientNetworkError(WebException error)
+        private static bool IsTransientNetworkError(Exception error)
         {
-            if (error.Status == WebExceptionStatus.ConnectFailure || error.Status == WebExceptionStatus.Timeout ||
-                error.Status == WebExceptionStatus.ReceiveFailure || error.Status == WebExceptionStatus.SendFailure ||
-                error.Status == WebExceptionStatus.ConnectionClosed || error.Status == WebExceptionStatus.KeepAliveFailure ||
-                error.Status == WebExceptionStatus.NameResolutionFailure) return true;
-            var response = error.Response as HttpWebResponse;
-            return response != null && ((int)response.StatusCode >= 500 ||
-                response.StatusCode == HttpStatusCode.RequestTimeout || (int)response.StatusCode == 429);
+            var api = error as ReplicateApiException;
+            if (api != null) return api.StatusCode >= 500 || api.StatusCode == 408 || api.StatusCode == 429;
+            var web = error as WebException;
+            if (web != null)
+            {
+                if (web.Status == WebExceptionStatus.ConnectFailure || web.Status == WebExceptionStatus.Timeout ||
+                    web.Status == WebExceptionStatus.ReceiveFailure || web.Status == WebExceptionStatus.SendFailure ||
+                    web.Status == WebExceptionStatus.ConnectionClosed || web.Status == WebExceptionStatus.KeepAliveFailure ||
+                    web.Status == WebExceptionStatus.NameResolutionFailure) return true;
+                var response = web.Response as HttpWebResponse;
+                if (response != null && ((int)response.StatusCode >= 500 ||
+                    response.StatusCode == HttpStatusCode.RequestTimeout || (int)response.StatusCode == 429)) return true;
+            }
+            var socket = error as SocketException;
+            if (socket != null)
+                return socket.SocketErrorCode == SocketError.ConnectionReset ||
+                    socket.SocketErrorCode == SocketError.ConnectionAborted ||
+                    socket.SocketErrorCode == SocketError.TimedOut ||
+                    socket.SocketErrorCode == SocketError.NetworkDown ||
+                    socket.SocketErrorCode == SocketError.NetworkUnreachable ||
+                    socket.SocketErrorCode == SocketError.HostUnreachable;
+            return error.InnerException != null && IsTransientNetworkError(error.InnerException);
         }
 
         private sealed class ReplicateApiException : InvalidOperationException

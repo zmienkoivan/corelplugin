@@ -112,7 +112,7 @@ namespace VanyaTools.Native
             title += " · " + DateTime.Now.ToString("dd.MM HH:mm", CultureInfo.CurrentCulture);
             string options = new JavaScriptSerializer().Serialize(new Dictionary<string, object>
             {
-                ["title"] = title, ["watermark"] = "ПРЕВЬЮ", ["opacity"] = 0.32,
+                ["title"] = title, ["watermark"] = "evpmerch.com", ["opacity"] = 0.32,
                 ["days"] = 7, ["dpi"] = dpi
             });
             string source = null;

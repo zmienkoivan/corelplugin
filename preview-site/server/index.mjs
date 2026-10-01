@@ -76,7 +76,7 @@ function optionsFromHeader(req) {
   if (typeof encoded !== 'string' || encoded.length > 4096) throw new Error('Не указаны параметры публикации.');
   const supplied = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
   const title = cleanText(supplied.title, 100) || 'Превью';
-  const watermark = cleanText(supplied.watermark, 80) || 'ПРЕВЬЮ';
+  const watermark = 'evpmerch.com';
   const recipient = cleanText(supplied.recipient, 60);
   const days = 7;
   const opacity = Number(supplied.opacity ?? 0.32);
@@ -89,17 +89,15 @@ function optionsFromHeader(req) {
 }
 
 function watermarkTile(text, recipient, opacity, width, height) {
-  const tileWidth = Math.min(width, 780);
-  const tileHeight = Math.min(height, 440);
-  const fontSize = Math.max(22, Math.min(58, Math.floor(tileWidth / 13)));
-  const subtitle = recipient || 'VANYA TOOLS · ПРЕВЬЮ';
+  const tileWidth = Math.min(width, 500);
+  const tileHeight = Math.min(height, 280);
+  const fontSize = Math.max(22, Math.min(48, Math.floor(tileWidth / 12)));
   return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${tileWidth}" height="${tileHeight}">
     <g transform="translate(${tileWidth / 2} ${tileHeight / 2}) rotate(-25)" text-anchor="middle"
        font-family="DejaVu Sans, Arial, sans-serif" font-weight="800" fill="#fff"
        fill-opacity="${opacity}" stroke="#111827" stroke-opacity="${(opacity * 0.8).toFixed(3)}"
        stroke-width="2" paint-order="stroke fill">
-      <text y="-8" font-size="${fontSize}">${xml(text)}</text>
-      <text y="${Math.round(fontSize * 0.65)}" font-size="${Math.round(fontSize * 0.45)}">${xml(subtitle)}</text>
+      <text y="${Math.round(fontSize * 0.3)}" font-size="${fontSize}">${xml(text)}</text>
     </g>
   </svg>`);
 }
