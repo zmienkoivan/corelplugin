@@ -205,7 +205,7 @@ namespace VanyaTools.Native
             {
                 string server = _server.Text.Trim(), key = _key.Password;
                 await Task.Run(() => PreviewAdminWorkerClient.Delete(server, key, id));
-                if (_link.Text.Contains("/p/" + id + "#")) _link.Text = "";
+                if (_link.Text.Contains("/p/" + id)) _link.Text = "";
                 await LoadList();
                 _status("Превью удалено.", false);
             }

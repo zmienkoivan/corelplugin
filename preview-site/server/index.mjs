@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash, createCipheriv, createDecipheriv, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHash, createDecipheriv, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
@@ -24,7 +24,9 @@ if (!['127.0.0.1', '::1', 'localhost'].includes(new URL(publicUrl).hostname) && 
   throw new Error('Public deployments require an HTTPS PREVIEW_PUBLIC_URL.');
 const maxUploadBytes = 350 * 1024 * 1024;
 const maxPixels = 70_000_000;
-const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const legacyIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const shortIdPattern = /^[A-Za-z0-9_-]{22}$/;
+const validId = id => legacyIdPattern.test(id) || shortIdPattern.test(id);
 const pinCache = new Map();
 let activePublishes = 0;
 
@@ -55,12 +57,6 @@ const safeEqual = (a, b) => {
 };
 const hash = value => createHash('sha256').update(value).digest('hex');
 const tokenKey = createHash('sha256').update(adminKey).digest();
-function sealToken(token) {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', tokenKey, iv);
-  const data = Buffer.concat([cipher.update(token, 'utf8'), cipher.final()]);
-  return { iv: iv.toString('hex'), tag: cipher.getAuthTag().toString('hex'), data: data.toString('hex') };
-}
 function openToken(sealed) {
   if (!sealed) return null;
   const decipher = createDecipheriv('aes-256-gcm', tokenKey, Buffer.from(sealed.iv, 'hex'));
@@ -104,7 +100,7 @@ function watermarkTile(_text, _recipient, opacity, width, height) {
 }
 
 async function readManifest(id) {
-  if (!idPattern.test(id)) return null;
+  if (!validId(id)) return null;
   try { return JSON.parse(await fsp.readFile(path.join(previewsRoot, id, 'preview.json'), 'utf8')); }
   catch { return null; }
 }
@@ -127,7 +123,8 @@ async function authorize(req, res, id) {
     json(res, 410, { error: 'Срок ссылки истёк.' }); return null;
   }
   const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  if (!safeEqual(hash(supplied), manifest.tokenHash)) {
+  if (!(manifest.capability && shortIdPattern.test(id)) &&
+      !safeEqual(hash(supplied), manifest.tokenHash)) {
     json(res, 403, { error: 'Ссылка недействительна.' }); return null;
   }
   if (!validPin(manifest, req.headers['x-preview-pin'])) {
@@ -156,8 +153,7 @@ async function publish(req, res) {
   catch (error) { json(res, 400, { error: error.message }); return; }
   if (activePublishes > 0) { json(res, 429, { error: 'Уже обрабатывается другой макет. Повторите позже.' }); return; }
   activePublishes++;
-  const id = randomUUID();
-  const token = randomBytes(32).toString('base64url');
+  const id = randomBytes(16).toString('base64url');
   const staging = path.join(previewsRoot, `.building-${id}`);
   const original = path.join(staging, 'source-upload');
   const marked = path.join(staging, 'marked.png');
@@ -186,10 +182,9 @@ async function publish(req, res) {
     const manifest = {
       id, title: options.title, recipient: options.recipient,
       width, height, dpi: options.dpi, sizeBytes,
+      capability: true,
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + options.days * 86400000).toISOString(),
-      tokenHash: hash(token),
-      sealedToken: sealToken(token),
       pin: options.pin ? (() => {
         const salt = randomBytes(16);
         return { salt: salt.toString('hex'),
@@ -198,7 +193,7 @@ async function publish(req, res) {
     };
     await fsp.writeFile(path.join(staging, 'preview.json'), JSON.stringify(manifest), { mode: 0o600 });
     await fsp.rename(staging, path.join(previewsRoot, id));
-    json(res, 201, { id, link: `${publicUrl}/p/${id}#token=${token}`,
+    json(res, 201, { id, link: `${publicUrl}/p/${id}`,
       width, height, dpi: options.dpi, sizeBytes, expiresAt: manifest.expiresAt });
   } catch (error) {
     await fsp.rm(staging, { recursive: true, force: true });
@@ -223,7 +218,8 @@ async function listPreviews(res) {
       found.push({ id: entry.id, title: entry.title, recipient: entry.recipient,
         width: entry.width, height: entry.height, dpi: entry.dpi, sizeBytes,
         createdAt: entry.createdAt, expiresAt: entry.expiresAt,
-        link: entry.sealedToken ? `${publicUrl}/p/${entry.id}#token=${openToken(entry.sealedToken)}` : null });
+        link: entry.capability ? `${publicUrl}/p/${entry.id}`
+          : entry.sealedToken ? `${publicUrl}/p/${entry.id}#token=${openToken(entry.sealedToken)}` : null });
     }
   }
   json(res, 200, found.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
@@ -231,7 +227,7 @@ async function listPreviews(res) {
 
 async function cleanupExpired() {
   for (const id of await fsp.readdir(previewsRoot)) {
-    if (!idPattern.test(id)) continue;
+    if (!validId(id)) continue;
     const entry = await readManifest(id);
     if (entry && Date.parse(entry.expiresAt) <= Date.now())
       await fsp.rm(path.join(previewsRoot, id), { recursive: true, force: true });
@@ -239,7 +235,7 @@ async function cleanupExpired() {
 }
 
 async function serveStatic(req, res, pathname) {
-  const relative = pathname === '/' || /^\/p\/[0-9a-f-]+$/.test(pathname)
+  const relative = pathname === '/' || /^\/p\/[A-Za-z0-9_-]{22,36}$/.test(pathname)
     ? 'index.html' : pathname.replace(/^\//, '');
   const file = path.resolve(distRoot, relative);
   if (!file.startsWith(distRoot + path.sep)) { json(res, 404, { error: 'Файл не найден.' }); return; }
@@ -251,6 +247,7 @@ async function serveStatic(req, res, pathname) {
     '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png',
     '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.woff': 'font/woff' }[path.extname(file)] || 'application/octet-stream';
   res.writeHead(200, { 'Content-Type': type, 'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
     'Cache-Control': path.extname(file) === '.html' ? 'no-store' : 'public, max-age=31536000, immutable',
     'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'" });
   fs.createReadStream(file).pipe(res);
@@ -269,10 +266,10 @@ const server = http.createServer(async (req, res) => {
       if (!validAdmin(req)) { json(res, 403, { error: 'Неверный ключ публикации.' }); return; }
       await listPreviews(res); return;
     }
-    const detail = pathname.match(/^\/api\/previews\/([0-9a-f-]{36})$/);
+    const detail = pathname.match(/^\/api\/previews\/([A-Za-z0-9_-]{22}|[0-9a-f-]{36})$/);
     if (detail && req.method === 'DELETE') {
       if (!validAdmin(req)) { json(res, 403, { error: 'Неверный ключ публикации.' }); return; }
-      if (!idPattern.test(detail[1])) { json(res, 404, { error: 'Не найдено.' }); return; }
+      if (!validId(detail[1])) { json(res, 404, { error: 'Не найдено.' }); return; }
       await fsp.rm(path.join(previewsRoot, detail[1]), { recursive: true, force: true });
       json(res, 200, { ok: true }); return;
     }
@@ -283,7 +280,7 @@ const server = http.createServer(async (req, res) => {
         expiresAt: entry.expiresAt });
       return;
     }
-    const tile = pathname.match(/^\/api\/previews\/([0-9a-f-]{36})\/tile\/(\d{1,2})\/(\d{1,5})_(\d{1,5})\.webp$/);
+    const tile = pathname.match(/^\/api\/previews\/([A-Za-z0-9_-]{22}|[0-9a-f-]{36})\/tile\/(\d{1,2})\/(\d{1,5})_(\d{1,5})\.webp$/);
     if (tile && req.method === 'GET') {
       const entry = await authorize(req, res, tile[1]);
       if (!entry) return;

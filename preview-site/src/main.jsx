@@ -158,6 +158,7 @@ function Publisher() {
 
 function PreviewViewer({ id }) {
   const token = new URLSearchParams(location.hash.slice(1)).get('token') || '';
+  const shortLink = /^[A-Za-z0-9_-]{22}$/.test(id);
   const [pin, setPin] = useState('');
   const [meta, setMeta] = useState(null);
   const [error, setError] = useState('');
@@ -171,7 +172,7 @@ function PreviewViewer({ id }) {
   const viewerRef = useRef(null);
 
   useEffect(() => {
-    if (!token) { setError('Ссылка неполная: отсутствует ключ доступа.'); return; }
+    if (!token && !shortLink) { setError('Ссылка неполная: отсутствует ключ доступа.'); return; }
     const controller = new AbortController();
     fetch(`/api/previews/${id}`, { headers: { Authorization: `Bearer ${token}`, 'X-Preview-Pin': pin }, signal: controller.signal })
       .then(async response => {
@@ -182,11 +183,12 @@ function PreviewViewer({ id }) {
       .then(data => { if (data) { setMeta(data); setNeedPin(false); setError(''); } })
       .catch(reason => { if (reason.name !== 'AbortError') setError(reason.message); });
     return () => controller.abort();
-  }, [id, token, pin]);
+  }, [id, token, pin, shortLink]);
 
   useEffect(() => {
     if (!meta || !elementRef.current) return undefined;
     const viewer = OpenSeadragon({ element: elementRef.current,
+      drawer: 'canvas',
       showNavigationControl: false, showNavigator: true,
       navigatorBackground: '#1d252b', navigatorBorderColor: '#6e7d7f',
       loadTilesWithAjax: true,
@@ -197,6 +199,10 @@ function PreviewViewer({ id }) {
         getTileUrl: (level, x, y) => `/api/previews/${id}/tile/${level}/${x}_${y}.webp` },
     });
     viewer.addHandler('zoom', () => setZoom(Math.round(viewer.viewport.viewportToImageZoom(viewer.viewport.getZoom()) * 100)));
+    viewer.addHandler('tile-drawing', ({ context }) => {
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = 'high';
+    });
     viewer.addHandler('open', () => { setTilesLoading(true); setZoom(Math.round(viewer.viewport.viewportToImageZoom(viewer.viewport.getZoom()) * 100)); });
     viewer.addHandler('fully-loaded-change', event => setTilesLoading(!event.fullyLoaded));
     viewerRef.current = viewer;
@@ -232,5 +238,5 @@ function VisitorHome() {
       <p>Откройте ссылку на опубликованный макет.</p></div></div></div>;
 }
 
-const match = location.pathname.match(/^\/p\/([0-9a-f-]{36})$/);
+const match = location.pathname.match(/^\/p\/([A-Za-z0-9_-]{22}|[0-9a-f-]{36})$/);
 createRoot(document.getElementById('root')).render(match ? <PreviewViewer id={match[1]} /> : <VisitorHome />);
