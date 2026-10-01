@@ -35,13 +35,17 @@ npm start
 sh preview-site/deploy/update-from-git.sh
 ```
 
-Скрипт получает `main` с GitHub, принимает только обновление без конфликтов и
-пересобирает только контейнер `vanya-preview`. Docker сам собирает интерфейс из
-исходников Git, поэтому передача архива и установленный Node.js на сервере не
-нужны. Для ручного первоначального размещения checkout:
+Скрипт получает `main` с GitHub по SSH, принимает только обновление без
+конфликтов и пересобирает только контейнер `vanya-preview`. Docker сам собирает
+интерфейс из исходников Git, поэтому передача архива и установленный Node.js на
+сервере не нужны. `origin` этого checkout использует ключ
+`/root/.ssh/evpmerch_deploy_key`. Для первоначального размещения checkout:
 
 ```sh
-git clone --branch main https://github.com/zmienkoivan/corelplugin.git /opt/vanya-preview/repo
+GIT_SSH_COMMAND='ssh -i /root/.ssh/evpmerch_deploy_key -o IdentitiesOnly=yes' \
+  git clone --branch main git@github.com:zmienkoivan/corelplugin.git /opt/vanya-preview/repo
+git -C /opt/vanya-preview/repo config core.sshCommand \
+  'ssh -i /root/.ssh/evpmerch_deploy_key -o IdentitiesOnly=yes -o BatchMode=yes'
 ```
 
 Чистый файл временно передаётся на сервер и удаляется после создания копии
