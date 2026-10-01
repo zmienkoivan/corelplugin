@@ -191,7 +191,7 @@ function PreviewViewer({ id }) {
       navigatorBackground: '#1d252b', navigatorBorderColor: '#6e7d7f',
       loadTilesWithAjax: true,
       ajaxHeaders: { Authorization: `Bearer ${token}`, 'X-Preview-Pin': pin },
-      maxZoomPixelRatio: 2, minZoomImageRatio: 0.75,
+      maxZoomPixelRatio: 1, imageSmoothingEnabled: true, minZoomImageRatio: 0.75,
       visibilityRatio: 0.85, constrainDuringPan: true,
       tileSources: { width: meta.width, height: meta.height, tileSize: 512,
         getTileUrl: (level, x, y) => `/api/previews/${id}/tile/${level}/${x}_${y}.webp` },

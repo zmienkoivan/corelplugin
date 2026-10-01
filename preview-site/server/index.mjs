@@ -7,6 +7,7 @@ import { createHash, createCipheriv, createDecipheriv, randomBytes, randomUUID, 
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
+import { watermarkOutline } from './watermark-outline.mjs';
 
 sharp.concurrency(1);
 sharp.cache({ memory: 64, files: 20, items: 100 });
@@ -86,38 +87,19 @@ function optionsFromHeader(req) {
   return { title, watermark, recipient, days, opacity, dpi, pin };
 }
 
-const watermarkGlyphs = {
-  e: ['00000', '01110', '10001', '11111', '10000', '01111', '00000'],
-  v: ['00000', '10001', '10001', '10001', '01010', '00100', '00000'],
-  p: ['00000', '11110', '10001', '11110', '10000', '10000', '10000'],
-  m: ['00000', '11011', '10101', '10101', '10101', '10101', '00000'],
-  r: ['00000', '10110', '11001', '10000', '10000', '10000', '00000'],
-  c: ['00000', '01111', '10000', '10000', '10000', '01111', '00000'],
-  h: ['10000', '10000', '11110', '10001', '10001', '10001', '00000'],
-  '.': ['00000', '00000', '00000', '00000', '00000', '00100', '00000'],
-  o: ['00000', '01110', '10001', '10001', '10001', '01110', '00000'],
-};
-
-function watermarkTile(text, _recipient, opacity, width, height) {
+function watermarkTile(_text, _recipient, opacity, width, height) {
   const tileWidth = Math.min(width, 430);
   const tileHeight = Math.min(height, 220);
-  const letters = [...text.toLowerCase()];
-  const columns = letters.length * 6 - 1;
-  const unit = Math.max(1, Math.min(5, tileWidth * 0.82 / columns, tileHeight * 0.35 / 7));
-  const rectangles = [];
-  letters.forEach((letter, index) => {
-    const rows = watermarkGlyphs[letter];
-    if (!rows) throw new Error(`Unsupported watermark character: ${letter}`);
-    rows.forEach((row, y) => {
-      for (let x = 0; x < row.length; x++) {
-        if (row[x] === '1') rectangles.push(`<rect x="${(index * 6 + x) * unit}" y="${y * unit}" width="${unit}" height="${unit}"/>`);
-      }
-    });
-  });
+  const textWidth = watermarkOutline.right - watermarkOutline.left;
+  const textHeight = watermarkOutline.top - watermarkOutline.bottom;
+  const scale = Math.min(tileWidth * 0.82 / textWidth, tileHeight * 0.4 / textHeight);
+  const centerX = (watermarkOutline.left + watermarkOutline.right) / 2;
+  const centerY = (watermarkOutline.bottom + watermarkOutline.top) / 2;
   return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${tileWidth}" height="${tileHeight}">
-    <g transform="translate(${tileWidth / 2} ${tileHeight / 2}) rotate(-25) translate(${-columns * unit / 2} ${-7 * unit / 2})"
-       fill="#fff" fill-opacity="${opacity}" stroke="#111827" stroke-opacity="${(opacity * 0.8).toFixed(3)}"
-       stroke-width="0.8" paint-order="stroke fill">${rectangles.join('')}</g>
+    <g transform="translate(${tileWidth / 2} ${tileHeight / 2}) rotate(-25) scale(${scale} ${-scale}) translate(${-centerX} ${-centerY})"
+       fill="#fff" fill-opacity="${opacity}" stroke="#111827"
+       stroke-opacity="${(opacity * 0.8).toFixed(3)}" stroke-width="${Math.max(12, 1.6 / scale)}"
+       paint-order="stroke fill"><path d="${watermarkOutline.path}"/></g>
   </svg>`);
 }
 
