@@ -97,8 +97,9 @@ namespace VanyaTools.Native
             long pixels300;
             try { pixels300 = AiSelectionCapture.EstimatePublishPixels(300, out widthMm, out heightMm); }
             catch (Exception error) { _status(error.Message, true); return; }
-            dpi = pixels300 <= 35000000 && FitsSide(widthMm, heightMm, 300) ? 300
-                : pixels300 <= 70000000 && FitsSide(widthMm, heightMm, 150) ? 150 : 72;
+            dpi = pixels300 <= 70000000 && FitsSide(widthMm, heightMm, 300) ? 300
+                : PixelCount(widthMm, heightMm, 150) <= 70000000 &&
+                  FitsSide(widthMm, heightMm, 150) ? 150 : 72;
             pixels = PixelCount(widthMm, heightMm, dpi);
             _size.Text = String.Format(CultureInfo.CurrentCulture,
                 "{0:0} × {1:0} мм · публикация {2} DPI ({3:0.0} Мп).\n" +
