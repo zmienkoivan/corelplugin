@@ -90,6 +90,11 @@ namespace VanyaTools.Native
             });
             tabs.Items.Add(new TabItem
             {
+                Header = "Фамилии",
+                Content = new NamesGridTab((message, isError) => SetStatus(message, isError))
+            });
+            tabs.Items.Add(new TabItem
+            {
                 Header = "AI-графика",
                 Content = new AiPrintTab(ImportAiResult, (message, isError) => SetStatus(message, isError), CaptureAiSelection)
             });
