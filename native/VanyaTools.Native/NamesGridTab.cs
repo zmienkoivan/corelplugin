@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -23,8 +24,18 @@ namespace VanyaTools.Native
         private readonly TextBox _horizontalGap;
         private readonly TextBox _verticalGap;
         private readonly CheckBox _center;
+        private readonly CheckBox _twoLines;
         private readonly TextBlock _count;
+        private readonly TextBox _preview;
         private bool _sizeIsMm;
+        private static readonly Regex NumberPrefix = new Regex(
+            @"^\s*(?:\d{1,4}[.)]|\(\d{1,4}\))\s*", RegexOptions.Compiled);
+        private static readonly Regex WidthNote = new Regex(
+            @"\s*\(\s*(?:укоротить|сократить|уменьшить)\s+до\s+(?<width>\d+(?:[.,]\d+)?)\s*(?:мм)?\s*\)\s*$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        private static readonly Regex UnrecognizedWidthNote = new Regex(
+            @"\([^)]*(?:укорот|сократ|уменьш|\d+\s*мм)[^)]*\)\s*$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
         public NamesGridTab(Action<string, bool> status)
         {
@@ -34,7 +45,7 @@ namespace VanyaTools.Native
 
             panel.Children.Add(new TextBlock { Text = "Фамилии для печати", FontSize = 14,
                 FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 5) });
-            panel.Children.Add(Note("Одна строка — одна надпись. Текст останется редактируемым."));
+            panel.Children.Add(Note("Одна строка — одна надпись. Номера и пометки «укоротить до 110» удаляются."));
 
             var inputHeader = new Grid { Margin = new Thickness(0, 4, 0, 3) };
             inputHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -51,8 +62,13 @@ namespace VanyaTools.Native
                 MinHeight = 170, MaxHeight = 280, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 12,
                 Margin = new Thickness(0, 0, 0, 9) };
-            _names.TextChanged += (_, __) => _count.Text = CountLines(_names.Text) + " надписей";
             panel.Children.Add(_names);
+            _preview = new TextBox { IsReadOnly = true, FontSize = 11, MinHeight = 72, MaxHeight = 150,
+                TextWrapping = TextWrapping.NoWrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto };
+            panel.Children.Add(new Expander { Header = "Что будет напечатано", Content = _preview,
+                Margin = new Thickness(0, 0, 0, 8) });
+            _names.TextChanged += (_, __) => UpdatePreview();
 
             panel.Children.Add(Label("Шрифт"));
             _font = new ComboBox { IsEditable = true, IsTextSearchEnabled = true, FontSize = 11,
@@ -79,10 +95,15 @@ namespace VanyaTools.Native
             sizeRow.Children.Add(_unit);
             panel.Children.Add(sizeRow);
 
-            _maxWidth = AddNumberRow(panel, "Макс. ширина надписи, мм", "85");
+            _maxWidth = AddNumberRow(panel, "Макс. ширина надписи, мм", "150");
             _columns = AddNumberRow(panel, "Колонок", "2");
             _horizontalGap = AddNumberRow(panel, "Между колонками, мм", "10");
             _verticalGap = AddNumberRow(panel, "Между строками, мм", "8");
+            _twoLines = new CheckBox { Content = "Фамилия и имя в две строки", IsChecked = false,
+                FontSize = 11, Margin = new Thickness(0, 3, 0, 3) };
+            _twoLines.Checked += (_, __) => UpdatePreview();
+            _twoLines.Unchecked += (_, __) => UpdatePreview();
+            panel.Children.Add(_twoLines);
             _center = new CheckBox { Content = "По центру ячеек", IsChecked = true, FontSize = 11,
                 Margin = new Thickness(0, 3, 0, 9) };
             panel.Children.Add(_center);
@@ -108,7 +129,7 @@ namespace VanyaTools.Native
                 {
                     _names.Text = File.ReadAllText(dialog.FileName, Encoding.GetEncoding(1251));
                 }
-                _status("Список загружен: " + CountLines(_names.Text) + " строк.", false);
+                _status("Список загружен: " + ParseNames(_names.Text).Count + " строк.", false);
             }
             catch (Exception ex)
             {
@@ -132,12 +153,12 @@ namespace VanyaTools.Native
         {
             try
             {
-                List<string> names = ParseNames(_names.Text);
+                List<NamesGridEntry> names = ParseNames(_names.Text);
                 if (names.Count == 0)
                     throw new InvalidOperationException("Вставьте список: одно имя на строку.");
                 if (names.Count > 2000)
                     throw new InvalidOperationException("За один раз можно создать не более 2000 надписей.");
-                if (names.Any(name => name.Length > 200))
+                if (names.Any(name => name.Text.Length > 200))
                     throw new InvalidOperationException("Одна из строк длиннее 200 символов.");
 
                 string font = _font.Text.Trim();
@@ -158,7 +179,8 @@ namespace VanyaTools.Native
                     Columns = Math.Min(columns, names.Count),
                     HorizontalGapMm = NonNegative(_horizontalGap.Text, "Расстояние между колонками"),
                     VerticalGapMm = NonNegative(_verticalGap.Text, "Расстояние между строками"),
-                    CenterInCell = _center.IsChecked == true
+                    CenterInCell = _center.IsChecked == true,
+                    TwoLines = _twoLines.IsChecked == true
                 };
                 var result = new NamesGridService().Create(names, options);
                 _status("Создано: " + result.Count + ". Уменьшено по ширине: " + result.ReducedCount +
@@ -172,15 +194,55 @@ namespace VanyaTools.Native
             }
         }
 
-        private static List<string> ParseNames(string text)
+        private void UpdatePreview()
         {
-            return text.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None)
-                .Select(line => String.Join(" ", line.Trim().Split(
-                    new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries)))
-                .Where(line => line.Length != 0).ToList();
+            try
+            {
+                List<NamesGridEntry> names = ParseNames(_names.Text);
+                int customWidths = names.Count(name => name.MaxWidthMm.HasValue);
+                _count.Text = names.Count + " надписей" +
+                    (customWidths > 0 ? " · " + customWidths + " пометок ширины" : "");
+                bool twoLines = _twoLines != null && _twoLines.IsChecked == true;
+                _preview.Text = String.Join(twoLines ? Environment.NewLine + Environment.NewLine : Environment.NewLine,
+                    names.Select(name => name.PrintText(twoLines).Replace("\r", Environment.NewLine)));
+            }
+            catch (InvalidOperationException ex)
+            {
+                _count.Text = "Проверьте список";
+                _preview.Text = ex.Message;
+            }
         }
 
-        private static int CountLines(string text) { return ParseNames(text).Count; }
+        private static List<NamesGridEntry> ParseNames(string text)
+        {
+            var entries = new List<NamesGridEntry>();
+            string[] lines = text.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i].Trim();
+                if (line.Length == 0) continue;
+                line = NumberPrefix.Replace(line, "", 1).Trim();
+                double? width = null;
+                Match note = WidthNote.Match(line);
+                if (note.Success)
+                {
+                    double value;
+                    if (!Double.TryParse(note.Groups["width"].Value.Replace(',', '.'), NumberStyles.Float,
+                        CultureInfo.InvariantCulture, out value) || value <= 0 || value > 2000)
+                        throw new InvalidOperationException("Строка " + (i + 1) + ": неверная ширина в пометке.");
+                    width = value;
+                    line = line.Substring(0, note.Index).TrimEnd();
+                }
+                else if (UnrecognizedWidthNote.IsMatch(line))
+                    throw new InvalidOperationException("Строка " + (i + 1) + ": не удалось прочитать пометку ширины.");
+
+                line = String.Join(" ", line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries));
+                if (line.Length == 0)
+                    throw new InvalidOperationException("Строка " + (i + 1) + ": после номера не осталось имени.");
+                entries.Add(new NamesGridEntry { Text = line, MaxWidthMm = width });
+            }
+            return entries;
+        }
 
         private static bool TryNumber(string text, out double result)
         {

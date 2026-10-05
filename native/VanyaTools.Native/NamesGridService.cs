@@ -3,6 +3,19 @@ using System.Collections.Generic;
 
 namespace VanyaTools.Native
 {
+    internal sealed class NamesGridEntry
+    {
+        public string Text;
+        public double? MaxWidthMm;
+
+        public string PrintText(bool twoLines)
+        {
+            if (!twoLines) return Text;
+            int separator = Text.IndexOf(' ');
+            return separator < 0 ? Text : Text.Substring(0, separator) + "\r" + Text.Substring(separator + 1);
+        }
+    }
+
     internal sealed class NamesGridOptions
     {
         public string FontName;
@@ -12,6 +25,7 @@ namespace VanyaTools.Native
         public double HorizontalGapMm;
         public double VerticalGapMm;
         public bool CenterInCell;
+        public bool TwoLines;
     }
 
     internal sealed class NamesGridResult
@@ -24,7 +38,7 @@ namespace VanyaTools.Native
 
     internal sealed class NamesGridService
     {
-        public NamesGridResult Create(IList<string> names, NamesGridOptions options)
+        public NamesGridResult Create(IList<NamesGridEntry> names, NamesGridOptions options)
         {
             if (names == null || names.Count == 0)
                 throw new InvalidOperationException("Добавьте хотя бы одну строку с именем.");
@@ -54,25 +68,31 @@ namespace VanyaTools.Native
                 {
                     // Wide text keeps Cyrillic and other Unicode characters intact.
                     dynamic shape = layer.CreateArtisticTextWide(
-                        0.0, 0.0, names[i], 0, -1, options.FontName, (float)options.FontSizePt);
+                        0.0, 0.0, names[i].PrintText(options.TwoLines), 0, -1,
+                        options.FontName, (float)options.FontSizePt);
                     shapes.Add(shape);
                     range.Add(shape);
+                    if (options.TwoLines)
+                        shape.Text.Story.Alignment = 3;
                     shape.Fill.UniformColor.RGBAssign(0, 0, 0);
                     shape.Outline.SetNoOutline();
 
                     double width = (double)shape.SizeWidth;
                     double height = (double)shape.SizeHeight;
                     if (width <= 0 || height <= 0)
-                        throw new InvalidOperationException("CorelDRAW не смог измерить текст: " + names[i]);
+                        throw new InvalidOperationException("CorelDRAW не смог измерить текст: " + names[i].Text);
 
-                    if (width > options.MaxWidthMm)
+                    double maxWidth = names[i].MaxWidthMm.HasValue
+                        ? Math.Min(options.MaxWidthMm, names[i].MaxWidthMm.Value)
+                        : options.MaxWidthMm;
+                    if (width > maxWidth)
                     {
-                        double scale = options.MaxWidthMm / width;
-                        shape.SetSize(options.MaxWidthMm, height * scale);
+                        double scale = maxWidth / width;
+                        shape.SetSize(maxWidth, height * scale);
                         width = (double)shape.SizeWidth;
                         height = (double)shape.SizeHeight;
-                        if (width > options.MaxWidthMm + 0.1)
-                            throw new InvalidOperationException("CorelDRAW не уменьшил текст до заданной ширины: " + names[i]);
+                        if (width > maxWidth + 0.1)
+                            throw new InvalidOperationException("CorelDRAW не уменьшил текст до заданной ширины: " + names[i].Text);
                         reducedCount++;
                     }
 
