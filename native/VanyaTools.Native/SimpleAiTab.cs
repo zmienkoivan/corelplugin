@@ -23,6 +23,7 @@ namespace VanyaTools.Native
         private readonly Action<string, bool> _status;
         private readonly ComboBox _model;
         private readonly TextBox _prompt;
+        private readonly TextBox _whiteThreshold;
         private readonly TextBox _alphaThreshold;
         private readonly TextBox _edgeRadius, _edgeExpansion, _underlayHex;
         private readonly Border _underlaySwatch;
@@ -30,14 +31,15 @@ namespace VanyaTools.Native
         private readonly Image _sourcePreview, _resultPreview;
         private readonly TextBlock _progress;
         private readonly ProgressBar _progressBar;
-        private readonly Button _removeButton, _upscaleButton, _alphaButton, _smoothButton, _pipetteButton,
+        private readonly Button _removeButton, _removeWhiteButton, _upscaleButton,
+            _alphaButton, _smoothButton, _pipetteButton,
             _editButton, _cancelButton, _retryButton;
         private readonly List<RadioButton> _styleButtons = new List<RadioButton>();
         private readonly DispatcherTimer _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         private readonly Stopwatch _elapsed = new Stopwatch();
         private CancellationTokenSource _cancellation;
         private bool _busy;
-        private string _stage, _lastModel, _lastOutput, _readyOutput;
+        private string _stage, _lastModel, _lastOutput, _lastSource, _readyOutput;
         private string _importWarning;
         private Dictionary<string, object> _lastInput;
         private StyleChoice _selectedStyle;
@@ -71,10 +73,20 @@ namespace VanyaTools.Native
             panel.Children.Add(Label("Простые AI-инструменты", true));
             panel.Children.Add(Note("Выделите объект или группу в CorelDRAW. Результат появится на холсте."));
             var quick = new UniformGrid { Columns = 2, Margin = new Thickness(0, 3, 0, 5) };
-            _removeButton = Button("Удалить фон", async (_, __) => await Run("background"));
+            _removeButton = Button("Удалить фон · AI", async (_, __) => await Run("background"));
             _upscaleButton = Button("Апскейл ×2", async (_, __) => await Run("upscale"));
             quick.Children.Add(_removeButton); quick.Children.Add(_upscaleButton);
             panel.Children.Add(quick);
+            var whiteRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
+            _removeWhiteButton = Button("Удалить белый фон · локально", async (_, __) => await RemoveWhiteBackground());
+            whiteRow.Children.Add(_removeWhiteButton);
+            whiteRow.Children.Add(new TextBlock { Text = "Белизна от", VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 10, Margin = new Thickness(6, 0, 3, 0) });
+            _whiteThreshold = new TextBox { Text = "245", Width = 40, FontSize = 11,
+                VerticalContentAlignment = VerticalAlignment.Center };
+            whiteRow.Children.Add(_whiteThreshold);
+            panel.Children.Add(whiteRow);
+            panel.Children.Add(Note("Без оплаты. Убирает белое только от краёв; проверьте светлые детали у границы."));
             var alphaRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 5) };
             _alphaButton = Button("Убрать полупрозрачные пиксели", async (_, __) => await RemoveSemiTransparent());
             alphaRow.Children.Add(_alphaButton);
@@ -223,7 +235,8 @@ namespace VanyaTools.Native
                 _importWarning = null;
                 // Corel COM capture must run on the UI thread. It duplicates the selection,
                 // rasterizes the temporary copy, then restores the original objects.
-                string source = _capture();
+                string source = action == "background" ? AiSelectionCapture.Capture() : _capture();
+                _lastSource = action == "background" ? source : null;
                 _sourcePreview.Source = AiPrintTab.Bitmap(source);
                 _resultPreview.Source = null;
                 string image = action == "background"
@@ -245,6 +258,39 @@ namespace VanyaTools.Native
             }
             catch (OperationCanceledException) { Report("Операция отменена.", false); }
             catch (Exception ex) { Log.Error("Simple AI operation failed.", ex); Report(ex.Message, true); }
+            finally { SetBusy(false, null); }
+        }
+
+        private async Task RemoveWhiteBackground()
+        {
+            if (_busy) return;
+            if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
+            { Report("Сначала вставьте готовый результат.", true); return; }
+            int threshold;
+            if (!Int32.TryParse(_whiteThreshold.Text, out threshold) || threshold < 200 || threshold > 255)
+            { Report("Порог белизны: от 200 до 255. Для белого фона начните с 245.", true); return; }
+            SetBusy(true, "Удаляю белый фон без AI…");
+            try
+            {
+                _importWarning = null;
+                string source = AiSelectionCapture.Capture();
+                _sourcePreview.Source = AiPrintTab.Bitmap(source);
+                _resultPreview.Source = null;
+                string output = Path.Combine(Path.GetTempPath(), "Vanya-White-" + Guid.NewGuid().ToString("N") + ".png");
+                CancellationToken cancellation = _cancellation.Token;
+                await Task.Run(() => BackgroundRemovalProcessor.RemoveWhite(
+                    source, output, threshold, cancellation), cancellation);
+                cancellation.ThrowIfCancellationRequested();
+                _readyOutput = output;
+                Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
+                File.WriteAllText(PendingPath(), output);
+                _resultPreview.Source = AiPrintTab.Bitmap(output);
+                InsertReady();
+                ReportOutcome();
+            }
+            catch (OperationCanceledException) { Report("Операция отменена.", false); }
+            catch (Exception ex) { Log.Error("Local white background removal failed.", ex);
+                Report(ex.GetBaseException().Message, true); }
             finally { SetBusy(false, null); }
         }
 
@@ -558,7 +604,12 @@ namespace VanyaTools.Native
             cancellation.ThrowIfCancellationRequested();
             SetStage("Подготавливаю результат…");
             string png = Path.Combine(Path.GetTempPath(), "Vanya-Simple-Ready-" + Guid.NewGuid().ToString("N") + ".png");
-            await Task.Run(() => SaveAsPng(_lastOutput, png), cancellation);
+            if (_lastModel == "bria/remove-background" && !String.IsNullOrEmpty(_lastSource) &&
+                File.Exists(_lastSource))
+                await Task.Run(() => BackgroundRemovalProcessor.ApplyModelMask(
+                    _lastSource, _lastOutput, png, cancellation), cancellation);
+            else
+                await Task.Run(() => SaveAsPng(_lastOutput, png), cancellation);
             _readyOutput = png;
             Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
             File.WriteAllText(PendingPath(), png);
@@ -581,7 +632,7 @@ namespace VanyaTools.Native
             {
                 string warning = _import(_readyOutput);
                 _importWarning = warning;
-                _readyOutput = null; _lastInput = null;
+                _readyOutput = null; _lastInput = null; _lastSource = null;
                 try { if (File.Exists(PendingPath())) File.Delete(PendingPath()); } catch { }
             }
             catch (Exception ex)
@@ -635,10 +686,10 @@ namespace VanyaTools.Native
         private void SetBusy(bool busy, string stage)
         {
             _busy = busy;
-            _removeButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
+            _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
                 _smoothButton.IsEnabled = _pipetteButton.IsEnabled =
                 _editButton.IsEnabled = !busy;
-            _model.IsEnabled = _prompt.IsEnabled = _alphaThreshold.IsEnabled =
+            _model.IsEnabled = _prompt.IsEnabled = _whiteThreshold.IsEnabled = _alphaThreshold.IsEnabled =
                 _edgeRadius.IsEnabled = _edgeExpansion.IsEnabled = _underlayHex.IsEnabled = !busy;
             foreach (var choice in _styleButtons) choice.IsEnabled = !busy;
             _cancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
