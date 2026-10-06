@@ -21,6 +21,7 @@ namespace VanyaTools.Native
         private readonly Func<string> _token;
         private readonly Func<string, string> _import;
         private readonly Action<string, bool> _status;
+        private readonly bool _styleOnly;
         private readonly ComboBox _model;
         private readonly TextBox _prompt;
         private readonly TextBox _whiteThreshold;
@@ -64,19 +65,19 @@ namespace VanyaTools.Native
         }
 
         public SimpleAiTab(Func<string> capture, Func<string> token,
-            Func<string, string> import, Action<string, bool> status)
+            Func<string, string> import, Action<string, bool> status, bool styleOnly)
         {
             _capture = capture; _token = token; _import = import; _status = status;
+            _styleOnly = styleOnly;
             var panel = new StackPanel { Margin = new Thickness(7) };
-            Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel };
+            Content = styleOnly
+                ? (object)new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel }
+                : panel;
 
-            panel.Children.Add(Label("Простые AI-инструменты", true));
-            panel.Children.Add(Note("Выделите объект или группу в CorelDRAW. Результат появится на холсте."));
-            var quick = new UniformGrid { Columns = 2, Margin = new Thickness(0, 3, 0, 5) };
+            panel.Children.Add(Label(styleOnly ? "Стилизация" : "Подготовка изображения", true));
+            panel.Children.Add(Note("Выделите объект или группу. Результат появится на холсте."));
             _removeButton = Button("Удалить фон · AI", async (_, __) => await Run("background"));
             _upscaleButton = Button("Апскейл ×2", async (_, __) => await Run("upscale"));
-            quick.Children.Add(_removeButton); quick.Children.Add(_upscaleButton);
-            panel.Children.Add(quick);
             var whiteRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
             _removeWhiteButton = Button("Удалить белый фон · локально", async (_, __) => await RemoveWhiteBackground());
             whiteRow.Children.Add(_removeWhiteButton);
@@ -85,8 +86,17 @@ namespace VanyaTools.Native
             _whiteThreshold = new TextBox { Text = "245", Width = 40, FontSize = 11,
                 VerticalContentAlignment = VerticalAlignment.Center };
             whiteRow.Children.Add(_whiteThreshold);
-            panel.Children.Add(whiteRow);
-            panel.Children.Add(Note("Без оплаты. Убирает белое только от краёв; проверьте светлые детали у границы."));
+            if (!styleOnly)
+            {
+                panel.Children.Add(Label("Удаление фона", false));
+                panel.Children.Add(whiteRow);
+                panel.Children.Add(Note("Белое у края · локально и без оплаты. Светлые детали у границы проверьте."));
+                panel.Children.Add(_removeButton);
+                panel.Children.Add(Label("Апскейл", false));
+                panel.Children.Add(_upscaleButton);
+                panel.Children.Add(new Separator { Margin = new Thickness(0, 12, 0, 6) });
+                panel.Children.Add(Label("Подготовка для ДТФ", true));
+            }
             var alphaRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 5) };
             _alphaButton = Button("Убрать полупрозрачные пиксели", async (_, __) => await RemoveSemiTransparent());
             alphaRow.Children.Add(_alphaButton);
@@ -95,10 +105,10 @@ namespace VanyaTools.Native
             _alphaThreshold = new TextBox { Text = "150", Width = 40, FontSize = 11,
                 VerticalContentAlignment = VerticalAlignment.Center };
             alphaRow.Children.Add(_alphaThreshold);
-            panel.Children.Add(alphaRow);
+            if (!styleOnly) panel.Children.Add(alphaRow);
 
             var edgeRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 3) };
-            _smoothButton = Button("Сгладить край", async (_, __) => await SmoothEdge());
+            _smoothButton = Button("Обводка и сглаживание", async (_, __) => await SmoothEdge());
             edgeRow.Children.Add(_smoothButton);
             edgeRow.Children.Add(new TextBlock { Text = "Радиус px", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
             _edgeRadius = new TextBox { Text = "2", Width = 30, FontSize = 11, Margin = new Thickness(3, 0, 6, 0) };
@@ -116,9 +126,9 @@ namespace VanyaTools.Native
             _pipetteButton = Button("Пипетка", (_, __) => BeginColorPick());
             edgeRow.Children.Add(_pipetteButton);
             _underlayHex.TextChanged += (_, __) => UpdateUnderlaySwatch();
-            panel.Children.Add(edgeRow);
+            if (!styleOnly) panel.Children.Add(edgeRow);
             _edgeUnits = Note("");
-            panel.Children.Add(_edgeUnits);
+            if (!styleOnly) panel.Children.Add(_edgeUnits);
             _edgeRadius.TextChanged += (_, __) => UpdateEdgeUnits();
             _edgeExpansion.TextChanged += (_, __) => UpdateEdgeUnits();
             edgeRow.MouseEnter += (_, __) => UpdateEdgeUnits();
@@ -130,7 +140,7 @@ namespace VanyaTools.Native
             _sourcePreview.MouseLeftButtonDown += SampleUnderlayColor;
             panel.Children.Add(previews);
 
-            panel.Children.Add(Label("Стилизация", true));
+            if (styleOnly) panel.Children.Add(Label("Пресеты стиля", true));
             var styles = new UniformGrid { Columns = 2 };
             foreach (var style in new[]
             {
@@ -141,22 +151,28 @@ namespace VanyaTools.Native
                 new StyleChoice("Комикс", "comic", "Transform the selected image into modern comic-book art with bold ink outlines, halftone shadows and vivid flat color blocks."),
                 new StyleChoice("Городская иллюстрация", "street-illustration", "Render the selected subject as a playful hand-painted editorial street illustration: irregular thick black ink outlines, flat warm peach and cream areas, vivid cobalt blue and orange accents, simplified expressive figures and subtle painted-paper texture. Preserve the source subject and composition.")
             }) styles.Children.Add(StyleCard(style));
-            panel.Children.Add(styles);
-            panel.Children.Add(Button("Свой промпт без образца стиля", (_, __) => ClearStyle()));
-            panel.Children.Add(Label("Модель", false));
+            if (styleOnly)
+            {
+                panel.Children.Add(styles);
+                panel.Children.Add(Button("Свой промпт без образца стиля", (_, __) => ClearStyle()));
+                panel.Children.Add(Label("Модель", false));
+            }
             _model = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 5) };
             _model.Items.Add(new ModelChoice("black-forest-labs/flux-2-pro", "FLUX.2 Pro", 0.14m));
             _model.Items.Add(new ModelChoice("black-forest-labs/flux-kontext-max", "FLUX.1 Kontext Max", 0.08m));
             _model.Items.Add(new ModelChoice("qwen/qwen-image-edit", "Qwen Image Edit", 0.03m));
             _model.SelectedIndex = 0;
-            panel.Children.Add(_model);
-            panel.Children.Add(Label("Промпт", false));
+            if (styleOnly) panel.Children.Add(_model);
+            if (styleOnly) panel.Children.Add(Label("Промпт", false));
             _prompt = new TextBox { MinHeight = 75, MaxHeight = 160, AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 11 };
-            panel.Children.Add(_prompt);
-            panel.Children.Add(Note("Выберите стиль или напишите свой промпт. Исходник сохранится."));
+            if (styleOnly)
+            {
+                panel.Children.Add(_prompt);
+                panel.Children.Add(Note("Выберите стиль или напишите свой промпт. Исходник сохранится."));
+            }
             _editButton = Button("Применить стиль / промпт", async (_, __) => await Run("edit"));
-            panel.Children.Add(_editButton);
+            if (styleOnly) panel.Children.Add(_editButton);
 
             _cancelButton = Button("Отменить", (_, __) => Cancel());
             _cancelButton.Visibility = Visibility.Collapsed;
@@ -223,7 +239,7 @@ namespace VanyaTools.Native
             string model = action == "background" ? "bria/remove-background" :
                 action == "upscale" ? TiledUpscaler : selectedModel.Id;
             string key = _token();
-            if (key.Length < 8) { Report("Укажите ключ Replicate во вкладке «AI-графика».", true); return; }
+            if (key.Length < 8) { Report("Укажите ключ Replicate во вкладке «Настройки».", true); return; }
             decimal cost = action == "background" ? 0.018m : action == "upscale" ? 0.006m : selectedModel.EstimatedCost;
             string price = "Платный запрос Replicate · ориентировочно $" +
                 cost.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) + ".";
@@ -711,10 +727,10 @@ namespace VanyaTools.Native
             }
         }
 
-        private static string PendingPath()
+        private string PendingPath()
         {
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "VanyaTools", "pending-simple-ai-result.txt");
+                "VanyaTools", _styleOnly ? "pending-simple-style-result.txt" : "pending-simple-ai-result.txt");
         }
 
         private void RestorePending()

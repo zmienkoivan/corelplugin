@@ -115,7 +115,7 @@ namespace VanyaTools.Native
         {
             if (_busy) return;
             string key = _token();
-            if (String.IsNullOrWhiteSpace(key) || key.Length < 8) { Report("Сначала сохраните ключ Replicate во вкладке «AI-графика».", true); return; }
+            if (String.IsNullOrWhiteSpace(key) || key.Length < 8) { Report("Сначала сохраните ключ Replicate во вкладке «Настройки».", true); return; }
             if (!TryDimensions(out int width, out int height)) return;
             string selected;
             try { selected = _captureSelection(); }

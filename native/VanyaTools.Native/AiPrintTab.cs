@@ -19,6 +19,8 @@ namespace VanyaTools.Native
 {
     internal sealed class AiPrintTab : UserControl
     {
+        internal FrameworkElement SettingsView { get; private set; }
+        internal string GetToken() { return CurrentToken(); }
         private readonly Func<string, string> _import;
         private readonly Action<string, bool> _status;
         private readonly Func<string> _captureSelection;
@@ -59,34 +61,20 @@ namespace VanyaTools.Native
         public AiPrintTab(Func<string, string> import, Action<string, bool> status, Func<string> captureSelection)
         {
             _import = import; _status = status; _captureSelection = captureSelection;
-            var subtabs = new TabControl { MinHeight = 430 };
-            Content = subtabs;
+            var sections = new StackPanel { Margin = new Thickness(5) };
+            Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Content = sections };
             var panel = new StackPanel { Margin = new Thickness(7) };
-            subtabs.Items.Add(new TabItem
-            {
-                Header = "AI-графика",
-                Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel }
-            });
-            subtabs.Items.Add(new TabItem
-            {
-                Header = "Простые AI",
-                Content = new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
-                    () => CurrentToken(), _import, _status)
-            });
             var fontPanel = new StackPanel { Margin = new Thickness(7) };
-            subtabs.Items.Add(new TabItem
-            {
-                Header = "Определение шрифта",
-                Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = fontPanel }
-            });
-            subtabs.Items.Add(new TabItem
-            {
-                Header = "Развёртка формы",
-                Content = new SublimationTab(_import, _status,
-                    () => AiSelectionCapture.Capture(2048, 4000000), () => CurrentToken())
-            });
-            panel.Children.Add(Label("AI-графика · Replicate", true));
-            panel.Children.Add(Button("Баланс / Billing ↗", (_, __) => OpenBilling()));
+            sections.Children.Add(new Expander { Header = "Определить шрифт",
+                IsExpanded = true, Content = fontPanel });
+            sections.Children.Add(new Expander { Header = "Восстановление принта",
+                IsExpanded = false, Content = panel });
+            var settingsPanel = new StackPanel { Margin = new Thickness(7) };
+            SettingsView = settingsPanel;
+            settingsPanel.Children.Add(Label("Replicate", true));
+            settingsPanel.Children.Add(Button("Баланс / Billing ↗", (_, __) => OpenBilling()));
+            panel.Children.Add(Label("Восстановление принта · Replicate", true));
             panel.Children.Add(Note("Выделите объект и запустите. Результат появится на холсте."));
             fontPanel.Children.Add(Label("Определение шрифта по выделенному объекту", true));
             fontPanel.Children.Add(Note("Выделите буквы. Результат — вероятные шрифты."));
@@ -159,11 +147,11 @@ namespace VanyaTools.Native
             _prompt = new TextBox { MinHeight = 110, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontSize = 11, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             panel.Children.Add(_prompt);
 
-            panel.Children.Add(Label("Ключ Replicate", false));
+            settingsPanel.Children.Add(Label("Ключ Replicate", false));
             _token = new PasswordBox { Margin = new Thickness(0, 0, 0, 4) };
             LoadToken();
-            panel.Children.Add(_token);
-            panel.Children.Add(Button("Сохранить ключ", (_, __) => SaveToken()));
+            settingsPanel.Children.Add(_token);
+            settingsPanel.Children.Add(Button("Сохранить ключ", (_, __) => SaveToken()));
             _runEditButton = Button("Запустить", async (_, __) => await RunEdit());
             panel.Children.Add(_runEditButton);
             _runVectorButton = Button("Векторизовать в SVG · Recraft · $0.01", async (_, __) => await RunVector());

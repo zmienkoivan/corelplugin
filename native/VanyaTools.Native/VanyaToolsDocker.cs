@@ -82,27 +82,41 @@ namespace VanyaTools.Native
             root.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
 
             var standardTools = new StackPanel { Margin = new Thickness(5) };
+            var stickerTools = new StackPanel { Margin = new Thickness(5) };
+            var aiTools = new AiPrintTab(ImportAiResult,
+                (message, isError) => SetStatus(message, isError), CaptureAiSelection);
+            var settings = new StackPanel { Margin = new Thickness(5) };
+            settings.Children.Add(aiTools.SettingsView);
+            AddSeparator(settings);
+            settings.Children.Add(new Expander { Header = "Публикация превью",
+                Content = new PreviewLibraryTab((message, isError) => SetStatus(message, isError)),
+                IsExpanded = false, Margin = new Thickness(4, 2, 4, 5) });
+
             var tabs = new TabControl { MinHeight = 430 };
-            tabs.Items.Add(new TabItem
-            {
-                Header = "Инструменты",
-                Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = standardTools }
-            });
-            tabs.Items.Add(new TabItem
-            {
-                Header = "Фамилии",
-                Content = new NamesGridTab((message, isError) => SetStatus(message, isError))
-            });
-            tabs.Items.Add(new TabItem
-            {
-                Header = "AI-графика",
-                Content = new AiPrintTab(ImportAiResult, (message, isError) => SetStatus(message, isError), CaptureAiSelection)
-            });
-            tabs.Items.Add(new TabItem
-            {
-                Header = "Публикация",
-                Content = new PreviewLibraryTab((message, isError) => SetStatus(message, isError))
-            });
+            tabs.Items.Add(ThumbnailTabs.Create("Основная", ThumbnailTabs.Crop,
+                Color.FromRgb(46, 112, 124),
+                new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = standardTools }));
+            tabs.Items.Add(ThumbnailTabs.Create("Стикерпаки", ThumbnailTabs.Stickers,
+                Color.FromRgb(171, 111, 43),
+                new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = stickerTools }));
+            tabs.Items.Add(ThumbnailTabs.Create("Развёртка формы", ThumbnailTabs.Shirt,
+                Color.FromRgb(74, 114, 174),
+                new SublimationTab(ImportAiResult, (message, isError) => SetStatus(message, isError),
+                    () => AiSelectionCapture.Capture(2048, 4000000), () => aiTools.GetToken())));
+            tabs.Items.Add(ThumbnailTabs.Create("Фамилии", ThumbnailTabs.Names,
+                Color.FromRgb(89, 135, 74),
+                new NamesGridTab((message, isError) => SetStatus(message, isError))));
+            tabs.Items.Add(ThumbnailTabs.Create("Стилизация", ThumbnailTabs.Style,
+                Color.FromRgb(167, 83, 123),
+                new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
+                    () => aiTools.GetToken(), ImportAiResult,
+                    (message, isError) => SetStatus(message, isError), true)));
+            tabs.Items.Add(ThumbnailTabs.Create("Настройки", ThumbnailTabs.Settings,
+                Color.FromRgb(91, 104, 116),
+                new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = settings }));
+            tabs.Items.Add(ThumbnailTabs.Create("Шрифт и принт", ThumbnailTabs.Restore,
+                Color.FromRgb(95, 88, 152), aiTools));
+            tabs.SelectedIndex = 0;
             outer.Children.Add(tabs);
             root = standardTools;
 
@@ -123,7 +137,11 @@ namespace VanyaTools.Native
             trimSettings.Children.Add(sidesGrid);
             _trimPaddingPx = AddRow(trimSettings, "Отступ, px", "2");
 
-            AddSeparator(root);
+            root.Children.Add(new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
+                () => aiTools.GetToken(), ImportAiResult,
+                (message, isError) => SetStatus(message, isError), false));
+
+            root = stickerTools;
             AddSectionTitle(root, "Подготовка стикерпака");
 
             AddSectionTitle(root, "1. Выберите размер пака");
