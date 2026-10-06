@@ -74,9 +74,7 @@ namespace VanyaTools.Native
             SettingsView = settingsPanel;
             settingsPanel.Children.Add(Label("Replicate", true));
             settingsPanel.Children.Add(Button("Баланс / Billing ↗", (_, __) => OpenBilling()));
-            panel.Children.Add(Label("Восстановление принта · Replicate", true));
             panel.Children.Add(Note("Выделите объект и запустите. Результат появится на холсте."));
-            fontPanel.Children.Add(Label("Определение шрифта по выделенному объекту", true));
             fontPanel.Children.Add(Note("Выделите буквы. Результат — вероятные шрифты."));
             fontPanel.Children.Add(Label("Модель анализа", false));
             _fontModel = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 4) };
@@ -84,7 +82,7 @@ namespace VanyaTools.Native
             _fontModel.Items.Add(new ModelItem("deepseek-ai/deepseek-vl2:e5caf557dd9e5dcee46442e1315291ef1867f027991ede8ff95e304d4f734200", "DeepSeek-VL2 · примерно $0.015 за запуск", 0.015m));
             _fontModel.SelectedIndex = 0;
             fontPanel.Children.Add(_fontModel);
-            _fontAnalysisButton = Button("Определить шрифт", async (_, __) => await AnalyzeFont());
+            _fontAnalysisButton = DockerTheme.Primary(Button("Определить шрифт", async (_, __) => await AnalyzeFont()));
             fontPanel.Children.Add(_fontAnalysisButton);
             _fontCancelButton = Button("Отменить анализ", (_, __) => CancelOperation());
             _fontCancelButton.Visibility = Visibility.Collapsed;
@@ -132,27 +130,30 @@ namespace VanyaTools.Native
             _analysisText = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 180, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 10 };
             panel.Children.Add(new Expander { Header = "Анализ AI", Content = _analysisText });
 
-            panel.Children.Add(Label("Модель и ориентировочная цена", false));
+            var advanced = new StackPanel { Margin = new Thickness(3, 2, 3, 3) };
+            panel.Children.Add(new Expander { Header = "Модель и промпт", IsExpanded = false,
+                Content = advanced });
+            advanced.Children.Add(Label("Модель и ориентировочная цена", false));
             _model = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 2) };
             _model.Items.Add(new ModelItem("black-forest-labs/flux-2-pro", "FLUX.2 Pro · 2MP · до $0.14 ориентировочно", 0.14m));
             _model.Items.Add(new ModelItem("black-forest-labs/flux-kontext-max", "FLUX.1 Kontext Max · $0.08 / изображение", 0.08m));
             _model.Items.Add(new ModelItem("qwen/qwen-image-edit", "Qwen Image Edit · $0.03 / изображение", 0.03m));
             _model.SelectedIndex = 0;
             _model.SelectionChanged += (_, __) => UpdateCost();
-            panel.Children.Add(_model);
+            advanced.Children.Add(_model);
             _cost = Note("");
-            panel.Children.Add(_cost);
+            advanced.Children.Add(_cost);
 
-            panel.Children.Add(Label("Промпт", false));
+            advanced.Children.Add(Label("Промпт", false));
             _prompt = new TextBox { MinHeight = 110, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontSize = 11, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-            panel.Children.Add(_prompt);
+            advanced.Children.Add(_prompt);
 
             settingsPanel.Children.Add(Label("Ключ Replicate", false));
             _token = new PasswordBox { Margin = new Thickness(0, 0, 0, 4) };
             LoadToken();
             settingsPanel.Children.Add(_token);
-            settingsPanel.Children.Add(Button("Сохранить ключ", (_, __) => SaveToken()));
-            _runEditButton = Button("Запустить", async (_, __) => await RunEdit());
+            settingsPanel.Children.Add(DockerTheme.Primary(Button("Сохранить ключ", (_, __) => SaveToken())));
+            _runEditButton = DockerTheme.Primary(Button("Запустить", async (_, __) => await RunEdit()));
             panel.Children.Add(_runEditButton);
             _runVectorButton = Button("Векторизовать в SVG · Recraft · $0.01", async (_, __) => await RunVector());
             panel.Children.Add(_runVectorButton);
@@ -674,12 +675,12 @@ namespace VanyaTools.Native
         private static double P(string s, double fallback) { double v; return Double.TryParse((s ?? "").Replace(",", "."), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v) ? v : fallback; }
         private static TextBlock Label(string text, bool heading) { return new TextBlock { Text = text, FontSize = heading ? 13 : 11, FontWeight = heading ? FontWeights.SemiBold : FontWeights.Normal, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 3) }; }
         private static TextBlock Note(string text) { return new TextBlock { Text = text, FontSize = 10, Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 5) }; }
-        private static Button Button(string text, RoutedEventHandler handler) { var b = new Button { Content = text, FontSize = 11, MinHeight = 24, Margin = new Thickness(0, 0, 0, 4) }; b.Click += handler; return b; }
+        private static Button Button(string text, RoutedEventHandler handler) { var b = new Button { Content = text, FontSize = 11, MinHeight = 24, Margin = new Thickness(0, 0, 0, 2) }; b.Click += handler; return b; }
         private static Border Preview(string title, out Image image)
         {
-            image = new Image { Height = 130, Stretch = Stretch.Uniform };
+            image = new Image { Height = 92, Stretch = Stretch.Uniform };
             var stack = new StackPanel(); stack.Children.Add(Label(title, false));
-            stack.Children.Add(new Border { Height = 136, BorderThickness = new Thickness(1), BorderBrush = Brushes.LightGray, Child = image });
+            stack.Children.Add(new Border { Height = 98, BorderThickness = new Thickness(1), BorderBrush = Brushes.LightGray, Child = image });
             return new Border { Margin = new Thickness(2), Child = stack };
         }
         private static TextBox CropField(Panel parent, string value) { var t = new TextBox { Text = value, FontSize = 10, Height = 22, TextAlignment = TextAlignment.Center, Margin = new Thickness(1) }; parent.Children.Add(t); return t; }

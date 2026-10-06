@@ -39,11 +39,11 @@ namespace VanyaTools.Native
         {
             _status = status;
             var panel = new StackPanel { Margin = new Thickness(8) };
-            Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel };
+            Content = panel;
             panel.Children.Add(new TextBlock { Text = "Превью принта", FontSize = 14,
                 FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 1, 0, 6) });
             panel.Children.Add(Note("Выделите принт. Ссылка действует 7 дней."));
-            _publish = Button("Опубликовать выделение", async (_, __) => await Publish());
+            _publish = DockerTheme.Primary(Button("Опубликовать выделение", async (_, __) => await Publish()));
             panel.Children.Add(_publish);
             _cancel = Button("Отменить", (_, __) => _cancellation?.Cancel());
             _cancel.Visibility = Visibility.Collapsed;

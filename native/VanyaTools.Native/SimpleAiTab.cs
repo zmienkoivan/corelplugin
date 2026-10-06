@@ -33,7 +33,7 @@ namespace VanyaTools.Native
         private readonly TextBlock _progress;
         private readonly ProgressBar _progressBar;
         private readonly Button _removeButton, _removeWhiteButton, _upscaleButton,
-            _alphaButton, _smoothButton, _pipetteButton,
+            _alphaButton, _smoothButton, _stairButton, _pipetteButton,
             _editButton, _cancelButton, _retryButton;
         private readonly List<RadioButton> _styleButtons = new List<RadioButton>();
         private readonly DispatcherTimer _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -69,46 +69,47 @@ namespace VanyaTools.Native
         {
             _capture = capture; _token = token; _import = import; _status = status;
             _styleOnly = styleOnly;
-            var panel = new StackPanel { Margin = new Thickness(7) };
-            Content = styleOnly
-                ? (object)new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel }
-                : panel;
+            var panel = new StackPanel { Margin = new Thickness(5) };
+            Content = panel;
 
-            panel.Children.Add(Label(styleOnly ? "Стилизация" : "Подготовка изображения", true));
-            panel.Children.Add(Note("Выделите объект или группу. Результат появится на холсте."));
+            if (styleOnly) panel.Children.Add(Label("Стилизация", true));
+            panel.Children.Add(Note("Выделите объект или группу."));
             _removeButton = Button("Удалить фон · AI", async (_, __) => await Run("background"));
             _upscaleButton = Button("Апскейл ×2", async (_, __) => await Run("upscale"));
-            var whiteRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
-            _removeWhiteButton = Button("Удалить белый фон · локально", async (_, __) => await RemoveWhiteBackground());
+            var whiteRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 2) };
+            _removeWhiteButton = Button("Белый фон", async (_, __) => await RemoveWhiteBackground());
             whiteRow.Children.Add(_removeWhiteButton);
-            whiteRow.Children.Add(new TextBlock { Text = "Белизна от", VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 10, Margin = new Thickness(6, 0, 3, 0) });
+            whiteRow.Children.Add(new TextBlock { Text = "Порог", VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 10, Margin = new Thickness(5, 0, 3, 0) });
             _whiteThreshold = new TextBox { Text = "245", Width = 40, FontSize = 11,
                 VerticalContentAlignment = VerticalAlignment.Center };
             whiteRow.Children.Add(_whiteThreshold);
             if (!styleOnly)
             {
-                panel.Children.Add(Label("Удаление фона", false));
                 panel.Children.Add(whiteRow);
-                panel.Children.Add(Note("Белое у края · локально и без оплаты. Светлые детали у границы проверьте."));
-                panel.Children.Add(_removeButton);
-                panel.Children.Add(Label("Апскейл", false));
-                panel.Children.Add(_upscaleButton);
-                panel.Children.Add(new Separator { Margin = new Thickness(0, 12, 0, 6) });
-                panel.Children.Add(Label("Подготовка для ДТФ", true));
+                var aiRow = new UniformGrid { Columns = 2 };
+                aiRow.Children.Add(_removeButton);
+                aiRow.Children.Add(_upscaleButton);
+                panel.Children.Add(aiRow);
+                panel.Children.Add(new Separator { Margin = new Thickness(0, 4, 0, 2) });
+                panel.Children.Add(Label("ДТФ", true));
             }
-            var alphaRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 5) };
-            _alphaButton = Button("Убрать полупрозрачные пиксели", async (_, __) => await RemoveSemiTransparent());
+            var alphaRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 2) };
+            _alphaButton = Button("Убрать полупрозрачность", async (_, __) => await RemoveSemiTransparent());
             alphaRow.Children.Add(_alphaButton);
             alphaRow.Children.Add(new TextBlock { Text = "Порог:", VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 10, Margin = new Thickness(6, 0, 3, 0) });
-            _alphaThreshold = new TextBox { Text = "150", Width = 40, FontSize = 11,
+                FontSize = 10, Margin = new Thickness(5, 0, 3, 0) });
+            _alphaThreshold = new TextBox { Text = "130", Width = 40, FontSize = 11,
                 VerticalContentAlignment = VerticalAlignment.Center };
             alphaRow.Children.Add(_alphaThreshold);
             if (!styleOnly) panel.Children.Add(alphaRow);
 
-            var edgeRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 3) };
-            _smoothButton = Button("Обводка и сглаживание", async (_, __) => await SmoothEdge());
+            _stairButton = Button("Сгладить лесенку", async (_, __) => await SmoothStairs());
+            _stairButton.ToolTip = "Уточняет край в более плотной сетке; прозрачность остаётся только 0 или 100%.";
+            if (!styleOnly) panel.Children.Add(_stairButton);
+
+            var edgeRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 1) };
+            _smoothButton = Button("Обводка", async (_, __) => await SmoothEdge());
             edgeRow.Children.Add(_smoothButton);
             edgeRow.Children.Add(new TextBlock { Text = "Радиус px", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
             _edgeRadius = new TextBox { Text = "2", Width = 30, FontSize = 11, Margin = new Thickness(3, 0, 6, 0) };
@@ -140,8 +141,8 @@ namespace VanyaTools.Native
             _sourcePreview.MouseLeftButtonDown += SampleUnderlayColor;
             panel.Children.Add(previews);
 
-            if (styleOnly) panel.Children.Add(Label("Пресеты стиля", true));
-            var styles = new UniformGrid { Columns = 2 };
+            if (styleOnly) panel.Children.Add(Label("Пресеты", true));
+            var styles = new UniformGrid { Columns = 3 };
             foreach (var style in new[]
             {
                 new StyleChoice("Аниме", "anime", "Transform the selected image into polished Japanese anime illustration with clean expressive linework and cel shading."),
@@ -164,14 +165,13 @@ namespace VanyaTools.Native
             _model.SelectedIndex = 0;
             if (styleOnly) panel.Children.Add(_model);
             if (styleOnly) panel.Children.Add(Label("Промпт", false));
-            _prompt = new TextBox { MinHeight = 75, MaxHeight = 160, AcceptsReturn = true,
-                TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 11 };
+            _prompt = new TextBox { MinHeight = 55, MaxHeight = 78, AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, FontSize = 11 };
             if (styleOnly)
             {
                 panel.Children.Add(_prompt);
-                panel.Children.Add(Note("Выберите стиль или напишите свой промпт. Исходник сохранится."));
             }
-            _editButton = Button("Применить стиль / промпт", async (_, __) => await Run("edit"));
+            _editButton = DockerTheme.Primary(Button("Применить стиль / промпт", async (_, __) => await Run("edit")));
             if (styleOnly) panel.Children.Add(_editButton);
 
             _cancelButton = Button("Отменить", (_, __) => Cancel());
@@ -191,15 +191,15 @@ namespace VanyaTools.Native
         private Border StyleCard(StyleChoice style)
         {
             var content = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
-            content.Children.Add(new Image { Source = Thumbnail(style.Asset), Width = 90, Height = 90,
-                Stretch = Stretch.UniformToFill, Margin = new Thickness(2) });
+            content.Children.Add(new Image { Source = Thumbnail(style.Asset), Width = 72, Height = 72,
+                Stretch = Stretch.UniformToFill, Margin = new Thickness(1) });
             content.Children.Add(new TextBlock { Text = style.Name, TextAlignment = TextAlignment.Center,
-                TextWrapping = TextWrapping.Wrap, FontSize = 10, MaxWidth = 130 });
+                TextWrapping = TextWrapping.Wrap, FontSize = 10, MaxWidth = 100 });
             var choice = new RadioButton { GroupName = "VanyaSimpleAiStyle", Content = content,
                 HorizontalAlignment = HorizontalAlignment.Center };
             _styleButtons.Add(choice);
             var border = new Border { BorderBrush = Brushes.LightGray, BorderThickness = new Thickness(1),
-                Margin = new Thickness(2), Padding = new Thickness(3), Child = choice };
+                Margin = new Thickness(1), Padding = new Thickness(2), Child = choice };
             choice.Checked += (_, __) => { _selectedStyle = style;
                 _prompt.Text = style.Prompt +
                 " Preserve the main subject, pose and composition of the input image. Do not invent text.";
@@ -359,6 +359,117 @@ namespace VanyaTools.Native
             }
             var result = BitmapSource.Create(bgra.PixelWidth, bgra.PixelHeight,
                 input.DpiX, input.DpiY, PixelFormats.Bgra32, null, pixels, stride);
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(result));
+            using (var stream = File.Create(output)) encoder.Save(stream);
+        }
+
+        private async Task SmoothStairs()
+        {
+            if (_busy) return;
+            if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
+            { Report("Сначала вставьте готовый результат.", true); return; }
+            int threshold;
+            if (!Int32.TryParse(_alphaThreshold.Text, out threshold) || threshold < 0 || threshold > 255)
+            { Report("Порог должен быть от 0 до 255.", true); return; }
+            SetBusy(true, "Сглаживаю ступеньки края…");
+            try
+            {
+                _importWarning = null;
+                string source = AiSelectionCapture.Capture();
+                _sourcePreview.Source = AiPrintTab.Bitmap(source);
+                _resultPreview.Source = null;
+                string output = Path.Combine(Path.GetTempPath(), "Vanya-Stairs-" + Guid.NewGuid().ToString("N") + ".png");
+                CancellationToken cancellation = _cancellation.Token;
+                await Task.Run(() => SmoothOpaqueStairs(source, output, threshold, cancellation), cancellation);
+                cancellation.ThrowIfCancellationRequested();
+                _readyOutput = output;
+                Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
+                File.WriteAllText(PendingPath(), output);
+                _resultPreview.Source = AiPrintTab.Bitmap(output);
+                InsertReady();
+                ReportOutcome();
+            }
+            catch (OperationCanceledException) { Report("Операция отменена.", false); }
+            catch (Exception ex) { Log.Error("Opaque stair smoothing failed.", ex); Report(ex.GetBaseException().Message, true); }
+            finally { SetBusy(false, null); }
+        }
+
+        private static void SmoothOpaqueStairs(string source, string output, int threshold,
+            CancellationToken cancellation)
+        {
+            BitmapSource input = AiPrintTab.Bitmap(source);
+            var bgra = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
+            int width = bgra.PixelWidth, height = bgra.PixelHeight;
+            int length = checked(width * height), stride = checked(width * 4);
+            // Use 2x for ordinary artwork and 1.5x for large print layouts.
+            // Keep the physical size unchanged by updating the PNG DPI below.
+            double scale = length <= 16000000 ? 2.0 : 1.5;
+            if (width > 20000 || height > 20000) scale = 1.0;
+            int outWidth = checked((int)Math.Round(width * scale));
+            int outHeight = checked((int)Math.Round(height * scale));
+            byte[] pixels = new byte[checked(stride * height)];
+            byte[] mask = new byte[length], work = new byte[length];
+            bgra.CopyPixels(pixels, stride, 0);
+            for (int p = 0; p < length; p++)
+            {
+                if ((p & 0xfffff) == 0) cancellation.ThrowIfCancellationRequested();
+                mask[p] = pixels[p * 4 + 3] >= threshold && pixels[p * 4 + 3] > 0
+                    ? (byte)255 : (byte)0;
+            }
+            GaussianHorizontal(mask, work, width, height, 1, cancellation);
+            GaussianVertical(work, mask, width, height, 1, cancellation);
+            // Keep one-pixel lettering and thin accents. The blur influences
+            // only the subpixel boundary when the mask is sampled below.
+            for (int p = 0; p < length; p++)
+            {
+                int original = pixels[p * 4 + 3] >= threshold && pixels[p * 4 + 3] > 0 ? 255 : 0;
+                mask[p] = (byte)((mask[p] * 45 + original * 55 + 50) / 100);
+            }
+            byte[] resultPixels = new byte[checked(outWidth * outHeight * 4)];
+            double scaleX = (double)outWidth / width, scaleY = (double)outHeight / height;
+            for (int y = 0; y < outHeight; y++)
+            {
+                if ((y & 63) == 0) cancellation.ThrowIfCancellationRequested();
+                double sy = (y + 0.5) / scaleY - 0.5;
+                int y0 = Math.Max(0, Math.Min(height - 1, (int)Math.Floor(sy)));
+                int y1 = Math.Min(height - 1, y0 + 1);
+                double fy = Math.Max(0, Math.Min(1, sy - y0));
+                for (int x = 0; x < outWidth; x++)
+                {
+                    double sx = (x + 0.5) / scaleX - 0.5;
+                    int x0 = Math.Max(0, Math.Min(width - 1, (int)Math.Floor(sx)));
+                    int x1 = Math.Min(width - 1, x0 + 1);
+                    double fx = Math.Max(0, Math.Min(1, sx - x0));
+                    int p00 = y0 * width + x0, p10 = y0 * width + x1;
+                    int p01 = y1 * width + x0, p11 = y1 * width + x1;
+                    double w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy);
+                    double w01 = (1 - fx) * fy, w11 = fx * fy;
+                    double coverage = mask[p00] * w00 + mask[p10] * w10 +
+                        mask[p01] * w01 + mask[p11] * w11;
+                    int destination = (y * outWidth + x) * 4;
+                    if (coverage < 128) continue;
+                    // Sample color from the kept artwork, not from translucent
+                    // fringe pixels that may contain a matte or white halo.
+                    double c00 = pixels[p00 * 4 + 3] >= threshold && pixels[p00 * 4 + 3] > 0 ? w00 : 0;
+                    double c10 = pixels[p10 * 4 + 3] >= threshold && pixels[p10 * 4 + 3] > 0 ? w10 : 0;
+                    double c01 = pixels[p01 * 4 + 3] >= threshold && pixels[p01 * 4 + 3] > 0 ? w01 : 0;
+                    double c11 = pixels[p11 * 4 + 3] >= threshold && pixels[p11 * 4 + 3] > 0 ? w11 : 0;
+                    double total = c00 + c10 + c01 + c11;
+                    for (int channel = 0; channel < 3; channel++)
+                    {
+                        double color = total > 0 ?
+                            (pixels[p00 * 4 + channel] * c00 + pixels[p10 * 4 + channel] * c10 +
+                             pixels[p01 * 4 + channel] * c01 + pixels[p11 * 4 + channel] * c11) / total :
+                            pixels[p00 * 4 + channel];
+                        resultPixels[destination + channel] = (byte)Math.Max(0, Math.Min(255, Math.Round(color)));
+                    }
+                    resultPixels[destination + 3] = 255;
+                }
+            }
+            var result = BitmapSource.Create(outWidth, outHeight,
+                input.DpiX * scaleX, input.DpiY * scaleY, PixelFormats.Bgra32,
+                null, resultPixels, checked(outWidth * 4));
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(result));
             using (var stream = File.Create(output)) encoder.Save(stream);
@@ -703,7 +814,7 @@ namespace VanyaTools.Native
         {
             _busy = busy;
             _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
-                _smoothButton.IsEnabled = _pipetteButton.IsEnabled =
+                _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled =
                 _editButton.IsEnabled = !busy;
             _model.IsEnabled = _prompt.IsEnabled = _whiteThreshold.IsEnabled = _alphaThreshold.IsEnabled =
                 _edgeRadius.IsEnabled = _edgeExpansion.IsEnabled = _underlayHex.IsEnabled = !busy;
@@ -755,18 +866,19 @@ namespace VanyaTools.Native
             _importWarning = null;
         }
         private static TextBlock Label(string text, bool heading) { return new TextBlock { Text = text,
-            FontSize = heading ? 13 : 11, FontWeight = heading ? FontWeights.SemiBold : FontWeights.Normal,
-            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 4) }; }
+            FontSize = heading ? 12 : 10, FontWeight = heading ? FontWeights.SemiBold : FontWeights.Normal,
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 2) }; }
         private static TextBlock Note(string text) { return new TextBlock { Text = text, FontSize = 10,
-            Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 5) }; }
+            Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 2) }; }
         private static Button Button(string text, RoutedEventHandler handler) { var button = new Button
-            { Content = text, FontSize = 11, MinHeight = 28, Margin = new Thickness(2) };
+            { Content = text, FontSize = 10, MinHeight = 24, Margin = new Thickness(1),
+              Padding = new Thickness(3, 1, 3, 1) };
             button.Click += handler; return button; }
         private static Border Preview(string title, out Image image)
         {
-            image = new Image { Height = 115, Stretch = Stretch.Uniform };
+            image = new Image { Height = 72, Stretch = Stretch.Uniform };
             var stack = new StackPanel(); stack.Children.Add(Label(title, false));
-            stack.Children.Add(new Border { Height = 120, BorderThickness = new Thickness(1),
+            stack.Children.Add(new Border { Height = 76, BorderThickness = new Thickness(1),
                 BorderBrush = Brushes.LightGray, Child = image });
             return new Border { Margin = new Thickness(2), Child = stack };
         }

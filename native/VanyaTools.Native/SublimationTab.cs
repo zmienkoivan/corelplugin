@@ -57,9 +57,9 @@ namespace VanyaTools.Native
             Func<string> captureSelection, Func<string> token)
         {
             _import = import; _status = status; _captureSelection = captureSelection; _token = token;
-            var panel = new StackPanel { Margin = new Thickness(7) };
-            Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel };
-            panel.Children.Add(Label("Развёртка спортивной формы", true));
+            var panel = new StackPanel { Margin = new Thickness(6) };
+            Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Content = panel };
             panel.Children.Add(Note("Выделите мокап. Один запуск — одна деталь."));
 
             var previews = new UniformGrid { Columns = 2 };
@@ -72,7 +72,7 @@ namespace VanyaTools.Native
             _part.SelectedIndex = 0;
             _part.SelectionChanged += (_, __) => SetDefaultSize();
             panel.Children.Add(_part);
-            panel.Children.Add(Note("Вид спереди: правый рукав на фото слева, левый — справа."));
+            panel.Children.Add(Note("Спереди: правый рукав слева, левый справа."));
 
             panel.Children.Add(Label("Размер прямоугольника, мм: ширина × высота", false));
             var dimensions = new UniformGrid { Columns = 2 };
@@ -83,11 +83,11 @@ namespace VanyaTools.Native
             panel.Children.Add(dimensions);
             _size = Note(""); panel.Children.Add(_size);
             UpdateSize();
-            panel.Children.Add(Note("PNG 300 dpi, без прозрачности. Лекало добавьте в CorelDRAW."));
+            panel.Children.Add(Note("PNG 300 dpi; лекало добавьте в CorelDRAW."));
 
             panel.Children.Add(Label("Уточнение композиции (необязательно)", false));
-            _hint = new TextBox { MinHeight = 65, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 11 };
+            _hint = new TextBox { MinHeight = 48, MaxHeight = 72, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, FontSize = 11 };
             panel.Children.Add(_hint);
             _upscale = new CheckBox { Content = "Детальное увеличение ×4 по 4 фрагментам", IsChecked = true,
                 FontSize = 10, Margin = new Thickness(0, 3, 0, 4) };
@@ -95,7 +95,7 @@ namespace VanyaTools.Native
             _price = Note("Цена: ~$0.11–0.16 за запуск.");
             panel.Children.Add(_price);
 
-            _run = Button("Создать развёртку из выделения", async (_, __) => await Start());
+            _run = DockerTheme.Primary(Button("Создать развёртку из выделения", async (_, __) => await Start()));
             panel.Children.Add(_run);
             _cancel = Button("Отменить", (_, __) => Cancel()); _cancel.Visibility = Visibility.Collapsed;
             panel.Children.Add(_cancel);
@@ -594,12 +594,12 @@ namespace VanyaTools.Native
         private static TextBox Field(string value) { return new TextBox { Text = value, FontSize = 11, Height = 24,
             TextAlignment = TextAlignment.Center, Margin = new Thickness(1, 0, 1, 4) }; }
         private static Button Button(string text, RoutedEventHandler click) { var button = new Button { Content = text,
-            FontSize = 11, MinHeight = 25, Margin = new Thickness(0, 0, 0, 4) }; button.Click += click; return button; }
+            FontSize = 11, MinHeight = 25, Margin = new Thickness(0, 0, 0, 2) }; button.Click += click; return button; }
         private static Border Preview(string title, out Image image)
         {
-            image = new Image { Height = 130, Stretch = Stretch.Uniform };
+            image = new Image { Height = 90, Stretch = Stretch.Uniform };
             var content = new StackPanel(); content.Children.Add(Label(title, false));
-            content.Children.Add(new Border { Height = 136, BorderBrush = Brushes.LightGray,
+            content.Children.Add(new Border { Height = 96, BorderBrush = Brushes.LightGray,
                 BorderThickness = new Thickness(1), Child = image });
             return new Border { Margin = new Thickness(2), Child = content };
         }

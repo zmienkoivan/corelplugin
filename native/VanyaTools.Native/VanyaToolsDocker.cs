@@ -48,54 +48,58 @@ namespace VanyaTools.Native
             CorelApp.SetHostApplication(app);
             Log.Info("VanyaToolsDocker constructor started.");
 
-            var outer = new StackPanel
+            var outer = new Grid
             {
                 Margin = new Thickness(6),
                 Background = new SolidColorBrush(Color.FromRgb(236, 239, 241))
             };
+            outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            outer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            DockerTheme.Apply(outer);
+            Content = outer;
 
-            Content = new ScrollViewer
-            {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Content = outer
-            };
-            var root = outer;
-
-            root.Children.Add(new TextBlock
+            var heading = new TextBlock
             {
                 Text = "Vanya Tools · " + typeof(VanyaToolsDocker).Assembly.GetName().Version.ToString(3),
                 FontSize = 14,
                 FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 0, 0, 5)
-            });
+                Margin = new Thickness(0, 0, 0, 3)
+            };
+            outer.Children.Add(heading);
 
             _status = new TextBlock
             {
                 Text = "Готово",
                 FontSize = 11,
                 Padding = new Thickness(5, 3, 5, 3),
-                Margin = new Thickness(0, 0, 0, 6),
-                TextWrapping = TextWrapping.Wrap,
-                Background = new SolidColorBrush(Color.FromRgb(223, 229, 232))
+                Margin = new Thickness(0, 0, 0, 3),
+                TextWrapping = TextWrapping.Wrap
             };
-            root.Children.Add(_status);
-            root.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
+            var statusFrame = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(223, 229, 232)),
+                CornerRadius = new CornerRadius(5),
+                Child = _status
+            };
+            Grid.SetRow(statusFrame, 1);
+            outer.Children.Add(statusFrame);
 
             var standardTools = new StackPanel { Margin = new Thickness(5) };
             var stickerTools = new StackPanel { Margin = new Thickness(5) };
             var aiTools = new AiPrintTab(ImportAiResult,
                 (message, isError) => SetStatus(message, isError), CaptureAiSelection);
             var settings = new StackPanel { Margin = new Thickness(5) };
+            settings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
             settings.Children.Add(aiTools.SettingsView);
             AddSeparator(settings);
             settings.Children.Add(new Expander { Header = "Публикация превью",
                 Content = new PreviewLibraryTab((message, isError) => SetStatus(message, isError)),
                 IsExpanded = false, Margin = new Thickness(4, 2, 4, 5) });
 
-            var tabs = new TabControl { MinHeight = 430 };
+            var tabs = new TabControl { MinHeight = 360 };
             tabs.Items.Add(ThumbnailTabs.Create("Основная", ThumbnailTabs.Crop,
-                Color.FromRgb(46, 112, 124),
-                new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = standardTools }));
+                Color.FromRgb(46, 112, 124), standardTools));
             tabs.Items.Add(ThumbnailTabs.Create("Стикерпаки", ThumbnailTabs.Stickers,
                 Color.FromRgb(171, 111, 43),
                 new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = stickerTools }));
@@ -117,11 +121,11 @@ namespace VanyaTools.Native
             tabs.Items.Add(ThumbnailTabs.Create("Шрифт и принт", ThumbnailTabs.Restore,
                 Color.FromRgb(95, 88, 152), aiTools));
             tabs.SelectedIndex = 0;
+            Grid.SetRow(tabs, 2);
             outer.Children.Add(tabs);
-            root = standardTools;
+            Panel root = standardTools;
 
-            AddSectionTitle(root, "Простые автоматизации");
-            root.Children.Add(Button("Обрезать растр", (_, __) => RunTrim(true)));
+            root.Children.Add(DockerTheme.Primary(Button("Обрезать растр", (_, __) => RunTrim(true))));
             var trimSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
             AddSettingsExpander(root, "Настройки обрезки растра", trimSettings);
             AddSmallLabel(trimSettings, "По границе");
@@ -161,7 +165,7 @@ namespace VanyaTools.Native
             AddSeparator(root);
             AddSectionTitle(root, "2. Создайте контур пака");
             AddSmallLabel(root, "Выделите стикеры.");
-            root.Children.Add(Button("Создать контур реза", (_, __) => RunCutContour()));
+            root.Children.Add(DockerTheme.Primary(Button("Создать контур реза", (_, __) => RunCutContour())));
             var contourSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
             AddSettingsExpander(root, "Настройки контура", contourSettings);
             _offsetMm = AddRow(contourSettings, "Отступ, мм", "2");
@@ -194,7 +198,7 @@ namespace VanyaTools.Native
             AddSeparator(root);
             AddSectionTitle(root, "4. Примените язычки");
             AddSmallLabel(root, "Выделите контур или маркер.");
-            root.Children.Add(Button("Применить язычки", (_, __) => RunApplyPeelTabs()));
+            root.Children.Add(DockerTheme.Primary(Button("Применить язычки", (_, __) => RunApplyPeelTabs())));
 
             AddSeparator(root);
             var maintenance = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
@@ -473,7 +477,7 @@ namespace VanyaTools.Native
                 Content = text,
                 FontSize = 11,
                 MinHeight = 24,
-                Margin = new Thickness(0, 0, 0, 4),
+                Margin = new Thickness(0, 0, 0, 2),
                 Padding = new Thickness(5, 1, 5, 1)
             };
             button.Click += handler;

@@ -40,11 +40,10 @@ namespace VanyaTools.Native
         public NamesGridTab(Action<string, bool> status)
         {
             _status = status;
-            var panel = new StackPanel { Margin = new Thickness(10) };
-            Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel };
+            var panel = new StackPanel { Margin = new Thickness(6) };
+            Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Content = panel };
 
-            panel.Children.Add(new TextBlock { Text = "Фамилии для печати", FontSize = 14,
-                FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 5) });
             panel.Children.Add(Note("Одна строка — одна надпись. Номера и пометки «укоротить до 110» удаляются."));
 
             var inputHeader = new Grid { Margin = new Thickness(0, 4, 0, 3) };
@@ -59,7 +58,7 @@ namespace VanyaTools.Native
             panel.Children.Add(inputHeader);
 
             _names = new TextBox { AcceptsReturn = true, AcceptsTab = false, TextWrapping = TextWrapping.NoWrap,
-                MinHeight = 170, MaxHeight = 280, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                MinHeight = 125, MaxHeight = 220, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 12,
                 Margin = new Thickness(0, 0, 0, 9) };
             panel.Children.Add(_names);
@@ -107,7 +106,7 @@ namespace VanyaTools.Native
             _center = new CheckBox { Content = "По центру ячеек", IsChecked = true, FontSize = 11,
                 Margin = new Thickness(0, 3, 0, 9) };
             panel.Children.Add(_center);
-            panel.Children.Add(Button("Создать сетку в CorelDRAW", CreateGrid));
+            panel.Children.Add(DockerTheme.Primary(Button("Создать сетку в CorelDRAW", CreateGrid)));
             panel.Children.Add(Note("Сетка начнётся в 10 мм от верхнего левого края страницы. Пустые строки пропускаются."));
         }
 
