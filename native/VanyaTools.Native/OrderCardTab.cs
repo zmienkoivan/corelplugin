@@ -279,17 +279,17 @@ namespace VanyaTools.Native
             var original = new List<dynamic>();
             foreach (dynamic shape in app.ActiveSelectionRange.Shapes) original.Add(shape);
             dynamic originalPage = doc.ActivePage;
+            string capturePath = null;
             try
             {
                 SelectShapes(doc, frame);
-                Log.Info("Order card: copying selection to clipboard.");
-                app.ActiveSelectionRange.Copy();
-                BitmapSource image = Clipboard.GetImage();
-                if (image == null)
-                    throw new InvalidOperationException("CorelDRAW не передал изображение в буфер обмена. Попробуйте выделить кадр и скопировать его вручную (Ctrl+C).");
-                Log.Info("Order card: clipboard bitmap " + image.PixelWidth + "x" + image.PixelHeight + ".");
+                Log.Info("Order card: rasterizing selected shapes in CorelDRAW.");
+                capturePath = AiSelectionCapture.Capture(9500, 24000000);
+                BitmapSource image = AiPrintTab.Bitmap(capturePath);
+                Log.Info("Order card: captured bitmap " + image.PixelWidth + "x" + image.PixelHeight + ".");
                 if (image.PixelWidth <= 0 || image.PixelHeight <= 0)
-                    throw new InvalidOperationException("Буфер обмена вернул пустое изображение.");
+                    throw new InvalidOperationException("CorelDRAW вернул пустой кадр.");
+                EnsureVisiblePhoto(image);
                 if (Math.Max(image.PixelWidth, image.PixelHeight) >
                     20 * Math.Min(image.PixelWidth, image.PixelHeight))
                     throw new InvalidOperationException("Кадр слишком узкий для Telegram. Измените выделение.");
@@ -329,6 +329,7 @@ namespace VanyaTools.Native
             }
             finally
             {
+                try { if (capturePath != null) File.Delete(capturePath); } catch { }
                 try { originalPage.Activate(); } catch { }
                 try
                 {
@@ -337,6 +338,25 @@ namespace VanyaTools.Native
                 }
                 catch { }
             }
+        }
+
+        private static void EnsureVisiblePhoto(BitmapSource image)
+        {
+            const int size = 128;
+            var visual = new DrawingVisual();
+            using (var context = visual.RenderOpen())
+            {
+                context.DrawRectangle(Brushes.White, null, new Rect(0, 0, size, size));
+                context.DrawImage(image, new Rect(0, 0, size, size));
+            }
+            var sample = new RenderTargetBitmap(size, size, 96, 96, PixelFormats.Pbgra32);
+            sample.Render(visual);
+            byte[] pixels = new byte[size * size * 4];
+            sample.CopyPixels(pixels, size * 4, 0);
+            for (int i = 0; i < pixels.Length; i += 4)
+                if (pixels[i] < 254 || pixels[i + 1] < 254 || pixels[i + 2] < 254)
+                    return;
+            throw new InvalidOperationException("Кадр получился полностью белым. Проверьте выделение в CDR и повторите публикацию.");
         }
 
         private async Task Publish()
