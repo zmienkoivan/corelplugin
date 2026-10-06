@@ -79,12 +79,12 @@ namespace VanyaTools.Native
             _caption.Padding = new Thickness(7);
             panel.Children.Add(_caption);
             var saveActions = new UniformGrid { Columns = 2 };
-            saveActions.Children.Add(Button("Сохранить в CDR", (_, __) => Safe(SaveForm)));
+            saveActions.Children.Add(Button("Сохранить карточку и CDR", (_, __) => Safe(SaveForm)));
             saveActions.Children.Add(Button("Новая карточка", (_, __) => Safe(ClearCard)));
             panel.Children.Add(saveActions);
             _send = DockerTheme.Primary(Button("Опубликовать в Telegram", async (_, __) => await Publish()));
             panel.Children.Add(_send);
-            panel.Children.Add(Note("Кадры: 1–10. Сначала добавьте бота в администраторы канала."));
+            panel.Children.Add(Note("Кадры: 1–10 · максимальный размер фото Telegram. После изменений сохраните CDR кнопкой или Ctrl+S."));
 
             var settings = new StackPanel { Margin = new Thickness(4, 12, 4, 4) };
             settings.Children.Add(Title("Telegram · карточки заказов"));
@@ -94,6 +94,15 @@ namespace VanyaTools.Native
             _token = new PasswordBox { Margin = new Thickness(0, 0, 0, 5) };
             settings.Children.Add(_token);
             settings.Children.Add(Button("Сохранить Telegram", (_, __) => Safe(() => SaveTelegramSettings())));
+            settings.Children.Add(Button("Проверить Telegram", async (_, __) =>
+            {
+                try
+                {
+                    string description = await TelegramOrderClient.Check(_token.Password.Trim(), _channel.Text.Trim());
+                    _status("Telegram: " + description, false);
+                }
+                catch (Exception error) { _status("Telegram: " + error.Message, true); }
+            }));
             settings.Children.Add(Note("Токен хранится только на этом ПК в зашифрованном виде."));
             SettingsView = settings;
             LoadTelegramSettings();
@@ -160,20 +169,23 @@ namespace VanyaTools.Native
 
         private void SaveForm()
         {
-            EnsureDocument(); ReadForm(); SaveData();
+            EnsureDocument(); ReadForm(); SaveData(true);
             _status("Карточка сохранена в CDR.", false);
         }
 
-        private void SaveData()
+        private void SaveData(bool saveDocument = false)
         {
             dynamic doc = EnsureDocument(false);
             _data.SchemaVersion = 1;
             string json = new JavaScriptSerializer().Serialize(_data);
             object properties = doc.Properties;
+            Log.Info("Order card: writing document property.");
             properties.GetType().InvokeMember("Item", BindingFlags.SetProperty,
                 null, properties, new object[] { PropertyOwner, 1, json });
-            doc.Save();
-            _documentName.Text = Path.GetFileName(_documentPath) + " · " + _data.Frames.Count + " кадр(ов)";
+            Log.Info("Order card: document property written.");
+            if (saveDocument) { Log.Info("Order card: saving CDR."); doc.Save(); Log.Info("Order card: CDR saved."); }
+            _documentName.Text = Path.GetFileName(_documentPath) + " · " + _data.Frames.Count +
+                " кадр(ов)" + (saveDocument ? "" : " · сохраните CDR");
         }
 
         private void AddSelection()
@@ -190,7 +202,7 @@ namespace VanyaTools.Native
                 frame.Shapes.Add(new OrderCardShape {
                     Page = Convert.ToInt32(shape.Page.Index), Id = Convert.ToInt32(shape.StaticID) });
             ReadForm(); _data.Frames.Add(frame); SaveData(); RenderFrames(); UpdateCaption();
-            _status("Выделение добавлено в карточку (" + _data.Frames.Count + "/10).", false);
+            _status("Кадр добавлен (" + _data.Frames.Count + "/10). Сохраните CDR после сборки карточки.", false);
         }
 
         private void RenderFrames()
@@ -270,40 +282,56 @@ namespace VanyaTools.Native
             var original = new List<dynamic>();
             foreach (dynamic shape in app.ActiveSelectionRange.Shapes) original.Add(shape);
             dynamic originalPage = doc.ActivePage;
-            string png = null;
             try
             {
                 SelectShapes(doc, frame);
-                png = AiSelectionCapture.Capture(1800, 3200000);
-                var image = new BitmapImage();
-                image.BeginInit(); image.CacheOption = BitmapCacheOption.OnLoad;
-                image.UriSource = new Uri(png); image.EndInit(); image.Freeze();
+                Log.Info("Order card: copying selection to clipboard.");
+                app.ActiveSelectionRange.Copy();
+                BitmapSource image = Clipboard.GetImage();
+                if (image == null)
+                    throw new InvalidOperationException("CorelDRAW не передал изображение в буфер обмена. Попробуйте выделить кадр и скопировать его вручную (Ctrl+C).");
+                Log.Info("Order card: clipboard bitmap " + image.PixelWidth + "x" + image.PixelHeight + ".");
+                if (image.PixelWidth <= 0 || image.PixelHeight <= 0)
+                    throw new InvalidOperationException("Буфер обмена вернул пустое изображение.");
                 if (Math.Max(image.PixelWidth, image.PixelHeight) >
                     20 * Math.Min(image.PixelWidth, image.PixelHeight))
                     throw new InvalidOperationException("Кадр слишком узкий для Telegram. Измените выделение.");
-                var visual = new DrawingVisual();
-                using (var context = visual.RenderOpen())
+                double scale = Math.Min(1.0, 9990.0 / (image.PixelWidth + image.PixelHeight));
+                for (int attempt = 0; attempt < 7; attempt++)
                 {
-                    context.DrawRectangle(Brushes.White, null, new Rect(0, 0, image.PixelWidth, image.PixelHeight));
-                    context.DrawImage(image, new Rect(0, 0, image.PixelWidth, image.PixelHeight));
-                }
-                var bitmap = new RenderTargetBitmap(image.PixelWidth, image.PixelHeight, 96, 96, PixelFormats.Pbgra32);
-                bitmap.Render(visual);
-                foreach (int quality in new[] { 88, 75, 60 })
-                {
-                    var encoder = new JpegBitmapEncoder { QualityLevel = quality };
-                    encoder.Frames.Add(BitmapFrame.Create(bitmap));
-                    using (var output = new MemoryStream())
+                    BitmapSource sized = scale < 1.0 ? new TransformedBitmap(image,
+                        new ScaleTransform(scale, scale)) : image;
+                    var visual = new DrawingVisual();
+                    using (var context = visual.RenderOpen())
                     {
-                        encoder.Save(output);
-                        if (output.Length < 10L * 1024 * 1024) return output.ToArray();
+                        context.DrawRectangle(Brushes.White, null,
+                            new Rect(0, 0, sized.PixelWidth, sized.PixelHeight));
+                        context.DrawImage(sized, new Rect(0, 0, sized.PixelWidth, sized.PixelHeight));
                     }
+                    var bitmap = new RenderTargetBitmap(sized.PixelWidth, sized.PixelHeight,
+                        96, 96, PixelFormats.Pbgra32);
+                    bitmap.Render(visual);
+                    foreach (int quality in new[] { 92, 85, 75, 65 })
+                    {
+                        var encoder = new JpegBitmapEncoder { QualityLevel = quality };
+                        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                        using (var output = new MemoryStream())
+                        {
+                            encoder.Save(output);
+                            if (output.Length <= 9500000)
+                            {
+                                Log.Info("Order card: Telegram JPEG " + sized.PixelWidth + "x" +
+                                    sized.PixelHeight + ", " + output.Length + " bytes.");
+                                return output.ToArray();
+                            }
+                        }
+                    }
+                    scale *= 0.82;
                 }
-                throw new InvalidOperationException("Кадр больше 10 МБ. Уменьшите выделение.");
+                throw new InvalidOperationException("Не удалось уложить фото в лимит Telegram 10 МБ.");
             }
             finally
             {
-                if (png != null) { try { File.Delete(png); } catch { } }
                 try { originalPage.Activate(); } catch { }
                 try
                 {
@@ -342,7 +370,7 @@ namespace VanyaTools.Native
                 _data.PublishedAtUtc = DateTime.UtcNow.ToString("o");
                 _data.TelegramMessageId = messageId;
                 SaveData();
-                _status("Карточка опубликована в Telegram. Сообщение №" + messageId + ".", false);
+                _status("Карточка опубликована в Telegram. Сообщение №" + messageId + ". Сохраните CDR.", false);
             }
             catch (Exception error)
             {
@@ -442,6 +470,39 @@ namespace VanyaTools.Native
 
     internal static class TelegramOrderClient
     {
+        internal static async Task<string> Check(string token, string channel)
+        {
+            if (String.IsNullOrWhiteSpace(token) || String.IsNullOrWhiteSpace(channel))
+                throw new InvalidOperationException("укажите канал и токен бота.");
+            using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) })
+            using (var form = new MultipartFormDataContent())
+            {
+                form.Add(new StringContent(channel), "chat_id");
+                client.DefaultRequestHeaders.ExpectContinue = false;
+                try
+                {
+                    using (var response = await client.PostAsync(
+                        "https://api.telegram.org/bot" + token + "/getChat", form))
+                    {
+                        string body = await response.Content.ReadAsStringAsync();
+                        var result = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(body);
+                        if (!response.IsSuccessStatusCode || result == null ||
+                            !result.ContainsKey("ok") || !Convert.ToBoolean(result["ok"]))
+                        {
+                            string reason = result != null && result.ContainsKey("description")
+                                ? Convert.ToString(result["description"]) : response.ReasonPhrase;
+                            throw new InvalidOperationException(reason.Replace(token, "[скрыто]"));
+                        }
+                        return "бот и канал доступны.";
+                    }
+                }
+                catch (HttpRequestException error)
+                {
+                    throw new InvalidOperationException(ConnectionError(error, token));
+                }
+            }
+        }
+
         internal static async Task<int> Send(string token, string channel, string caption, IList<byte[]> photos)
         {
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
@@ -450,6 +511,7 @@ namespace VanyaTools.Native
             using (var client = new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
             using (var form = new MultipartFormDataContent())
             {
+                client.DefaultRequestHeaders.ExpectContinue = false;
                 form.Add(new StringContent(channel), "chat_id");
                 if (album)
                 {
@@ -502,11 +564,20 @@ namespace VanyaTools.Native
                 {
                     throw new InvalidOperationException("Telegram не ответил вовремя. Проверьте канал перед повторной отправкой, чтобы не создать дубль.");
                 }
-                catch (HttpRequestException)
+                catch (HttpRequestException error)
                 {
-                    throw new InvalidOperationException("Сбой соединения с Telegram. Проверьте канал перед повторной отправкой, чтобы не создать дубль.");
+                    throw new InvalidOperationException(ConnectionError(error, token) +
+                        " Проверьте канал перед повторной отправкой, чтобы не создать дубль.");
                 }
             }
+        }
+
+        private static string ConnectionError(Exception error, string token)
+        {
+            Exception cause = error.GetBaseException();
+            string detail = cause.GetType().Name + ": " + cause.Message.Replace(token, "[скрыто]");
+            if (detail.Length > 180) detail = detail.Substring(0, 180) + "…";
+            return "Сбой соединения с Telegram (" + detail + ").";
         }
     }
 }
