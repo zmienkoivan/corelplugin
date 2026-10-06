@@ -25,6 +25,8 @@ namespace VanyaTools.Updater
                 return OpenAiImageWorker.Run();
             if (args != null && args.Length == 1 && args[0] == "--preview-publish-worker")
                 return PreviewPublishWorker.Run();
+            if (args != null && args.Length == 1 && args[0] == "--telegram-worker")
+                return TelegramWorker.Run();
 
             Console.OutputEncoding = Encoding.UTF8;
             string installedVersionText = GetArgument(args, "--installed-version");

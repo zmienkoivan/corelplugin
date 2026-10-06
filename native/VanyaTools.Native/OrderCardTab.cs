@@ -2,9 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net;
-using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -98,7 +95,7 @@ namespace VanyaTools.Native
             {
                 try
                 {
-                    string description = await TelegramOrderClient.Check(_token.Password.Trim(), _channel.Text.Trim());
+                    string description = await TelegramWorkerClient.Check(_token.Password.Trim(), _channel.Text.Trim());
                     _status("Telegram: " + description, false);
                 }
                 catch (Exception error) { _status("Telegram: " + error.Message, true); }
@@ -365,7 +362,7 @@ namespace VanyaTools.Native
                     photos.Add(CapturePhoto(doc, _data.Frames[i]));
                 }
                 _status("Отправка в Telegram…", false);
-                int messageId = await TelegramOrderClient.Send(token, channel, caption, photos);
+                int messageId = await TelegramWorkerClient.Send(token, channel, caption, photos);
                 sent = true;
                 _data.PublishedAtUtc = DateTime.UtcNow.ToString("o");
                 _data.TelegramMessageId = messageId;
@@ -466,118 +463,5 @@ namespace VanyaTools.Native
     {
         public int Page { get; set; }
         public int Id { get; set; }
-    }
-
-    internal static class TelegramOrderClient
-    {
-        internal static async Task<string> Check(string token, string channel)
-        {
-            if (String.IsNullOrWhiteSpace(token) || String.IsNullOrWhiteSpace(channel))
-                throw new InvalidOperationException("укажите канал и токен бота.");
-            using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) })
-            using (var form = new MultipartFormDataContent())
-            {
-                form.Add(new StringContent(channel), "chat_id");
-                client.DefaultRequestHeaders.ExpectContinue = false;
-                try
-                {
-                    using (var response = await client.PostAsync(
-                        "https://api.telegram.org/bot" + token + "/getChat", form))
-                    {
-                        string body = await response.Content.ReadAsStringAsync();
-                        var result = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(body);
-                        if (!response.IsSuccessStatusCode || result == null ||
-                            !result.ContainsKey("ok") || !Convert.ToBoolean(result["ok"]))
-                        {
-                            string reason = result != null && result.ContainsKey("description")
-                                ? Convert.ToString(result["description"]) : response.ReasonPhrase;
-                            throw new InvalidOperationException(reason.Replace(token, "[скрыто]"));
-                        }
-                        return "бот и канал доступны.";
-                    }
-                }
-                catch (HttpRequestException error)
-                {
-                    throw new InvalidOperationException(ConnectionError(error, token));
-                }
-            }
-        }
-
-        internal static async Task<int> Send(string token, string channel, string caption, IList<byte[]> photos)
-        {
-            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            bool album = photos.Count > 1;
-            string method = album ? "sendMediaGroup" : "sendPhoto";
-            using (var client = new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
-            using (var form = new MultipartFormDataContent())
-            {
-                client.DefaultRequestHeaders.ExpectContinue = false;
-                form.Add(new StringContent(channel), "chat_id");
-                if (album)
-                {
-                    var media = new List<Dictionary<string, string>>();
-                    for (int i = 0; i < photos.Count; i++)
-                    {
-                        var item = new Dictionary<string, string>
-                            { ["type"] = "photo", ["media"] = "attach://photo" + i };
-                        if (i == 0) item["caption"] = caption;
-                        media.Add(item);
-                    }
-                    form.Add(new StringContent(new JavaScriptSerializer().Serialize(media), Encoding.UTF8), "media");
-                }
-                else form.Add(new StringContent(caption, Encoding.UTF8), "caption");
-                for (int i = 0; i < photos.Count; i++)
-                {
-                    var content = new ByteArrayContent(photos[i]);
-                    content.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
-                    form.Add(content, album ? "photo" + i : "photo", "order-card-" + (i + 1) + ".jpg");
-                }
-                try
-                {
-                    using (var response = await client.PostAsync(
-                        "https://api.telegram.org/bot" + token + "/" + method, form))
-                    {
-                        string body = await response.Content.ReadAsStringAsync();
-                        Dictionary<string, object> result;
-                        try { result = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(body); }
-                        catch { throw new InvalidOperationException("Не удалось прочитать ответ Telegram. Проверьте канал перед повторной отправкой."); }
-                        if (result == null || !result.ContainsKey("ok"))
-                            throw new InvalidOperationException("Telegram вернул неполный ответ. Проверьте канал перед повторной отправкой.");
-                        if (!response.IsSuccessStatusCode || !Convert.ToBoolean(result["ok"]))
-                        {
-                            string description = result.ContainsKey("description") ? Convert.ToString(result["description"]) : response.ReasonPhrase;
-                            throw new InvalidOperationException("Telegram: " + description.Replace(token, "[скрыто]"));
-                        }
-                        object message = result["result"];
-                        if (album)
-                        {
-                            var messages = message as object[];
-                            if (messages == null || messages.Length == 0)
-                                throw new InvalidOperationException("Telegram не вернул сообщения альбома.");
-                            message = messages[0];
-                        }
-                        var data = (Dictionary<string, object>)message;
-                        return Convert.ToInt32(data["message_id"]);
-                    }
-                }
-                catch (TaskCanceledException)
-                {
-                    throw new InvalidOperationException("Telegram не ответил вовремя. Проверьте канал перед повторной отправкой, чтобы не создать дубль.");
-                }
-                catch (HttpRequestException error)
-                {
-                    throw new InvalidOperationException(ConnectionError(error, token) +
-                        " Проверьте канал перед повторной отправкой, чтобы не создать дубль.");
-                }
-            }
-        }
-
-        private static string ConnectionError(Exception error, string token)
-        {
-            Exception cause = error.GetBaseException();
-            string detail = cause.GetType().Name + ": " + cause.Message.Replace(token, "[скрыто]");
-            if (detail.Length > 180) detail = detail.Substring(0, 180) + "…";
-            return "Сбой соединения с Telegram (" + detail + ").";
-        }
     }
 }
