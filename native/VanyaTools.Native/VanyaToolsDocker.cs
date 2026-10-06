@@ -89,9 +89,11 @@ namespace VanyaTools.Native
             var stickerTools = new StackPanel { Margin = new Thickness(5) };
             var aiTools = new AiPrintTab(ImportAiResult,
                 (message, isError) => SetStatus(message, isError), CaptureAiSelection);
+            var orderCards = new OrderCardTab((message, isError) => SetStatus(message, isError));
             var settings = new StackPanel { Margin = new Thickness(5) };
             settings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
             settings.Children.Add(aiTools.SettingsView);
+            settings.Children.Add(orderCards.SettingsView);
 
             var tabs = new TabControl { MinHeight = 360 };
             tabs.Items.Add(ThumbnailTabs.Create("Основная", ThumbnailTabs.Crop,
@@ -113,7 +115,15 @@ namespace VanyaTools.Native
                     (message, isError) => SetStatus(message, isError), true)));
             tabs.Items.Add(ThumbnailTabs.Create("Публикация", ThumbnailTabs.Publish,
                 Color.FromRgb(57, 120, 138),
-                new PreviewLibraryTab((message, isError) => SetStatus(message, isError))));
+                new TabControl
+                {
+                    Items =
+                    {
+                        new TabItem { Header = "Карточка заказа", Content = orderCards },
+                        new TabItem { Header = "Превью", Content =
+                            new PreviewLibraryTab((message, isError) => SetStatus(message, isError)) }
+                    }
+                }));
             tabs.Items.Add(ThumbnailTabs.Create("Настройки", ThumbnailTabs.Settings,
                 Color.FromRgb(91, 104, 116),
                 new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = settings }));
