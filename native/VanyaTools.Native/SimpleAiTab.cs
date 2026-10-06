@@ -24,7 +24,7 @@ namespace VanyaTools.Native
         private readonly bool _styleOnly;
         private readonly ComboBox _model;
         private readonly TextBox _prompt;
-        private readonly TextBox _whiteThreshold;
+        private readonly TextBox _whiteThreshold, _whiteCutPixels;
         private readonly TextBox _alphaThreshold;
         private readonly TextBox _edgeRadius, _edgeExpansion, _underlayHex;
         private readonly Border _underlaySwatch;
@@ -44,7 +44,6 @@ namespace VanyaTools.Native
         private string _importWarning;
         private Dictionary<string, object> _lastInput;
         private StyleChoice _selectedStyle;
-        private bool _samplingColor;
 
         private const string TiledUpscaler = "xinntao/realesrgan:1b976a4d456ed9e4d1a846597b7614e79eadad3032e9124fa63859db0fd59b56";
 
@@ -84,6 +83,12 @@ namespace VanyaTools.Native
             _whiteThreshold = new TextBox { Text = "245", Width = 40, FontSize = 11,
                 VerticalContentAlignment = VerticalAlignment.Center };
             whiteRow.Children.Add(_whiteThreshold);
+            whiteRow.Children.Add(new TextBlock { Text = "Подрезать, px", VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 10, Margin = new Thickness(8, 0, 3, 0) });
+            _whiteCutPixels = new TextBox { Text = "0", Width = 34, FontSize = 11,
+                VerticalContentAlignment = VerticalAlignment.Center };
+            _whiteCutPixels.ToolTip = "Сдвинуть край прозрачности внутрь на указанное число пикселей.";
+            whiteRow.Children.Add(_whiteCutPixels);
             if (!styleOnly)
             {
                 panel.Children.Add(whiteRow);
@@ -124,7 +129,7 @@ namespace VanyaTools.Native
             _underlaySwatch = new Border { Width = 18, Height = 18, Background = Brushes.White,
                 BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Margin = new Thickness(2) };
             edgeRow.Children.Add(_underlaySwatch);
-            _pipetteButton = Button("Пипетка", (_, __) => BeginColorPick());
+            _pipetteButton = Button("Пипетка с экрана", async (_, __) => await BeginColorPick());
             edgeRow.Children.Add(_pipetteButton);
             _underlayHex.TextChanged += (_, __) => UpdateUnderlaySwatch();
             if (!styleOnly) panel.Children.Add(edgeRow);
@@ -138,7 +143,6 @@ namespace VanyaTools.Native
             var previews = new UniformGrid { Columns = 2 };
             previews.Children.Add(Preview("Выделение", out _sourcePreview));
             previews.Children.Add(Preview("Результат", out _resultPreview));
-            _sourcePreview.MouseLeftButtonDown += SampleUnderlayColor;
             panel.Children.Add(previews);
 
             if (styleOnly) panel.Children.Add(Label("Пресеты", true));
@@ -282,9 +286,11 @@ namespace VanyaTools.Native
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
             { Report("Сначала вставьте готовый результат.", true); return; }
-            int threshold;
+            int threshold, cutPixels;
             if (!Int32.TryParse(_whiteThreshold.Text, out threshold) || threshold < 200 || threshold > 255)
             { Report("Порог белизны: от 200 до 255. Для белого фона начните с 245.", true); return; }
+            if (!Int32.TryParse(_whiteCutPixels.Text, out cutPixels) || cutPixels < 0 || cutPixels > 8)
+            { Report("Подрезка края: от 0 до 8 пикселей.", true); return; }
             SetBusy(true, "Удаляю белый фон без AI…");
             try
             {
@@ -295,7 +301,7 @@ namespace VanyaTools.Native
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-White-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
                 await Task.Run(() => BackgroundRemovalProcessor.RemoveWhite(
-                    source, output, threshold, cancellation), cancellation);
+                    source, output, threshold, cutPixels, cancellation), cancellation);
                 cancellation.ThrowIfCancellationRequested();
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
@@ -685,41 +691,20 @@ namespace VanyaTools.Native
                 new SolidColorBrush(color) : Brushes.Transparent;
         }
 
-        private void BeginColorPick()
+        private async Task BeginColorPick()
         {
             if (_busy) return;
             try
             {
-                _sourcePreview.Source = AiPrintTab.Bitmap(AiSelectionCapture.Capture(2048, 4000000));
-                _samplingColor = true;
-                Report("Нажмите на нужный цвет в превью выделения.", false);
+                Report("Кликните по цвету на экране. Esc — отмена.", false);
+                Color? picked = await ScreenColorPicker.PickAsync();
+                if (!picked.HasValue) { Report("Выбор цвета отменён.", false); return; }
+                Color color = picked.Value;
+                _underlayHex.Text = String.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}",
+                    color.R, color.G, color.B);
+                Report("Цвет подложки: " + _underlayHex.Text, false);
             }
             catch (Exception ex) { Report(ex.GetBaseException().Message, true); }
-        }
-
-        private void SampleUnderlayColor(object sender, MouseButtonEventArgs e)
-        {
-            if (!_samplingColor || _busy) return;
-            var image = _sourcePreview.Source as BitmapSource;
-            if (image == null) return;
-            Point point = e.GetPosition(_sourcePreview);
-            double scale = Math.Min(_sourcePreview.ActualWidth / image.PixelWidth,
-                _sourcePreview.ActualHeight / image.PixelHeight);
-            if (scale <= 0) return;
-            double left = (_sourcePreview.ActualWidth - image.PixelWidth * scale) / 2;
-            double top = (_sourcePreview.ActualHeight - image.PixelHeight * scale) / 2;
-            int x = (int)Math.Floor((point.X - left) / scale);
-            int y = (int)Math.Floor((point.Y - top) / scale);
-            if (x < 0 || y < 0 || x >= image.PixelWidth || y >= image.PixelHeight) return;
-            var bgra = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0);
-            byte[] pixel = new byte[4];
-            bgra.CopyPixels(new Int32Rect(x, y, 1, 1), pixel, 4, 0);
-            if (pixel[3] == 0) { Report("Выберите непрозрачный пиксель.", true); return; }
-            _underlayHex.Text = String.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}",
-                pixel[2], pixel[1], pixel[0]);
-            _samplingColor = false;
-            Report("Цвет подложки: " + _underlayHex.Text, false);
-            e.Handled = true;
         }
 
         private async Task Execute(string key)
@@ -816,7 +801,7 @@ namespace VanyaTools.Native
             _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
                 _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled =
                 _editButton.IsEnabled = !busy;
-            _model.IsEnabled = _prompt.IsEnabled = _whiteThreshold.IsEnabled = _alphaThreshold.IsEnabled =
+            _model.IsEnabled = _prompt.IsEnabled = _whiteThreshold.IsEnabled = _whiteCutPixels.IsEnabled = _alphaThreshold.IsEnabled =
                 _edgeRadius.IsEnabled = _edgeExpansion.IsEnabled = _underlayHex.IsEnabled = !busy;
             foreach (var choice in _styleButtons) choice.IsEnabled = !busy;
             _cancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;

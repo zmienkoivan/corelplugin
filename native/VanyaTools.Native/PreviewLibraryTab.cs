@@ -39,7 +39,8 @@ namespace VanyaTools.Native
         {
             _status = status;
             var panel = new StackPanel { Margin = new Thickness(8) };
-            Content = panel;
+            Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Content = panel };
             panel.Children.Add(new TextBlock { Text = "Превью принта", FontSize = 14,
                 FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 1, 0, 6) });
             panel.Children.Add(Note("Выделите принт. Ссылка действует 7 дней."));

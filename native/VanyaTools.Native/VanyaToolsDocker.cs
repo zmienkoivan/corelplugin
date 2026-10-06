@@ -92,10 +92,6 @@ namespace VanyaTools.Native
             var settings = new StackPanel { Margin = new Thickness(5) };
             settings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
             settings.Children.Add(aiTools.SettingsView);
-            AddSeparator(settings);
-            settings.Children.Add(new Expander { Header = "Публикация превью",
-                Content = new PreviewLibraryTab((message, isError) => SetStatus(message, isError)),
-                IsExpanded = false, Margin = new Thickness(4, 2, 4, 5) });
 
             var tabs = new TabControl { MinHeight = 360 };
             tabs.Items.Add(ThumbnailTabs.Create("Основная", ThumbnailTabs.Crop,
@@ -115,6 +111,9 @@ namespace VanyaTools.Native
                 new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
                     () => aiTools.GetToken(), ImportAiResult,
                     (message, isError) => SetStatus(message, isError), true)));
+            tabs.Items.Add(ThumbnailTabs.Create("Публикация", ThumbnailTabs.Publish,
+                Color.FromRgb(57, 120, 138),
+                new PreviewLibraryTab((message, isError) => SetStatus(message, isError))));
             tabs.Items.Add(ThumbnailTabs.Create("Настройки", ThumbnailTabs.Settings,
                 Color.FromRgb(91, 104, 116),
                 new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = settings }));
@@ -125,7 +124,7 @@ namespace VanyaTools.Native
             outer.Children.Add(tabs);
             Panel root = standardTools;
 
-            root.Children.Add(DockerTheme.Primary(Button("Обрезать растр", (_, __) => RunTrim(true))));
+            root.Children.Add(Button("Обрезать растр", (_, __) => RunTrim(true)));
             var trimSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
             AddSettingsExpander(root, "Настройки обрезки растра", trimSettings);
             AddSmallLabel(trimSettings, "По границе");

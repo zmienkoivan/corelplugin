@@ -11,7 +11,7 @@ namespace VanyaTools.Native
     {
         // Only whites connected to the image border are background. Enclosed white
         // lettering and highlights remain part of the artwork.
-        public static void RemoveWhite(string source, string output, int threshold,
+        public static void RemoveWhite(string source, string output, int threshold, int cutPixels,
             CancellationToken cancellation)
         {
             BitmapSource input = AiPrintTab.Bitmap(source);
@@ -57,6 +57,8 @@ namespace VanyaTools.Native
             }
             if (removed == 0)
                 throw new InvalidOperationException("Белый фон не найден у края изображения. Уменьшите порог или используйте AI.");
+            if (cutPixels > 0)
+                background = ExpandBackground(background, width, height, cutPixels, cancellation);
 
             int softStart = Math.Max(0, threshold - 20);
             int visible = 0;
@@ -98,6 +100,56 @@ namespace VanyaTools.Native
             if (visible == 0)
                 throw new InvalidOperationException("На изображении не осталось непрозрачных деталей. Увеличьте порог.");
             Save(output, width, height, input.DpiX, input.DpiY, pixels, stride);
+        }
+
+        // Move only the boundary connected to the removed background inward.
+        // A disk distance keeps diagonal edges from being cut as a square block.
+        private static byte[] ExpandBackground(byte[] background, int width, int height,
+            int radius, CancellationToken cancellation)
+        {
+            int length = checked(width * height);
+            var horizontalDistance = new byte[length];
+            var expanded = new byte[length];
+            byte far = (byte)(radius + 1);
+            for (int y = 0; y < height; y++)
+            {
+                if ((y & 63) == 0) cancellation.ThrowIfCancellationRequested();
+                int row = y * width, last = -radius - 1;
+                for (int x = 0; x < width; x++)
+                {
+                    if (background[row + x] != 0) last = x;
+                    horizontalDistance[row + x] = (byte)Math.Min(far, x - last);
+                }
+                last = width + radius;
+                for (int x = width - 1; x >= 0; x--)
+                {
+                    if (background[row + x] != 0) last = x;
+                    int distance = last - x;
+                    if (distance < horizontalDistance[row + x])
+                        horizontalDistance[row + x] = (byte)distance;
+                }
+            }
+            int radiusSquared = radius * radius;
+            for (int y = 0; y < height; y++)
+            {
+                if ((y & 63) == 0) cancellation.ThrowIfCancellationRequested();
+                int row = y * width;
+                for (int x = 0; x < width; x++)
+                {
+                    int p = row + x;
+                    if (background[p] != 0) { expanded[p] = 1; continue; }
+                    for (int dy = -radius; dy <= radius; dy++)
+                    {
+                        int ny = y + dy;
+                        if (ny < 0 || ny >= height) continue;
+                        int dx = horizontalDistance[ny * width + x];
+                        if (dx * dx + dy * dy > radiusSquared) continue;
+                        expanded[p] = 1;
+                        break;
+                    }
+                }
+            }
+            return expanded;
         }
 
         // Bria may return a much smaller PNG. Use its alpha as a mask and keep
