@@ -37,6 +37,7 @@ namespace VanyaTools.Native
         private readonly System.Windows.Controls.CheckBox _mergeAdjacentContours;
         private readonly System.Windows.Controls.RadioButton _rotatePackClockwise;
         private readonly System.Windows.Controls.RadioButton _rotatePackCounterClockwise;
+        private PrintFrameAnchor _printFrameAnchor = PrintFrameAnchor.TopCenter;
 
         public VanyaToolsDocker()
             : this(null)
@@ -134,16 +135,26 @@ namespace VanyaTools.Native
             outer.Children.Add(tabs);
             Panel root = standardTools;
 
-            var quickActions = new UniformGrid { Columns = 2 };
-            quickActions.Children.Add(Button("Обрезать растр", (_, __) => RunTrim(true)));
+            var quickActions = new Grid();
+            quickActions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            quickActions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            quickActions.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var trimButton = Button("Обрезать растр", (_, __) => RunTrim(true));
+            trimButton.Margin = new Thickness(0, 0, 3, 2);
+            quickActions.Children.Add(trimButton);
             var fitFrame = Button("Подогнать рамку", (_, __) => RunSafe(() =>
             {
-                int parts = PrintFrameFitService.FitSelected();
+                int parts = PrintFrameFitService.FitSelected(_printFrameAnchor);
                 SetStatus(parts > 1 ? "Части принта сгруппированы; рамка подогнана."
                     : "Рамка подогнана под принт.", false);
             }));
-            fitFrame.ToolTip = "Выделите все части принта, затем рамку последней через Shift+щелчок. Части принта сгруппируются; рамка примет размер принта.";
+            fitFrame.Margin = new Thickness(0, 0, 3, 2);
+            fitFrame.ToolTip = "Выделите части принта, затем рамку последней через Shift+щелчок. Точку привязки выберите справа.";
+            Grid.SetColumn(fitFrame, 1);
             quickActions.Children.Add(fitFrame);
+            var anchorPicker = CreatePrintFrameAnchorPicker();
+            Grid.SetColumn(anchorPicker, 2);
+            quickActions.Children.Add(anchorPicker);
             root.Children.Add(quickActions);
             var trimSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
             AddSettingsExpander(root, "Настройки обрезки растра", trimSettings);
@@ -501,6 +512,63 @@ namespace VanyaTools.Native
             };
             button.Click += handler;
             return button;
+        }
+
+        private FrameworkElement CreatePrintFrameAnchorPicker()
+        {
+            var positions = new[]
+            {
+                "Верхний левый угол", "Верх по центру", "Верхний правый угол",
+                "Слева по центру", "Центр", "Справа по центру",
+                "Нижний левый угол", "Низ по центру", "Нижний правый угол"
+            };
+            var cells = new UniformGrid { Rows = 3, Columns = 3, Width = 39, Height = 39 };
+            var marker = new FrameworkElementFactory(typeof(Border));
+            marker.Name = "Marker";
+            marker.SetValue(Border.BackgroundProperty, new SolidColorBrush(Colors.White));
+            marker.SetValue(Border.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(109, 127, 138)));
+            marker.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            marker.SetValue(Border.CornerRadiusProperty, new CornerRadius(1));
+            marker.SetValue(FrameworkElement.MarginProperty, new Thickness(1));
+            var template = new ControlTemplate(typeof(System.Windows.Controls.RadioButton)) { VisualTree = marker };
+            var selected = new Trigger { Property = ToggleButton.IsCheckedProperty, Value = true };
+            selected.Setters.Add(new Setter(Border.BackgroundProperty,
+                new SolidColorBrush(Color.FromRgb(55, 106, 139))) { TargetName = "Marker" });
+            selected.Setters.Add(new Setter(Border.BorderBrushProperty,
+                new SolidColorBrush(Color.FromRgb(36, 75, 102))) { TargetName = "Marker" });
+            template.Triggers.Add(selected);
+            var focused = new Trigger { Property = UIElement.IsKeyboardFocusedProperty, Value = true };
+            focused.Setters.Add(new Setter(Border.BorderThicknessProperty, new Thickness(2)) { TargetName = "Marker" });
+            template.Triggers.Add(focused);
+            var style = new Style(typeof(System.Windows.Controls.RadioButton));
+            style.Setters.Add(new Setter(Control.TemplateProperty, template));
+            style.Setters.Add(new Setter(FrameworkElement.CursorProperty, System.Windows.Input.Cursors.Hand));
+
+            for (int i = 0; i < positions.Length; i++)
+            {
+                PrintFrameAnchor position = (PrintFrameAnchor)i;
+                var radio = new System.Windows.Controls.RadioButton
+                {
+                    GroupName = "PrintFrameAnchor",
+                    Style = style,
+                    ToolTip = positions[i]
+                };
+                radio.Checked += (_, __) => _printFrameAnchor = position;
+                radio.IsChecked = position == PrintFrameAnchor.TopCenter;
+                cells.Children.Add(radio);
+            }
+
+            return new Border
+            {
+                Child = cells,
+                Background = new SolidColorBrush(Color.FromRgb(223, 229, 232)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(166, 186, 199)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(2),
+                Margin = new Thickness(0, 0, 0, 2),
+                VerticalAlignment = VerticalAlignment.Center
+            };
         }
 
         private static TextBox AddRow(Panel root, string label, string value)
