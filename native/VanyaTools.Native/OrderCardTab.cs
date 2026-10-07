@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
@@ -12,6 +13,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 
 namespace VanyaTools.Native
 {
@@ -23,11 +25,18 @@ namespace VanyaTools.Native
         private readonly ComboBox _source;
         private readonly PasswordBox _token;
         private readonly TextBlock _caption, _documentName;
-        private readonly StackPanel _frames;
+        private readonly StackPanel _frames, _editor;
+        private readonly Expander _frameExpander;
         private readonly Button _send;
+        private readonly DispatcherTimer _documentWatcher;
         private readonly List<CheckBox> _technologies = new List<CheckBox>();
         private OrderCardData _data = new OrderCardData();
         private string _documentPath;
+        private string _lastWrittenJson;
+        private object _documentIdentity;
+        private object _failedDocumentIdentity;
+        private string _failedDocumentPath;
+        private bool _loadingForm;
         private bool _busy;
 
         internal FrameworkElement SettingsView { get; }
@@ -41,47 +50,61 @@ namespace VanyaTools.Native
             _status = status;
             var panel = new StackPanel { Margin = new Thickness(8) };
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel };
-            panel.Children.Add(Title("Карточка заказа"));
             _documentName = Note("Откройте сохранённый CDR.");
-            panel.Children.Add(_documentName);
-            var actions = new UniformGrid { Columns = 2 };
-            actions.Children.Add(Button("Загрузить из CDR", (_, __) => Safe(() => LoadDocument(true))));
-            actions.Children.Add(Button("Добавить выделение", (_, __) => Safe(AddSelection)));
-            panel.Children.Add(actions);
-            _frames = new StackPanel { Margin = new Thickness(0, 3, 0, 8) };
-            panel.Children.Add(_frames);
+            var documentRow = new DockPanel();
+            var reload = Button("↻", (_, __) => Safe(() => LoadDocument(true)));
+            reload.MinWidth = 32;
+            reload.ToolTip = "Загрузить карточку из CDR повторно";
+            DockPanel.SetDock(reload, Dock.Right);
+            documentRow.Children.Add(reload);
+            documentRow.Children.Add(_documentName);
+            panel.Children.Add(documentRow);
+            _editor = new StackPanel { IsEnabled = false };
+            panel.Children.Add(_editor);
+            _editor.Children.Add(Button("Добавить выделение", (_, __) => Safe(AddSelection)));
+            _frames = new StackPanel { Margin = new Thickness(0, 3, 0, 5) };
+            _frameExpander = new Expander { Header = "Кадры (0)", Content = _frames,
+                Margin = new Thickness(0, 2, 0, 3) };
+            _editor.Children.Add(_frameExpander);
 
-            panel.Children.Add(Label("Заказчик"));
-            _customer = Input(); panel.Children.Add(_customer);
-            panel.Children.Add(Label("Источник"));
+            var identity = new Grid();
+            identity.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
+            identity.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var customerColumn = new StackPanel { Margin = new Thickness(0, 0, 5, 0) };
+            customerColumn.Children.Add(Label("Заказчик"));
+            _customer = Input(); customerColumn.Children.Add(_customer);
+            identity.Children.Add(customerColumn);
+            var sourceColumn = new StackPanel();
+            Grid.SetColumn(sourceColumn, 1);
+            sourceColumn.Children.Add(Label("Источник"));
             _source = new ComboBox { IsEditable = true, MinHeight = 27,
                 ItemsSource = new[] { "ТГ", "ВК", "ПОЧТА", "КП" },
                 Margin = new Thickness(0, 0, 0, 3) };
-            panel.Children.Add(_source);
-            panel.Children.Add(Label("Технология печати"));
+            sourceColumn.Children.Add(_source);
+            identity.Children.Add(sourceColumn);
+            _editor.Children.Add(identity);
+            _editor.Children.Add(Label("Технология печати"));
             var techGrid = new UniformGrid { Columns = 2 };
             foreach (string name in new[] { "ДТФ", "Шелкография", "Вышивка", "Сублимация", "Лазер" })
             {
                 var box = new CheckBox { Content = name, Margin = new Thickness(2, 1, 2, 1) };
                 _technologies.Add(box); techGrid.Children.Add(box);
             }
-            panel.Children.Add(techGrid);
-            panel.Children.Add(Label("Описание"));
-            _description = Input(55); panel.Children.Add(_description);
-            panel.Children.Add(Label("Изделия и количество, по одному на строку"));
-            _items = Input(65); panel.Children.Add(_items);
-            panel.Children.Add(Label("Подпись Telegram"));
+            _editor.Children.Add(techGrid);
+            _editor.Children.Add(Label("Описание"));
+            _description = Input(48); _editor.Children.Add(_description);
+            _editor.Children.Add(Label("Изделия и количество"));
+            _items = Input(55); _editor.Children.Add(_items);
             _caption = Note("");
-            _caption.Background = Brushes.White;
-            _caption.Padding = new Thickness(7);
-            panel.Children.Add(_caption);
-            var saveActions = new UniformGrid { Columns = 2 };
-            saveActions.Children.Add(Button("Сохранить карточку и CDR", (_, __) => Safe(SaveForm)));
-            saveActions.Children.Add(Button("Новая карточка", (_, __) => Safe(ClearCard)));
-            panel.Children.Add(saveActions);
+            _caption.Padding = new Thickness(5);
+            _editor.Children.Add(new Expander { Header = "Подпись Telegram", Content = _caption,
+                Margin = new Thickness(0, 4, 0, 4) });
             _send = DockerTheme.Primary(Button("Опубликовать в Telegram", async (_, __) => await Publish()));
-            panel.Children.Add(_send);
-            panel.Children.Add(Note("Кадры: 1–10 · максимальный размер фото Telegram. После изменений сохраните CDR кнопкой или Ctrl+S."));
+            _editor.Children.Add(_send);
+            var more = new StackPanel();
+            more.Children.Add(Button("Новая карточка", (_, __) => Safe(ClearCard)));
+            _editor.Children.Add(new Expander { Header = "Ещё", Content = more,
+                Margin = new Thickness(0, 3, 0, 0) });
 
             var settings = new StackPanel { Margin = new Thickness(4, 12, 4, 4) };
             settings.Children.Add(Title("Telegram · карточки заказов"));
@@ -104,13 +127,16 @@ namespace VanyaTools.Native
             SettingsView = settings;
             LoadTelegramSettings();
             foreach (var input in new[] { _customer, _description, _items })
-                input.TextChanged += (_, __) => UpdateCaption();
-            _source.SelectionChanged += (_, __) => UpdateCaption();
+                input.TextChanged += (_, __) => FormChanged();
+            _source.SelectionChanged += (_, __) => FormChanged();
             _source.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
-                new TextChangedEventHandler((_, __) => UpdateCaption()));
-            foreach (var box in _technologies) box.Checked += (_, __) => UpdateCaption();
-            foreach (var box in _technologies) box.Unchecked += (_, __) => UpdateCaption();
-            Loaded += (_, __) => Safe(() => LoadDocument(false));
+                new TextChangedEventHandler((_, __) => FormChanged()));
+            foreach (var box in _technologies) box.Checked += (_, __) => FormChanged();
+            foreach (var box in _technologies) box.Unchecked += (_, __) => FormChanged();
+            _documentWatcher = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _documentWatcher.Tick += (_, __) => RefreshDocument();
+            Loaded += (_, __) => { _documentWatcher.Start(); RefreshDocument(); };
+            Unloaded += (_, __) => _documentWatcher.Stop();
             RenderFrames(); UpdateCaption();
         }
 
@@ -121,9 +147,80 @@ namespace VanyaTools.Native
             string path = Convert.ToString(doc.FullFileName);
             if (String.IsNullOrWhiteSpace(path))
                 throw new InvalidOperationException("Сначала сохраните документ как CDR.");
-            if (loadIfChanged && !String.Equals(path, _documentPath, StringComparison.OrdinalIgnoreCase))
-                LoadDocument(true);
+            if (loadIfChanged && (!SameDocument(_documentIdentity, (object)doc) ||
+                !String.Equals(path, _documentPath, StringComparison.OrdinalIgnoreCase)))
+                LoadDocument(false);
             return doc;
+        }
+
+        private void RefreshDocument()
+        {
+            if (_busy) return;
+            object candidate = null;
+            string path = null;
+            try
+            {
+                dynamic doc = CorelApp.Get().ActiveDocument;
+                candidate = (object)doc;
+                path = doc == null ? null : Convert.ToString(doc.FullFileName);
+                if (String.IsNullOrWhiteSpace(path)) { ClearDocumentView(); return; }
+                if (SameDocument(_failedDocumentIdentity, candidate) &&
+                    String.Equals(path, _failedDocumentPath, StringComparison.OrdinalIgnoreCase)) return;
+                if (!SameDocument(_documentIdentity, (object)doc) ||
+                    !String.Equals(path, _documentPath, StringComparison.OrdinalIgnoreCase))
+                    LoadDocument(false);
+            }
+            catch (Exception error)
+            {
+                ClearDocumentView();
+                _failedDocumentIdentity = candidate;
+                _failedDocumentPath = path;
+                _documentName.Text = String.IsNullOrEmpty(path) ? "Откройте сохранённый CDR."
+                    : Path.GetFileName(path) + " · ошибка загрузки";
+                Log.Error("Order card auto-load failed", error);
+                _status("Карточка: " + error.Message, true);
+            }
+        }
+
+        private void ClearDocumentView()
+        {
+            if (_documentIdentity == null && _failedDocumentIdentity == null && !_editor.IsEnabled) return;
+            _documentIdentity = null;
+            _documentPath = null;
+            _lastWrittenJson = null;
+            _failedDocumentIdentity = null;
+            _failedDocumentPath = null;
+            _data = new OrderCardData();
+            _loadingForm = true;
+            try
+            {
+                _customer.Text = ""; _source.Text = "";
+                _description.Text = ""; _items.Text = "";
+                foreach (var box in _technologies) box.IsChecked = false;
+                RenderFrames(); UpdateCaption();
+            }
+            finally { _loadingForm = false; }
+            _documentName.Text = "Откройте сохранённый CDR.";
+            _editor.IsEnabled = false;
+        }
+
+        private static bool SameDocument(object first, object second)
+        {
+            if (ReferenceEquals(first, second)) return first != null;
+            if (first == null || second == null) return false;
+            IntPtr a = IntPtr.Zero, b = IntPtr.Zero;
+            try
+            {
+                a = Marshal.GetIUnknownForObject(first);
+                b = Marshal.GetIUnknownForObject(second);
+                return a == b;
+            }
+            catch { return false; }
+            finally
+            {
+                if (a != IntPtr.Zero) Marshal.Release(a);
+                if (b != IntPtr.Zero) Marshal.Release(b);
+            }
         }
 
         private void LoadDocument(bool report)
@@ -131,27 +228,58 @@ namespace VanyaTools.Native
             dynamic doc = EnsureDocument(false);
             string path = Convert.ToString(doc.FullFileName);
             dynamic properties = doc.Properties;
-            _data = new OrderCardData();
+            var loadedData = new OrderCardData();
+            string storedJson = null;
             if (Convert.ToBoolean(properties.Exists(PropertyOwner, 1)))
             {
                 object value = properties.GetType().InvokeMember("Item",
                     BindingFlags.GetProperty, null, (object)properties,
                     new object[] { PropertyOwner, 1 });
-                var loaded = new JavaScriptSerializer().Deserialize<OrderCardData>(Convert.ToString(value));
-                if (loaded != null) _data = loaded;
+                storedJson = Convert.ToString(value);
+                var loaded = new JavaScriptSerializer().Deserialize<OrderCardData>(storedJson);
+                if (loaded != null) loadedData = loaded;
             }
+            _data = loadedData;
             if (_data.Frames == null) _data.Frames = new List<OrderCardFrame>();
             if (_data.Technologies == null) _data.Technologies = new List<string>();
             _documentPath = path;
-            _documentName.Text = Path.GetFileName(path) + " · " + _data.Frames.Count + " кадр(ов)";
-            _customer.Text = _data.Customer ?? "";
-            _source.Text = _data.Source ?? "";
-            _description.Text = _data.Description ?? "";
-            _items.Text = _data.Items ?? "";
-            foreach (var box in _technologies)
-                box.IsChecked = _data.Technologies.Contains(Convert.ToString(box.Content));
-            RenderFrames(); UpdateCaption();
+            _documentIdentity = (object)doc;
+            _failedDocumentIdentity = null;
+            _failedDocumentPath = null;
+            _lastWrittenJson = storedJson;
+            _loadingForm = true;
+            try
+            {
+                _documentName.Text = Path.GetFileName(path) + " · " + _data.Frames.Count + " фото";
+                _customer.Text = _data.Customer ?? "";
+                _source.Text = _data.Source ?? "";
+                _description.Text = _data.Description ?? "";
+                _items.Text = _data.Items ?? "";
+                foreach (var box in _technologies)
+                    box.IsChecked = _data.Technologies.Contains(Convert.ToString(box.Content));
+                RenderFrames(); UpdateCaption();
+            }
+            finally { _loadingForm = false; }
+            _editor.IsEnabled = true;
             if (report) _status("Карточка загружена из CDR.", false);
+        }
+
+        private void FormChanged()
+        {
+            UpdateCaption();
+            if (_loadingForm || _busy || !_editor.IsEnabled || _documentIdentity == null) return;
+            try
+            {
+                object previous = _documentIdentity;
+                dynamic doc = EnsureDocument();
+                if (!SameDocument(previous, (object)doc)) return;
+                ReadForm(); SaveData();
+            }
+            catch (Exception error)
+            {
+                Log.Error("Order card auto-save failed", error);
+                _status("Не удалось записать карточку в документ: " + error.Message, true);
+            }
         }
 
         private void ReadForm()
@@ -164,25 +292,20 @@ namespace VanyaTools.Native
                 .Select(x => Convert.ToString(x.Content)).ToList();
         }
 
-        private void SaveForm()
-        {
-            EnsureDocument(); ReadForm(); SaveData(true);
-            _status("Карточка сохранена в CDR.", false);
-        }
-
-        private void SaveData(bool saveDocument = false)
+        private void SaveData()
         {
             dynamic doc = EnsureDocument(false);
             _data.SchemaVersion = 1;
             string json = new JavaScriptSerializer().Serialize(_data);
-            object properties = doc.Properties;
-            Log.Info("Order card: writing document property.");
-            properties.GetType().InvokeMember("Item", BindingFlags.SetProperty,
-                null, properties, new object[] { PropertyOwner, 1, json });
-            Log.Info("Order card: document property written.");
-            if (saveDocument) { Log.Info("Order card: saving CDR."); doc.Save(); Log.Info("Order card: CDR saved."); }
+            if (!String.Equals(json, _lastWrittenJson, StringComparison.Ordinal))
+            {
+                object properties = doc.Properties;
+                properties.GetType().InvokeMember("Item", BindingFlags.SetProperty,
+                    null, properties, new object[] { PropertyOwner, 1, json });
+                _lastWrittenJson = json;
+            }
             _documentName.Text = Path.GetFileName(_documentPath) + " · " + _data.Frames.Count +
-                " кадр(ов)" + (saveDocument ? "" : " · сохраните CDR");
+                " фото · Ctrl+S";
         }
 
         private void AddSelection()
@@ -204,6 +327,7 @@ namespace VanyaTools.Native
 
         private void RenderFrames()
         {
+            _frameExpander.Header = "Кадры (" + _data.Frames.Count + ")";
             _frames.Children.Clear();
             if (_data.Frames.Count == 0) { _frames.Children.Add(Note("Кадров нет. Выделите макет и нажмите «Добавить выделение».")); return; }
             for (int i = 0; i < _data.Frames.Count; i++)
