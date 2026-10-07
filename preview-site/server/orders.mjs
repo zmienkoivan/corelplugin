@@ -85,7 +85,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     ];
     const firstPhotoId = JSON.parse(row.photo_ids)[0];
     const chatId = String(row.chat_id || '');
-    if (row.publication_mode !== 'single' && firstPhotoId && /^-100\d+$/.test(chatId))
+    if (row.publication_mode === 'album' && firstPhotoId && /^-100\d+$/.test(chatId))
       actions.push({ text: 'Фото', url: `https://t.me/c/${chatId.slice(4)}/${firstPhotoId}` });
     return { inline_keyboard: [actions] };
   };
@@ -149,7 +149,8 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
         caption: singleCaption(row), reply_markup: buttons(row) });
     else if (row.publication_mode === 'album-only')
       await api('editMessageCaption', { chat_id: row.chat_id, message_id: row.status_message_id,
-        caption: singleCaption(row) });
+        caption: singleCaption(row),
+        ...(JSON.parse(row.photo_ids).length === 1 ? { reply_markup: buttons(row) } : {}) });
     else
       await api('editMessageText', { chat_id: row.chat_id, message_id: row.status_message_id,
         text: statusText(row), reply_markup: buttons(row) });
@@ -219,7 +220,8 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     const assignedRow = get(id);
     try {
       const messages = photos.length === 1
-        ? [await api('sendPhoto', { chat_id: channel, caption: singleCaption(assignedRow) }, photos)]
+        ? [await api('sendPhoto', { chat_id: channel, caption: singleCaption(assignedRow),
+            reply_markup: buttons(assignedRow) }, photos)]
         : await api('sendMediaGroup', { chat_id: channel,
             media: photos.map((_, i) => ({ type: 'photo', media: `attach://photo${i}`,
               ...(i === 0 ? { caption: singleCaption(assignedRow) } : {}) })) }, photos);
@@ -267,19 +269,27 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
           media: { type: 'photo', media: 'attach://photo0',
             ...(i === 0 ? { caption: row.publication_mode === 'album-only'
               ? singleCaption({ ...row, caption: value.caption })
-              : photoCaption({ ...row, caption: value.caption }) } : {}) } }, [photos[i]]);
+              : photoCaption({ ...row, caption: value.caption }) } : {}) },
+          ...(row.publication_mode === 'album-only' && ids.length === 1
+            ? { reply_markup: buttons({ ...row, revision: row.revision + 1 }) } : {}) }, [photos[i]]);
       }
       if (!photos.length && value.caption !== row.caption)
         await api('editMessageCaption', { chat_id: row.chat_id, message_id: ids[0],
           caption: row.publication_mode === 'album-only'
             ? singleCaption({ ...row, caption: value.caption })
-            : photoCaption({ ...row, caption: value.caption }) });
+            : photoCaption({ ...row, caption: value.caption }),
+          ...(row.publication_mode === 'album-only' && ids.length === 1
+            ? { reply_markup: buttons({ ...row, revision: row.revision + 1 }) } : {}) });
     }
     const result = db.prepare(`UPDATE orders SET caption=?, customer=?, source=?, technologies=?, description=?, items=?,
       revision=revision+1, updated_at=? WHERE id=? AND revision=?`).run(value.caption, value.customer,
       value.source, value.technologies, value.description, value.items, now(), id, row.revision);
     if (result.changes !== 1) throw new Error('Карточка изменена на другом ПК.');
     if (row.publication_mode === 'album') await syncStatus(get(id));
+    if (row.publication_mode === 'album-only' && JSON.parse(row.photo_ids).length === 1 &&
+        !photos.length && value.caption === row.caption)
+      await api('editMessageReplyMarkup', { chat_id: row.chat_id,
+        message_id: row.status_message_id, reply_markup: buttons(get(id)) });
     return publicOrder(get(id));
   }
 
