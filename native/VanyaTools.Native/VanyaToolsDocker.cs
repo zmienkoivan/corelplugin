@@ -134,7 +134,16 @@ namespace VanyaTools.Native
             outer.Children.Add(tabs);
             Panel root = standardTools;
 
-            root.Children.Add(Button("Обрезать растр", (_, __) => RunTrim(true)));
+            var quickActions = new UniformGrid { Columns = 2 };
+            quickActions.Children.Add(Button("Обрезать растр", (_, __) => RunTrim(true)));
+            var fitFrame = Button("Подогнать рамку", (_, __) => RunSafe(() =>
+            {
+                PrintFrameFitService.FitSelected();
+                SetStatus("Рамка подогнана под принт.", false);
+            }));
+            fitFrame.ToolTip = "Сначала выделите принт, затем рамку через Shift+щелчок. Принт станет по центру и верху рамки; рамка примет размер принта.";
+            quickActions.Children.Add(fitFrame);
+            root.Children.Add(quickActions);
             var trimSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
             AddSettingsExpander(root, "Настройки обрезки растра", trimSettings);
             AddSmallLabel(trimSettings, "По границе");
