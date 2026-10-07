@@ -13,11 +13,15 @@ namespace VanyaTools.Native
         private readonly TextBlock _referenceLabel;
         private readonly Border _preview;
         private readonly ComboBox _model;
+        private readonly ComboBox _layout;
         private readonly ComboBox _horizontal;
         private readonly ComboBox _vertical;
+        private readonly Grid _horizontalRow;
+        private readonly Grid _verticalRow;
         private readonly ComboBox _cells;
         private readonly TextBox _step;
         private readonly TextBox _square;
+        private readonly TextBlock _layoutNote;
         private ColorProofReference _reference;
 
         public ColorProofTab(Action<string, bool> status)
@@ -58,28 +62,38 @@ namespace VanyaTools.Native
             _model.SelectedIndex = 0;
             panel.Children.Add(Row("Модель вариантов", _model));
 
+            _layout = new ComboBox { Height = 27, FontSize = 11 };
+            _layout.Items.Add("Все каналы");
+            _layout.Items.Add("Два канала");
+            _layout.SelectedIndex = 0;
+            panel.Children.Add(Row("Режим", _layout));
+
             _horizontal = new ComboBox { Height = 27, FontSize = 11 };
             _vertical = new ComboBox { Height = 27, FontSize = 11 };
-            panel.Children.Add(Row("По горизонтали ±", _horizontal));
-            panel.Children.Add(Row("По вертикали ±", _vertical));
+            _horizontalRow = Row("По горизонтали ±", _horizontal);
+            _verticalRow = Row("По вертикали ±", _vertical);
+            panel.Children.Add(_horizontalRow);
+            panel.Children.Add(_verticalRow);
             _model.SelectionChanged += (_, __) => UpdateChannels();
             UpdateChannels();
 
             _step = Field("5");
             panel.Children.Add(Row("Шаг канала, % / 0–255", _step));
             _cells = new ComboBox { Height = 27, FontSize = 11 };
-            _cells.Items.Add("3 × 3");
-            _cells.Items.Add("5 × 5");
-            _cells.Items.Add("7 × 7");
             _cells.SelectedIndex = 1;
             panel.Children.Add(Row("Сетка", _cells));
             _square = Field("24");
             panel.Children.Add(Row("Плашка, мм", _square));
 
+            _layout.SelectionChanged += (_, __) => UpdateProofLayout();
+            UpdateProofLayout();
+
             var create = DockerTheme.Primary(Button("Создать на странице", (_, __) => Create()));
             create.Margin = new Thickness(0, 7, 0, 0);
             panel.Children.Add(create);
-            panel.Children.Add(Note("В центре — значение эталона. Плашечный эталон сохраняется отдельно; варианты — триадные."));
+            _layoutNote = Note("");
+            panel.Children.Add(_layoutNote);
+            UpdateProofLayout();
         }
 
         private void ReadSelection()
@@ -126,6 +140,23 @@ namespace VanyaTools.Native
             if (_reference != null) SetReference(_reference);
         }
 
+        private void UpdateProofLayout()
+        {
+            if (_horizontalRow == null || _verticalRow == null || _cells == null) return;
+            bool all = _layout.SelectedIndex == 0;
+            _horizontalRow.Visibility = all ? Visibility.Collapsed : Visibility.Visible;
+            _verticalRow.Visibility = all ? Visibility.Collapsed : Visibility.Visible;
+            int selected = _cells.SelectedIndex;
+            _cells.Items.Clear();
+            foreach (int count in new[] { 3, 5, 7 })
+                _cells.Items.Add(all ? count + " вариантов" : count + " × " + count);
+            _cells.SelectedIndex = selected >= 0 && selected < 3 ? selected : 1;
+            if (_layoutNote != null)
+                _layoutNote.Text = all
+                    ? "Отдельная строка для каждого канала. Средняя плашка — эталон; остальные каналы не меняются."
+                    : "Сетка отклонений по двум каналам. Средняя плашка — эталон.";
+        }
+
         private void Create()
         {
             try
@@ -140,11 +171,15 @@ namespace VanyaTools.Native
                     !Double.TryParse(_square.Text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out square))
                     throw new InvalidOperationException("Введите размер плашки в мм.");
                 int cells = (_cells.SelectedIndex + 1) * 2 + 1;
+                bool allChannels = _layout.SelectedIndex == 0;
                 _service.Create(_reference, new ColorProofOptions {
-                    Cmyk = cmyk, HorizontalChannel = _horizontal.SelectedIndex,
+                    Cmyk = cmyk, AllChannels = allChannels,
+                    HorizontalChannel = _horizontal.SelectedIndex,
                     VerticalChannel = _vertical.SelectedIndex, Step = step,
                     Cells = cells, SquareMm = square });
-                _status("Цветопроба " + cells + " × " + cells + " создана на странице.", false);
+                _status(allChannels
+                    ? "Создано " + (cmyk ? 4 : 3) + " таблицы по " + cells + " плашек."
+                    : "Цветопроба " + cells + " × " + cells + " создана на странице.", false);
             }
             catch (Exception ex) { Fail("Color proof creation failed.", ex); }
         }
