@@ -21,13 +21,13 @@ namespace VanyaTools.Native
     {
         private const string PropertyOwner = "CD899165-445C-40F0-91D7-2DF6703B0AF8";
         private readonly Action<string, bool> _status;
-        private readonly TextBox _customer, _description, _items, _channel;
+        private readonly TextBox _customer, _description, _items, _server;
         private readonly ComboBox _source;
-        private readonly PasswordBox _token;
-        private readonly TextBlock _caption, _documentName;
+        private readonly PasswordBox _key;
+        private readonly TextBlock _caption, _documentName, _orderInfo;
         private readonly StackPanel _frames, _editor;
         private readonly Expander _frameExpander;
-        private readonly Button _send;
+        private readonly Button _send, _updateText, _state, _refreshServer;
         private readonly DispatcherTimer _documentWatcher;
         private readonly List<CheckBox> _technologies = new List<CheckBox>();
         private OrderCardData _data = new OrderCardData();
@@ -43,7 +43,10 @@ namespace VanyaTools.Native
 
         private static string SettingsPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "VanyaTools", "telegram-order-cards.bin");
+            "VanyaTools", "order-server.bin");
+        private static string PreviewSettingsPath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "VanyaTools", "preview-publisher.bin");
 
         internal OrderCardTab(Action<string, bool> status)
         {
@@ -59,6 +62,7 @@ namespace VanyaTools.Native
             documentRow.Children.Add(reload);
             documentRow.Children.Add(_documentName);
             panel.Children.Add(documentRow);
+            _orderInfo = Note(""); panel.Children.Add(_orderInfo);
             _editor = new StackPanel { IsEnabled = false };
             panel.Children.Add(_editor);
             _editor.Children.Add(Button("Добавить выделение", (_, __) => Safe(AddSelection)));
@@ -99,33 +103,39 @@ namespace VanyaTools.Native
             _caption.Padding = new Thickness(5);
             _editor.Children.Add(new Expander { Header = "Подпись Telegram", Content = _caption,
                 Margin = new Thickness(0, 4, 0, 4) });
-            _send = DockerTheme.Primary(Button("Опубликовать в Telegram", async (_, __) => await Publish()));
+            _send = DockerTheme.Primary(Button("Опубликовать в Telegram", async (_, __) => await Publish(true)));
             _editor.Children.Add(_send);
+            _updateText = Button("Обновить текст без экспорта фото", async (_, __) => await Publish(false));
+            _editor.Children.Add(_updateText);
+            _state = Button("Отметить выполненным", async (_, __) => await ToggleState());
+            _editor.Children.Add(_state);
+            _refreshServer = Button("Загрузить карточку с сервера", async (_, __) => await RefreshServer());
+            _editor.Children.Add(_refreshServer);
             var more = new StackPanel();
             more.Children.Add(Button("Новая карточка", (_, __) => Safe(ClearCard)));
             _editor.Children.Add(new Expander { Header = "Ещё", Content = more,
                 Margin = new Thickness(0, 3, 0, 0) });
 
             var settings = new StackPanel { Margin = new Thickness(4, 12, 4, 4) };
-            settings.Children.Add(Title("Telegram · карточки заказов"));
-            settings.Children.Add(Label("Канал: @имя или числовой chat ID"));
-            _channel = Input(); settings.Children.Add(_channel);
-            settings.Children.Add(Label("Токен бота от BotFather"));
-            _token = new PasswordBox { Margin = new Thickness(0, 0, 0, 5) };
-            settings.Children.Add(_token);
-            settings.Children.Add(Button("Сохранить Telegram", (_, __) => Safe(() => SaveTelegramSettings())));
-            settings.Children.Add(Button("Проверить Telegram", async (_, __) =>
+            settings.Children.Add(Title("Сервер заказов"));
+            settings.Children.Add(Label("Адрес сервера"));
+            _server = Input(); _server.Text = "https://p.evpmerch.com"; settings.Children.Add(_server);
+            settings.Children.Add(Label("Ключ публикации"));
+            _key = new PasswordBox { Margin = new Thickness(0, 0, 0, 5) };
+            settings.Children.Add(_key);
+            settings.Children.Add(Button("Сохранить подключение", (_, __) => Safe(() => SaveServerSettings())));
+            settings.Children.Add(Button("Проверить сервер", async (_, __) =>
             {
                 try
                 {
-                    string description = await TelegramWorkerClient.Check(_token.Password.Trim(), _channel.Text.Trim());
-                    _status("Telegram: " + description, false);
+                    await OrderServerClient.Check(_server.Text.Trim(), _key.Password.Trim());
+                    _status("Сервер заказов доступен.", false);
                 }
-                catch (Exception error) { _status("Telegram: " + error.Message, true); }
+                catch (Exception error) { _status("Сервер заказов: " + error.Message, true); }
             }));
-            settings.Children.Add(Note("Токен хранится только на этом ПК в зашифрованном виде."));
+            settings.Children.Add(Note("Токен бота хранится на сервере. Здесь нужен ключ публикации."));
             SettingsView = settings;
-            LoadTelegramSettings();
+            LoadServerSettings();
             foreach (var input in new[] { _customer, _description, _items })
                 input.TextChanged += (_, __) => FormChanged();
             _source.SelectionChanged += (_, __) => FormChanged();
@@ -137,7 +147,7 @@ namespace VanyaTools.Native
             _documentWatcher.Tick += (_, __) => RefreshDocument();
             Loaded += (_, __) => { _documentWatcher.Start(); RefreshDocument(); };
             Unloaded += (_, __) => _documentWatcher.Stop();
-            RenderFrames(); UpdateCaption();
+            RenderFrames(); UpdateCaption(); UpdateActions();
         }
 
         private dynamic EnsureDocument(bool loadIfChanged = true)
@@ -197,7 +207,7 @@ namespace VanyaTools.Native
                 _customer.Text = ""; _source.Text = "";
                 _description.Text = ""; _items.Text = "";
                 foreach (var box in _technologies) box.IsChecked = false;
-                RenderFrames(); UpdateCaption();
+                RenderFrames(); UpdateCaption(); UpdateActions();
             }
             finally { _loadingForm = false; }
             _documentName.Text = "Откройте сохранённый CDR.";
@@ -257,7 +267,7 @@ namespace VanyaTools.Native
                 _items.Text = _data.Items ?? "";
                 foreach (var box in _technologies)
                     box.IsChecked = _data.Technologies.Contains(Convert.ToString(box.Content));
-                RenderFrames(); UpdateCaption();
+                RenderFrames(); UpdateCaption(); UpdateActions();
             }
             finally { _loadingForm = false; }
             _editor.IsEnabled = true;
@@ -295,7 +305,7 @@ namespace VanyaTools.Native
         private void SaveData()
         {
             dynamic doc = EnsureDocument(false);
-            _data.SchemaVersion = 1;
+            _data.SchemaVersion = 2;
             string json = new JavaScriptSerializer().Serialize(_data);
             if (!String.Equals(json, _lastWrittenJson, StringComparison.Ordinal))
             {
@@ -483,43 +493,105 @@ namespace VanyaTools.Native
             throw new InvalidOperationException("Кадр получился полностью белым. Проверьте выделение в CDR и повторите публикацию.");
         }
 
-        private async Task Publish()
+        private async Task Publish(bool includePhotos)
         {
             if (_busy) return;
-            string token = _token.Password.Trim(), channel = _channel.Text.Trim();
-            if (token.Length == 0 || channel.Length == 0)
-            { _status("Укажите канал и токен бота во вкладке «Настройки».", true); return; }
+            string server = _server.Text.Trim(), key = _key.Password.Trim();
+            if (server.Length == 0 || key.Length == 0)
+            { _status("Укажите адрес и ключ сервера во вкладке «Настройки».", true); return; }
             _busy = true; _send.IsEnabled = false;
-            bool sent = false;
             try
             {
                 dynamic doc = EnsureDocument(); ReadForm();
-                if (_data.Frames.Count == 0) throw new InvalidOperationException("Добавьте хотя бы одно выделение.");
+                if (includePhotos && _data.Frames.Count == 0)
+                    throw new InvalidOperationException("Добавьте хотя бы одно выделение.");
                 if (_data.Customer.Length == 0) throw new InvalidOperationException("Введите имя заказчика.");
                 string caption = ComposeCaption();
                 if (caption.Length > 1024) throw new InvalidOperationException("Подпись длиннее 1024 символов. Сократите описание.");
-                SaveData(); SaveTelegramSettings(false);
+                if (_data.ServerOrderId == 0 && _data.TelegramMessageId > 0 &&
+                    MessageBox.Show("Эта карточка уже отправлена напрямую в Telegram. Опубликовать новую серверную карточку?",
+                        "Vanya Tools", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+                if (String.IsNullOrEmpty(_data.ClientKey)) _data.ClientKey = Guid.NewGuid().ToString();
+                SaveData(); SaveServerSettings(false);
                 var photos = new List<byte[]>();
-                for (int i = 0; i < _data.Frames.Count; i++)
+                if (includePhotos) for (int i = 0; i < _data.Frames.Count; i++)
                 {
                     _status("Подготовка кадра " + (i + 1) + " из " + _data.Frames.Count + "…", false);
                     photos.Add(CapturePhoto(doc, _data.Frames[i]));
                 }
-                _status("Отправка в Telegram…", false);
-                int messageId = await TelegramWorkerClient.Send(token, channel, caption, photos);
-                sent = true;
+                _status(_data.ServerOrderId == 0 ? "Публикация через сервер…" : "Обновление карточки…", false);
+                var details = new Dictionary<string, object> {
+                    ["clientKey"] = _data.ClientKey, ["caption"] = caption,
+                    ["customer"] = _data.Customer, ["source"] = _data.Source,
+                    ["technologies"] = _data.Technologies,
+                    ["description"] = _data.Description, ["items"] = _data.Items,
+                    ["revision"] = _data.ServerRevision
+                };
+                var result = await OrderServerClient.Publish(server, key, details, photos, _data.ServerOrderId);
                 _data.PublishedAtUtc = DateTime.UtcNow.ToString("o");
-                _data.TelegramMessageId = messageId;
+                ApplyServerResult(result);
                 SaveData();
-                _status("Карточка опубликована в Telegram. Сообщение №" + messageId + ". Сохраните CDR.", false);
+                UpdateActions();
+                if (Convert.ToString(result["sendState"]) != "sent")
+                    throw new InvalidOperationException("Публикация не завершена. Проверьте канал и загрузите карточку с сервера.");
+                _status("Заказ №" + _data.ServerOrderId + " сохранён в Telegram. Сохраните CDR.", false);
             }
             catch (Exception error)
             {
                 Log.Info("Order card publish failed: " + error.GetType().Name);
-                _status(sent ? "Карточка отправлена, но не удалось сохранить отметку в CDR: " + error.Message
-                    : "Публикация: " + error.Message.Replace(token, "[скрыто]"), true);
+                _status("Карточка: " + error.Message.Replace(key, "[скрыто]"), true);
             }
             finally { _busy = false; _send.IsEnabled = true; }
+        }
+
+        private void ApplyServerResult(Dictionary<string, object> result)
+        {
+            _data.ServerOrderId = Convert.ToInt32(result["id"]);
+            _data.ServerRevision = Convert.ToInt32(result["revision"]);
+            _data.ServerState = Convert.ToString(result["state"]);
+            if (result.TryGetValue("photoIds", out object ids) && ids is object[] photos && photos.Length > 0)
+                _data.TelegramMessageId = Convert.ToInt32(photos[0]);
+        }
+
+        private async Task RefreshServer()
+        {
+            if (_busy || _data.ServerOrderId == 0) return;
+            _busy = true; _refreshServer.IsEnabled = false;
+            try
+            {
+                var result = await OrderServerClient.Get(_server.Text.Trim(), _key.Password.Trim(), _data.ServerOrderId);
+                _loadingForm = true;
+                try
+                {
+                    _customer.Text = Convert.ToString(result["customer"]);
+                    _source.Text = Convert.ToString(result["source"]);
+                    _description.Text = Convert.ToString(result["description"]);
+                    _items.Text = Convert.ToString(result["items"]);
+                    var technologies = result["technologies"] as object[] ?? new object[0];
+                    foreach (var box in _technologies)
+                        box.IsChecked = technologies.Any(x => Convert.ToString(x) == Convert.ToString(box.Content));
+                }
+                finally { _loadingForm = false; }
+                ReadForm(); ApplyServerResult(result); SaveData(); UpdateCaption(); UpdateActions();
+                _status("Заказ №" + _data.ServerOrderId + " загружен с сервера. Сохраните CDR.", false);
+            }
+            catch (Exception error) { _status("Загрузка заказа: " + error.Message, true); }
+            finally { _busy = false; _refreshServer.IsEnabled = true; }
+        }
+
+        private async Task ToggleState()
+        {
+            if (_busy || _data.ServerOrderId == 0) return;
+            _busy = true; _state.IsEnabled = false;
+            try
+            {
+                var result = await OrderServerClient.SetState(_server.Text.Trim(), _key.Password.Trim(),
+                    _data.ServerOrderId, _data.ServerState == "done" ? "new" : "done", _data.ServerRevision);
+                ApplyServerResult(result); SaveData(); UpdateActions();
+                _status("Статус заказа №" + _data.ServerOrderId + " обновлён.", false);
+            }
+            catch (Exception error) { _status("Статус заказа: " + error.Message, true); }
+            finally { _busy = false; _state.IsEnabled = true; }
         }
 
         private string ComposeCaption()
@@ -537,31 +609,45 @@ namespace VanyaTools.Native
 
         private void UpdateCaption() { if (_caption != null) _caption.Text = ComposeCaption(); }
 
-        private void SaveTelegramSettings(bool report = true)
+        private void UpdateActions()
         {
-            string channel = _channel.Text.Trim(), token = _token.Password.Trim();
-            if (channel.Length == 0 || token.Length == 0)
-                throw new InvalidOperationException("Укажите канал и токен бота.");
+            if (_send == null) return;
+            bool published = _data.ServerOrderId > 0;
+            _send.Content = published ? "Заменить фото и обновить текст" : "Опубликовать в Telegram";
+            _updateText.Visibility = published ? Visibility.Visible : Visibility.Collapsed;
+            _state.Visibility = published ? Visibility.Visible : Visibility.Collapsed;
+            _refreshServer.Visibility = published ? Visibility.Visible : Visibility.Collapsed;
+            _state.Content = _data.ServerState == "done" ? "Вернуть в работу" : "Отметить выполненным";
+            _orderInfo.Text = published ? "Заказ №" + _data.ServerOrderId + " · " +
+                (_data.ServerState == "done" ? "выполнен" : "в работе") : "";
+        }
+
+        private void SaveServerSettings(bool report = true)
+        {
+            string server = _server.Text.Trim(), key = _key.Password.Trim();
+            if (server.Length == 0 || key.Length == 0)
+                throw new InvalidOperationException("Укажите адрес и ключ сервера.");
             string json = new JavaScriptSerializer().Serialize(new Dictionary<string, string>
-                { ["channel"] = channel, ["token"] = token });
+                { ["server"] = server, ["key"] = key });
             byte[] encrypted = ProtectedData.Protect(Encoding.UTF8.GetBytes(json), null, DataProtectionScope.CurrentUser);
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
             File.WriteAllBytes(SettingsPath, encrypted);
-            if (report) _status("Подключение Telegram сохранено.", false);
+            if (report) _status("Подключение к серверу сохранено.", false);
         }
 
-        private void LoadTelegramSettings()
+        private void LoadServerSettings()
         {
             try
             {
-                if (!File.Exists(SettingsPath)) return;
+                string file = File.Exists(SettingsPath) ? SettingsPath : PreviewSettingsPath;
+                if (!File.Exists(file)) return;
                 string json = Encoding.UTF8.GetString(ProtectedData.Unprotect(
-                    File.ReadAllBytes(SettingsPath), null, DataProtectionScope.CurrentUser));
+                    File.ReadAllBytes(file), null, DataProtectionScope.CurrentUser));
                 var settings = new JavaScriptSerializer().Deserialize<Dictionary<string, string>>(json);
-                if (settings.TryGetValue("channel", out string channel)) _channel.Text = channel;
-                if (settings.TryGetValue("token", out string token)) _token.Password = token;
+                if (settings.TryGetValue("server", out string server)) _server.Text = server;
+                if (settings.TryGetValue("key", out string key)) _key.Password = key;
             }
-            catch { _status("Не удалось прочитать настройки Telegram. Введите их повторно.", true); }
+            catch { _status("Не удалось прочитать настройки сервера. Введите их повторно.", true); }
         }
 
         private void Safe(Action action)
@@ -589,7 +675,7 @@ namespace VanyaTools.Native
 
     public sealed class OrderCardData
     {
-        public int SchemaVersion { get; set; } = 1;
+        public int SchemaVersion { get; set; } = 2;
         public string Customer { get; set; }
         public string Source { get; set; }
         public List<string> Technologies { get; set; } = new List<string>();
@@ -598,6 +684,10 @@ namespace VanyaTools.Native
         public List<OrderCardFrame> Frames { get; set; } = new List<OrderCardFrame>();
         public string PublishedAtUtc { get; set; }
         public int TelegramMessageId { get; set; }
+        public string ClientKey { get; set; }
+        public int ServerOrderId { get; set; }
+        public int ServerRevision { get; set; }
+        public string ServerState { get; set; }
     }
     public sealed class OrderCardFrame
     {

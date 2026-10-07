@@ -1,0 +1,238 @@
+import { DatabaseSync } from 'node:sqlite';
+import path from 'node:path';
+
+const now = () => new Date().toISOString();
+const text = (value, max) => String(value ?? '').trim().slice(0, max);
+
+export function createOrders({ dataRoot, token, channel, allowedUsers }) {
+  if (!token || !channel) return null;
+  const db = new DatabaseSync(path.join(dataRoot, 'orders.sqlite'));
+  db.exec(`PRAGMA journal_mode=WAL;
+    CREATE TABLE IF NOT EXISTS orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_key TEXT NOT NULL UNIQUE,
+      chat_id TEXT,
+      caption TEXT NOT NULL,
+      customer TEXT NOT NULL,
+      source TEXT NOT NULL,
+      technologies TEXT NOT NULL,
+      description TEXT NOT NULL,
+      items TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'new',
+      send_state TEXT NOT NULL DEFAULT 'sending',
+      photo_ids TEXT NOT NULL DEFAULT '[]',
+      status_message_id INTEGER,
+      revision INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS bot_state (name TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+  const users = new Set(String(allowedUsers || '').split(',').map(x => x.trim()).filter(Boolean));
+  const pending = new Map();
+  async function locked(id, action) {
+    const previous = pending.get(id) || Promise.resolve();
+    let release;
+    const current = new Promise(resolve => { release = resolve; });
+    pending.set(id, current);
+    await previous;
+    try { return await action(); }
+    finally {
+      release();
+      if (pending.get(id) === current) pending.delete(id);
+    }
+  }
+
+  async function api(method, fields, photos = []) {
+    const form = new FormData();
+    for (const [key, value] of Object.entries(fields)) form.set(key, typeof value === 'string' ? value : JSON.stringify(value));
+    for (let i = 0; i < photos.length; i++)
+      form.set(method === 'sendPhoto' ? 'photo' : `photo${i}`,
+        new Blob([photos[i]], { type: 'image/jpeg' }), `order-${i + 1}.jpg`);
+    const timeoutMs = photos.length ? 6 * 60 * 1000 : method === 'getUpdates' ? 35_000 : 60_000;
+    const response = await fetch(`https://api.telegram.org/bot${token}/${method}`,
+      { method: 'POST', body: form, signal: AbortSignal.timeout(timeoutMs) });
+    const body = await response.json();
+    if (!response.ok || !body.ok) throw new Error(`Telegram ${method}: ${body.description || response.status}`);
+    return body.result;
+  }
+
+  const get = id => db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+  const publicOrder = row => ({ id: row.id, clientKey: row.client_key,
+    chatId: row.chat_id, state: row.state, sendState: row.send_state,
+    revision: row.revision, photoIds: JSON.parse(row.photo_ids),
+    caption: row.caption, customer: row.customer, source: row.source,
+    technologies: JSON.parse(row.technologies), description: row.description,
+    items: row.items,
+    statusMessageId: row.status_message_id, createdAt: row.created_at,
+    updatedAt: row.updated_at });
+  const buttons = row => ({ inline_keyboard: [[
+    { text: row.state === 'done' ? '↩ Вернуть в работу' : '✓ Выполнен', callback_data: `order:${row.id}:${row.revision}:${row.state === 'done' ? 'new' : 'done'}` }
+  ]] });
+  const statusText = row => `Заказ №${row.id} · ${row.state === 'done' ? 'Выполнен' : 'В работе'}\n${row.customer}`;
+
+  async function syncStatus(row) {
+    if (!row.status_message_id) return;
+    await api('editMessageText', { chat_id: row.chat_id, message_id: row.status_message_id,
+      text: statusText(row), reply_markup: buttons(row) });
+  }
+
+  async function readRequest(req) {
+    const length = Number(req.headers['content-length'] || 0);
+    if (length > 105 * 1024 * 1024) throw new Error('Карточка больше 105 МБ.');
+    let size = 0;
+    const chunks = [];
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > 105 * 1024 * 1024) throw new Error('Карточка больше 105 МБ.');
+      chunks.push(chunk);
+    }
+    const contentType = String(req.headers['content-type'] || '');
+    if (!contentType.startsWith('multipart/form-data;')) throw new Error('Ожидается multipart/form-data.');
+    const request = new Request('http://localhost/order', { method: 'POST',
+      headers: { 'content-type': contentType }, body: Buffer.concat(chunks) });
+    const form = await request.formData();
+    const details = JSON.parse(String(form.get('details') || '{}'));
+    const photos = [];
+    for (let i = 0; i < 10; i++) {
+      const photo = form.get(`photo${i}`);
+      if (!photo) break;
+      if (photo.type !== 'image/jpeg' || photo.size > 9_500_000 || photo.size === 0)
+        throw new Error('Каждое фото должно быть JPEG до 9,5 МБ.');
+      photos.push(Buffer.from(await photo.arrayBuffer()));
+    }
+    return { details, photos };
+  }
+
+  function fields(details) {
+    const clientKey = text(details.clientKey, 64);
+    if (!/^[0-9a-f-]{36}$/i.test(clientKey)) throw new Error('Неверный ID карточки.');
+    const customer = text(details.customer, 120);
+    if (!customer) throw new Error('Введите заказчика.');
+    const caption = text(details.caption, 1024);
+    if (!caption) throw new Error('Подпись пуста.');
+    return { clientKey, customer, caption, source: text(details.source, 40),
+      technologies: JSON.stringify(Array.isArray(details.technologies) ? details.technologies.slice(0, 10) : []),
+      description: text(details.description, 1000), items: text(details.items, 1000) };
+  }
+
+  async function create(req) {
+    const { details, photos } = await readRequest(req);
+    if (photos.length < 1) throw new Error('Добавьте хотя бы одно фото.');
+    const value = fields(details);
+    const existing = db.prepare('SELECT * FROM orders WHERE client_key = ?').get(value.clientKey);
+    if (existing) return publicOrder(existing); // Safe retry after a lost HTTP response.
+    const timestamp = now();
+    const inserted = db.prepare(`INSERT INTO orders
+      (client_key, caption, customer, source, technologies, description, items, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(value.clientKey, value.caption,
+      value.customer, value.source, value.technologies, value.description, value.items, timestamp, timestamp);
+    const id = Number(inserted.lastInsertRowid);
+    try {
+      let messages;
+      if (photos.length === 1) {
+        messages = [await api('sendPhoto', { chat_id: channel, caption: value.caption }, photos)];
+      } else {
+        const media = photos.map((_, i) => ({ type: 'photo', media: `attach://photo${i}`,
+          ...(i === 0 ? { caption: value.caption } : {}) }));
+        messages = await api('sendMediaGroup', { chat_id: channel, media }, photos);
+      }
+      const photoIds = messages.map(message => message.message_id);
+      const chatId = String(messages[0].chat.id);
+      db.prepare(`UPDATE orders SET chat_id=?, photo_ids=?, send_state='photos_sent', updated_at=? WHERE id=?`)
+        .run(chatId, JSON.stringify(photoIds), now(), id);
+      const row = get(id);
+      const status = await api('sendMessage', { chat_id: chatId, text: statusText(row),
+        reply_markup: buttons(row) });
+      db.prepare(`UPDATE orders SET status_message_id=?, send_state='sent', updated_at=? WHERE id=?`)
+        .run(status.message_id, now(), id);
+      try { await api('pinChatMessage', { chat_id: chatId, message_id: status.message_id,
+        disable_notification: true }); }
+      catch (error) { console.error(`Order ${id} pin failed:`, error.message); }
+      return publicOrder(get(id));
+    } catch (error) {
+      db.prepare(`UPDATE orders SET send_state=CASE WHEN send_state='photos_sent' THEN 'photos_sent' ELSE 'uncertain' END,
+        updated_at=? WHERE id=?`).run(now(), id);
+      throw new Error(`Заказ №${id}: ${error.message}. Проверьте канал; повтор не создаст дубль.`);
+    }
+  }
+
+  async function update(id, req) {
+    const row = get(id);
+    if (!row) throw new Error('Заказ не найден.');
+    if (row.send_state !== 'sent') throw new Error('Публикация заказа не завершена. Проверьте канал.');
+    const { details, photos } = await readRequest(req);
+    const value = fields(details);
+    if (value.clientKey !== row.client_key) throw new Error('ID карточки не совпадает.');
+    if (Number(details.revision) !== row.revision) throw new Error('Карточка изменена на другом ПК. Обновите данные.');
+    if (photos.length && photos.length !== JSON.parse(row.photo_ids).length)
+      throw new Error('Чтобы изменить число фото, опубликуйте новую карточку.');
+    const ids = JSON.parse(row.photo_ids);
+    for (let i = 0; i < photos.length; i++) {
+      await api('editMessageMedia', { chat_id: row.chat_id, message_id: ids[i],
+        media: { type: 'photo', media: 'attach://photo0', ...(i === 0 ? { caption: value.caption } : {}) } }, [photos[i]]);
+    }
+    if (!photos.length && value.caption !== row.caption)
+      await api('editMessageCaption', { chat_id: row.chat_id, message_id: ids[0], caption: value.caption });
+    const result = db.prepare(`UPDATE orders SET caption=?, customer=?, source=?, technologies=?, description=?, items=?,
+      revision=revision+1, updated_at=? WHERE id=? AND revision=?`).run(value.caption, value.customer,
+      value.source, value.technologies, value.description, value.items, now(), id, row.revision);
+    if (result.changes !== 1) throw new Error('Карточка изменена на другом ПК.');
+    await syncStatus(get(id));
+    return publicOrder(get(id));
+  }
+
+  async function setState(id, state, revision) {
+    if (!['new', 'done'].includes(state)) throw new Error('Неизвестный статус.');
+    const row = get(id);
+    if (!row) throw new Error('Заказ не найден.');
+    if (revision !== row.revision) throw new Error('Карточка изменена.');
+    if (row.state === state) return publicOrder(row);
+    const updated = db.prepare('UPDATE orders SET state=?, revision=revision+1, updated_at=? WHERE id=? AND revision=?')
+      .run(state, now(), id, revision);
+    if (updated.changes !== 1) throw new Error('Карточка изменена.');
+    const current = get(id);
+    await syncStatus(current);
+    if (current.status_message_id) {
+      await api(state === 'done' ? 'unpinChatMessage' : 'pinChatMessage',
+        { chat_id: current.chat_id, message_id: current.status_message_id,
+          ...(state === 'new' ? { disable_notification: true } : {}) });
+    }
+    return publicOrder(get(id));
+  }
+
+  let offset = Number(db.prepare("SELECT value FROM bot_state WHERE name='offset'").get()?.value || 0);
+  let polling = false;
+  async function poll() {
+    if (polling) return;
+    polling = true;
+    try {
+      const updates = await api('getUpdates', { offset, timeout: 25, allowed_updates: ['callback_query'] });
+      for (const update of updates) {
+        offset = update.update_id + 1;
+        db.prepare("INSERT INTO bot_state(name,value) VALUES('offset',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value")
+          .run(String(offset));
+        const query = update.callback_query;
+        const match = /^order:(\d+):(\d+):(new|done)$/.exec(query?.data || '');
+        if (!match) continue;
+        let answer = 'Готово';
+        try {
+          if (!users.has(String(query.from.id))) throw new Error('Нет доступа.');
+          const row = get(Number(match[1]));
+          if (!row || String(query.message?.chat?.id) !== row.chat_id ||
+              query.message?.message_id !== row.status_message_id)
+            throw new Error('Карточка не найдена.');
+          await locked(row.id, () => setState(row.id, match[3], Number(match[2])));
+        } catch (error) { answer = error.message; }
+        await api('answerCallbackQuery', { callback_query_id: query.id, text: answer.slice(0, 180) });
+      }
+    } catch (error) { console.error('Order bot polling:', error.message); }
+    finally { polling = false; }
+  }
+  setInterval(poll, 3000).unref();
+  poll();
+
+  return { create, update: (id, req) => locked(id, () => update(id, req)),
+    setState: (id, state, revision) => locked(id, () => setState(id, state, revision)),
+    get: id => { const row = get(id); return row ? publicOrder(row) : null; },
+    list: () => db.prepare('SELECT * FROM orders ORDER BY id DESC LIMIT 100').all().map(publicOrder) };
+}

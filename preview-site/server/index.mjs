@@ -8,6 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import { watermarkOutline } from './watermark-outline.mjs';
+import { createOrders } from './orders.mjs';
 
 sharp.concurrency(1);
 sharp.cache({ memory: 64, files: 20, items: 100 });
@@ -64,6 +65,9 @@ function openToken(sealed) {
   return Buffer.concat([decipher.update(Buffer.from(sealed.data, 'hex')), decipher.final()]).toString('utf8');
 }
 const validAdmin = req => safeEqual(req.headers['x-admin-key'], adminKey);
+const orders = createOrders({ dataRoot, token: process.env.ORDER_BOT_TOKEN,
+  channel: process.env.ORDER_BOT_CHANNEL,
+  allowedUsers: process.env.ORDER_BOT_ALLOWED_USER_IDS });
 const cleanText = (value, limit) => String(value || '').trim().slice(0, limit);
 
 function optionsFromHeader(req) {
@@ -258,6 +262,37 @@ const server = http.createServer(async (req, res) => {
     const pathname = new URL(req.url, 'http://localhost').pathname;
     if (req.method === 'GET' && pathname === '/api/health') {
       json(res, 200, { ok: true }); return;
+    }
+    if (pathname === '/api/orders' || /^\/api\/orders\/\d+(?:\/state)?$/.test(pathname)) {
+      if (!validAdmin(req)) { json(res, 403, { error: 'Неверный ключ публикации.' }); return; }
+      if (!orders) { json(res, 503, { error: 'Бот не настроен на сервере.' }); return; }
+      try {
+        if (pathname === '/api/orders' && req.method === 'GET')
+          json(res, 200, orders.list());
+        else if (pathname === '/api/orders' && req.method === 'POST')
+          json(res, 201, await orders.create(req));
+        else {
+          const id = Number(pathname.split('/')[3]);
+          if (pathname.endsWith('/state') && req.method === 'PATCH') {
+            let body = '';
+            for await (const chunk of req) {
+              body += chunk.toString('utf8');
+              if (body.length > 4096) throw new Error('Запрос слишком велик.');
+            }
+            const value = JSON.parse(body);
+            json(res, 200, await orders.setState(id, value.state, Number(value.revision)));
+          } else if (req.method === 'GET') {
+            const value = orders.get(id);
+            json(res, value ? 200 : 404, value || { error: 'Заказ не найден.' });
+          } else if (req.method === 'PUT' && !pathname.endsWith('/state'))
+            json(res, 200, await orders.update(id, req));
+          else json(res, 405, { error: 'Метод не поддерживается.' });
+        }
+      } catch (error) {
+        console.error('Order request failed:', error.message);
+        json(res, /изменена|уже/.test(error.message) ? 409 : 400, { error: error.message });
+      }
+      return;
     }
     if (req.method === 'POST' && pathname === '/api/previews') {
       await publish(req, res); return;
