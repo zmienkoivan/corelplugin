@@ -37,6 +37,7 @@ namespace VanyaTools.Native
         private readonly System.Windows.Controls.CheckBox _mergeAdjacentContours;
         private readonly System.Windows.Controls.RadioButton _rotatePackClockwise;
         private readonly System.Windows.Controls.RadioButton _rotatePackCounterClockwise;
+        private readonly CorelHotkeyManager _hotkeys;
         private PrintFrameAnchor _printFrameAnchor = PrintFrameAnchor.TopCenter;
 
         public VanyaToolsDocker()
@@ -93,8 +94,13 @@ namespace VanyaTools.Native
             var orderCards = new OrderCardTab((message, isError) => SetStatus(message, isError));
             var settings = new StackPanel { Margin = new Thickness(5) };
             settings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
+            _hotkeys = new CorelHotkeyManager(() => RunTrim(true), RunFitFrame,
+                (message, isError) => SetStatus(message, isError));
+            settings.Children.Add(_hotkeys.SettingsView);
             settings.Children.Add(aiTools.SettingsView);
             settings.Children.Add(orderCards.SettingsView);
+            Loaded += (_, __) => _hotkeys.Attach(this);
+            Unloaded += (_, __) => _hotkeys.Detach();
 
             var tabs = new TabControl { MinHeight = 360 };
             tabs.Items.Add(ThumbnailTabs.Create("Основная", ThumbnailTabs.Crop,
@@ -142,12 +148,7 @@ namespace VanyaTools.Native
             var trimButton = Button("Обрезать растр", (_, __) => RunTrim(true));
             trimButton.Margin = new Thickness(0, 0, 3, 2);
             quickActions.Children.Add(trimButton);
-            var fitFrame = Button("Подогнать рамку", (_, __) => RunSafe(() =>
-            {
-                int parts = PrintFrameFitService.FitSelected(_printFrameAnchor);
-                SetStatus(parts > 1 ? "Части принта сгруппированы; рамка подогнана."
-                    : "Рамка подогнана под принт.", false);
-            }));
+            var fitFrame = Button("Подогнать рамку", (_, __) => RunFitFrame());
             fitFrame.Margin = new Thickness(0, 0, 3, 2);
             fitFrame.ToolTip = "Выделите части принта, затем рамку последней через Shift+щелчок. Точку привязки выберите справа.";
             Grid.SetColumn(fitFrame, 1);
@@ -305,6 +306,16 @@ namespace VanyaTools.Native
                 var result = new BitmapTrimService().TrimSelected(mode, sides, padding, useTiles);
                 string m = useTiles ? "тайлы" : "пиксели";
                 SetStatus($"Обрезано ({m}): {result.Trimmed}. Пропущено: {result.Skipped}.", false);
+            });
+        }
+
+        private void RunFitFrame()
+        {
+            RunSafe(() =>
+            {
+                int parts = PrintFrameFitService.FitSelected(_printFrameAnchor);
+                SetStatus(parts > 1 ? "Части принта сгруппированы; рамка подогнана."
+                    : "Рамка подогнана под принт.", false);
             });
         }
 
