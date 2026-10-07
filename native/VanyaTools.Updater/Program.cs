@@ -27,6 +27,8 @@ namespace VanyaTools.Updater
                 return PreviewPublishWorker.Run();
             if (args != null && args.Length == 1 && args[0] == "--telegram-worker")
                 return TelegramWorker.Run();
+            if (args != null && args.Length == 1 && args[0] == "--order-worker")
+                return OrderWorker.Run();
 
             Console.OutputEncoding = Encoding.UTF8;
             string installedVersionText = GetArgument(args, "--installed-version");

@@ -27,6 +27,14 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
       updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS bot_state (name TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+  const columns = db.prepare('PRAGMA table_info(orders)').all().map(column => column.name);
+  if (!columns.includes('order_number')) db.exec('ALTER TABLE orders ADD COLUMN order_number TEXT;');
+  if (!columns.includes('order_period')) db.exec('ALTER TABLE orders ADD COLUMN order_period TEXT;');
+  db.exec(`CREATE TABLE IF NOT EXISTS order_counters (
+    period TEXT PRIMARY KEY,
+    last_value INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS orders_period_number ON orders(order_period, order_number);`);
   const users = new Set(String(allowedUsers || '').split(',').map(x => x.trim()).filter(Boolean));
   const pending = new Map();
   async function locked(id, action) {
@@ -57,7 +65,8 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
   }
 
   const get = id => db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
-  const publicOrder = row => ({ id: row.id, clientKey: row.client_key,
+  const publicOrder = row => ({ id: row.id, number: row.order_number || String(row.id),
+    period: row.order_period, clientKey: row.client_key,
     chatId: row.chat_id, state: row.state, sendState: row.send_state,
     revision: row.revision, photoIds: JSON.parse(row.photo_ids),
     caption: row.caption, customer: row.customer, source: row.source,
@@ -68,7 +77,22 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
   const buttons = row => ({ inline_keyboard: [[
     { text: row.state === 'done' ? '↩ Вернуть в работу' : '✓ Выполнен', callback_data: `order:${row.id}:${row.revision}:${row.state === 'done' ? 'new' : 'done'}` }
   ]] });
-  const statusText = row => `Заказ №${row.id} · ${row.state === 'done' ? 'Выполнен' : 'В работе'}\n${row.customer}`;
+  const statusText = row => `Заказ №${row.order_number || row.id} · ${row.state === 'done' ? 'Выполнен' : 'В работе'}\n${row.customer}`;
+  const photoCaption = row => `№${row.order_number || row.id}\n${row.caption}`;
+
+  function nextOrderNumber() {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Yekaterinburg',
+      year: 'numeric', month: '2-digit' }).formatToParts(new Date());
+    const year = parts.find(part => part.type === 'year').value;
+    const month = parts.find(part => part.type === 'month').value;
+    const period = `${year}-${month}`;
+    const current = db.prepare('SELECT last_value FROM order_counters WHERE period=?').get(period);
+    const value = current ? current.last_value + 1 : 1;
+    if (value > 999) throw new Error('В этом месяце достигнут лимит 999 заказов.');
+    db.prepare(`INSERT INTO order_counters(period,last_value) VALUES(?,?)
+      ON CONFLICT(period) DO UPDATE SET last_value=excluded.last_value`).run(period, value);
+    return { period, number: month + String(value).padStart(3, '0') };
+  }
 
   async function syncStatus(row) {
     if (!row.status_message_id) return;
@@ -110,6 +134,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     if (!customer) throw new Error('Введите заказчика.');
     const caption = text(details.caption, 1024);
     if (!caption) throw new Error('Подпись пуста.');
+    if (caption.length > 1016) throw new Error('Подпись слишком длинная для номера заказа.');
     return { clientKey, customer, caption, source: text(details.source, 40),
       technologies: JSON.stringify(Array.isArray(details.technologies) ? details.technologies.slice(0, 10) : []),
       description: text(details.description, 1000), items: text(details.items, 1000) };
@@ -122,18 +147,27 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     const existing = db.prepare('SELECT * FROM orders WHERE client_key = ?').get(value.clientKey);
     if (existing) return publicOrder(existing); // Safe retry after a lost HTTP response.
     const timestamp = now();
-    const inserted = db.prepare(`INSERT INTO orders
-      (client_key, caption, customer, source, technologies, description, items, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(value.clientKey, value.caption,
-      value.customer, value.source, value.technologies, value.description, value.items, timestamp, timestamp);
-    const id = Number(inserted.lastInsertRowid);
+    let id;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const assigned = nextOrderNumber();
+      const inserted = db.prepare(`INSERT INTO orders
+        (client_key, order_number, order_period, caption, customer, source, technologies,
+         description, items, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(value.clientKey,
+        assigned.number, assigned.period, value.caption, value.customer, value.source,
+        value.technologies, value.description, value.items, timestamp, timestamp);
+      id = Number(inserted.lastInsertRowid);
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    const assignedRow = get(id);
     try {
       let messages;
       if (photos.length === 1) {
-        messages = [await api('sendPhoto', { chat_id: channel, caption: value.caption }, photos)];
+        messages = [await api('sendPhoto', { chat_id: channel, caption: photoCaption(assignedRow) }, photos)];
       } else {
         const media = photos.map((_, i) => ({ type: 'photo', media: `attach://photo${i}`,
-          ...(i === 0 ? { caption: value.caption } : {}) }));
+          ...(i === 0 ? { caption: photoCaption(assignedRow) } : {}) }));
         messages = await api('sendMediaGroup', { chat_id: channel, media }, photos);
       }
       const photoIds = messages.map(message => message.message_id);
@@ -152,7 +186,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     } catch (error) {
       db.prepare(`UPDATE orders SET send_state=CASE WHEN send_state='photos_sent' THEN 'photos_sent' ELSE 'uncertain' END,
         updated_at=? WHERE id=?`).run(now(), id);
-      throw new Error(`Заказ №${id}: ${error.message}. Проверьте канал; повтор не создаст дубль.`);
+      throw new Error(`Заказ №${assignedRow.order_number}: ${error.message}. Проверьте канал; повтор не создаст дубль.`);
     }
   }
 
@@ -169,10 +203,12 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     const ids = JSON.parse(row.photo_ids);
     for (let i = 0; i < photos.length; i++) {
       await api('editMessageMedia', { chat_id: row.chat_id, message_id: ids[i],
-        media: { type: 'photo', media: 'attach://photo0', ...(i === 0 ? { caption: value.caption } : {}) } }, [photos[i]]);
+        media: { type: 'photo', media: 'attach://photo0',
+          ...(i === 0 ? { caption: `№${row.order_number || row.id}\n${value.caption}` } : {}) } }, [photos[i]]);
     }
     if (!photos.length && value.caption !== row.caption)
-      await api('editMessageCaption', { chat_id: row.chat_id, message_id: ids[0], caption: value.caption });
+      await api('editMessageCaption', { chat_id: row.chat_id, message_id: ids[0],
+        caption: `№${row.order_number || row.id}\n${value.caption}` });
     const result = db.prepare(`UPDATE orders SET caption=?, customer=?, source=?, technologies=?, description=?, items=?,
       revision=revision+1, updated_at=? WHERE id=? AND revision=?`).run(value.caption, value.customer,
       value.source, value.technologies, value.description, value.items, now(), id, row.revision);
@@ -234,5 +270,12 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
   return { create, update: (id, req) => locked(id, () => update(id, req)),
     setState: (id, state, revision) => locked(id, () => setState(id, state, revision)),
     get: id => { const row = get(id); return row ? publicOrder(row) : null; },
+    getByNumber: (number, year) => {
+      const row = year
+        ? db.prepare('SELECT * FROM orders WHERE order_number=? AND order_period LIKE ? ORDER BY id DESC LIMIT 1')
+          .get(number, year + '-%')
+        : db.prepare('SELECT * FROM orders WHERE order_number=? ORDER BY id DESC LIMIT 1').get(number);
+      return row ? publicOrder(row) : null;
+    },
     list: () => db.prepare('SELECT * FROM orders ORDER BY id DESC LIMIT 100').all().map(publicOrder) };
 }

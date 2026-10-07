@@ -259,11 +259,13 @@ async function serveStatic(req, res, pathname) {
 
 const server = http.createServer(async (req, res) => {
   try {
-    const pathname = new URL(req.url, 'http://localhost').pathname;
+    const requestUrl = new URL(req.url, 'http://localhost');
+    const pathname = requestUrl.pathname;
     if (req.method === 'GET' && pathname === '/api/health') {
       json(res, 200, { ok: true }); return;
     }
-    if (pathname === '/api/orders' || /^\/api\/orders\/\d+(?:\/state)?$/.test(pathname)) {
+    if (pathname === '/api/orders' || /^\/api\/orders\/\d+(?:\/state)?$/.test(pathname) ||
+        /^\/api\/orders\/by-number\/\d{5}$/.test(pathname)) {
       if (!validAdmin(req)) { json(res, 403, { error: 'Неверный ключ публикации.' }); return; }
       if (!orders) { json(res, 503, { error: 'Бот не настроен на сервере.' }); return; }
       try {
@@ -271,7 +273,12 @@ const server = http.createServer(async (req, res) => {
           json(res, 200, orders.list());
         else if (pathname === '/api/orders' && req.method === 'POST')
           json(res, 201, await orders.create(req));
-        else {
+        else if (/^\/api\/orders\/by-number\/\d{5}$/.test(pathname) && req.method === 'GET') {
+          const year = requestUrl.searchParams.get('year');
+          if (year && !/^\d{4}$/.test(year)) throw new Error('Неверный год заказа.');
+          const value = orders.getByNumber(pathname.split('/')[4], year);
+          json(res, value ? 200 : 404, value || { error: 'Заказ не найден.' });
+        } else {
           const id = Number(pathname.split('/')[3]);
           if (pathname.endsWith('/state') && req.method === 'PATCH') {
             let body = '';

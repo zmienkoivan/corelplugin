@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Net.Http;
-using System.Net.Http.Headers;
+using System.Diagnostics;
+using System.IO;
 using System.Text;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
@@ -12,102 +12,102 @@ namespace VanyaTools.Native
     {
         internal static Task Check(string server, string key)
         {
-            return Task.Run(async () =>
-            {
-                using (var client = Client(key))
-                using (var response = await client.GetAsync(Address(server, "/api/orders")).ConfigureAwait(false))
-                {
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                        Dictionary<string, object> data = null;
-                        try { data = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(body); }
-                        catch { }
-                        throw new InvalidOperationException(data != null && data.ContainsKey("error")
-                            ? Convert.ToString(data["error"]) : "Сервер заказов: HTTP " + (int)response.StatusCode);
-                    }
-                }
-            });
+            return Task.Run(() => RunWorker("check", server, key, 0, null, null));
         }
 
         internal static Task<Dictionary<string, object>> Publish(string server, string key,
             Dictionary<string, object> details, IList<byte[]> photos, int orderId = 0)
         {
-            return Task.Run(async () =>
-            {
-                using (var client = Client(key))
-                using (var form = new MultipartFormDataContent())
-                {
-                    form.Add(new StringContent(new JavaScriptSerializer().Serialize(details), Encoding.UTF8), "details");
-                    for (int i = 0; i < photos.Count; i++)
-                    {
-                        var content = new ByteArrayContent(photos[i]);
-                        content.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
-                        form.Add(content, "photo" + i, "order-" + (i + 1) + ".jpg");
-                    }
-                    string endpoint = Address(server, orderId == 0 ? "/api/orders" : "/api/orders/" + orderId);
-                    using (var response = await (orderId == 0
-                        ? client.PostAsync(endpoint, form)
-                        : client.PutAsync(endpoint, form)).ConfigureAwait(false))
-                        return await Read(response).ConfigureAwait(false);
-                }
-            });
+            return Task.Run(() => RunWorker("publish", server, key, orderId, null,
+                new JavaScriptSerializer().Serialize(details), photos));
         }
 
         internal static Task<Dictionary<string, object>> Get(string server, string key, int orderId)
         {
-            return Task.Run(async () =>
-            {
-                using (var client = Client(key))
-                using (var response = await client.GetAsync(Address(server, "/api/orders/" + orderId)).ConfigureAwait(false))
-                    return await Read(response).ConfigureAwait(false);
-            });
+            return Task.Run(() => RunWorker("get", server, key, orderId, null, null));
         }
+
+        internal static Task<Dictionary<string, object>> GetByNumber(string server, string key, string number) =>
+            Task.Run(() => RunWorker("get-number", server, key, 0, number, null));
 
         internal static Task<Dictionary<string, object>> SetState(string server, string key,
             int orderId, string state, int revision)
         {
-            return Task.Run(async () =>
+            return Task.Run(() => RunWorker("state", server, key, orderId, null,
+                new JavaScriptSerializer().Serialize(new { state, revision })));
+        }
+
+        private static Dictionary<string, object> RunWorker(string action, string server, string key,
+            int orderId, string number, string details, IList<byte[]> photos = null)
+        {
+            string exe = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "VanyaTools", "VanyaTools.ReplicateWorker.exe");
+            if (!File.Exists(exe)) throw new FileNotFoundException("Помощник заказов не найден. Обновите Vanya Tools.", exe);
+            string directory = null;
+            var files = new List<string>();
+            try
             {
-                using (var client = Client(key))
-                using (var request = new HttpRequestMessage(new HttpMethod("PATCH"),
-                    Address(server, "/api/orders/" + orderId + "/state")))
+                if (photos != null && photos.Count > 0)
                 {
-                    request.Content = new StringContent(new JavaScriptSerializer().Serialize(
-                        new { state, revision }), Encoding.UTF8, "application/json");
-                    using (var response = await client.SendAsync(request).ConfigureAwait(false))
-                        return await Read(response).ConfigureAwait(false);
+                    directory = Path.Combine(Path.GetTempPath(), "VanyaOrder-" + Guid.NewGuid().ToString("N"));
+                    Directory.CreateDirectory(directory);
+                    for (int i = 0; i < photos.Count; i++)
+                    {
+                        string file = Path.Combine(directory, "photo-" + i + ".jpg");
+                        File.WriteAllBytes(file, photos[i]);
+                        files.Add(file);
+                    }
                 }
-            });
+                var serializer = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue };
+                var job = new Dictionary<string, object> {
+                    ["action"] = action, ["server"] = server, ["key"] = key,
+                    ["id"] = orderId, ["number"] = number, ["details"] = details,
+                    ["photos"] = files
+                };
+                var start = new ProcessStartInfo {
+                    FileName = exe, Arguments = "--order-worker",
+                    WorkingDirectory = Path.GetDirectoryName(exe), UseShellExecute = false,
+                    CreateNoWindow = true, RedirectStandardInput = true,
+                    RedirectStandardOutput = true, RedirectStandardError = true
+                };
+                using (var process = Process.Start(start))
+                {
+                    if (process == null) throw new InvalidOperationException("Не удалось запустить помощник заказов.");
+                    var output = process.StandardOutput.ReadToEndAsync();
+                    var errors = process.StandardError.ReadToEndAsync();
+                    process.StandardInput.Write(Convert.ToBase64String(
+                        Encoding.UTF8.GetBytes(serializer.Serialize(job))));
+                    process.StandardInput.Close();
+                    if (!process.WaitForExit(8 * 60 * 1000))
+                    {
+                        try { process.Kill(); } catch { }
+                        throw new TimeoutException("Сервер заказов не ответил за 8 минут. Проверьте канал перед повтором.");
+                    }
+                    Dictionary<string, object> reply;
+                    try
+                    {
+                        string json = Encoding.UTF8.GetString(Convert.FromBase64String(output.GetAwaiter().GetResult().Trim()));
+                        reply = serializer.Deserialize<Dictionary<string, object>>(json);
+                    }
+                    catch (Exception error) when (error is FormatException || error is ArgumentException)
+                    {
+                        throw new InvalidDataException("Помощник заказов не вернул ответ: " +
+                            errors.GetAwaiter().GetResult());
+                    }
+                    if (reply == null || !reply.ContainsKey("ok") || !Convert.ToBoolean(reply["ok"]))
+                        throw new InvalidOperationException(reply != null && reply.ContainsKey("error")
+                            ? Convert.ToString(reply["error"]) : "Сервер заказов не ответил.");
+                    if (action == "check") return new Dictionary<string, object>();
+                    string data = reply.ContainsKey("data") ? Convert.ToString(reply["data"]) : null;
+                    return serializer.Deserialize<Dictionary<string, object>>(data);
+                }
+            }
+            finally
+            {
+                foreach (string file in files) try { File.Delete(file); } catch { }
+                if (directory != null) try { Directory.Delete(directory); } catch { }
+            }
         }
 
-        private static HttpClient Client(string key)
-        {
-            if (String.IsNullOrWhiteSpace(key)) throw new InvalidOperationException("Укажите ключ сервера заказов.");
-            var client = new HttpClient { Timeout = TimeSpan.FromMinutes(8) };
-            client.DefaultRequestHeaders.TryAddWithoutValidation("x-admin-key", key.Trim());
-            client.DefaultRequestHeaders.ExpectContinue = false;
-            return client;
-        }
-
-        private static string Address(string server, string path)
-        {
-            if (!Uri.TryCreate(server?.TrimEnd('/'), UriKind.Absolute, out Uri uri) ||
-                (uri.Scheme != Uri.UriSchemeHttps && uri.Host != "localhost" && uri.Host != "127.0.0.1"))
-                throw new InvalidOperationException("Укажите HTTPS-адрес сервера заказов.");
-            return uri.GetLeftPart(UriPartial.Authority) + path;
-        }
-
-        private static async Task<Dictionary<string, object>> Read(HttpResponseMessage response)
-        {
-            string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            Dictionary<string, object> data;
-            try { data = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(body); }
-            catch { throw new InvalidOperationException("Сервер заказов вернул непонятный ответ."); }
-            if (!response.IsSuccessStatusCode)
-                throw new InvalidOperationException(data != null && data.ContainsKey("error")
-                    ? Convert.ToString(data["error"]) : "Сервер заказов: HTTP " + (int)response.StatusCode);
-            return data;
-        }
     }
 }

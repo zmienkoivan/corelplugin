@@ -65,10 +65,11 @@ namespace VanyaTools.Native
             var openRow = new DockPanel { Margin = new Thickness(0, 1, 0, 2) };
             var openButton = Button("Открыть заказ", async (_, __) => await OpenServerOrder());
             DockPanel.SetDock(openButton, Dock.Right); openRow.Children.Add(openButton);
-            var openLabel = Label("№ заказа"); openLabel.VerticalAlignment = VerticalAlignment.Center;
+            var openLabel = Label("ММ###"); openLabel.VerticalAlignment = VerticalAlignment.Center;
             DockPanel.SetDock(openLabel, Dock.Left); openRow.Children.Add(openLabel);
             _orderNumber = Input(); openRow.Children.Add(_orderNumber);
-            panel.Children.Add(openRow);
+            panel.Children.Add(new Expander { Header = "Открыть прежний заказ", Content = openRow,
+                Margin = new Thickness(0, 1, 0, 2) });
             _orderInfo = Note(""); panel.Children.Add(_orderInfo);
             _editor = new StackPanel { IsEnabled = false };
             panel.Children.Add(_editor);
@@ -269,7 +270,7 @@ namespace VanyaTools.Native
             try
             {
                 _documentName.Text = Path.GetFileName(path) + " · " + _data.Frames.Count + " фото";
-                _orderNumber.Text = _data.ServerOrderId > 0 ? _data.ServerOrderId.ToString() : "";
+                _orderNumber.Text = _data.ServerOrderNumber ?? "";
                 _customer.Text = _data.Customer ?? "";
                 _source.Text = _data.Source ?? "";
                 _description.Text = _data.Description ?? "";
@@ -314,7 +315,7 @@ namespace VanyaTools.Native
         private void SaveData()
         {
             dynamic doc = EnsureDocument(false);
-            _data.SchemaVersion = 2;
+            _data.SchemaVersion = 3;
             string json = new JavaScriptSerializer().Serialize(_data);
             if (!String.Equals(json, _lastWrittenJson, StringComparison.Ordinal))
             {
@@ -516,7 +517,7 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Добавьте хотя бы одно выделение.");
                 if (_data.Customer.Length == 0) throw new InvalidOperationException("Введите имя заказчика.");
                 string caption = ComposeCaption();
-                if (caption.Length > 1024) throw new InvalidOperationException("Подпись длиннее 1024 символов. Сократите описание.");
+                if (caption.Length > 1016) throw new InvalidOperationException("Подпись длиннее 1016 символов. Сократите описание.");
                 if (_data.ServerOrderId == 0 && _data.TelegramMessageId > 0 &&
                     MessageBox.Show("Эта карточка уже отправлена напрямую в Telegram. Опубликовать новую серверную карточку?",
                         "Vanya Tools", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
@@ -543,11 +544,11 @@ namespace VanyaTools.Native
                 UpdateActions();
                 if (Convert.ToString(result["sendState"]) != "sent")
                     throw new InvalidOperationException("Публикация не завершена. Проверьте канал и загрузите карточку с сервера.");
-                _status("Заказ №" + _data.ServerOrderId + " сохранён в Telegram. Сохраните CDR.", false);
+                _status("Заказ №" + _data.ServerOrderNumber + " сохранён в Telegram. Сохраните CDR.", false);
             }
             catch (Exception error)
             {
-                Log.Info("Order card publish failed: " + error.GetType().Name);
+                Log.Error("Order card publish failed", error);
                 _status("Карточка: " + error.Message.Replace(key, "[скрыто]"), true);
             }
             finally { _busy = false; _send.IsEnabled = true; }
@@ -556,6 +557,7 @@ namespace VanyaTools.Native
         private void ApplyServerResult(Dictionary<string, object> result)
         {
             _data.ServerOrderId = Convert.ToInt32(result["id"]);
+            _data.ServerOrderNumber = Convert.ToString(result["number"]);
             _data.ServerRevision = Convert.ToInt32(result["revision"]);
             _data.ServerState = Convert.ToString(result["state"]);
             if (result.TryGetValue("photoIds", out object ids) && ids is object[] photos && photos.Length > 0)
@@ -571,7 +573,7 @@ namespace VanyaTools.Native
                 var result = await OrderServerClient.Get(_server.Text.Trim(), _key.Password.Trim(), _data.ServerOrderId);
                 LoadServerFields(result);
                 ReadForm(); ApplyServerResult(result); SaveData(); UpdateCaption(); UpdateActions();
-                _status("Заказ №" + _data.ServerOrderId + " загружен с сервера. Сохраните CDR.", false);
+                _status("Заказ №" + _data.ServerOrderNumber + " загружен с сервера. Сохраните CDR.", false);
             }
             catch (Exception error) { _status("Загрузка заказа: " + error.Message, true); }
             finally { _busy = false; _refreshServer.IsEnabled = true; }
@@ -580,22 +582,23 @@ namespace VanyaTools.Native
         private async Task OpenServerOrder()
         {
             if (_busy) return;
-            if (!Int32.TryParse(_orderNumber.Text.Trim(), out int id) || id < 1)
-            { _status("Введите номер заказа.", true); return; }
+            string number = _orderNumber.Text.Trim();
+            if (!System.Text.RegularExpressions.Regex.IsMatch(number, @"^(?:\d{4}/)?\d{5}$"))
+            { _status("Введите номер ММ###, например 10001. Для старого года: 2026/10001.", true); return; }
             try
             {
                 EnsureDocument();
-                if (_data.ServerOrderId != id && (_data.ServerOrderId > 0 ||
+                if (_data.ServerOrderNumber != number && (_data.ServerOrderId > 0 ||
                     _data.Frames.Count > 0 || !String.IsNullOrWhiteSpace(_data.Customer)) &&
-                    MessageBox.Show("Заменить карточку в текущем CDR данными заказа №" + id + "?",
+                    MessageBox.Show("Заменить карточку в текущем CDR данными заказа №" + number + "?",
                         "Vanya Tools", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
                 _busy = true;
-                var result = await OrderServerClient.Get(_server.Text.Trim(), _key.Password.Trim(), id);
-                if (_data.ServerOrderId != id)
+                var result = await OrderServerClient.GetByNumber(_server.Text.Trim(), _key.Password.Trim(), number);
+                if (_data.ServerOrderId != Convert.ToInt32(result["id"]))
                     _data = new OrderCardData { ClientKey = Convert.ToString(result["clientKey"]) };
                 LoadServerFields(result);
                 ReadForm(); ApplyServerResult(result); SaveData(); RenderFrames(); UpdateCaption(); UpdateActions();
-                _status("Заказ №" + id + " открыт. Сохраните CDR.", false);
+                _status("Заказ №" + number + " открыт. Сохраните CDR.", false);
             }
             catch (Exception error) { _status("Открытие заказа: " + error.Message, true); }
             finally { _busy = false; }
@@ -626,7 +629,7 @@ namespace VanyaTools.Native
                 var result = await OrderServerClient.SetState(_server.Text.Trim(), _key.Password.Trim(),
                     _data.ServerOrderId, _data.ServerState == "done" ? "new" : "done", _data.ServerRevision);
                 ApplyServerResult(result); SaveData(); UpdateActions();
-                _status("Статус заказа №" + _data.ServerOrderId + " обновлён.", false);
+                _status("Статус заказа №" + _data.ServerOrderNumber + " обновлён.", false);
             }
             catch (Exception error) { _status("Статус заказа: " + error.Message, true); }
             finally { _busy = false; _state.IsEnabled = true; }
@@ -656,9 +659,9 @@ namespace VanyaTools.Native
             _state.Visibility = published ? Visibility.Visible : Visibility.Collapsed;
             _refreshServer.Visibility = published ? Visibility.Visible : Visibility.Collapsed;
             _state.Content = _data.ServerState == "done" ? "Вернуть в работу" : "Отметить выполненным";
-            _orderInfo.Text = published ? "Заказ №" + _data.ServerOrderId + " · " +
+            _orderInfo.Text = published ? "Заказ №" + _data.ServerOrderNumber + " · " +
                 (_data.ServerState == "done" ? "выполнен" : "в работе") : "";
-            if (published) _orderNumber.Text = _data.ServerOrderId.ToString();
+            if (published) _orderNumber.Text = _data.ServerOrderNumber;
         }
 
         private void SaveServerSettings(bool report = true)
@@ -714,7 +717,7 @@ namespace VanyaTools.Native
 
     public sealed class OrderCardData
     {
-        public int SchemaVersion { get; set; } = 2;
+        public int SchemaVersion { get; set; } = 3;
         public string Customer { get; set; }
         public string Source { get; set; }
         public List<string> Technologies { get; set; } = new List<string>();
@@ -725,6 +728,7 @@ namespace VanyaTools.Native
         public int TelegramMessageId { get; set; }
         public string ClientKey { get; set; }
         public int ServerOrderId { get; set; }
+        public string ServerOrderNumber { get; set; }
         public int ServerRevision { get; set; }
         public string ServerState { get; set; }
     }
