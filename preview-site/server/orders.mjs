@@ -147,6 +147,9 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     if (row.publication_mode === 'single')
       await api('editMessageCaption', { chat_id: row.chat_id, message_id: row.status_message_id,
         caption: singleCaption(row), reply_markup: buttons(row) });
+    else if (row.publication_mode === 'album-only')
+      await api('editMessageCaption', { chat_id: row.chat_id, message_id: row.status_message_id,
+        caption: singleCaption(row) });
     else
       await api('editMessageText', { chat_id: row.chat_id, message_id: row.status_message_id,
         text: statusText(row), reply_markup: buttons(row) });
@@ -198,8 +201,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     const value = fields(details);
     const existing = db.prepare('SELECT * FROM orders WHERE client_key = ?').get(value.clientKey);
     if (existing) return publicOrder(existing); // Safe retry after a lost HTTP response.
-    if (value.caption.length > 990) throw new Error('Подпись слишком длинная для одной карточки Telegram.');
-    const image = await composePhoto(photos);
+    if (value.caption.length > 990) throw new Error('Подпись слишком длинная для карточки Telegram.');
     const timestamp = now();
     let id;
     db.exec('BEGIN IMMEDIATE');
@@ -208,7 +210,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
       const inserted = db.prepare(`INSERT INTO orders
         (client_key, order_number, order_period, publication_mode, caption, customer, source, technologies,
          description, items, created_at, updated_at)
-        VALUES (?, ?, ?, 'single', ?, ?, ?, ?, ?, ?, ?, ?)`).run(value.clientKey,
+        VALUES (?, ?, ?, 'album-only', ?, ?, ?, ?, ?, ?, ?, ?)`).run(value.clientKey,
         assigned.number, assigned.period, value.caption, value.customer, value.source,
         value.technologies, value.description, value.items, timestamp, timestamp);
       id = Number(inserted.lastInsertRowid);
@@ -216,12 +218,16 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     const assignedRow = get(id);
     try {
-      const message = await api('sendPhoto', { chat_id: channel,
-        caption: singleCaption(assignedRow), reply_markup: buttons(assignedRow) }, [image]);
-      const chatId = String(message.chat.id);
+      const messages = photos.length === 1
+        ? [await api('sendPhoto', { chat_id: channel, caption: singleCaption(assignedRow) }, photos)]
+        : await api('sendMediaGroup', { chat_id: channel,
+            media: photos.map((_, i) => ({ type: 'photo', media: `attach://photo${i}`,
+              ...(i === 0 ? { caption: singleCaption(assignedRow) } : {}) })) }, photos);
+      const chatId = String(messages[0].chat.id);
+      const photoIds = messages.map(message => message.message_id);
       db.prepare(`UPDATE orders SET chat_id=?, photo_ids=?, status_message_id=?, send_state='sent', updated_at=? WHERE id=?`)
-        .run(chatId, JSON.stringify([message.message_id]), message.message_id, now(), id);
-      try { await api('pinChatMessage', { chat_id: chatId, message_id: message.message_id,
+        .run(chatId, JSON.stringify(photoIds), photoIds[0], now(), id);
+      try { await api('pinChatMessage', { chat_id: chatId, message_id: photoIds[0],
         disable_notification: true }); }
       catch (error) { console.error(`Order ${id} pin failed:`, error.message); }
       return publicOrder(get(id));
@@ -259,17 +265,21 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
       for (let i = 0; i < photos.length; i++) {
         await api('editMessageMedia', { chat_id: row.chat_id, message_id: ids[i],
           media: { type: 'photo', media: 'attach://photo0',
-            ...(i === 0 ? { caption: photoCaption({ ...row, caption: value.caption }) } : {}) } }, [photos[i]]);
+            ...(i === 0 ? { caption: row.publication_mode === 'album-only'
+              ? singleCaption({ ...row, caption: value.caption })
+              : photoCaption({ ...row, caption: value.caption }) } : {}) } }, [photos[i]]);
       }
       if (!photos.length && value.caption !== row.caption)
         await api('editMessageCaption', { chat_id: row.chat_id, message_id: ids[0],
-          caption: photoCaption({ ...row, caption: value.caption }) });
+          caption: row.publication_mode === 'album-only'
+            ? singleCaption({ ...row, caption: value.caption })
+            : photoCaption({ ...row, caption: value.caption }) });
     }
     const result = db.prepare(`UPDATE orders SET caption=?, customer=?, source=?, technologies=?, description=?, items=?,
       revision=revision+1, updated_at=? WHERE id=? AND revision=?`).run(value.caption, value.customer,
       value.source, value.technologies, value.description, value.items, now(), id, row.revision);
     if (result.changes !== 1) throw new Error('Карточка изменена на другом ПК.');
-    if (row.publication_mode !== 'single') await syncStatus(get(id));
+    if (row.publication_mode === 'album') await syncStatus(get(id));
     return publicOrder(get(id));
   }
 
