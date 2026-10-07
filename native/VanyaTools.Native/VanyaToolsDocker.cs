@@ -115,6 +115,9 @@ namespace VanyaTools.Native
             tabs.Items.Add(ThumbnailTabs.Create("Фамилии", ThumbnailTabs.Names,
                 Color.FromRgb(89, 135, 74),
                 new NamesGridTab((message, isError) => SetStatus(message, isError))));
+            tabs.Items.Add(ThumbnailTabs.Create("Цветопроба", ThumbnailTabs.ColorProof,
+                Color.FromRgb(130, 106, 65),
+                new ColorProofTab((message, isError) => SetStatus(message, isError))));
             tabs.Items.Add(ThumbnailTabs.Create("Стилизация", ThumbnailTabs.Style,
                 Color.FromRgb(167, 83, 123),
                 new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),

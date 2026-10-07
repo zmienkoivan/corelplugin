@@ -33,6 +33,8 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
   if (!columns.includes('order_period')) db.exec('ALTER TABLE orders ADD COLUMN order_period TEXT;');
   if (!columns.includes('publication_mode'))
     db.exec("ALTER TABLE orders ADD COLUMN publication_mode TEXT NOT NULL DEFAULT 'album';");
+  if (!columns.includes('rich_photo_files'))
+    db.exec("ALTER TABLE orders ADD COLUMN rich_photo_files TEXT NOT NULL DEFAULT '[]';");
   db.exec(`CREATE TABLE IF NOT EXISTS order_counters (
     period TEXT PRIMARY KEY,
     last_value INTEGER NOT NULL
@@ -92,6 +94,32 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
   const statusText = row => `Заказ №${row.order_number || row.id} · ${row.state === 'done' ? 'Выполнен' : 'В работе'}\n${row.customer}`;
   const photoCaption = row => `№${row.order_number || row.id}\n${row.caption}`;
   const singleCaption = row => `Заказ №${row.order_number || row.id} · ${row.state === 'done' ? 'Выполнен' : 'В работе'}\n${row.caption}`;
+  const statusLine = row => `Заказ №${row.order_number || row.id} · ${row.state === 'done' ? 'Выполнен' : 'В работе'}`;
+
+  function richContent(row, media) {
+    if (!media.length) throw new Error('Для карточки не найдены фотографии Telegram.');
+    const photos = media.map(value => ({ type: 'photo', photo: { type: 'photo', media: value } }));
+    return { blocks: [
+      photos.length === 1 ? photos[0] : { type: 'collage', blocks: photos },
+      { type: 'heading', size: 5, text: statusLine(row) },
+      { type: 'paragraph', text: row.caption }
+    ] };
+  }
+
+  function richPhotoFiles(message) {
+    const files = [];
+    function visit(blocks) {
+      for (const block of blocks || []) {
+        if (block.type === 'photo' && Array.isArray(block.photo)) {
+          const largest = block.photo[block.photo.length - 1];
+          if (largest?.file_id) files.push(largest.file_id);
+        }
+        if (Array.isArray(block.blocks)) visit(block.blocks);
+      }
+    }
+    visit(message?.rich_message?.blocks);
+    return files;
+  }
 
   async function composePhoto(photos) {
     if (photos.length === 1) return photos[0];
@@ -144,7 +172,11 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
 
   async function syncStatus(row) {
     if (!row.status_message_id) return;
-    if (row.publication_mode === 'single')
+    if (row.publication_mode === 'rich')
+      await api('editMessageText', { chat_id: row.chat_id, message_id: row.status_message_id,
+        rich_message: richContent(row, JSON.parse(row.rich_photo_files)),
+        reply_markup: buttons(row) });
+    else if (row.publication_mode === 'single')
       await api('editMessageCaption', { chat_id: row.chat_id, message_id: row.status_message_id,
         caption: singleCaption(row), reply_markup: buttons(row) });
     else if (row.publication_mode === 'album-only')
@@ -211,7 +243,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
       const inserted = db.prepare(`INSERT INTO orders
         (client_key, order_number, order_period, publication_mode, caption, customer, source, technologies,
          description, items, created_at, updated_at)
-        VALUES (?, ?, ?, 'album-only', ?, ?, ?, ?, ?, ?, ?, ?)`).run(value.clientKey,
+        VALUES (?, ?, ?, 'rich', ?, ?, ?, ?, ?, ?, ?, ?)`).run(value.clientKey,
         assigned.number, assigned.period, value.caption, value.customer, value.source,
         value.technologies, value.description, value.items, timestamp, timestamp);
       id = Number(inserted.lastInsertRowid);
@@ -219,17 +251,18 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     const assignedRow = get(id);
     try {
-      const messages = photos.length === 1
-        ? [await api('sendPhoto', { chat_id: channel, caption: singleCaption(assignedRow),
-            reply_markup: buttons(assignedRow) }, photos)]
-        : await api('sendMediaGroup', { chat_id: channel,
-            media: photos.map((_, i) => ({ type: 'photo', media: `attach://photo${i}`,
-              ...(i === 0 ? { caption: singleCaption(assignedRow) } : {}) })) }, photos);
-      const chatId = String(messages[0].chat.id);
-      const photoIds = messages.map(message => message.message_id);
-      db.prepare(`UPDATE orders SET chat_id=?, photo_ids=?, status_message_id=?, send_state='sent', updated_at=? WHERE id=?`)
-        .run(chatId, JSON.stringify(photoIds), photoIds[0], now(), id);
-      try { await api('pinChatMessage', { chat_id: chatId, message_id: photoIds[0],
+      const message = await api('sendRichMessage', { chat_id: channel,
+        rich_message: richContent(assignedRow, photos.map((_, i) => `attach://photo${i}`)),
+        reply_markup: buttons(assignedRow) }, photos);
+      const chatId = String(message.chat.id);
+      const messageId = message.message_id;
+      const fileIds = richPhotoFiles(message);
+      db.prepare(`UPDATE orders SET chat_id=?, photo_ids=?, rich_photo_files=?,
+        status_message_id=?, send_state='sent', updated_at=? WHERE id=?`)
+        .run(chatId, JSON.stringify([messageId]), JSON.stringify(fileIds), messageId, now(), id);
+      if (fileIds.length !== photos.length)
+        console.error(`Order ${id}: Telegram returned ${fileIds.length} of ${photos.length} rich photo file IDs.`);
+      try { await api('pinChatMessage', { chat_id: chatId, message_id: messageId,
         disable_notification: true }); }
       catch (error) { console.error(`Order ${id} pin failed:`, error.message); }
       return publicOrder(get(id));
@@ -247,7 +280,23 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     const value = fields(details);
     if (value.clientKey !== row.client_key) throw new Error('ID карточки не совпадает.');
     if (Number(details.revision) !== row.revision) throw new Error('Карточка изменена на другом ПК. Обновите данные.');
-    if (row.publication_mode === 'single') {
+    if (row.publication_mode === 'rich') {
+      const next = { ...row, caption: value.caption, customer: value.customer,
+        revision: row.revision + 1 };
+      const media = photos.length
+        ? photos.map((_, i) => `attach://photo${i}`)
+        : JSON.parse(row.rich_photo_files);
+      const edited = await api('editMessageText', { chat_id: row.chat_id,
+        message_id: row.status_message_id, rich_message: richContent(next, media),
+        reply_markup: buttons(next) }, photos);
+      if (photos.length) {
+        const files = richPhotoFiles(edited);
+        if (files.length !== photos.length)
+          throw new Error('Telegram обновил карточку, но не вернул ID всех фото. Обновите карточку с сервера.');
+        db.prepare('UPDATE orders SET rich_photo_files=? WHERE id=?')
+          .run(JSON.stringify(files), id);
+      }
+    } else if (row.publication_mode === 'single') {
       if (value.caption.length > 990) throw new Error('Подпись слишком длинная для одной карточки Telegram.');
       const next = { ...row, caption: value.caption, customer: value.customer,
         revision: row.revision + 1 };
