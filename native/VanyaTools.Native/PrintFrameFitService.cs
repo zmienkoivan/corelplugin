@@ -4,28 +4,32 @@ namespace VanyaTools.Native
 {
     internal static class PrintFrameFitService
     {
-        internal static void FitSelected()
+        internal static int FitSelected()
         {
             dynamic app = CorelApp.Get();
             dynamic doc = app.ActiveDocument;
             if (doc == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
             dynamic selection = app.ActiveSelectionRange;
-            if (selection == null || Convert.ToInt32(selection.Count) != 2)
-                throw new InvalidOperationException("Выделите ровно два объекта: сначала принт, затем рамку (Shift+щелчок).");
+            int selectedCount = selection == null ? 0 : Convert.ToInt32(selection.Count);
+            if (selectedCount < 2)
+                throw new InvalidOperationException("Выделите принт, затем рамку последней (Shift+щелчок).");
 
             // CorelDRAW returns selected shapes in reverse selection order.
-            dynamic print = selection.LastShape;
             dynamic frame = selection.FirstShape;
-            if (Convert.ToInt32(print.Page.Index) != Convert.ToInt32(frame.Page.Index))
-                throw new InvalidOperationException("Принт и рамка должны находиться на одной странице.");
+            int pageIndex = Convert.ToInt32(frame.Page.Index);
+            dynamic printRange = app.CreateShapeRange();
+            for (int i = 2; i <= selectedCount; i++)
+            {
+                dynamic part = selection.Item[i];
+                if (Convert.ToInt32(part.Page.Index) != pageIndex)
+                    throw new InvalidOperationException("Все части принта и рамка должны находиться на одной странице.");
+                printRange.Add(part);
+            }
 
-            double printWidth = Convert.ToDouble(print.SizeWidth);
-            double printHeight = Convert.ToDouble(print.SizeHeight);
             double frameCenterX = Convert.ToDouble(frame.CenterX);
             double frameTopY = Convert.ToDouble(frame.TopY);
-            if (!Valid(printWidth) || !Valid(printHeight) ||
-                !Valid(Convert.ToDouble(frame.SizeWidth)) || !Valid(Convert.ToDouble(frame.SizeHeight)))
-                throw new InvalidOperationException("Не удалось определить размеры принта или рамки.");
+            if (!Valid(Convert.ToDouble(frame.SizeWidth)) || !Valid(Convert.ToDouble(frame.SizeHeight)))
+                throw new InvalidOperationException("Не удалось определить размер рамки.");
 
             bool groupOpen = false;
             bool changed = false;
@@ -33,6 +37,13 @@ namespace VanyaTools.Native
             {
                 doc.BeginCommandGroup("Vanya Tools - fit print frame");
                 groupOpen = true;
+                dynamic print = selectedCount == 2 ? selection.LastShape : printRange.Group();
+                if (print == null) throw new InvalidOperationException("CorelDRAW не смог сгруппировать принт.");
+                if (selectedCount > 2) changed = true;
+                double printWidth = Convert.ToDouble(print.SizeWidth);
+                double printHeight = Convert.ToDouble(print.SizeHeight);
+                if (!Valid(printWidth) || !Valid(printHeight))
+                    throw new InvalidOperationException("Не удалось определить размер принта.");
 
                 double movePrintX = frameCenterX - Convert.ToDouble(print.CenterX);
                 double movePrintY = frameTopY - Convert.ToDouble(print.TopY);
@@ -62,6 +73,7 @@ namespace VanyaTools.Native
                 doc.EndCommandGroup();
                 groupOpen = false;
                 try { app.ActiveWindow.Refresh(); } catch { }
+                return selectedCount - 1;
             }
             catch
             {

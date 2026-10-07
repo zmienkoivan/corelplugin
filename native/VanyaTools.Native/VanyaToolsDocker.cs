@@ -138,10 +138,11 @@ namespace VanyaTools.Native
             quickActions.Children.Add(Button("Обрезать растр", (_, __) => RunTrim(true)));
             var fitFrame = Button("Подогнать рамку", (_, __) => RunSafe(() =>
             {
-                PrintFrameFitService.FitSelected();
-                SetStatus("Рамка подогнана под принт.", false);
+                int parts = PrintFrameFitService.FitSelected();
+                SetStatus(parts > 1 ? "Части принта сгруппированы; рамка подогнана."
+                    : "Рамка подогнана под принт.", false);
             }));
-            fitFrame.ToolTip = "Сначала выделите принт, затем рамку через Shift+щелчок. Принт станет по центру и верху рамки; рамка примет размер принта.";
+            fitFrame.ToolTip = "Выделите все части принта, затем рамку последней через Shift+щелчок. Части принта сгруппируются; рамка примет размер принта.";
             quickActions.Children.Add(fitFrame);
             root.Children.Add(quickActions);
             var trimSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
