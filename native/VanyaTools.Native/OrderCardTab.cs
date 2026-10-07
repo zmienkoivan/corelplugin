@@ -438,7 +438,11 @@ namespace VanyaTools.Native
                 if (page == null) throw new InvalidOperationException("Страница кадра не найдена. Обновите карточку.");
                 dynamic shape = page.FindShape(null, 0, reference.Id, true);
                 if (shape == null) throw new InvalidOperationException("Объект кадра удалён из CDR. Уберите этот кадр и добавьте его заново.");
-                if (first) { page.Activate(); shape.CreateSelection(); first = false; }
+                if (first)
+                {
+                    if (Convert.ToInt32(doc.ActivePage.Index) != reference.Page) page.Activate();
+                    shape.CreateSelection(); first = false;
+                }
                 else shape.AddToSelection();
             }
             if (first) throw new InvalidOperationException("Кадр пуст.");
@@ -455,7 +459,8 @@ namespace VanyaTools.Native
             {
                 SelectShapes(doc, frame);
                 Log.Info("Order card: rasterizing selected shapes in CorelDRAW.");
-                capturePath = AiSelectionCapture.Capture(9500, 24000000);
+                capturePath = AiSelectionCapture.Capture(9500, 24000000,
+                    restoreSelection: false, refreshWindow: false);
                 BitmapSource image = AiPrintTab.Bitmap(capturePath);
                 Log.Info("Order card: captured bitmap " + image.PixelWidth + "x" + image.PixelHeight + ".");
                 if (image.PixelWidth <= 0 || image.PixelHeight <= 0)
@@ -501,7 +506,12 @@ namespace VanyaTools.Native
             finally
             {
                 try { if (capturePath != null) File.Delete(capturePath); } catch { }
-                try { originalPage.Activate(); } catch { }
+                try
+                {
+                    if (Convert.ToInt32(doc.ActivePage.Index) != Convert.ToInt32(originalPage.Index))
+                        originalPage.Activate();
+                }
+                catch { }
                 try
                 {
                     for (int i = 0; i < original.Count; i++)

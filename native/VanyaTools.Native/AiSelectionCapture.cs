@@ -13,9 +13,11 @@ namespace VanyaTools.Native
     {
         private const int CaptureDpi = 400;
 
-        public static string Capture(int maxDimension = 0, int maxPixels = 32000000)
+        public static string Capture(int maxDimension = 0, int maxPixels = 32000000,
+            bool restoreSelection = true, bool refreshWindow = true)
         {
-            return CaptureCore(CaptureDpi, maxDimension, maxPixels, false);
+            return CaptureCore(CaptureDpi, maxDimension, maxPixels, false,
+                restoreSelection, refreshWindow);
         }
 
         public static int EstimateDefaultCaptureDpi()
@@ -32,7 +34,7 @@ namespace VanyaTools.Native
         public static string CaptureForPublish(int dpi = 300)
         {
             if (dpi < 72 || dpi > 300) throw new InvalidOperationException("DPI публикации: от 72 до 300.");
-            return CaptureCore(dpi, 0, 70000000, true);
+            return CaptureCore(dpi, 0, 70000000, true, true, true);
         }
 
         public static long EstimatePublishPixels(int dpi, out double widthMm, out double heightMm)
@@ -57,7 +59,8 @@ namespace VanyaTools.Native
             finally { doc.Unit = oldUnit; }
         }
 
-        private static string CaptureCore(int desiredDpi, int maxDimension, int maxPixels, bool exactDpi)
+        private static string CaptureCore(int desiredDpi, int maxDimension, int maxPixels,
+            bool exactDpi, bool restoreSelection, bool refreshWindow)
         {
             dynamic app = CorelApp.Get();
             dynamic doc = app.ActiveDocument;
@@ -138,7 +141,7 @@ namespace VanyaTools.Native
                 TryDelete(rasterShape);
                 TryDelete(workingShape);
                 TryDeleteRange(workingRange);
-                try
+                if (restoreSelection) try
                 {
                     for (int i = 0; i < originals.Count; i++)
                     {
@@ -149,7 +152,7 @@ namespace VanyaTools.Native
                 catch { }
                 try { if (commandGroupStarted) doc.EndCommandGroup(); } catch { }
                 try { app.Optimization = oldOptimization; } catch { }
-                try { app.ActiveWindow.Refresh(); } catch { }
+                if (refreshWindow) try { app.ActiveWindow.Refresh(); } catch { }
             }
         }
 
