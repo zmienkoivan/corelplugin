@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
+import sharp from 'sharp';
 
 const now = () => new Date().toISOString();
 const text = (value, max) => String(value ?? '').trim().slice(0, max);
@@ -30,6 +31,8 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
   const columns = db.prepare('PRAGMA table_info(orders)').all().map(column => column.name);
   if (!columns.includes('order_number')) db.exec('ALTER TABLE orders ADD COLUMN order_number TEXT;');
   if (!columns.includes('order_period')) db.exec('ALTER TABLE orders ADD COLUMN order_period TEXT;');
+  if (!columns.includes('publication_mode'))
+    db.exec("ALTER TABLE orders ADD COLUMN publication_mode TEXT NOT NULL DEFAULT 'album';");
   db.exec(`CREATE TABLE IF NOT EXISTS order_counters (
     period TEXT PRIMARY KEY,
     last_value INTEGER NOT NULL
@@ -67,6 +70,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
   const get = id => db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
   const publicOrder = row => ({ id: row.id, number: row.order_number || String(row.id),
     period: row.order_period, clientKey: row.client_key,
+    publicationMode: row.publication_mode,
     chatId: row.chat_id, state: row.state, sendState: row.send_state,
     revision: row.revision, photoIds: JSON.parse(row.photo_ids),
     caption: row.caption, customer: row.customer, source: row.source,
@@ -81,12 +85,48 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     ];
     const firstPhotoId = JSON.parse(row.photo_ids)[0];
     const chatId = String(row.chat_id || '');
-    if (firstPhotoId && /^-100\d+$/.test(chatId))
+    if (row.publication_mode !== 'single' && firstPhotoId && /^-100\d+$/.test(chatId))
       actions.push({ text: 'Фото', url: `https://t.me/c/${chatId.slice(4)}/${firstPhotoId}` });
     return { inline_keyboard: [actions] };
   };
   const statusText = row => `Заказ №${row.order_number || row.id} · ${row.state === 'done' ? 'Выполнен' : 'В работе'}\n${row.customer}`;
   const photoCaption = row => `№${row.order_number || row.id}\n${row.caption}`;
+  const singleCaption = row => `Заказ №${row.order_number || row.id} · ${row.state === 'done' ? 'Выполнен' : 'В работе'}\n${row.caption}`;
+
+  async function composePhoto(photos) {
+    if (photos.length === 1) return photos[0];
+    const width = 5000;
+    const height = photos.length === 2 ? 3000 : 4800;
+    const columns = photos.length === 2 ? 2 : photos.length <= 4 ? 2 : 3;
+    const rows = Math.ceil(photos.length / columns);
+    const gap = 12;
+    const cellWidth = Math.floor(width / columns);
+    const cellHeight = Math.floor(height / rows);
+    const layers = [];
+    for (let i = 0; i < photos.length; i++) {
+      const cell = photos.length === 3
+        ? i === 0
+          ? { left: 0, top: 0, width, height: Math.floor(height / 2) }
+          : { left: (i - 1) * Math.floor(width / 2), top: Math.floor(height / 2),
+            width: Math.floor(width / 2), height: Math.ceil(height / 2) }
+        : { left: (i % columns) * cellWidth, top: Math.floor(i / columns) * cellHeight,
+          width: cellWidth, height: cellHeight };
+      const image = await sharp(photos[i], { limitInputPixels: 50_000_000 })
+        .resize(cell.width - gap * 2, cell.height - gap * 2,
+          { fit: 'contain', background: '#ffffff' })
+        .flatten({ background: '#ffffff' }).jpeg({ quality: 92 }).toBuffer();
+      layers.push({ input: image, left: cell.left + gap, top: cell.top + gap });
+    }
+    const surface = sharp({ create: { width, height, channels: 3, background: '#e8e8e8' } });
+    let result = await surface.composite(layers).jpeg({ quality: 92, chromaSubsampling: '4:4:4' }).toBuffer();
+    if (result.length > 9_500_000)
+      result = await sharp(result).jpeg({ quality: 80 }).toBuffer();
+    if (result.length > 9_500_000)
+      result = await sharp(result).resize({ width: 4200 }).jpeg({ quality: 78 }).toBuffer();
+    if (result.length > 9_500_000)
+      throw new Error('Общий кадр не помещается в лимит фото Telegram. Уменьшите число кадров.');
+    return result;
+  }
 
   function nextOrderNumber() {
     const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Yekaterinburg',
@@ -104,8 +144,12 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
 
   async function syncStatus(row) {
     if (!row.status_message_id) return;
-    await api('editMessageText', { chat_id: row.chat_id, message_id: row.status_message_id,
-      text: statusText(row), reply_markup: buttons(row) });
+    if (row.publication_mode === 'single')
+      await api('editMessageCaption', { chat_id: row.chat_id, message_id: row.status_message_id,
+        caption: singleCaption(row), reply_markup: buttons(row) });
+    else
+      await api('editMessageText', { chat_id: row.chat_id, message_id: row.status_message_id,
+        text: statusText(row), reply_markup: buttons(row) });
   }
 
   async function readRequest(req) {
@@ -154,15 +198,17 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     const value = fields(details);
     const existing = db.prepare('SELECT * FROM orders WHERE client_key = ?').get(value.clientKey);
     if (existing) return publicOrder(existing); // Safe retry after a lost HTTP response.
+    if (value.caption.length > 990) throw new Error('Подпись слишком длинная для одной карточки Telegram.');
+    const image = await composePhoto(photos);
     const timestamp = now();
     let id;
     db.exec('BEGIN IMMEDIATE');
     try {
       const assigned = nextOrderNumber();
       const inserted = db.prepare(`INSERT INTO orders
-        (client_key, order_number, order_period, caption, customer, source, technologies,
+        (client_key, order_number, order_period, publication_mode, caption, customer, source, technologies,
          description, items, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(value.clientKey,
+        VALUES (?, ?, ?, 'single', ?, ?, ?, ?, ?, ?, ?, ?)`).run(value.clientKey,
         assigned.number, assigned.period, value.caption, value.customer, value.source,
         value.technologies, value.description, value.items, timestamp, timestamp);
       id = Number(inserted.lastInsertRowid);
@@ -170,30 +216,17 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     const assignedRow = get(id);
     try {
-      let messages;
-      if (photos.length === 1) {
-        messages = [await api('sendPhoto', { chat_id: channel, caption: photoCaption(assignedRow) }, photos)];
-      } else {
-        const media = photos.map((_, i) => ({ type: 'photo', media: `attach://photo${i}`,
-          ...(i === 0 ? { caption: photoCaption(assignedRow) } : {}) }));
-        messages = await api('sendMediaGroup', { chat_id: channel, media }, photos);
-      }
-      const photoIds = messages.map(message => message.message_id);
-      const chatId = String(messages[0].chat.id);
-      db.prepare(`UPDATE orders SET chat_id=?, photo_ids=?, send_state='photos_sent', updated_at=? WHERE id=?`)
-        .run(chatId, JSON.stringify(photoIds), now(), id);
-      const row = get(id);
-      const status = await api('sendMessage', { chat_id: chatId, text: statusText(row),
-        reply_markup: buttons(row) });
-      db.prepare(`UPDATE orders SET status_message_id=?, send_state='sent', updated_at=? WHERE id=?`)
-        .run(status.message_id, now(), id);
-      try { await api('pinChatMessage', { chat_id: chatId, message_id: status.message_id,
+      const message = await api('sendPhoto', { chat_id: channel,
+        caption: singleCaption(assignedRow), reply_markup: buttons(assignedRow) }, [image]);
+      const chatId = String(message.chat.id);
+      db.prepare(`UPDATE orders SET chat_id=?, photo_ids=?, status_message_id=?, send_state='sent', updated_at=? WHERE id=?`)
+        .run(chatId, JSON.stringify([message.message_id]), message.message_id, now(), id);
+      try { await api('pinChatMessage', { chat_id: chatId, message_id: message.message_id,
         disable_notification: true }); }
       catch (error) { console.error(`Order ${id} pin failed:`, error.message); }
       return publicOrder(get(id));
     } catch (error) {
-      db.prepare(`UPDATE orders SET send_state=CASE WHEN send_state='photos_sent' THEN 'photos_sent' ELSE 'uncertain' END,
-        updated_at=? WHERE id=?`).run(now(), id);
+      db.prepare("UPDATE orders SET send_state='uncertain', updated_at=? WHERE id=?").run(now(), id);
       throw new Error(`Заказ №${assignedRow.order_number}: ${error.message}. Проверьте канал; повтор не создаст дубль.`);
     }
   }
@@ -206,22 +239,37 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     const value = fields(details);
     if (value.clientKey !== row.client_key) throw new Error('ID карточки не совпадает.');
     if (Number(details.revision) !== row.revision) throw new Error('Карточка изменена на другом ПК. Обновите данные.');
-    if (photos.length && photos.length !== JSON.parse(row.photo_ids).length)
-      throw new Error('Чтобы изменить число фото, опубликуйте новую карточку.');
-    const ids = JSON.parse(row.photo_ids);
-    for (let i = 0; i < photos.length; i++) {
-      await api('editMessageMedia', { chat_id: row.chat_id, message_id: ids[i],
-        media: { type: 'photo', media: 'attach://photo0',
-          ...(i === 0 ? { caption: `№${row.order_number || row.id}\n${value.caption}` } : {}) } }, [photos[i]]);
+    if (row.publication_mode === 'single') {
+      if (value.caption.length > 990) throw new Error('Подпись слишком длинная для одной карточки Telegram.');
+      const next = { ...row, caption: value.caption, customer: value.customer,
+        revision: row.revision + 1 };
+      if (photos.length) {
+        const image = await composePhoto(photos);
+        await api('editMessageMedia', { chat_id: row.chat_id, message_id: row.status_message_id,
+          media: { type: 'photo', media: 'attach://photo0', caption: singleCaption(next) },
+          reply_markup: buttons(next) }, [image]);
+      } else {
+        await api('editMessageCaption', { chat_id: row.chat_id, message_id: row.status_message_id,
+          caption: singleCaption(next), reply_markup: buttons(next) });
+      }
+    } else {
+      if (photos.length && photos.length !== JSON.parse(row.photo_ids).length)
+        throw new Error('Чтобы изменить число фото, опубликуйте новую карточку.');
+      const ids = JSON.parse(row.photo_ids);
+      for (let i = 0; i < photos.length; i++) {
+        await api('editMessageMedia', { chat_id: row.chat_id, message_id: ids[i],
+          media: { type: 'photo', media: 'attach://photo0',
+            ...(i === 0 ? { caption: photoCaption({ ...row, caption: value.caption }) } : {}) } }, [photos[i]]);
+      }
+      if (!photos.length && value.caption !== row.caption)
+        await api('editMessageCaption', { chat_id: row.chat_id, message_id: ids[0],
+          caption: photoCaption({ ...row, caption: value.caption }) });
     }
-    if (!photos.length && value.caption !== row.caption)
-      await api('editMessageCaption', { chat_id: row.chat_id, message_id: ids[0],
-        caption: `№${row.order_number || row.id}\n${value.caption}` });
     const result = db.prepare(`UPDATE orders SET caption=?, customer=?, source=?, technologies=?, description=?, items=?,
       revision=revision+1, updated_at=? WHERE id=? AND revision=?`).run(value.caption, value.customer,
       value.source, value.technologies, value.description, value.items, now(), id, row.revision);
     if (result.changes !== 1) throw new Error('Карточка изменена на другом ПК.');
-    await syncStatus(get(id));
+    if (row.publication_mode !== 'single') await syncStatus(get(id));
     return publicOrder(get(id));
   }
 

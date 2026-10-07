@@ -521,7 +521,7 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Добавьте хотя бы одно выделение.");
                 if (_data.Customer.Length == 0) throw new InvalidOperationException("Введите имя заказчика.");
                 string caption = ComposeCaption();
-                if (caption.Length > 1016) throw new InvalidOperationException("Подпись длиннее 1016 символов. Сократите описание.");
+                if (caption.Length > 990) throw new InvalidOperationException("Подпись длиннее 990 символов. Сократите описание.");
                 if (_data.ServerOrderId == 0 && _data.TelegramMessageId > 0 &&
                     MessageBox.Show("Эта карточка уже отправлена напрямую в Telegram. Опубликовать новую серверную карточку?",
                         "Vanya Tools", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
