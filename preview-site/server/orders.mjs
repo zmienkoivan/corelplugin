@@ -74,9 +74,17 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
     items: row.items,
     statusMessageId: row.status_message_id, createdAt: row.created_at,
     updatedAt: row.updated_at });
-  const buttons = row => ({ inline_keyboard: [[
-    { text: row.state === 'done' ? '↩ Вернуть в работу' : '✓ Выполнен', callback_data: `order:${row.id}:${row.revision}:${row.state === 'done' ? 'new' : 'done'}` }
-  ]] });
+  const buttons = row => {
+    const actions = [
+      { text: row.state === 'done' ? '↩ Вернуть в работу' : '✓ Выполнен',
+        callback_data: `order:${row.id}:${row.revision}:${row.state === 'done' ? 'new' : 'done'}` }
+    ];
+    const firstPhotoId = JSON.parse(row.photo_ids)[0];
+    const chatId = String(row.chat_id || '');
+    if (firstPhotoId && /^-100\d+$/.test(chatId))
+      actions.push({ text: 'Фото', url: `https://t.me/c/${chatId.slice(4)}/${firstPhotoId}` });
+    return { inline_keyboard: [actions] };
+  };
   const statusText = row => `Заказ №${row.order_number || row.id} · ${row.state === 'done' ? 'Выполнен' : 'В работе'}\n${row.customer}`;
   const photoCaption = row => `№${row.order_number || row.id}\n${row.caption}`;
 
