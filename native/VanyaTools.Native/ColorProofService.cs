@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 
 namespace VanyaTools.Native
@@ -45,6 +46,24 @@ namespace VanyaTools.Native
             dynamic color = app.CreateColor();
             if (!Convert.ToBoolean(color.UserAssignEx())) return null;
             return CopyReference(app, color, "Цвет палитры");
+        }
+
+        public ColorProofReference BlueStartingColor()
+        {
+            dynamic app = CorelApp.Get();
+            if (app.ActiveDocument == null)
+                throw new InvalidOperationException("Откройте документ CorelDRAW.");
+            return CopyReference(app, app.CreateCMYKColor(100, 70, 0, 0),
+                "Синий · стартовый C100 M70 Y0 K0");
+        }
+
+        public ColorProofReference BlueRgbStartingColor()
+        {
+            dynamic app = CorelApp.Get();
+            if (app.ActiveDocument == null)
+                throw new InvalidOperationException("Откройте документ CorelDRAW.");
+            return CopyReference(app, app.CreateRGBColor(20, 60, 255),
+                "Синий · стартовый R20 G60 B255");
         }
 
         public int[] Components(ColorProofReference reference, bool cmyk)
@@ -168,6 +187,119 @@ namespace VanyaTools.Native
             }
         }
 
+        public int CreateCombinations(ColorProofReference reference, bool cmyk,
+            int[][] levels, double squareMm)
+        {
+            if (reference == null) throw new InvalidOperationException("Сначала выберите эталонный цвет.");
+            int channelCount = cmyk ? 4 : 3;
+            if (levels == null || levels.Length != channelCount)
+                throw new InvalidOperationException("Заполните значения всех каналов.");
+            int maxValue = cmyk ? 100 : 255;
+            foreach (int[] values in levels)
+                if (values == null || values.Length == 0 || values.Length > 9 ||
+                    Array.Exists(values, value => value < 0 || value > maxValue))
+                    throw new InvalidOperationException("Проверьте значения каналов цветопробы.");
+            if (squareMm < 12 || squareMm > 40)
+                throw new InvalidOperationException("Размер плашки: от 12 до 40 мм.");
+            int planes = cmyk ? levels[2].Length * levels[3].Length : levels[2].Length;
+            int totalSwatches = levels[0].Length * levels[1].Length * planes;
+            if (planes > 30 || totalSwatches > 500)
+                throw new InvalidOperationException("Слишком много комбинаций. Уменьшите списки до 500 плашек и 30 страниц.");
+
+            dynamic app = CorelApp.Get();
+            dynamic doc = app.ActiveDocument;
+            if (doc == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
+            dynamic originalPage = doc.ActivePage;
+            int oldUnit = (int)doc.Unit;
+            bool commandStarted = false;
+            var createdPages = new List<dynamic>();
+            try
+            {
+                doc.BeginCommandGroup("Vanya Tools - color combinations");
+                commandStarted = true;
+                doc.Unit = CorelConstants.CdrMillimeter;
+                double width = levels[0].Length * squareMm + (levels[0].Length - 1) * 5.0;
+                double height = 40.0 + levels[1].Length * (squareMm + 11.0);
+                double pageWidth = Math.Max(210.0, width + 20.0);
+                double pageHeight = Math.Max(297.0, height + 10.0);
+
+                int[] referenceValues = Components(reference, cmyk);
+                string[] channelNames = cmyk ? new[] { "C", "M", "Y", "K" } : new[] { "R", "G", "B" };
+                for (int outer = 0; outer < (cmyk ? levels[3].Length : 1); outer++)
+                {
+                    for (int inner = 0; inner < levels[2].Length; inner++)
+                    {
+                        dynamic page = doc.AddPages(1);
+                        createdPages.Add(page);
+                        page.Activate();
+                        page.SetSize(pageWidth, pageHeight);
+                        dynamic layer = doc.ActiveLayer;
+                        dynamic range = app.CreateShapeRange();
+                        int planeIndex = createdPages.Count;
+                        int third = levels[2][inner];
+                        int fourth = cmyk ? levels[3][outer] : 0;
+                        string planeName = cmyk ? "Y" + third + " K" + fourth : "B" + third;
+                        page.Name = "Цветопроба " + planeIndex + " · " + planeName;
+                        double left = 10.0;
+                        double top = (double)page.SizeHeight - 10.0;
+                        AddSwatch(layer, range, left, top, 20.0, reference.Color);
+                        AddText(layer, range, left + 25.0, top - 5.0,
+                            "ЭТАЛОН" + (reference.IsSpot ? " · плашечный" : ""), 10f, false);
+                        AddText(layer, range, left + 25.0, top - 12.0,
+                            reference.Name, 8f, false);
+                        AddText(layer, range, left + 25.0, top - 19.0,
+                            FormatValues(referenceValues, cmyk).Replace("\r", "   "), 7f, false);
+                        AddText(layer, range, left, top - 29.0,
+                            "Комбинации " + channelNames[0] + " × " + channelNames[1] +
+                            " · " + planeName + " · " + planeIndex + "/" + planes, 8f, false);
+
+                        for (int row = 0; row < levels[1].Length; row++)
+                        {
+                            for (int column = 0; column < levels[0].Length; column++)
+                            {
+                                int[] values = cmyk
+                                    ? new[] { levels[0][column], levels[1][row], third, fourth }
+                                    : new[] { levels[0][column], levels[1][row], third };
+                                dynamic color = cmyk
+                                    ? app.CreateCMYKColor(values[0], values[1], values[2], values[3])
+                                    : app.CreateRGBColor(values[0], values[1], values[2]);
+                                double x = left + column * (squareMm + 5.0);
+                                double y = top - 40.0 - row * (squareMm + 11.0);
+                                bool isReference = SameValues(values, referenceValues);
+                                AddSwatch(layer, range, x, y, squareMm, color, isReference);
+                                dynamic label = AddText(layer, range, 0, 0,
+                                    FormatValues(values, cmyk), 7f, true);
+                                if ((double)label.SizeWidth > squareMm)
+                                {
+                                    double scale = squareMm / (double)label.SizeWidth;
+                                    label.SetSize(squareMm, (double)label.SizeHeight * scale);
+                                }
+                                label.Move(x + (squareMm - (double)label.SizeWidth) / 2.0 -
+                                    (double)label.LeftX, y - squareMm - 8.0 - (double)label.BottomY);
+                            }
+                        }
+                    }
+                }
+                createdPages[0].Activate();
+                try { app.ActiveWindow.Refresh(); } catch { }
+                return planes;
+            }
+            catch
+            {
+                for (int i = createdPages.Count - 1; i >= 0; i--)
+                    try { createdPages[i].Delete(); }
+                    catch (Exception ex) { Log.Error("Color combination page rollback failed.", ex); }
+                try { originalPage.Activate(); } catch { }
+                throw;
+            }
+            finally
+            {
+                try { doc.Unit = oldUnit; } catch { }
+                if (commandStarted)
+                    try { doc.EndCommandGroup(); } catch (Exception ex) { Log.Error("Color combination command group failed.", ex); }
+            }
+        }
+
         private static ColorProofReference CopyReference(dynamic app, dynamic source, string fallbackName)
         {
             dynamic color = app.CreateColor();
@@ -206,6 +338,13 @@ namespace VanyaTools.Native
         }
 
         private static int Clamp(int value, int max) { return Math.Max(0, Math.Min(max, value)); }
+
+        private static bool SameValues(int[] left, int[] right)
+        {
+            if (left.Length != right.Length) return false;
+            for (int i = 0; i < left.Length; i++) if (left[i] != right[i]) return false;
+            return true;
+        }
 
         private static string ChannelName(bool cmyk, int channel)
         {
