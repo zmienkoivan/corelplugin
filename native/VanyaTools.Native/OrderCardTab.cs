@@ -119,7 +119,7 @@ namespace VanyaTools.Native
             var settings = new StackPanel { Margin = new Thickness(4, 12, 4, 4) };
             settings.Children.Add(Title("Сервер заказов"));
             settings.Children.Add(Label("Адрес сервера"));
-            _server = Input(); _server.Text = "https://p.evpmerch.com"; settings.Children.Add(_server);
+            _server = Input(); _server.Text = "https://evpmerch.com:9443"; settings.Children.Add(_server);
             settings.Children.Add(Label("Ключ публикации"));
             _key = new PasswordBox { Margin = new Thickness(0, 0, 0, 5) };
             settings.Children.Add(_key);
