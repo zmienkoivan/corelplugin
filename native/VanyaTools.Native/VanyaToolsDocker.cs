@@ -177,7 +177,7 @@ namespace VanyaTools.Native
 
             root.Children.Add(new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
                 () => aiTools.GetToken(), ImportAiResult,
-                (message, isError) => SetStatus(message, isError), false));
+                (message, isError) => SetStatus(message, isError), false, ImportDtfResult));
 
             root = stickerTools;
             AddSectionTitle(root, "Подготовка стикерпака");
@@ -242,7 +242,10 @@ namespace VanyaTools.Native
             Log.Info("VanyaToolsDocker constructor finished.");
         }
 
-        private string ImportAiResult(string path)
+        private string ImportAiResult(string path) { return ImportAiResult(path, true); }
+        private string ImportDtfResult(string path) { return ImportAiResult(path, false); }
+
+        private string ImportAiResult(string path, bool trimAfterImport)
         {
             try
             {
@@ -255,14 +258,16 @@ namespace VanyaTools.Native
                 // The DLR call with null options fails with DISP_E_TYPEMISMATCH on Corel 27.
                 object layer = doc.ActiveLayer;
                 object options = app.CreateStructImportOptions();
+                Log.Info("AI result ImportEx starting: " + Path.GetFileName(path));
                 dynamic importFilter = layer.GetType().InvokeMember("ImportEx",
                     BindingFlags.InvokeMethod, null, layer,
                     new object[] { new BStrWrapper(Path.GetFullPath(path)), 0, options });
                 importFilter.Finish();
-                // Imported PNG shapes are selected by Corel. Use Vanya Tools' existing
-                // alpha-aware cropper so the trimmed bounds and physical size agree.
+                Log.Info("AI result ImportEx finished: " + Path.GetFileName(path));
+                // DTF outputs are already cropped on the worker thread. Other
+                // results still use Corel's alpha-aware crop after import.
                 string trimWarning = null;
-                try
+                if (trimAfterImport) try
                 {
                     var trim = new BitmapTrimService().TrimSelected(
                         TrimMode.TransparentPixels, TrimSides.All, 2, true);
@@ -274,7 +279,7 @@ namespace VanyaTools.Native
                     trimWarning = "Изображение вставлено. Не удалось обрезать прозрачные поля: " + trimError.Message;
                 }
                 // A refresh failure must not turn a completed import into a retry/duplicate.
-                try { app.ActiveWindow.Refresh(); } catch { }
+                if (trimAfterImport) try { app.ActiveWindow.Refresh(); } catch { }
                 if (String.IsNullOrEmpty(trimWarning)) SetStatus("AI-результат импортирован в Corel: " + Path.GetFileName(path), false);
                 return trimWarning;
             }

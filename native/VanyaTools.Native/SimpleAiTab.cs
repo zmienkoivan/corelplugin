@@ -20,6 +20,7 @@ namespace VanyaTools.Native
         private readonly Func<string> _capture;
         private readonly Func<string> _token;
         private readonly Func<string, string> _import;
+        private readonly Func<string, string> _importDtf;
         private readonly Action<string, bool> _status;
         private readonly bool _styleOnly;
         private readonly ComboBox _model;
@@ -64,9 +65,11 @@ namespace VanyaTools.Native
         }
 
         public SimpleAiTab(Func<string> capture, Func<string> token,
-            Func<string, string> import, Action<string, bool> status, bool styleOnly)
+            Func<string, string> import, Action<string, bool> status, bool styleOnly,
+            Func<string, string> importDtf = null)
         {
-            _capture = capture; _token = token; _import = import; _status = status;
+            _capture = capture; _token = token; _import = import;
+            _importDtf = importDtf ?? import; _status = status;
             _styleOnly = styleOnly;
             var panel = new StackPanel { Margin = new Thickness(5) };
             Content = panel;
@@ -257,7 +260,7 @@ namespace VanyaTools.Native
                 // rasterizes the temporary copy, then restores the original objects.
                 string source = action == "background" ? AiSelectionCapture.Capture() : _capture();
                 _lastSource = action == "background" ? source : null;
-                _sourcePreview.Source = AiPrintTab.Bitmap(source);
+                _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
                 string image = action == "background"
                     ? AiPrintTab.DataUri(AiPrintTab.Bitmap(source), 4096, 16000000)
@@ -296,7 +299,7 @@ namespace VanyaTools.Native
             {
                 _importWarning = null;
                 string source = AiSelectionCapture.Capture();
-                _sourcePreview.Source = AiPrintTab.Bitmap(source);
+                _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-White-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
@@ -306,7 +309,7 @@ namespace VanyaTools.Native
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), output);
-                _resultPreview.Source = AiPrintTab.Bitmap(output);
+                _resultPreview.Source = PreviewBitmap(output);
                 InsertReady();
                 ReportOutcome();
             }
@@ -331,7 +334,7 @@ namespace VanyaTools.Native
                 // Local processing can retain the full capture resolution; the AI
                 // actions above limit pixels to each remote model's practical range.
                 string source = AiSelectionCapture.Capture();
-                _sourcePreview.Source = AiPrintTab.Bitmap(source);
+                _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Alpha-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
@@ -340,7 +343,7 @@ namespace VanyaTools.Native
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), output);
-                _resultPreview.Source = AiPrintTab.Bitmap(output);
+                _resultPreview.Source = PreviewBitmap(output);
                 InsertReady();
                 ReportOutcome();
             }
@@ -383,7 +386,7 @@ namespace VanyaTools.Native
             {
                 _importWarning = null;
                 string source = AiSelectionCapture.Capture();
-                _sourcePreview.Source = AiPrintTab.Bitmap(source);
+                _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Stairs-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
@@ -392,7 +395,7 @@ namespace VanyaTools.Native
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), output);
-                _resultPreview.Source = AiPrintTab.Bitmap(output);
+                _resultPreview.Source = PreviewBitmap(output);
                 InsertReady();
                 ReportOutcome();
             }
@@ -473,17 +476,13 @@ namespace VanyaTools.Native
                     resultPixels[destination + 3] = 255;
                 }
             }
-            var result = BitmapSource.Create(outWidth, outHeight,
-                input.DpiX * scaleX, input.DpiY * scaleY, PixelFormats.Bgra32,
-                null, resultPixels, checked(outWidth * 4));
-            var encoder = new PngBitmapEncoder();
-            encoder.Frames.Add(BitmapFrame.Create(result));
-            using (var stream = File.Create(output)) encoder.Save(stream);
+            SaveBinaryResult(output, resultPixels, outWidth, outHeight,
+                input.DpiX * scaleX, input.DpiY * scaleY, cancellation);
         }
 
         private void UpdateEdgeUnits()
         {
-            if (_edgeUnits == null) return;
+            if (_edgeUnits == null || _busy) return;
             int radius, expansion;
             if (!Int32.TryParse(_edgeRadius.Text, out radius) ||
                 !Int32.TryParse(_edgeExpansion.Text, out expansion))
@@ -516,7 +515,7 @@ namespace VanyaTools.Native
             {
                 _importWarning = null;
                 string source = AiSelectionCapture.Capture();
-                _sourcePreview.Source = AiPrintTab.Bitmap(source);
+                _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Edge-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
@@ -526,7 +525,7 @@ namespace VanyaTools.Native
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), output);
-                _resultPreview.Source = AiPrintTab.Bitmap(output);
+                _resultPreview.Source = PreviewBitmap(output);
                 InsertReady();
                 ReportOutcome();
             }
@@ -575,8 +574,42 @@ namespace VanyaTools.Native
                     pixels[i + 3] = 255;
                 }
             }
-            var result = BitmapSource.Create(width, height, input.DpiX, input.DpiY,
-                PixelFormats.Bgra32, null, pixels, stride);
+            SaveBinaryResult(output, pixels, width, height, input.DpiX, input.DpiY, cancellation);
+        }
+
+        // Crop on the worker thread, before Corel imports the result. The old
+        // post-import Corel bitmap scan blocked the docker on large prints.
+        private static void SaveBinaryResult(string output, byte[] pixels, int width,
+            int height, double dpiX, double dpiY, CancellationToken cancellation)
+        {
+            int minX = width, minY = height, maxX = -1, maxY = -1;
+            for (int y = 0; y < height; y++)
+            {
+                if ((y & 127) == 0) cancellation.ThrowIfCancellationRequested();
+                int row = y * width * 4;
+                for (int x = 0; x < width; x++)
+                {
+                    if (pixels[row + x * 4 + 3] == 0) continue;
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+            var bitmap = BitmapSource.Create(width, height, dpiX, dpiY,
+                PixelFormats.Bgra32, null, pixels, checked(width * 4));
+            BitmapSource result = bitmap;
+            if (maxX >= 0)
+            {
+                const int padding = 2;
+                int left = Math.Max(0, minX - padding), top = Math.Max(0, minY - padding);
+                int right = Math.Min(width - 1, maxX + padding);
+                int bottom = Math.Min(height - 1, maxY + padding);
+                if (left != 0 || top != 0 || right != width - 1 || bottom != height - 1)
+                    result = new CroppedBitmap(bitmap,
+                        new Int32Rect(left, top, right - left + 1, bottom - top + 1));
+            }
+            cancellation.ThrowIfCancellationRequested();
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(result));
             using (var stream = File.Create(output)) encoder.Save(stream);
@@ -725,7 +758,7 @@ namespace VanyaTools.Native
             _readyOutput = png;
             Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
             File.WriteAllText(PendingPath(), png);
-            _resultPreview.Source = AiPrintTab.Bitmap(png);
+            _resultPreview.Source = PreviewBitmap(png);
             cancellation.ThrowIfCancellationRequested();
             InsertReady();
         }
@@ -742,7 +775,12 @@ namespace VanyaTools.Native
         {
             try
             {
-                string warning = _import(_readyOutput);
+                string name = Path.GetFileName(_readyOutput);
+                bool dtfResult = name.StartsWith("Vanya-Edge-", StringComparison.OrdinalIgnoreCase) ||
+                    name.StartsWith("Vanya-Stairs-", StringComparison.OrdinalIgnoreCase);
+                Log.Info("Simple AI import starting: " + name + (dtfResult ? " (DTF)" : ""));
+                string warning = (dtfResult ? _importDtf : _import)(_readyOutput);
+                Log.Info("Simple AI import finished: " + name);
                 _importWarning = warning;
                 _readyOutput = null; _lastInput = null; _lastSource = null;
                 try { if (File.Exists(PendingPath())) File.Delete(PendingPath()); } catch { }
@@ -837,7 +875,7 @@ namespace VanyaTools.Native
                 string path = File.ReadAllText(PendingPath()).Trim();
                 if (!File.Exists(path)) return;
                 _readyOutput = path;
-                _resultPreview.Source = AiPrintTab.Bitmap(path);
+                _resultPreview.Source = PreviewBitmap(path);
                 SetBusy(false, null);
             }
             catch (Exception ex) { Log.Error("Simple AI pending result restore failed.", ex); }
@@ -855,6 +893,25 @@ namespace VanyaTools.Native
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 2) }; }
         private static TextBlock Note(string text) { return new TextBlock { Text = text, FontSize = 10,
             Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 2) }; }
+        private static BitmapSource PreviewBitmap(string path)
+        {
+            int width, height;
+            using (var stream = File.OpenRead(path))
+            {
+                BitmapFrame frame = BitmapFrame.Create(stream,
+                    BitmapCreateOptions.DelayCreation, BitmapCacheOption.OnDemand);
+                width = frame.PixelWidth; height = frame.PixelHeight;
+            }
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            if (width >= height) image.DecodePixelWidth = 256;
+            else image.DecodePixelHeight = 256;
+            image.UriSource = new Uri(Path.GetFullPath(path), UriKind.Absolute);
+            image.EndInit();
+            image.Freeze();
+            return image;
+        }
         private static Button Button(string text, RoutedEventHandler handler) { var button = new Button
             { Content = text, FontSize = 10, MinHeight = 24, Margin = new Thickness(1),
               Padding = new Thickness(3, 1, 3, 1) };
