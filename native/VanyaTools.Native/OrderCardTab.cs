@@ -22,7 +22,7 @@ namespace VanyaTools.Native
         private const string PropertyOwner = "CD899165-445C-40F0-91D7-2DF6703B0AF8";
         private readonly Action<string, bool> _status;
         private readonly TextBox _customer, _description, _items, _server, _orderNumber;
-        private readonly ComboBox _source;
+        private readonly List<RadioButton> _sourceButtons = new List<RadioButton>();
         private readonly PasswordBox _key;
         private readonly TextBlock _caption, _documentName, _orderInfo;
         private readonly StackPanel _frames, _editor;
@@ -38,6 +38,7 @@ namespace VanyaTools.Native
         private string _failedDocumentPath;
         private bool _loadingForm;
         private bool _busy;
+        private string _sourceValue = "";
 
         internal FrameworkElement SettingsView { get; }
 
@@ -79,22 +80,19 @@ namespace VanyaTools.Native
                 Margin = new Thickness(0, 2, 0, 3) };
             _editor.Children.Add(_frameExpander);
 
-            var identity = new Grid();
-            identity.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
-            identity.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            var customerColumn = new StackPanel { Margin = new Thickness(0, 0, 5, 0) };
-            customerColumn.Children.Add(Label("Заказчик"));
-            _customer = Input(); customerColumn.Children.Add(_customer);
-            identity.Children.Add(customerColumn);
-            var sourceColumn = new StackPanel();
-            Grid.SetColumn(sourceColumn, 1);
-            sourceColumn.Children.Add(Label("Источник"));
-            _source = new ComboBox { IsEditable = true, MinHeight = 27,
-                ItemsSource = new[] { "ТГ", "ВК", "ПОЧТА", "КП" },
-                Margin = new Thickness(0, 0, 0, 3) };
-            sourceColumn.Children.Add(_source);
-            identity.Children.Add(sourceColumn);
-            _editor.Children.Add(identity);
+            _editor.Children.Add(Label("Заказчик"));
+            _customer = Input(); _editor.Children.Add(_customer);
+            _editor.Children.Add(Label("Источник"));
+            var sourceRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 3) };
+            foreach (string name in new[] { "ТГ", "ВК", "ПОЧТА", "КП" })
+            {
+                var radio = new RadioButton { Content = name,
+                    Margin = new Thickness(2, 2, 15, 2), VerticalAlignment = VerticalAlignment.Center };
+                radio.Checked += (_, __) => { _sourceValue = name; FormChanged(); };
+                _sourceButtons.Add(radio);
+                sourceRow.Children.Add(radio);
+            }
+            _editor.Children.Add(sourceRow);
             _editor.Children.Add(Label("Технология печати"));
             var techGrid = new UniformGrid { Columns = 2 };
             foreach (string name in new[] { "ДТФ", "Шелкография", "Вышивка", "Сублимация", "Лазер" })
@@ -146,9 +144,6 @@ namespace VanyaTools.Native
             LoadServerSettings();
             foreach (var input in new[] { _customer, _description, _items })
                 input.TextChanged += (_, __) => FormChanged();
-            _source.SelectionChanged += (_, __) => FormChanged();
-            _source.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
-                new TextChangedEventHandler((_, __) => FormChanged()));
             foreach (var box in _technologies) box.Checked += (_, __) => FormChanged();
             foreach (var box in _technologies) box.Unchecked += (_, __) => FormChanged();
             _documentWatcher = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -213,7 +208,7 @@ namespace VanyaTools.Native
             _loadingForm = true;
             try
             {
-                _customer.Text = ""; _source.Text = "";
+                _customer.Text = ""; SetSourceSelection("");
                 _description.Text = ""; _items.Text = "";
                 foreach (var box in _technologies) box.IsChecked = false;
                 RenderFrames(); UpdateCaption(); UpdateActions();
@@ -272,7 +267,7 @@ namespace VanyaTools.Native
                 _documentName.Text = Path.GetFileName(path) + " · " + _data.Frames.Count + " фото";
                 _orderNumber.Text = _data.ServerOrderNumber ?? "";
                 _customer.Text = _data.Customer ?? "";
-                _source.Text = _data.Source ?? "";
+                SetSourceSelection(_data.Source);
                 _description.Text = _data.Description ?? "";
                 _items.Text = _data.Items ?? "";
                 foreach (var box in _technologies)
@@ -305,11 +300,20 @@ namespace VanyaTools.Native
         private void ReadForm()
         {
             _data.Customer = _customer.Text.Trim();
-            _data.Source = _source.Text.Trim();
+            _data.Source = _sourceValue.Trim();
             _data.Description = _description.Text.Trim();
             _data.Items = _items.Text.Trim();
             _data.Technologies = _technologies.Where(x => x.IsChecked == true)
                 .Select(x => Convert.ToString(x.Content)).ToList();
+        }
+
+        private void SetSourceSelection(string source)
+        {
+            string value = source ?? "";
+            foreach (var radio in _sourceButtons)
+                radio.IsChecked = String.Equals(Convert.ToString(radio.Content), value,
+                    StringComparison.OrdinalIgnoreCase);
+            _sourceValue = value;
         }
 
         private void SaveData()
@@ -610,7 +614,7 @@ namespace VanyaTools.Native
             try
             {
                 _customer.Text = Convert.ToString(result["customer"]);
-                _source.Text = Convert.ToString(result["source"]);
+                SetSourceSelection(Convert.ToString(result["source"]));
                 _description.Text = Convert.ToString(result["description"]);
                 _items.Text = Convert.ToString(result["items"]);
                 var technologies = result["technologies"] as object[] ?? new object[0];
@@ -637,7 +641,7 @@ namespace VanyaTools.Native
 
         private string ComposeCaption()
         {
-            string customer = _customer.Text.Trim(), source = _source.Text.Trim();
+            string customer = _customer.Text.Trim(), source = _sourceValue.Trim();
             string tech = String.Join(", ", _technologies.Where(x => x.IsChecked == true).Select(x => Convert.ToString(x.Content)));
             var lines = new List<string> { (customer + " " + source).Trim(), tech };
             string details = _description.Text.Trim();
