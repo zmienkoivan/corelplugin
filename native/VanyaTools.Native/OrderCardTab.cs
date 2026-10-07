@@ -21,7 +21,7 @@ namespace VanyaTools.Native
     {
         private const string PropertyOwner = "CD899165-445C-40F0-91D7-2DF6703B0AF8";
         private readonly Action<string, bool> _status;
-        private readonly TextBox _customer, _description, _items, _server;
+        private readonly TextBox _customer, _description, _items, _server, _orderNumber;
         private readonly ComboBox _source;
         private readonly PasswordBox _key;
         private readonly TextBlock _caption, _documentName, _orderInfo;
@@ -62,6 +62,13 @@ namespace VanyaTools.Native
             documentRow.Children.Add(reload);
             documentRow.Children.Add(_documentName);
             panel.Children.Add(documentRow);
+            var openRow = new DockPanel { Margin = new Thickness(0, 1, 0, 2) };
+            var openButton = Button("Открыть заказ", async (_, __) => await OpenServerOrder());
+            DockPanel.SetDock(openButton, Dock.Right); openRow.Children.Add(openButton);
+            var openLabel = Label("№ заказа"); openLabel.VerticalAlignment = VerticalAlignment.Center;
+            DockPanel.SetDock(openLabel, Dock.Left); openRow.Children.Add(openLabel);
+            _orderNumber = Input(); openRow.Children.Add(_orderNumber);
+            panel.Children.Add(openRow);
             _orderInfo = Note(""); panel.Children.Add(_orderInfo);
             _editor = new StackPanel { IsEnabled = false };
             panel.Children.Add(_editor);
@@ -201,6 +208,7 @@ namespace VanyaTools.Native
             _failedDocumentIdentity = null;
             _failedDocumentPath = null;
             _data = new OrderCardData();
+            _orderNumber.Text = "";
             _loadingForm = true;
             try
             {
@@ -261,6 +269,7 @@ namespace VanyaTools.Native
             try
             {
                 _documentName.Text = Path.GetFileName(path) + " · " + _data.Frames.Count + " фото";
+                _orderNumber.Text = _data.ServerOrderId > 0 ? _data.ServerOrderId.ToString() : "";
                 _customer.Text = _data.Customer ?? "";
                 _source.Text = _data.Source ?? "";
                 _description.Text = _data.Description ?? "";
@@ -560,23 +569,52 @@ namespace VanyaTools.Native
             try
             {
                 var result = await OrderServerClient.Get(_server.Text.Trim(), _key.Password.Trim(), _data.ServerOrderId);
-                _loadingForm = true;
-                try
-                {
-                    _customer.Text = Convert.ToString(result["customer"]);
-                    _source.Text = Convert.ToString(result["source"]);
-                    _description.Text = Convert.ToString(result["description"]);
-                    _items.Text = Convert.ToString(result["items"]);
-                    var technologies = result["technologies"] as object[] ?? new object[0];
-                    foreach (var box in _technologies)
-                        box.IsChecked = technologies.Any(x => Convert.ToString(x) == Convert.ToString(box.Content));
-                }
-                finally { _loadingForm = false; }
+                LoadServerFields(result);
                 ReadForm(); ApplyServerResult(result); SaveData(); UpdateCaption(); UpdateActions();
                 _status("Заказ №" + _data.ServerOrderId + " загружен с сервера. Сохраните CDR.", false);
             }
             catch (Exception error) { _status("Загрузка заказа: " + error.Message, true); }
             finally { _busy = false; _refreshServer.IsEnabled = true; }
+        }
+
+        private async Task OpenServerOrder()
+        {
+            if (_busy) return;
+            if (!Int32.TryParse(_orderNumber.Text.Trim(), out int id) || id < 1)
+            { _status("Введите номер заказа.", true); return; }
+            try
+            {
+                EnsureDocument();
+                if (_data.ServerOrderId != id && (_data.ServerOrderId > 0 ||
+                    _data.Frames.Count > 0 || !String.IsNullOrWhiteSpace(_data.Customer)) &&
+                    MessageBox.Show("Заменить карточку в текущем CDR данными заказа №" + id + "?",
+                        "Vanya Tools", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+                _busy = true;
+                var result = await OrderServerClient.Get(_server.Text.Trim(), _key.Password.Trim(), id);
+                if (_data.ServerOrderId != id)
+                    _data = new OrderCardData { ClientKey = Convert.ToString(result["clientKey"]) };
+                LoadServerFields(result);
+                ReadForm(); ApplyServerResult(result); SaveData(); RenderFrames(); UpdateCaption(); UpdateActions();
+                _status("Заказ №" + id + " открыт. Сохраните CDR.", false);
+            }
+            catch (Exception error) { _status("Открытие заказа: " + error.Message, true); }
+            finally { _busy = false; }
+        }
+
+        private void LoadServerFields(Dictionary<string, object> result)
+        {
+            _loadingForm = true;
+            try
+            {
+                _customer.Text = Convert.ToString(result["customer"]);
+                _source.Text = Convert.ToString(result["source"]);
+                _description.Text = Convert.ToString(result["description"]);
+                _items.Text = Convert.ToString(result["items"]);
+                var technologies = result["technologies"] as object[] ?? new object[0];
+                foreach (var box in _technologies)
+                    box.IsChecked = technologies.Any(x => Convert.ToString(x) == Convert.ToString(box.Content));
+            }
+            finally { _loadingForm = false; }
         }
 
         private async Task ToggleState()
@@ -620,6 +658,7 @@ namespace VanyaTools.Native
             _state.Content = _data.ServerState == "done" ? "Вернуть в работу" : "Отметить выполненным";
             _orderInfo.Text = published ? "Заказ №" + _data.ServerOrderId + " · " +
                 (_data.ServerState == "done" ? "выполнен" : "в работе") : "";
+            if (published) _orderNumber.Text = _data.ServerOrderId.ToString();
         }
 
         private void SaveServerSettings(bool report = true)
