@@ -24,9 +24,9 @@ namespace VanyaTools.Updater
                 string key = Required(job, "key");
                 string action = Required(job, "action");
                 if (!Uri.TryCreate(server, UriKind.Absolute, out Uri root) ||
-                    (root.Scheme != Uri.UriSchemeHttps && !root.IsLoopback) ||
+                    (root.Scheme != Uri.UriSchemeHttps && !IsLocalHttp(root)) ||
                     !String.IsNullOrEmpty(root.UserInfo) || root.AbsolutePath != "/")
-                    throw new InvalidDataException("Укажите HTTPS-адрес сервера заказов.");
+                    throw new InvalidDataException("Укажите HTTPS-адрес или HTTP-адрес сервера в локальной сети.");
                 ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
                 ServicePointManager.Expect100Continue = false;
                 string route = "/api/orders";
@@ -59,7 +59,16 @@ namespace VanyaTools.Updater
                     route += "/" + id + "/state";
                     method = "PATCH";
                 }
-                else if (action != "check") throw new InvalidDataException("Неизвестная команда заказа.");
+                else if (action == "unassigned") route += "/unassigned";
+                else if (action == "assign")
+                {
+                    int id = Convert.ToInt32(job["id"]);
+                    if (id < 1) throw new InvalidDataException("Неверный номер заказа.");
+                    route += "/" + id + "/assign";
+                    method = "POST";
+                }
+                else if (action != "check" && action != "list")
+                    throw new InvalidDataException("Неизвестная команда заказа.");
 
                 var request = (HttpWebRequest)WebRequest.Create(new Uri(root, route));
                 request.Method = method;
@@ -68,10 +77,15 @@ namespace VanyaTools.Updater
                 request.ReadWriteTimeout = 8 * 60 * 1000;
                 request.KeepAlive = false;
                 if (action == "publish") WriteMultipart(request, Required(job, "details"), job["photos"] as IEnumerable);
-                if (action == "state") WriteJson(request, Required(job, "details"));
+                if (action == "state" || action == "assign") WriteJson(request, Required(job, "details"));
                 using (var response = (HttpWebResponse)request.GetResponse())
                 using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
-                    Reply(serializer, true, reader.ReadToEnd(), null);
+                {
+                    string body = reader.ReadToEnd();
+                    if (action == "unassigned" || action == "list")
+                        body = "{\"orders\":" + body + "}";
+                    Reply(serializer, true, body, null);
+                }
                 return 0;
             }
             catch (Exception error)
@@ -79,6 +93,17 @@ namespace VanyaTools.Updater
                 Reply(serializer, false, null, Describe(error));
                 return 1;
             }
+        }
+
+        private static bool IsLocalHttp(Uri root)
+        {
+            if (root.Scheme != Uri.UriSchemeHttp) return false;
+            if (root.IsLoopback) return true;
+            if (!IPAddress.TryParse(root.Host, out IPAddress address)) return false;
+            byte[] bytes = address.GetAddressBytes();
+            return bytes.Length == 4 && (bytes[0] == 10 ||
+                (bytes[0] == 192 && bytes[1] == 168) ||
+                (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31));
         }
 
         private static void WriteMultipart(HttpWebRequest request, string details, IEnumerable images)

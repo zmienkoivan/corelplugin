@@ -94,11 +94,14 @@ namespace VanyaTools.Native
             var aiTools = new AiPrintTab(ImportAiResult,
                 (message, isError) => SetStatus(message, isError), CaptureAiSelection);
             var orderCards = new OrderCardTab((message, isError) => SetStatus(message, isError));
+            var approvalCopy = new ApprovalCopyTool((message, isError) => SetStatus(message, isError));
             var settings = new StackPanel { Margin = new Thickness(5) };
             settings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
             _hotkeys = new CorelHotkeyManager(() => RunTrim(true), RunFitFrame,
+                approvalCopy.CopySelection,
                 (message, isError) => SetStatus(message, isError));
             settings.Children.Add(_hotkeys.SettingsView);
+            settings.Children.Add(approvalCopy.SettingsView);
             settings.Children.Add(aiTools.SettingsView);
             settings.Children.Add(orderCards.SettingsView);
             Loaded += (_, __) =>
@@ -137,6 +140,7 @@ namespace VanyaTools.Native
                     Items =
                     {
                         new TabItem { Header = "Карточка заказа", Content = orderCards },
+                        new TabItem { Header = "Заказы", Content = orderCards.OrdersView },
                         new TabItem { Header = "Превью", Content =
                             new PreviewLibraryTab((message, isError) => SetStatus(message, isError)) }
                     }
@@ -152,6 +156,8 @@ namespace VanyaTools.Native
             Panel root = standardTools;
 
             var quickActions = new Grid();
+            quickActions.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            quickActions.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             quickActions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             quickActions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             quickActions.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -166,6 +172,11 @@ namespace VanyaTools.Native
             var anchorPicker = CreatePrintFrameAnchorPicker();
             Grid.SetColumn(anchorPicker, 2);
             quickActions.Children.Add(anchorPicker);
+            var approvalButton = Button("Копировать визуализацию + текст", (_, __) => approvalCopy.CopySelection());
+            approvalButton.ToolTip = "Крупное изображение выделения с красной подписью для согласования. Ctrl+Alt+C.";
+            Grid.SetRow(approvalButton, 1);
+            Grid.SetColumnSpan(approvalButton, 3);
+            quickActions.Children.Add(approvalButton);
             root.Children.Add(quickActions);
             var trimSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
             AddSettingsExpander(root, "Настройки обрезки растра", trimSettings);

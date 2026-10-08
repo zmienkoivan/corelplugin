@@ -30,6 +30,16 @@ namespace VanyaTools.Native
         internal static Task<Dictionary<string, object>> GetByNumber(string server, string key, string number) =>
             Task.Run(() => RunWorker("get-number", server, key, 0, number, null));
 
+        internal static Task<Dictionary<string, object>> Unassigned(string server, string key) =>
+            Task.Run(() => RunWorker("unassigned", server, key, 0, null, null));
+
+        internal static Task<Dictionary<string, object>> List(string server, string key) =>
+            Task.Run(() => RunWorker("list", server, key, 0, null, null));
+
+        internal static Task<Dictionary<string, object>> Assign(string server, string key, int id, string clientKey) =>
+            Task.Run(() => RunWorker("assign", server, key, id, null,
+                new JavaScriptSerializer().Serialize(new { clientKey })));
+
         internal static Task<Dictionary<string, object>> SetState(string server, string key,
             int orderId, string state, int revision)
         {

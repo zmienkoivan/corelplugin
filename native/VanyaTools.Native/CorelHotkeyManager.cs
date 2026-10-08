@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Web.Script.Serialization;
 using System.Windows;
@@ -23,10 +24,10 @@ namespace VanyaTools.Native
 
         private readonly Action[] _actions;
         private readonly Action<string, bool> _status;
-        private readonly Hotkey[] _bindings = new Hotkey[2];
-        private readonly bool[] _registered = new bool[2];
-        private readonly bool[] _warned = new bool[2];
-        private readonly TextBox[] _fields = new TextBox[2];
+        private readonly Hotkey[] _bindings = new Hotkey[3];
+        private readonly bool[] _registered = new bool[3];
+        private readonly bool[] _warned = new bool[3];
+        private readonly TextBox[] _fields = new TextBox[3];
         private readonly TextBlock _message;
         private readonly DispatcherTimer _timer;
         private readonly string _settingsPath;
@@ -36,13 +37,15 @@ namespace VanyaTools.Native
 
         internal FrameworkElement SettingsView { get; }
 
-        internal CorelHotkeyManager(Action trim, Action fitFrame, Action<string, bool> status)
+        internal CorelHotkeyManager(Action trim, Action fitFrame, Action copyApproval,
+            Action<string, bool> status)
         {
-            _actions = new[] { trim, fitFrame };
+            _actions = new[] { trim, fitFrame, copyApproval };
             _status = status;
             _settingsPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "VanyaTools", "hotkeys.json");
+            _bindings[2] = new Hotkey(Control | Alt, (uint)KeyInterop.VirtualKeyFromKey(Key.C));
             Load();
 
             var panel = new StackPanel { Margin = new Thickness(4, 7, 4, 7) };
@@ -54,6 +57,7 @@ namespace VanyaTools.Native
             });
             AddRow(panel, 0, "Обрезать растр");
             AddRow(panel, 1, "Подогнать рамку");
+            AddRow(panel, 2, "Копировать согласование");
             panel.Children.Add(new TextBlock
             {
                 Text = "Нажмите в поле Ctrl+Alt+клавишу. Delete — убрать. Работает при открытом докере CorelDRAW.",
@@ -171,7 +175,8 @@ namespace VanyaTools.Native
                 return;
             }
             var candidate = new Hotkey(flags, (uint)virtualKey);
-            if (candidate.Equals(_bindings[1 - index]))
+            if (_bindings.Where((binding, other) => other != index)
+                .Any(binding => !binding.IsEmpty && candidate.Equals(binding)))
             {
                 ShowMessage("Это сочетание уже назначено другой кнопке.", true);
                 return;
@@ -300,7 +305,11 @@ namespace VanyaTools.Native
                 string value;
                 if (saved.TryGetValue("trim", out value)) _bindings[0] = Hotkey.Parse(value);
                 if (saved.TryGetValue("fitFrame", out value)) _bindings[1] = Hotkey.Parse(value);
-                if (_bindings[0].Equals(_bindings[1])) _bindings[1] = default(Hotkey);
+                if (saved.TryGetValue("copyApproval", out value)) _bindings[2] = Hotkey.Parse(value);
+                for (int i = 0; i < _bindings.Length; i++)
+                    for (int j = 0; j < i; j++)
+                        if (!_bindings[i].IsEmpty && _bindings[i].Equals(_bindings[j]))
+                            _bindings[i] = default(Hotkey);
             }
             catch (Exception error) { Log.Error("Could not load hotkeys.", error); }
         }
@@ -313,7 +322,8 @@ namespace VanyaTools.Native
                 var data = new Dictionary<string, string>
                 {
                     { "trim", _bindings[0].Stored },
-                    { "fitFrame", _bindings[1].Stored }
+                    { "fitFrame", _bindings[1].Stored },
+                    { "copyApproval", _bindings[2].Stored }
                 };
                 File.WriteAllText(_settingsPath, new JavaScriptSerializer().Serialize(data));
                 return true;
