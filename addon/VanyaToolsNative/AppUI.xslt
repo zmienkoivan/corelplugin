@@ -28,6 +28,20 @@
                 type="wpfhost"
                 hostedType="Addons\VanyaToolsNative\VanyaTools.Native.dll,VanyaTools.Native.VanyaToolsDocker"
                 enable="true" />
+
+      <itemData guid="a624e7f3-8a23-4b1e-b2e6-58cf6725b9e4"
+                type="wpfhost"
+                hostedType="Addons\VanyaToolsNative\VanyaTools.Native.dll,VanyaTools.Native.VanyaToolsTrimButton"
+                dynamicCategory="2cc24a3e-fe24-4708-9a74-9c75406eebcd"
+                userCaption="Vanya Tools: обрезать растр"
+                enable="true" />
+
+      <itemData guid="96b63d8e-86b4-433f-a315-126381e35e11"
+                type="wpfhost"
+                hostedType="Addons\VanyaToolsNative\VanyaTools.Native.dll,VanyaTools.Native.VanyaToolsFitFrameButton"
+                dynamicCategory="2cc24a3e-fe24-4708-9a74-9c75406eebcd"
+                userCaption="Vanya Tools: подогнать рамку"
+                enable="true" />
     </xsl:copy>
   </xsl:template>
 

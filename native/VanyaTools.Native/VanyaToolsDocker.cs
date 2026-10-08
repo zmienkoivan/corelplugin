@@ -38,6 +38,7 @@ namespace VanyaTools.Native
         private readonly System.Windows.Controls.RadioButton _rotatePackClockwise;
         private readonly System.Windows.Controls.RadioButton _rotatePackCounterClockwise;
         private readonly CorelHotkeyManager _hotkeys;
+        private static WeakReference<VanyaToolsDocker> _toolbarTarget;
         private PrintFrameAnchor _printFrameAnchor = PrintFrameAnchor.TopCenter;
 
         public VanyaToolsDocker()
@@ -48,6 +49,7 @@ namespace VanyaTools.Native
         public VanyaToolsDocker(object app)
         {
             CorelApp.SetHostApplication(app);
+            _toolbarTarget = new WeakReference<VanyaToolsDocker>(this);
             Log.Info("VanyaToolsDocker constructor started.");
 
             var outer = new Grid
@@ -99,7 +101,12 @@ namespace VanyaTools.Native
             settings.Children.Add(_hotkeys.SettingsView);
             settings.Children.Add(aiTools.SettingsView);
             settings.Children.Add(orderCards.SettingsView);
-            Loaded += (_, __) => _hotkeys.Attach(this);
+            Loaded += (_, __) =>
+            {
+                _hotkeys.Attach(this);
+                Dispatcher.BeginInvoke(new Action(CorelToolbarInstaller.Ensure),
+                    System.Windows.Threading.DispatcherPriority.Background);
+            };
             Unloaded += (_, __) => _hotkeys.Detach();
 
             var tabs = new TabControl { MinHeight = 360 };
@@ -325,6 +332,22 @@ namespace VanyaTools.Native
                 SetStatus(parts > 1 ? "Части принта сгруппированы; рамка подогнана."
                     : "Рамка подогнана под принт.", false);
             });
+        }
+
+        internal static bool TryRunToolbarTrim()
+        {
+            VanyaToolsDocker docker;
+            if (_toolbarTarget == null || !_toolbarTarget.TryGetTarget(out docker)) return false;
+            docker.RunTrim(true);
+            return true;
+        }
+
+        internal static bool TryRunToolbarFitFrame()
+        {
+            VanyaToolsDocker docker;
+            if (_toolbarTarget == null || !_toolbarTarget.TryGetTarget(out docker)) return false;
+            docker.RunFitFrame();
+            return true;
         }
 
         private void RunCutContour()
