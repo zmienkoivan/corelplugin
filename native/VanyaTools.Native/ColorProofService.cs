@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Globalization;
 
 namespace VanyaTools.Native
@@ -201,10 +200,10 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Проверьте значения каналов цветопробы.");
             if (squareMm < 12 || squareMm > 40)
                 throw new InvalidOperationException("Размер плашки: от 12 до 40 мм.");
-            int planes = cmyk ? levels[2].Length * levels[3].Length : levels[2].Length;
-            int totalSwatches = levels[0].Length * levels[1].Length * planes;
-            if (planes > 30 || totalSwatches > 500)
-                throw new InvalidOperationException("Слишком много комбинаций. Уменьшите списки до 500 плашек и 30 страниц.");
+            int totalSwatches = 1;
+            foreach (int[] values in levels) totalSwatches *= values.Length;
+            if (totalSwatches > 500)
+                throw new InvalidOperationException("Слишком много комбинаций. Уменьшите списки до 500 плашек.");
 
             dynamic app = CorelApp.Get();
             dynamic doc = app.ActiveDocument;
@@ -212,82 +211,77 @@ namespace VanyaTools.Native
             dynamic originalPage = doc.ActivePage;
             int oldUnit = (int)doc.Unit;
             bool commandStarted = false;
-            var createdPages = new List<dynamic>();
+            dynamic createdPage = null;
             try
             {
                 doc.BeginCommandGroup("Vanya Tools - color combinations");
                 commandStarted = true;
                 doc.Unit = CorelConstants.CdrMillimeter;
-                double width = levels[0].Length * squareMm + (levels[0].Length - 1) * 5.0;
-                double height = 40.0 + levels[1].Length * (squareMm + 11.0);
-                double pageWidth = Math.Max(210.0, width + 20.0);
-                double pageHeight = Math.Max(297.0, height + 10.0);
-
+                const double gapX = 2.0;
+                const double labelSpace = 7.0;
+                double columnPitch = squareMm + gapX;
+                double rowPitch = squareMm + labelSpace;
+                int columns = Math.Min(totalSwatches, Math.Max(1,
+                    (int)Math.Ceiling(Math.Sqrt(totalSwatches * rowPitch / columnPitch))));
+                int rows = (totalSwatches + columns - 1) / columns;
+                double tableWidth = columns * squareMm + (columns - 1) * gapX;
+                double pageWidth = Math.Max(140.0, tableWidth + 16.0);
+                double pageHeight = Math.Max(100.0, 47.0 + rows * rowPitch);
                 int[] referenceValues = Components(reference, cmyk);
-                string[] channelNames = cmyk ? new[] { "C", "M", "Y", "K" } : new[] { "R", "G", "B" };
-                for (int outer = 0; outer < (cmyk ? levels[3].Length : 1); outer++)
-                {
-                    for (int inner = 0; inner < levels[2].Length; inner++)
-                    {
-                        dynamic page = doc.AddPages(1);
-                        createdPages.Add(page);
-                        page.Activate();
-                        page.SetSize(pageWidth, pageHeight);
-                        dynamic layer = doc.ActiveLayer;
-                        dynamic range = app.CreateShapeRange();
-                        int planeIndex = createdPages.Count;
-                        int third = levels[2][inner];
-                        int fourth = cmyk ? levels[3][outer] : 0;
-                        string planeName = cmyk ? "Y" + third + " K" + fourth : "B" + third;
-                        page.Name = "Цветопроба " + planeIndex + " · " + planeName;
-                        double left = 10.0;
-                        double top = (double)page.SizeHeight - 10.0;
-                        AddSwatch(layer, range, left, top, 20.0, reference.Color);
-                        AddText(layer, range, left + 25.0, top - 5.0,
-                            "ЭТАЛОН" + (reference.IsSpot ? " · плашечный" : ""), 10f, false);
-                        AddText(layer, range, left + 25.0, top - 12.0,
-                            reference.Name, 8f, false);
-                        AddText(layer, range, left + 25.0, top - 19.0,
-                            FormatValues(referenceValues, cmyk).Replace("\r", "   "), 7f, false);
-                        AddText(layer, range, left, top - 29.0,
-                            "Комбинации " + channelNames[0] + " × " + channelNames[1] +
-                            " · " + planeName + " · " + planeIndex + "/" + planes, 8f, false);
+                createdPage = doc.AddPages(1);
+                createdPage.Activate();
+                createdPage.SetSize(pageWidth, pageHeight);
+                createdPage.Name = "Цветопроба " + (cmyk ? "CMYK" : "RGB") +
+                    " · " + totalSwatches;
+                dynamic layer = doc.ActiveLayer;
+                dynamic range = app.CreateShapeRange();
+                double left = 8.0;
+                double top = pageHeight - 8.0;
+                AddSwatch(layer, range, left, top, 16.0, reference.Color);
+                AddText(layer, range, left + 20.0, top - 4.0,
+                    "ЭТАЛОН" + (reference.IsSpot ? " · плашечный" : ""), 9f, false);
+                AddText(layer, range, left + 20.0, top - 10.0, reference.Name, 7f, false);
+                AddText(layer, range, left + 20.0, top - 16.0,
+                    FormatValues(referenceValues, cmyk).Replace("\r", "  "), 6.5f, false);
+                AddText(layer, range, left, top - 25.0,
+                    (cmyk ? "CMYK" : "RGB") + " · все сочетания · " + totalSwatches + " плашек", 7f, false);
 
-                        for (int row = 0; row < levels[1].Length; row++)
-                        {
-                            for (int column = 0; column < levels[0].Length; column++)
-                            {
-                                int[] values = cmyk
-                                    ? new[] { levels[0][column], levels[1][row], third, fourth }
-                                    : new[] { levels[0][column], levels[1][row], third };
-                                dynamic color = cmyk
-                                    ? app.CreateCMYKColor(values[0], values[1], values[2], values[3])
-                                    : app.CreateRGBColor(values[0], values[1], values[2]);
-                                double x = left + column * (squareMm + 5.0);
-                                double y = top - 40.0 - row * (squareMm + 11.0);
-                                bool isReference = SameValues(values, referenceValues);
-                                AddSwatch(layer, range, x, y, squareMm, color, isReference);
-                                dynamic label = AddText(layer, range, 0, 0,
-                                    FormatValues(values, cmyk), 7f, true);
-                                if ((double)label.SizeWidth > squareMm)
-                                {
-                                    double scale = squareMm / (double)label.SizeWidth;
-                                    label.SetSize(squareMm, (double)label.SizeHeight * scale);
-                                }
-                                label.Move(x + (squareMm - (double)label.SizeWidth) / 2.0 -
-                                    (double)label.LeftX, y - squareMm - 8.0 - (double)label.BottomY);
-                            }
-                        }
+                for (int index = 0; index < totalSwatches; index++)
+                {
+                    int remainder = index;
+                    var values = new int[channelCount];
+                    for (int channel = 0; channel < channelCount; channel++)
+                    {
+                        values[channel] = levels[channel][remainder % levels[channel].Length];
+                        remainder /= levels[channel].Length;
                     }
+                    dynamic color = cmyk
+                        ? app.CreateCMYKColor(values[0], values[1], values[2], values[3])
+                        : app.CreateRGBColor(values[0], values[1], values[2]);
+                    int row = index / columns;
+                    int column = index % columns;
+                    double x = left + column * columnPitch;
+                    double y = top - 31.0 - row * rowPitch;
+                    AddSwatch(layer, range, x, y, squareMm, color,
+                        SameValues(values, referenceValues));
+                    dynamic label = AddText(layer, range, 0, 0,
+                        FormatValues(values, cmyk), 6.5f, true);
+                    if ((double)label.SizeWidth > squareMm)
+                    {
+                        double scale = squareMm / (double)label.SizeWidth;
+                        label.SetSize(squareMm, (double)label.SizeHeight * scale);
+                    }
+                    label.Move(x + (squareMm - (double)label.SizeWidth) / 2.0 -
+                        (double)label.LeftX, y - squareMm - 5.5 - (double)label.BottomY);
                 }
-                createdPages[0].Activate();
+                range.CreateSelection();
                 try { app.ActiveWindow.Refresh(); } catch { }
-                return planes;
+                return 1;
             }
             catch
             {
-                for (int i = createdPages.Count - 1; i >= 0; i--)
-                    try { createdPages[i].Delete(); }
+                if (createdPage != null)
+                    try { createdPage.Delete(); }
                     catch (Exception ex) { Log.Error("Color combination page rollback failed.", ex); }
                 try { originalPage.Activate(); } catch { }
                 throw;

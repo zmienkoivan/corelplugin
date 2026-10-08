@@ -120,7 +120,7 @@ namespace VanyaTools.Native
             _cells.SelectedIndex = 1;
             _cellsRow = Row("Сетка", _cells);
             panel.Children.Add(_cellsRow);
-            _square = Field("24");
+            _square = Field("16");
             panel.Children.Add(Row("Плашка, мм", _square));
 
             _model.SelectionChanged += (_, __) => { UpdateChannels(); ApplyDefaultRanges(); };
@@ -197,7 +197,7 @@ namespace VanyaTools.Native
             _cells.SelectedIndex = selected >= 0 && selected < 3 ? selected : 1;
             if (_layoutNote != null)
                 _layoutNote.Text = combinations
-                    ? "Все указанные сочетания. Для каждого Y/K или B создаётся отдельная страница нужного размера."
+                    ? "Все сочетания в одной таблице. На каждой плашке — значения CMYK или RGB."
                     : all
                     ? "Отдельная строка для каждого канала. Средняя плашка — эталон; остальные каналы не меняются."
                     : "Сетка отклонений по двум каналам. Средняя плашка — эталон.";
@@ -242,8 +242,8 @@ namespace VanyaTools.Native
                     ? new[] { "70,80,90,100", "40,50,60,70,80,90,100", "0,5,10", "0,5" }
                     : new[] { "0,20,40,60", "0,30,60,90,120", "220,240,255" };
                 for (int i = 0; i < blue.Length; i++) _ranges[i].Text = blue[i];
-                _status(cmyk ? "Синий CMYK: 168 плашек на 6 страницах."
-                    : "Синий RGB: 60 плашек на 3 страницах.", false);
+                _status(cmyk ? "Синий CMYK: 168 плашек в одной таблице."
+                    : "Синий RGB: 60 плашек в одной таблице.", false);
             }
             catch (Exception ex) { Fail("Blue color proof preset failed.", ex); }
         }
@@ -275,9 +275,10 @@ namespace VanyaTools.Native
             try
             {
                 int[][] levels = ReadLevels();
-                int planes = levels.Skip(2).Aggregate(1, (count, channel) => count * channel.Length);
-                int swatches = planes * levels[0].Length * levels[1].Length;
-                _sampleCount.Text = swatches + " плашек · " + planes + " стр. Печатайте с одним профилем.";
+                int swatches = levels.Aggregate(1, (count, channel) => count * channel.Length);
+                _sampleCount.Text = swatches > 500
+                    ? swatches + " плашек · максимум 500. Сократите списки."
+                    : swatches + " плашек · 1 таблица.";
             }
             catch { _sampleCount.Text = "Укажите значения через запятую, например 70,80,90,100."; }
         }
@@ -319,8 +320,10 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Введите размер плашки в мм.");
                 if (_layout.SelectedIndex == 0)
                 {
-                    int pages = _service.CreateCombinations(_reference, cmyk, ReadLevels(), square);
-                    _status("Цветопроба комбинаций создана: " + pages + " страниц.", false);
+                    int[][] levels = ReadLevels();
+                    int swatches = levels.Aggregate(1, (count, channel) => count * channel.Length);
+                    _service.CreateCombinations(_reference, cmyk, levels, square);
+                    _status("Создана одна таблица: " + swatches + " плашек.", false);
                     return;
                 }
                 int step;
@@ -334,8 +337,8 @@ namespace VanyaTools.Native
                     VerticalChannel = _vertical.SelectedIndex, Step = step,
                     Cells = cells, SquareMm = square });
                 _status(allChannels
-                    ? "Создано " + (cmyk ? 4 : 3) + " таблицы по " + cells + " плашек."
-                    : "Цветопроба " + cells + " × " + cells + " создана на странице.", false);
+                    ? "Создана одна таблица: " + (cmyk ? 4 : 3) + " ряда по " + cells + " плашек."
+                    : "Создана одна таблица " + cells + " × " + cells + ".", false);
             }
             catch (Exception ex) { Fail("Color proof creation failed.", ex); }
         }
