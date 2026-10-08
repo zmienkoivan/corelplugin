@@ -34,6 +34,7 @@
                 hostedType="Addons\VanyaToolsNative\VanyaTools.Native.dll,VanyaTools.Native.VanyaToolsTrimButton"
                 dynamicCategory="2cc24a3e-fe24-4708-9a74-9c75406eebcd"
                 userCaption="Vanya Tools: обрезать растр"
+                width="31"
                 enable="true" />
 
       <itemData guid="96b63d8e-86b4-433f-a315-126381e35e11"
@@ -41,6 +42,7 @@
                 hostedType="Addons\VanyaToolsNative\VanyaTools.Native.dll,VanyaTools.Native.VanyaToolsFitFrameButton"
                 dynamicCategory="2cc24a3e-fe24-4708-9a74-9c75406eebcd"
                 userCaption="Vanya Tools: подогнать рамку"
+                width="31"
                 enable="true" />
     </xsl:copy>
   </xsl:template>

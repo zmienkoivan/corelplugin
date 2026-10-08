@@ -104,7 +104,7 @@ namespace VanyaTools.Native
             Loaded += (_, __) =>
             {
                 _hotkeys.Attach(this);
-                Dispatcher.BeginInvoke(new Action(CorelToolbarInstaller.Ensure),
+                Dispatcher.BeginInvoke(new Action(CorelToolbarInstaller.RemoveLegacyDuplicates),
                     System.Windows.Threading.DispatcherPriority.Background);
             };
             Unloaded += (_, __) => _hotkeys.Detach();

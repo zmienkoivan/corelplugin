@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -74,10 +77,16 @@ namespace VanyaTools.Native
         private const string TrimButton = "a624e7f3-8a23-4b1e-b2e6-58cf6725b9e4";
         private const string FitFrameButton = "96b63d8e-86b4-433f-a315-126381e35e11";
 
-        internal static void Ensure()
+        // v1.0.117 inserted controls through COM as well as UserUI.xslt. On some
+        // workspaces COM inserted one over the New Document button. Remove only
+        // duplicate Vanya Tools controls, keeping the rightmost toolbar group.
+        internal static void RemoveLegacyDuplicates()
         {
             try
             {
+                string markerPath = GetMigrationMarkerPath();
+                if (File.Exists(markerPath)) return;
+
                 dynamic app = CorelApp.Get();
                 dynamic standard = null;
                 foreach (dynamic bar in app.FrameWork.CommandBars)
@@ -90,50 +99,70 @@ namespace VanyaTools.Native
                 }
                 if (standard == null)
                 {
-                    Log.Info("Standard command bar was not found; toolbar buttons remain available through workspace customization.");
+                    Log.Info("Standard command bar was not found; legacy toolbar cleanup skipped.");
                     return;
                 }
 
-                TryAdd(standard.Controls, DockerButton);
-                TryAdd(standard.Controls, TrimButton);
-                TryAdd(standard.Controls, FitFrameButton);
+                dynamic controls = standard.Controls;
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                int found = 0;
+                int removed = 0;
+                for (int i = (int)controls.Count; i >= 1; i--)
+                {
+                    dynamic control = controls.Item[i];
+                    string id = GetOurControlId(control);
+                    if (id == null) continue;
+                    found++;
+                    if (seen.Add(id)) continue;
+                    controls.Remove(i);
+                    removed++;
+                }
+
+                if (found == 0) return;
+                Directory.CreateDirectory(Path.GetDirectoryName(markerPath));
+                File.WriteAllText(markerPath, DateTime.UtcNow.ToString("O"));
+                Log.Info("Legacy Standard toolbar duplicates removed: " + removed);
             }
             catch (Exception error)
             {
-                // A toolbar API failure must never prevent the docker from loading.
-                Log.Error("Could not update the Standard toolbar.", error);
+                Log.Error("Could not remove legacy Standard toolbar duplicates.", error);
             }
         }
 
-        private static void TryAdd(dynamic controls, string id)
+        private static string GetOurControlId(dynamic control)
         {
             try
             {
-                string tag = "VanyaTools:" + id;
-                for (int i = 1; i <= (int)controls.Count; i++)
-                {
-                    dynamic control = controls.Item[i];
-                    try
-                    {
-                        if (String.Equals((string)control.ID, id, StringComparison.OrdinalIgnoreCase) ||
-                            String.Equals((string)control.Tag, tag, StringComparison.Ordinal))
-                            return;
-                    }
-                    catch { }
-                }
-
-                dynamic added = controls.Add(id, 0, false);
-                try { added.Tag = tag; } catch { }
-                if (String.Equals(id, DockerButton, StringComparison.OrdinalIgnoreCase))
-                {
-                    try { added.Caption = "Vanya Tools"; } catch { }
-                }
-                Log.Info("Added Standard toolbar control " + id);
+                string id = (string)control.ID;
+                if (IsOurId(id)) return id;
             }
-            catch (Exception error)
+            catch { }
+            try
             {
-                Log.Error("Could not add toolbar control " + id, error);
+                string tag = (string)control.Tag;
+                const string prefix = "VanyaTools:";
+                if (tag != null && tag.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    string id = tag.Substring(prefix.Length);
+                    if (IsOurId(id)) return id;
+                }
             }
+            catch { }
+            return null;
+        }
+
+        private static bool IsOurId(string id)
+        {
+            return String.Equals(id, DockerButton, StringComparison.OrdinalIgnoreCase) ||
+                   String.Equals(id, TrimButton, StringComparison.OrdinalIgnoreCase) ||
+                   String.Equals(id, FitFrameButton, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string GetMigrationMarkerPath()
+        {
+            string corelVersion = Process.GetCurrentProcess().MainModule.FileVersionInfo.FileMajorPart.ToString();
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "VanyaTools", "toolbar-117-cleaned-" + corelVersion + ".txt");
         }
     }
 }
