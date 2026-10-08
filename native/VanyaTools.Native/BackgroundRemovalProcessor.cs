@@ -179,6 +179,7 @@ namespace VanyaTools.Native
             if (!hasTransparency)
                 throw new InvalidOperationException("Модель не вернула прозрачную маску фона.");
 
+            int minX = width, minY = height, maxX = -1, maxY = -1;
             for (int y = 0; y < height; y++)
             {
                 if ((y & 63) == 0) cancellation.ThrowIfCancellationRequested();
@@ -203,9 +204,32 @@ namespace VanyaTools.Native
                         (top + (bottom - top) * fy) / 255.0);
                     pixels[i + 3] = (byte)Math.Max(0, Math.Min(255, alpha));
                     if (alpha == 0) pixels[i] = pixels[i + 1] = pixels[i + 2] = 0;
+                    if (alpha > 10)
+                    {
+                        if (x < minX) minX = x;
+                        if (x > maxX) maxX = x;
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
+                    }
                 }
             }
-            Save(output, width, height, original.DpiX, original.DpiY, pixels, stride);
+            if (maxX < 0)
+                throw new InvalidOperationException("Модель удалила всё изображение. Результат не вставлен.");
+            const int padding = 2;
+            int left = Math.Max(0, minX - padding), topEdge = Math.Max(0, minY - padding);
+            int right = Math.Min(width - 1, maxX + padding);
+            int bottomEdge = Math.Min(height - 1, maxY + padding);
+            BitmapSource bitmap = BitmapSource.Create(width, height, original.DpiX, original.DpiY,
+                PixelFormats.Bgra32, null, pixels, stride);
+            BitmapSource result = left == 0 && topEdge == 0 && right == width - 1 && bottomEdge == height - 1
+                ? bitmap : new CroppedBitmap(bitmap,
+                    new System.Windows.Int32Rect(left, topEdge, right - left + 1, bottomEdge - topEdge + 1));
+            cancellation.ThrowIfCancellationRequested();
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(result));
+            using (var stream = File.Create(output)) encoder.Save(stream);
+            Log.Info("Background mask cropped: " + width + "x" + height + " -> " +
+                result.PixelWidth + "x" + result.PixelHeight + ".");
         }
 
         private static bool IsWhite(byte[] pixels, int p, int threshold)

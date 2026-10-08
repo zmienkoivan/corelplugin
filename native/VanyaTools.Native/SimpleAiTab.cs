@@ -258,7 +258,9 @@ namespace VanyaTools.Native
                 _importWarning = null;
                 // Corel COM capture must run on the UI thread. It duplicates the selection,
                 // rasterizes the temporary copy, then restores the original objects.
+                Log.Info("Simple AI capture starting: " + action);
                 string source = action == "background" ? AiSelectionCapture.Capture() : _capture();
+                Log.Info("Simple AI capture finished: " + action);
                 _lastSource = action == "background" ? source : null;
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
@@ -310,6 +312,7 @@ namespace VanyaTools.Native
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), output);
                 _resultPreview.Source = PreviewBitmap(output);
+                SetStage("Вставляю результат в Corel…");
                 InsertReady();
                 ReportOutcome();
             }
@@ -385,17 +388,21 @@ namespace VanyaTools.Native
             try
             {
                 _importWarning = null;
+                Log.Info("Opaque stair smoothing capture starting.");
                 string source = AiSelectionCapture.Capture();
+                Log.Info("Opaque stair smoothing capture finished.");
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Stairs-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
                 await Task.Run(() => SmoothOpaqueStairs(source, output, threshold, cancellation), cancellation);
+                Log.Info("Opaque stair smoothing PNG finished.");
                 cancellation.ThrowIfCancellationRequested();
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), output);
                 _resultPreview.Source = PreviewBitmap(output);
+                SetStage("Вставляю результат в Corel…");
                 InsertReady();
                 ReportOutcome();
             }
@@ -411,12 +418,15 @@ namespace VanyaTools.Native
             var bgra = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
             int width = bgra.PixelWidth, height = bgra.PixelHeight;
             int length = checked(width * height), stride = checked(width * 4);
-            // Use 2x for ordinary artwork and 1.5x for large print layouts.
-            // Keep the physical size unchanged by updating the PNG DPI below.
-            double scale = length <= 16000000 ? 2.0 : 1.5;
-            if (width > 20000 || height > 20000) scale = 1.0;
+            // Keep the output under about 16 MP when enlarging. Large print
+            // rasters are smoothed at their existing resolution to avoid a
+            // second full-size RGBA buffer inside the Corel process.
+            double scale = length <= 4000000 ? 2.0 : length <= 8000000 ? 1.4 : 1.0;
+            if (width > 16000 || height > 16000) scale = 1.0;
             int outWidth = checked((int)Math.Round(width * scale));
             int outHeight = checked((int)Math.Round(height * scale));
+            Log.Info("Opaque stair smoothing: " + width + "x" + height +
+                " -> " + outWidth + "x" + outHeight + ".");
             byte[] pixels = new byte[checked(stride * height)];
             byte[] mask = new byte[length], work = new byte[length];
             bgra.CopyPixels(pixels, stride, 0);
@@ -428,12 +438,68 @@ namespace VanyaTools.Native
             }
             GaussianHorizontal(mask, work, width, height, 1, cancellation);
             GaussianVertical(work, mask, width, height, 1, cancellation);
-            // Keep one-pixel lettering and thin accents. The blur influences
-            // only the subpixel boundary when the mask is sampled below.
+            // Preserve original alpha separately while changing the blurred mask.
             for (int p = 0; p < length; p++)
             {
                 int original = pixels[p * 4 + 3] >= threshold && pixels[p * 4 + 3] > 0 ? 255 : 0;
-                mask[p] = (byte)((mask[p] * 45 + original * 55 + 50) / 100);
+                work[p] = (byte)original;
+                mask[p] = (byte)(scale == 1.0
+                    ? (mask[p] * 75 + original * 25 + 50) / 100
+                    : (mask[p] * 45 + original * 55 + 50) / 100);
+            }
+            if (scale == 1.0)
+            {
+                for (int y = 0; y < height; y++)
+                {
+                    if ((y & 63) == 0) cancellation.ThrowIfCancellationRequested();
+                    for (int x = 0; x < width; x++)
+                    {
+                        int p = y * width + x, i = p * 4;
+                        if (mask[p] < 128)
+                        {
+                            if (work[p] != 0)
+                            {
+                                int neighbors = 0;
+                                for (int dy = -1; dy <= 1; dy++)
+                                for (int dx = -1; dx <= 1; dx++)
+                                {
+                                    int nx = x + dx, ny = y + dy;
+                                    if ((dx != 0 || dy != 0) && nx >= 0 && nx < width &&
+                                        ny >= 0 && ny < height && work[ny * width + nx] != 0)
+                                        neighbors++;
+                                }
+                                if (neighbors <= 2) { pixels[i + 3] = 255; continue; }
+                            }
+                            pixels[i + 3] = 0;
+                            continue;
+                        }
+                        if (work[p] != 0) { pixels[i + 3] = 255; continue; }
+                        int neighbor = -1;
+                        for (int dy = -1; dy <= 1 && neighbor < 0; dy++)
+                        for (int dx = -1; dx <= 1; dx++)
+                        {
+                            int nx = x + dx, ny = y + dy;
+                            if (nx >= 0 && nx < width && ny >= 0 && ny < height &&
+                                work[ny * width + nx] != 0)
+                            { neighbor = (ny * width + nx) * 4; break; }
+                        }
+                        if (neighbor < 0) { pixels[i + 3] = 0; continue; }
+                        pixels[i] = pixels[neighbor];
+                        pixels[i + 1] = pixels[neighbor + 1];
+                        pixels[i + 2] = pixels[neighbor + 2];
+                        pixels[i + 3] = 255;
+                    }
+                }
+                for (int p = 0; p < length; p++)
+                {
+                    if ((p & 0xfffff) == 0) cancellation.ThrowIfCancellationRequested();
+                    if (pixels[p * 4 + 3] == 0)
+                        pixels[p * 4] = pixels[p * 4 + 1] = pixels[p * 4 + 2] = 0;
+                }
+                Log.Info("Opaque stair smoothing pixels ready; saving PNG.");
+                SaveBinaryResult(output, pixels, width, height,
+                    input.DpiX, input.DpiY, cancellation);
+                return;
             }
             byte[] resultPixels = new byte[checked(outWidth * outHeight * 4)];
             double scaleX = (double)outWidth / width, scaleY = (double)outHeight / height;
@@ -460,10 +526,10 @@ namespace VanyaTools.Native
                     if (coverage < 128) continue;
                     // Sample color from the kept artwork, not from translucent
                     // fringe pixels that may contain a matte or white halo.
-                    double c00 = pixels[p00 * 4 + 3] >= threshold && pixels[p00 * 4 + 3] > 0 ? w00 : 0;
-                    double c10 = pixels[p10 * 4 + 3] >= threshold && pixels[p10 * 4 + 3] > 0 ? w10 : 0;
-                    double c01 = pixels[p01 * 4 + 3] >= threshold && pixels[p01 * 4 + 3] > 0 ? w01 : 0;
-                    double c11 = pixels[p11 * 4 + 3] >= threshold && pixels[p11 * 4 + 3] > 0 ? w11 : 0;
+                    double c00 = work[p00] != 0 ? w00 : 0;
+                    double c10 = work[p10] != 0 ? w10 : 0;
+                    double c01 = work[p01] != 0 ? w01 : 0;
+                    double c11 = work[p11] != 0 ? w11 : 0;
                     double total = c00 + c10 + c01 + c11;
                     for (int channel = 0; channel < 3; channel++)
                     {
@@ -476,6 +542,7 @@ namespace VanyaTools.Native
                     resultPixels[destination + 3] = 255;
                 }
             }
+            Log.Info("Opaque stair smoothing pixels ready; saving PNG.");
             SaveBinaryResult(output, resultPixels, outWidth, outHeight,
                 input.DpiX * scaleX, input.DpiY * scaleY, cancellation);
         }
@@ -526,6 +593,7 @@ namespace VanyaTools.Native
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), output);
                 _resultPreview.Source = PreviewBitmap(output);
+                SetStage("Вставляю результат в Corel…");
                 InsertReady();
                 ReportOutcome();
             }
@@ -748,11 +816,19 @@ namespace VanyaTools.Native
                 _lastOutput, UpdateProgress, cancellation));
             cancellation.ThrowIfCancellationRequested();
             SetStage("Подготавливаю результат…");
-            string png = Path.Combine(Path.GetTempPath(), "Vanya-Simple-Ready-" + Guid.NewGuid().ToString("N") + ".png");
-            if (_lastModel == "bria/remove-background" && !String.IsNullOrEmpty(_lastSource) &&
-                File.Exists(_lastSource))
+            bool background = _lastModel == "bria/remove-background" &&
+                !String.IsNullOrEmpty(_lastSource) && File.Exists(_lastSource);
+            string png = Path.Combine(Path.GetTempPath(),
+                (background ? "Vanya-Background-Ready-" : "Vanya-Simple-Ready-") +
+                Guid.NewGuid().ToString("N") + ".png");
+            if (background)
+            {
+                SetStage("Совмещаю маску с исходником…");
+                Log.Info("AI background mask application starting.");
                 await Task.Run(() => BackgroundRemovalProcessor.ApplyModelMask(
                     _lastSource, _lastOutput, png, cancellation), cancellation);
+                Log.Info("AI background mask application finished.");
+            }
             else
                 await Task.Run(() => SaveAsPng(_lastOutput, png), cancellation);
             _readyOutput = png;
@@ -760,6 +836,7 @@ namespace VanyaTools.Native
             File.WriteAllText(PendingPath(), png);
             _resultPreview.Source = PreviewBitmap(png);
             cancellation.ThrowIfCancellationRequested();
+            SetStage("Вставляю результат в Corel…");
             InsertReady();
         }
 
@@ -776,10 +853,12 @@ namespace VanyaTools.Native
             try
             {
                 string name = Path.GetFileName(_readyOutput);
-                bool dtfResult = name.StartsWith("Vanya-Edge-", StringComparison.OrdinalIgnoreCase) ||
-                    name.StartsWith("Vanya-Stairs-", StringComparison.OrdinalIgnoreCase);
-                Log.Info("Simple AI import starting: " + name + (dtfResult ? " (DTF)" : ""));
-                string warning = (dtfResult ? _importDtf : _import)(_readyOutput);
+                bool alreadyCropped = name.StartsWith("Vanya-Edge-", StringComparison.OrdinalIgnoreCase) ||
+                    name.StartsWith("Vanya-Stairs-", StringComparison.OrdinalIgnoreCase) ||
+                    name.StartsWith("Vanya-Background-Ready-", StringComparison.OrdinalIgnoreCase);
+                Log.Info("Simple AI import starting: " + name +
+                    (alreadyCropped ? " (cropped PNG)" : ""));
+                string warning = (alreadyCropped ? _importDtf : _import)(_readyOutput);
                 Log.Info("Simple AI import finished: " + name);
                 _importWarning = warning;
                 _readyOutput = null; _lastInput = null; _lastSource = null;
