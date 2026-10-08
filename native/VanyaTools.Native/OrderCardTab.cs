@@ -16,6 +16,7 @@ using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using WinForms = System.Windows.Forms;
 
 namespace VanyaTools.Native
 {
@@ -190,10 +191,24 @@ namespace VanyaTools.Native
                 catch (Exception error) { _status("Сервер заказов: " + error.Message, true); }
             }));
             settings.Children.Add(Note("Токен бота хранится на сервере. Здесь нужен ключ публикации."));
-            settings.Children.Add(Title("Папка макетов"));
-            settings.Children.Add(Note("Укажите папку года, например D:\\Заказы\\2026."));
-            _yearFolder = Input(); settings.Children.Add(_yearFolder);
-            settings.Children.Add(Button("Сохранить папку года", (_, __) => Safe(SaveFileSettings)));
+            settings.Children.Add(Label("Папка года"));
+            var folderRow = new DockPanel { Margin = new Thickness(0, 0, 0, 3) };
+            var browseFolder = Button("", (_, __) => Safe(ChooseYearFolder));
+            browseFolder.Width = 36;
+            browseFolder.ToolTip = "Выбрать папку года";
+            browseFolder.Content = new Viewbox { Width = 18, Height = 18, Child =
+                new System.Windows.Shapes.Path {
+                    Data = Geometry.Parse("M 2,6 L 8,6 10,8 20,8 20,18 2,18 Z M 2,6 L 2,4 9,4 11,6"),
+                    Stroke = Brushes.DarkSlateGray, StrokeThickness = 1.7,
+                    StrokeLineJoin = PenLineJoin.Round, Fill = Brushes.Transparent } };
+            DockPanel.SetDock(browseFolder, Dock.Right);
+            folderRow.Children.Add(browseFolder);
+            _yearFolder = Input();
+            _yearFolder.IsReadOnly = true;
+            _yearFolder.ToolTip = "Папка года для новых CDR";
+            _yearFolder.Margin = new Thickness(0, 1, 4, 3);
+            folderRow.Children.Add(_yearFolder);
+            settings.Children.Add(folderRow);
             SettingsView = settings;
             LoadServerSettings();
             LoadFileSettings();
@@ -1055,6 +1070,33 @@ namespace VanyaTools.Native
                 if (settings.TryGetValue("key", out string key)) _key.Password = key;
             }
             catch { _status("Не удалось прочитать настройки сервера. Введите их повторно.", true); }
+        }
+
+        private void ChooseYearFolder()
+        {
+            using (var dialog = new WinForms.FolderBrowserDialog
+            {
+                Description = "Выберите папку года для макетов",
+                ShowNewFolderButton = true,
+                SelectedPath = Directory.Exists(_yearFolder.Text) ? _yearFolder.Text : ""
+            })
+            {
+                var source = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
+                WinForms.DialogResult result = source == null
+                    ? dialog.ShowDialog()
+                    : dialog.ShowDialog(new FolderDialogOwner(source.Handle));
+                if (result != WinForms.DialogResult.OK) return;
+                string previous = _yearFolder.Text;
+                _yearFolder.Text = dialog.SelectedPath;
+                try { SaveFileSettings(); }
+                catch { _yearFolder.Text = previous; throw; }
+            }
+        }
+
+        private sealed class FolderDialogOwner : WinForms.IWin32Window
+        {
+            internal FolderDialogOwner(IntPtr handle) { Handle = handle; }
+            public IntPtr Handle { get; }
         }
 
         private void SaveFileSettings()
