@@ -107,24 +107,54 @@ namespace VanyaTools.Native
                 : "Убрано кнопок версии 1.0.128: " + removed + ".";
         }
 
+        internal static string RemoveOldHostedButtons()
+        {
+            dynamic standard = GetStandardBar();
+            if (standard == null)
+                throw new InvalidOperationException("Стандартная панель Corel не найдена.");
+
+            dynamic controls = standard.Controls;
+            int removed = 0;
+            for (int i = (int)controls.Count; i >= 1; i--)
+            {
+                string id = GetOurControlId(controls.Item[i]);
+                if (!String.Equals(id, TrimButton, StringComparison.OrdinalIgnoreCase) &&
+                    !String.Equals(id, FitFrameButton, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                controls.Remove(i);
+                removed++;
+            }
+            return "Убрано старых кнопок: " + removed + ". Новые команды — в категории «Плагины».";
+        }
+
         internal static void ApplyDockerIcon()
         {
             string iconPath = Path.Combine(Path.GetDirectoryName(typeof(VanyaToolsDocker).Assembly.Location),
-                "VanyaToolsIcon.bmp");
-            if (!File.Exists(iconPath)) return;
+                "VanyaToolsIcon.ico");
+            if (!File.Exists(iconPath))
+            {
+                Log.Info("Docker icon is missing: " + iconPath);
+                return;
+            }
             try
             {
-                dynamic standard = GetStandardBar();
-                if (standard == null) return;
-                dynamic controls = standard.Controls;
-                for (int i = 1; i <= (int)controls.Count; i++)
+                int applied = 0;
+                foreach (dynamic bar in CorelApp.Get().FrameWork.CommandBars)
                 {
-                    dynamic control = controls.Item[i];
-                    if (!String.Equals(GetOurControlId(control), DockerButton,
-                        StringComparison.OrdinalIgnoreCase)) continue;
-                    try { control.SetCustomIcon(iconPath); }
-                    catch (Exception error) { Log.Error("Could not set Docker button icon.", error); }
+                    try
+                    {
+                        dynamic controls = bar.Controls;
+                        for (int i = 1; i <= (int)controls.Count; i++)
+                        {
+                            dynamic control = controls.Item[i];
+                            if (!IsDockerControl(control)) continue;
+                            try { control.SetCustomIcon(iconPath); applied++; }
+                            catch (Exception error) { Log.Error("Could not set Docker button icon.", error); }
+                        }
+                    }
+                    catch (Exception error) { Log.Error("Could not inspect command bar for Docker icon.", error); }
                 }
+                Log.Info("Docker icon applied to " + applied + " controls.");
             }
             catch (Exception error) { Log.Error("Could not apply Docker icon.", error); }
         }
@@ -211,6 +241,18 @@ namespace VanyaTools.Native
             }
             catch { }
             return null;
+        }
+
+        private static bool IsDockerControl(dynamic control)
+        {
+            if (String.Equals(GetOurControlId(control), DockerButton,
+                StringComparison.OrdinalIgnoreCase)) return true;
+            try
+            {
+                return String.Equals((string)control.Caption, "Vanya Tools",
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
         }
 
         private static bool IsOurId(string id)

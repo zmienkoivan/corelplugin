@@ -110,9 +110,18 @@ namespace VanyaTools.Native
                     SetStatus("Не удалось убрать кнопки: " + error.Message, true);
                 }
             }));
+            settings.Children.Add(Button("Убрать старые кнопки обрезки и рамки", (_, __) =>
+            {
+                try { SetStatus(CorelToolbarInstaller.RemoveOldHostedButtons(), false); }
+                catch (Exception error)
+                {
+                    Log.Error("Could not remove old hosted toolbar buttons.", error);
+                    SetStatus("Не удалось убрать кнопки: " + error.Message, true);
+                }
+            }));
             settings.Children.Add(new TextBlock
             {
-                Text = "Команды Corel: Настройка → Команды → Vanya Tools. Кнопки можно перетащить на любую панель.",
+                Text = "Команды Corel: Настройка → Команды → Плагины. Перетащите нужные кнопки на панель.",
                 FontSize = 10, TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(4, 2, 4, 7)
             });

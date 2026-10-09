@@ -20,7 +20,6 @@
                 noBmpOnMenu="true"
                 type="checkButton"
                 check="*Docker('e75f8206-5448-4578-ae13-ee8d9a4f15c9')"
-                dynamicCategory="2cc24a3e-fe24-4708-9a74-9c75406eebcd"
                 userCaption="Vanya Tools"
                 userToolTip="Открыть панель Vanya Tools"
                 enable="true"/>
@@ -33,7 +32,6 @@
       <itemData guid="a624e7f3-8a23-4b1e-b2e6-58cf6725b9e4"
                 type="wpfhost"
                 hostedType="Addons\VanyaToolsNative\VanyaTools.Native.dll,VanyaTools.Native.VanyaToolsTrimButton"
-                dynamicCategory="2cc24a3e-fe24-4708-9a74-9c75406eebcd"
                 userCaption="Vanya Tools: обрезать растр"
                 userToolTip="Обрезать выбранный растр"
                 width="31"
@@ -42,25 +40,10 @@
       <itemData guid="96b63d8e-86b4-433f-a315-126381e35e11"
                 type="wpfhost"
                 hostedType="Addons\VanyaToolsNative\VanyaTools.Native.dll,VanyaTools.Native.VanyaToolsFitFrameButton"
-                dynamicCategory="2cc24a3e-fe24-4708-9a74-9c75406eebcd"
                 userCaption="Vanya Tools: подогнать рамку"
                 userToolTip="Подогнать размерную рамку под принт"
                 width="31"
                 enable="true" />
-    </xsl:copy>
-  </xsl:template>
-
-  <xsl:template match="uiConfig/customizationList/container">
-    <xsl:copy>
-      <xsl:apply-templates select="node()|@*"/>
-      <xsl:if test="not(modeData[@guid='5e52d7f9-23bb-433f-a4ef-5d3c24c8aa18'])">
-        <modeData guid="5e52d7f9-23bb-433f-a4ef-5d3c24c8aa18"
-                  captionRef="60cc0805-a158-44eb-a286-49061c3d963d">
-          <item guidRef="60cc0805-a158-44eb-a286-49061c3d963d"/>
-          <item guidRef="a624e7f3-8a23-4b1e-b2e6-58cf6725b9e4"/>
-          <item guidRef="96b63d8e-86b4-433f-a315-126381e35e11"/>
-        </modeData>
-      </xsl:if>
     </xsl:copy>
   </xsl:template>
 
