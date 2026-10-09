@@ -94,6 +94,10 @@ namespace VanyaTools.Native
             var aiTools = new AiPrintTab(ImportAiResult,
                 (message, isError) => SetStatus(message, isError), CaptureAiSelection);
             var orderCards = new OrderCardTab((message, isError) => SetStatus(message, isError));
+            var standardPage = new DockPanel();
+            DockPanel.SetDock(orderCards.QuickDocumentFields, Dock.Bottom);
+            standardPage.Children.Add(orderCards.QuickDocumentFields);
+            standardPage.Children.Add(standardTools);
             var approvalCopy = new ApprovalCopyTool((message, isError) => SetStatus(message, isError));
             var settings = new StackPanel { Margin = new Thickness(5) };
             settings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
@@ -114,7 +118,7 @@ namespace VanyaTools.Native
 
             var tabs = new TabControl { MinHeight = 360 };
             tabs.Items.Add(ThumbnailTabs.Create("Основная", ThumbnailTabs.Crop,
-                Color.FromRgb(46, 112, 124), standardTools));
+                Color.FromRgb(46, 112, 124), standardPage));
             tabs.Items.Add(ThumbnailTabs.Create("Стикерпаки", ThumbnailTabs.Stickers,
                 Color.FromRgb(171, 111, 43),
                 new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = stickerTools }));

@@ -49,6 +49,7 @@ namespace VanyaTools.Native
 
         internal FrameworkElement SettingsView { get; }
         internal FrameworkElement OrdersView { get; }
+        internal FrameworkElement QuickDocumentFields { get; }
 
         private static string SettingsPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -219,11 +220,14 @@ namespace VanyaTools.Native
                 input.TextChanged += (_, __) => FormChanged();
             foreach (var box in _technologies) box.Checked += (_, __) => FormChanged();
             foreach (var box in _technologies) box.Unchecked += (_, __) => FormChanged();
+            QuickDocumentFields = CreateQuickDocumentFields();
             _documentWatcher = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
             _documentWatcher.Tick += (_, __) => RefreshDocument();
             Loaded += async (_, __) => { _documentWatcher.Start(); RefreshDocument();
                 if (!String.IsNullOrWhiteSpace(_key.Password)) await LoadOrders(); };
-            Unloaded += (_, __) => _documentWatcher.Stop();
+            Unloaded += (_, __) => { if (!QuickDocumentFields.IsLoaded) _documentWatcher.Stop(); };
+            QuickDocumentFields.Loaded += (_, __) => { _documentWatcher.Start(); RefreshDocument(); };
+            QuickDocumentFields.Unloaded += (_, __) => { if (!IsLoaded) _documentWatcher.Stop(); };
             RenderFrames(); UpdateCaption(); UpdateActions();
         }
 
@@ -430,6 +434,11 @@ namespace VanyaTools.Native
             _data = loadedData;
             if (_data.Frames == null) _data.Frames = new List<OrderCardFrame>();
             if (_data.Technologies == null) _data.Technologies = new List<string>();
+            if (TryReadDocumentNamesFromPath(path, out string pathCustomer, out string pathDesign))
+            {
+                if (String.IsNullOrWhiteSpace(_data.Customer)) _data.Customer = pathCustomer;
+                if (String.IsNullOrWhiteSpace(_data.DesignName)) _data.DesignName = pathDesign;
+            }
             _documentPath = path;
             _documentIdentity = (object)doc;
             _failedDocumentIdentity = null;
@@ -453,6 +462,31 @@ namespace VanyaTools.Native
             _editor.IsEnabled = true;
             _saveDocument.IsEnabled = true;
             if (report) _status("Карточка загружена из CDR.", false);
+        }
+
+        private static bool TryReadDocumentNamesFromPath(string path, out string customer, out string design)
+        {
+            customer = "";
+            design = "";
+            if (String.IsNullOrWhiteSpace(path)) return false;
+            string customerFolder = Path.GetDirectoryName(path);
+            if (String.IsNullOrWhiteSpace(customerFolder)) return false;
+            string monthFolder = Path.GetDirectoryName(customerFolder);
+            if (String.IsNullOrWhiteSpace(monthFolder)) return false;
+            string yearFolder = Path.GetDirectoryName(monthFolder);
+            if (String.IsNullOrWhiteSpace(yearFolder)) return false;
+            string yearName = new DirectoryInfo(yearFolder).Name;
+            if (yearName.Length != 4 || !Int32.TryParse(yearName, NumberStyles.None,
+                CultureInfo.InvariantCulture, out int year)) return false;
+            string monthName = new DirectoryInfo(monthFolder).Name;
+            var months = new CultureInfo("ru-RU").DateTimeFormat;
+            bool expectedMonth = Enumerable.Range(1, 12).Any(month => String.Equals(monthName,
+                month.ToString("00", CultureInfo.InvariantCulture) + months.GetMonthName(month) +
+                year.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase));
+            if (!expectedMonth) return false;
+            customer = new DirectoryInfo(customerFolder).Name;
+            design = Path.GetFileNameWithoutExtension(path);
+            return customer.Length > 0 && design.Length > 0;
         }
 
         private void FormChanged()
@@ -1119,6 +1153,44 @@ namespace VanyaTools.Native
             AcceptsReturn = height > 0, TextWrapping = TextWrapping.Wrap,
             VerticalScrollBarVisibility = height > 0 ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled,
             Margin = new Thickness(0, 0, 0, 3) };
+        private FrameworkElement CreateQuickDocumentFields()
+        {
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var labels = new[] { "Заказчик", "Имя макета" };
+            var originals = new[] { _customer, _designName };
+            for (int row = 0; row < labels.Length; row++)
+            {
+                var label = Label(labels[row]);
+                label.VerticalAlignment = VerticalAlignment.Center;
+                label.Margin = new Thickness(0, 1, 8, 3);
+                Grid.SetRow(label, row);
+                grid.Children.Add(label);
+                var input = Input();
+                input.ToolTip = "Поле карточки заказа. Сохраняется в CDR автоматически.";
+                input.SetBinding(TextBox.TextProperty, new Binding("Text")
+                {
+                    Source = originals[row], Mode = BindingMode.TwoWay,
+                    UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged
+                });
+                Grid.SetRow(input, row);
+                Grid.SetColumn(input, 1);
+                grid.Children.Add(input);
+            }
+            var border = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(218, 238, 218)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(150, 192, 153)),
+                BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(8, 5, 8, 4), Margin = new Thickness(5, 4, 5, 5),
+                Child = grid
+            };
+            border.SetBinding(IsEnabledProperty, new Binding("IsEnabled") { Source = _editor });
+            return border;
+        }
         private static Button Button(string text, RoutedEventHandler handler)
         {
             var button = new Button { Content = text, MinHeight = 29, Margin = new Thickness(1, 1, 1, 3) };
