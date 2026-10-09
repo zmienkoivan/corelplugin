@@ -77,6 +77,48 @@ namespace VanyaTools.Native
         private const string TrimButton = "a624e7f3-8a23-4b1e-b2e6-58cf6725b9e4";
         private const string FitFrameButton = "96b63d8e-86b4-433f-a315-126381e35e11";
 
+        // Called only by the explicit Settings button. Never rearrange controls
+        // automatically: the user may have customized their Corel workspace.
+        internal static string AddMissingToStandardToolbar()
+        {
+            dynamic app = CorelApp.Get();
+            dynamic standard = null;
+            foreach (dynamic bar in app.FrameWork.CommandBars)
+            {
+                if (String.Equals((string)bar.Name, "Standard", StringComparison.OrdinalIgnoreCase))
+                {
+                    standard = bar;
+                    break;
+                }
+            }
+            if (standard == null)
+                throw new InvalidOperationException("Стандартная панель Corel не найдена.");
+
+            dynamic controls = standard.Controls;
+            int added = 0;
+            foreach (string id in new[] { DockerButton, TrimButton, FitFrameButton })
+            {
+                bool exists = false;
+                for (int i = 1; i <= (int)controls.Count; i++)
+                {
+                    if (String.Equals(GetOurControlId(controls.Item[i]), id,
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (exists) continue;
+
+                dynamic control = controls.Add(id, (int)controls.Count + 1, false);
+                try { control.Tag = "VanyaTools:" + id; } catch { }
+                added++;
+            }
+            return added == 0
+                ? "Кнопки уже есть на стандартной панели."
+                : "Добавлено кнопок: " + added + ". Их можно переместить в настройках Corel.";
+        }
+
         // v1.0.117 inserted controls through COM as well as UserUI.xslt. On some
         // workspaces COM inserted one over the New Document button. Remove only
         // duplicate Vanya Tools controls, keeping the rightmost toolbar group.
@@ -134,6 +176,7 @@ namespace VanyaTools.Native
             try
             {
                 string id = (string)control.ID;
+                if (id != null) id = id.Trim('{', '}');
                 if (IsOurId(id)) return id;
             }
             catch { }
@@ -144,6 +187,7 @@ namespace VanyaTools.Native
                 if (tag != null && tag.StartsWith(prefix, StringComparison.Ordinal))
                 {
                     string id = tag.Substring(prefix.Length);
+                    id = id.Trim('{', '}');
                     if (IsOurId(id)) return id;
                 }
             }

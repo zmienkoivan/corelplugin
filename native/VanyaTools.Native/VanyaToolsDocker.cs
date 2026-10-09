@@ -101,9 +101,18 @@ namespace VanyaTools.Native
             var approvalCopy = new ApprovalCopyTool((message, isError) => SetStatus(message, isError));
             var settings = new StackPanel { Margin = new Thickness(5) };
             settings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
+            settings.Children.Add(Button("Добавить кнопки на стандартную панель", (_, __) =>
+            {
+                try { SetStatus(CorelToolbarInstaller.AddMissingToStandardToolbar(), false); }
+                catch (Exception error)
+                {
+                    Log.Error("Could not add toolbar buttons.", error);
+                    SetStatus("Не удалось добавить кнопки: " + error.Message, true);
+                }
+            }));
             settings.Children.Add(new TextBlock
             {
-                Text = "Кнопки панели: Инструменты → Параметры → Настройка → Команды → Подключаемые модули. Найдите «Vanya Tools» и перетащите нужные команды на панель.",
+                Text = "Команды Corel: Настройка → Команды → Макросы. Положение кнопок меняется перетаскиванием в режиме настройки.",
                 FontSize = 10, TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(4, 2, 4, 7)
             });
