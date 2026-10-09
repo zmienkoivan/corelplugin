@@ -101,18 +101,18 @@ namespace VanyaTools.Native
             var approvalCopy = new ApprovalCopyTool((message, isError) => SetStatus(message, isError));
             var settings = new StackPanel { Margin = new Thickness(5) };
             settings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
-            settings.Children.Add(Button("Добавить кнопки на стандартную панель", (_, __) =>
+            settings.Children.Add(Button("Убрать кнопки, добавленные версией 1.0.128", (_, __) =>
             {
-                try { SetStatus(CorelToolbarInstaller.AddMissingToStandardToolbar(), false); }
+                try { SetStatus(CorelToolbarInstaller.RemoveV128AddedControls(), false); }
                 catch (Exception error)
                 {
-                    Log.Error("Could not add toolbar buttons.", error);
-                    SetStatus("Не удалось добавить кнопки: " + error.Message, true);
+                    Log.Error("Could not remove v1.0.128 toolbar buttons.", error);
+                    SetStatus("Не удалось убрать кнопки: " + error.Message, true);
                 }
             }));
             settings.Children.Add(new TextBlock
             {
-                Text = "Команды Corel: Настройка → Команды → Макросы. Положение кнопок меняется перетаскиванием в режиме настройки.",
+                Text = "Команды Corel: Настройка → Команды → Vanya Tools. Кнопки можно перетащить на любую панель.",
                 FontSize = 10, TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(4, 2, 4, 7)
             });
@@ -126,7 +126,11 @@ namespace VanyaTools.Native
             Loaded += (_, __) =>
             {
                 _hotkeys.Attach(this);
-                Dispatcher.BeginInvoke(new Action(CorelToolbarInstaller.RemoveLegacyDuplicates),
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    CorelToolbarInstaller.RemoveLegacyDuplicates();
+                    CorelToolbarInstaller.ApplyDockerIcon();
+                }),
                     System.Windows.Threading.DispatcherPriority.Background);
             };
             Unloaded += (_, __) => _hotkeys.Detach();

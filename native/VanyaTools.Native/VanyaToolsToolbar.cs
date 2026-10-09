@@ -77,46 +77,64 @@ namespace VanyaTools.Native
         private const string TrimButton = "a624e7f3-8a23-4b1e-b2e6-58cf6725b9e4";
         private const string FitFrameButton = "96b63d8e-86b4-433f-a315-126381e35e11";
 
-        // Called only by the explicit Settings button. Never rearrange controls
-        // automatically: the user may have customized their Corel workspace.
-        internal static string AddMissingToStandardToolbar()
+        // Version 1.0.128 inserted controls into the Standard bar with this tag.
+        // Remove only those controls on request; leave all other customizations.
+        internal static string RemoveV128AddedControls()
         {
-            dynamic app = CorelApp.Get();
-            dynamic standard = null;
-            foreach (dynamic bar in app.FrameWork.CommandBars)
-            {
-                if (String.Equals((string)bar.Name, "Standard", StringComparison.OrdinalIgnoreCase))
-                {
-                    standard = bar;
-                    break;
-                }
-            }
+            dynamic standard = GetStandardBar();
             if (standard == null)
                 throw new InvalidOperationException("Стандартная панель Corel не найдена.");
 
             dynamic controls = standard.Controls;
-            int added = 0;
-            foreach (string id in new[] { DockerButton, TrimButton, FitFrameButton })
+            int removed = 0;
+            for (int i = (int)controls.Count; i >= 1; i--)
             {
-                bool exists = false;
+                dynamic control = controls.Item[i];
+                try
+                {
+                    string tag = (string)control.Tag;
+                    if (tag == null || !tag.StartsWith("VanyaTools:", StringComparison.Ordinal))
+                        continue;
+                    string id = tag.Substring("VanyaTools:".Length).Trim('{', '}');
+                    if (!IsOurId(id)) continue;
+                    controls.Remove(i);
+                    removed++;
+                }
+                catch (Exception error) { Log.Error("Could not remove tagged toolbar control.", error); }
+            }
+            return removed == 0
+                ? "Кнопок версии 1.0.128 на стандартной панели нет."
+                : "Убрано кнопок версии 1.0.128: " + removed + ".";
+        }
+
+        internal static void ApplyDockerIcon()
+        {
+            string iconPath = Path.Combine(Path.GetDirectoryName(typeof(VanyaToolsDocker).Assembly.Location),
+                "VanyaToolsIcon.bmp");
+            if (!File.Exists(iconPath)) return;
+            try
+            {
+                dynamic standard = GetStandardBar();
+                if (standard == null) return;
+                dynamic controls = standard.Controls;
                 for (int i = 1; i <= (int)controls.Count; i++)
                 {
-                    if (String.Equals(GetOurControlId(controls.Item[i]), id,
-                        StringComparison.OrdinalIgnoreCase))
-                    {
-                        exists = true;
-                        break;
-                    }
+                    dynamic control = controls.Item[i];
+                    if (!String.Equals(GetOurControlId(control), DockerButton,
+                        StringComparison.OrdinalIgnoreCase)) continue;
+                    try { control.SetCustomIcon(iconPath); }
+                    catch (Exception error) { Log.Error("Could not set Docker button icon.", error); }
                 }
-                if (exists) continue;
-
-                dynamic control = controls.Add(id, (int)controls.Count + 1, false);
-                try { control.Tag = "VanyaTools:" + id; } catch { }
-                added++;
             }
-            return added == 0
-                ? "Кнопки уже есть на стандартной панели."
-                : "Добавлено кнопок: " + added + ". Их можно переместить в настройках Corel.";
+            catch (Exception error) { Log.Error("Could not apply Docker icon.", error); }
+        }
+
+        private static dynamic GetStandardBar()
+        {
+            foreach (dynamic bar in CorelApp.Get().FrameWork.CommandBars)
+                if (String.Equals((string)bar.Name, "Standard", StringComparison.OrdinalIgnoreCase))
+                    return bar;
+            return null;
         }
 
         // v1.0.117 inserted controls through COM as well as UserUI.xslt. On some
