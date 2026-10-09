@@ -101,6 +101,12 @@ namespace VanyaTools.Native
             var approvalCopy = new ApprovalCopyTool((message, isError) => SetStatus(message, isError));
             var settings = new StackPanel { Margin = new Thickness(5) };
             settings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
+            settings.Children.Add(new TextBlock
+            {
+                Text = "Кнопки панели: Инструменты → Параметры → Настройка → Команды → Подключаемые модули. Найдите «Vanya Tools» и перетащите нужные команды на панель.",
+                FontSize = 10, TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(4, 2, 4, 7)
+            });
             _hotkeys = new CorelHotkeyManager(() => RunTrim(true), RunFitFrame,
                 approvalCopy.CopySelection,
                 (message, isError) => SetStatus(message, isError));

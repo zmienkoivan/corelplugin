@@ -20,8 +20,9 @@
                 noBmpOnMenu="true"
                 type="checkButton"
                 check="*Docker('e75f8206-5448-4578-ae13-ee8d9a4f15c9')"
-                dynamicCategory="2cc24a3e-fe24-4708-9a74-9c75406eebcd"
-                userCaption="Vanya Tools Native"
+                dynamicCategory="ab489730-8791-45d2-a825-b78bbe0d6a5d"
+                userCaption="Vanya Tools: открыть панель"
+                userToolTip="Открыть панель Vanya Tools"
                 enable="true"/>
 
       <itemData guid="459dee79-83a1-40c9-adba-7d61a6cb8f00"
@@ -32,16 +33,18 @@
       <itemData guid="a624e7f3-8a23-4b1e-b2e6-58cf6725b9e4"
                 type="wpfhost"
                 hostedType="Addons\VanyaToolsNative\VanyaTools.Native.dll,VanyaTools.Native.VanyaToolsTrimButton"
-                dynamicCategory="2cc24a3e-fe24-4708-9a74-9c75406eebcd"
+                dynamicCategory="ab489730-8791-45d2-a825-b78bbe0d6a5d"
                 userCaption="Vanya Tools: обрезать растр"
+                userToolTip="Обрезать выбранный растр"
                 width="31"
                 enable="true" />
 
       <itemData guid="96b63d8e-86b4-433f-a315-126381e35e11"
                 type="wpfhost"
                 hostedType="Addons\VanyaToolsNative\VanyaTools.Native.dll,VanyaTools.Native.VanyaToolsFitFrameButton"
-                dynamicCategory="2cc24a3e-fe24-4708-9a74-9c75406eebcd"
+                dynamicCategory="ab489730-8791-45d2-a825-b78bbe0d6a5d"
                 userCaption="Vanya Tools: подогнать рамку"
+                userToolTip="Подогнать размерную рамку под принт"
                 width="31"
                 enable="true" />
     </xsl:copy>
