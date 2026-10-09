@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<config>
+  <resources>
+    <resource name="VanyaTools" path="VanyaTools.Native.dll">
+      <resourceMap>
+        <resEntry id="08a71b5b-25a1-4f68-a3f4-12d22b04e675" string="10223" icon="108"/>
+      </resourceMap>
+    </resource>
+  </resources>
+</config>

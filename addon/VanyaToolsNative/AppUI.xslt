@@ -17,16 +17,17 @@
       <xsl:apply-templates select="node()|@*"/>
 
       <itemData guid="60cc0805-a158-44eb-a286-49061c3d963d"
-                noBmpOnMenu="true"
                 type="checkButton"
                 check="*Docker('e75f8206-5448-4578-ae13-ee8d9a4f15c9')"
                 userCaption="Vanya Tools"
                 userToolTip="Открыть панель Vanya Tools"
+                icon="guid://08a71b5b-25a1-4f68-a3f4-12d22b04e675"
                 enable="true"/>
 
       <itemData guid="459dee79-83a1-40c9-adba-7d61a6cb8f00"
                 type="wpfhost"
                 hostedType="Addons\VanyaToolsNative\VanyaTools.Native.dll,VanyaTools.Native.VanyaToolsDocker"
+                icon="guid://08a71b5b-25a1-4f68-a3f4-12d22b04e675"
                 enable="true" />
 
       <itemData guid="a624e7f3-8a23-4b1e-b2e6-58cf6725b9e4"
@@ -54,7 +55,8 @@
       <dockerData guid="e75f8206-5448-4578-ae13-ee8d9a4f15c9"
                   userCaption="Vanya Tools Native"
                   wantReturn="true"
-                  focusStyle="noThrow">
+                  focusStyle="noThrow"
+                  icon="guid://08a71b5b-25a1-4f68-a3f4-12d22b04e675">
         <container>
           <item dock="fill" margin="0,0,0,0" guidRef="459dee79-83a1-40c9-adba-7d61a6cb8f00"/>
         </container>

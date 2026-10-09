@@ -77,86 +77,82 @@ namespace VanyaTools.Native
         private const string TrimButton = "a624e7f3-8a23-4b1e-b2e6-58cf6725b9e4";
         private const string FitFrameButton = "96b63d8e-86b4-433f-a315-126381e35e11";
 
-        // Version 1.0.128 inserted controls into the Standard bar with this tag.
-        // Remove only those controls on request; leave all other customizations.
-        internal static string RemoveV128AddedControls()
+        private static string VisibilityPath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "VanyaTools", "toolbar-buttons-hidden.txt");
+
+        internal static string ToggleButtons()
         {
             dynamic standard = GetStandardBar();
             if (standard == null)
                 throw new InvalidOperationException("Стандартная панель Corel не найдена.");
 
             dynamic controls = standard.Controls;
-            int removed = 0;
-            for (int i = (int)controls.Count; i >= 1; i--)
+            bool anyVisible = false;
+            var present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 1; i <= (int)controls.Count; i++)
             {
                 dynamic control = controls.Item[i];
-                try
-                {
-                    string tag = (string)control.Tag;
-                    if (tag == null || !tag.StartsWith("VanyaTools:", StringComparison.Ordinal))
-                        continue;
-                    string id = tag.Substring("VanyaTools:".Length).Trim('{', '}');
-                    if (!IsOurId(id)) continue;
-                    controls.Remove(i);
-                    removed++;
-                }
-                catch (Exception error) { Log.Error("Could not remove tagged toolbar control.", error); }
+                string id = GetOurControlId(control);
+                if (id == null) continue;
+                present.Add(id);
+                if ((bool)control.Visible) anyVisible = true;
             }
-            return removed == 0
-                ? "Кнопок версии 1.0.128 на стандартной панели нет."
-                : "Убрано кнопок версии 1.0.128: " + removed + ".";
+
+            bool show = present.Count < 3 || !anyVisible;
+            if (show) AddMissingButtons(controls);
+
+            int changed = 0;
+            for (int i = 1; i <= (int)controls.Count; i++)
+            {
+                dynamic control = controls.Item[i];
+                if (GetOurControlId(control) == null) continue;
+                control.Visible = show;
+                if ((bool)control.Visible != show)
+                    throw new InvalidOperationException("Corel не изменил видимость кнопки.");
+                changed++;
+            }
+            if (changed == 0)
+                throw new InvalidOperationException("Кнопки Vanya Tools на панели Corel не найдены.");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(VisibilityPath));
+            if (show) File.Delete(VisibilityPath);
+            else File.WriteAllText(VisibilityPath, "hidden");
+            Log.Info((show ? "Shown" : "Hidden") + " Vanya Tools toolbar buttons: " + changed);
+            return show ? "Кнопки Vanya Tools показаны." : "Кнопки Vanya Tools скрыты.";
         }
 
-        internal static string RemoveOldHostedButtons()
+        internal static void ApplySavedVisibility()
         {
-            dynamic standard = GetStandardBar();
-            if (standard == null)
-                throw new InvalidOperationException("Стандартная панель Corel не найдена.");
-
-            dynamic controls = standard.Controls;
-            int removed = 0;
-            for (int i = (int)controls.Count; i >= 1; i--)
-            {
-                string id = GetOurControlId(controls.Item[i]);
-                if (!String.Equals(id, TrimButton, StringComparison.OrdinalIgnoreCase) &&
-                    !String.Equals(id, FitFrameButton, StringComparison.OrdinalIgnoreCase))
-                    continue;
-                controls.Remove(i);
-                removed++;
-            }
-            return "Убрано старых кнопок: " + removed + ". Новые команды — в категории «Плагины».";
-        }
-
-        internal static void ApplyDockerIcon()
-        {
-            string iconPath = Path.Combine(Path.GetDirectoryName(typeof(VanyaToolsDocker).Assembly.Location),
-                "VanyaToolsIcon.ico");
-            if (!File.Exists(iconPath))
-            {
-                Log.Info("Docker icon is missing: " + iconPath);
-                return;
-            }
+            if (!File.Exists(VisibilityPath)) return;
             try
             {
-                int applied = 0;
-                foreach (dynamic bar in CorelApp.Get().FrameWork.CommandBars)
+                dynamic standard = GetStandardBar();
+                if (standard == null) return;
+                dynamic controls = standard.Controls;
+                for (int i = 1; i <= (int)controls.Count; i++)
                 {
-                    try
-                    {
-                        dynamic controls = bar.Controls;
-                        for (int i = 1; i <= (int)controls.Count; i++)
-                        {
-                            dynamic control = controls.Item[i];
-                            if (!IsDockerControl(control)) continue;
-                            try { control.SetCustomIcon(iconPath); applied++; }
-                            catch (Exception error) { Log.Error("Could not set Docker button icon.", error); }
-                        }
-                    }
-                    catch (Exception error) { Log.Error("Could not inspect command bar for Docker icon.", error); }
+                    dynamic control = controls.Item[i];
+                    if (GetOurControlId(control) != null) control.Visible = false;
                 }
-                Log.Info("Docker icon applied to " + applied + " controls.");
             }
-            catch (Exception error) { Log.Error("Could not apply Docker icon.", error); }
+            catch (Exception error) { Log.Error("Could not restore toolbar button visibility.", error); }
+        }
+
+        private static void AddMissingButtons(dynamic controls)
+        {
+            foreach (string id in new[] { DockerButton, TrimButton, FitFrameButton })
+            {
+                bool found = false;
+                for (int i = 1; i <= (int)controls.Count; i++)
+                    if (String.Equals(GetOurControlId(controls.Item[i]), id,
+                        StringComparison.OrdinalIgnoreCase)) { found = true; break; }
+                if (found) continue;
+
+                dynamic added = controls.Add(id, 0, false);
+                try { added.Tag = "VanyaTools:" + id; } catch { }
+                Log.Info("Added missing Vanya Tools toolbar button: " + id);
+            }
         }
 
         private static dynamic GetStandardBar()
@@ -223,8 +219,7 @@ namespace VanyaTools.Native
         {
             try
             {
-                string id = (string)control.ID;
-                if (id != null) id = id.Trim('{', '}');
+                string id = NormalizeId((string)control.ID);
                 if (IsOurId(id)) return id;
             }
             catch { }
@@ -234,25 +229,27 @@ namespace VanyaTools.Native
                 const string prefix = "VanyaTools:";
                 if (tag != null && tag.StartsWith(prefix, StringComparison.Ordinal))
                 {
-                    string id = tag.Substring(prefix.Length);
-                    id = id.Trim('{', '}');
+                    string id = NormalizeId(tag.Substring(prefix.Length));
                     if (IsOurId(id)) return id;
                 }
+            }
+            catch { }
+            try
+            {
+                string caption = (string)control.Caption;
+                if (String.Equals(caption, "Vanya Tools", StringComparison.OrdinalIgnoreCase)) return DockerButton;
+                if (String.Equals(caption, "Vanya Tools: обрезать растр", StringComparison.OrdinalIgnoreCase)) return TrimButton;
+                if (String.Equals(caption, "Vanya Tools: подогнать рамку", StringComparison.OrdinalIgnoreCase)) return FitFrameButton;
             }
             catch { }
             return null;
         }
 
-        private static bool IsDockerControl(dynamic control)
+        private static string NormalizeId(string id)
         {
-            if (String.Equals(GetOurControlId(control), DockerButton,
-                StringComparison.OrdinalIgnoreCase)) return true;
-            try
-            {
-                return String.Equals((string)control.Caption, "Vanya Tools",
-                    StringComparison.OrdinalIgnoreCase);
-            }
-            catch { return false; }
+            if (String.IsNullOrWhiteSpace(id)) return null;
+            if (id.StartsWith("guid://", StringComparison.OrdinalIgnoreCase)) id = id.Substring(7);
+            return id.Trim('{', '}', ' ');
         }
 
         private static bool IsOurId(string id)

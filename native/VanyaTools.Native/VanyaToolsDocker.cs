@@ -101,30 +101,18 @@ namespace VanyaTools.Native
             var approvalCopy = new ApprovalCopyTool((message, isError) => SetStatus(message, isError));
             var settings = new StackPanel { Margin = new Thickness(5) };
             settings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
-            settings.Children.Add(Button("Убрать кнопки, добавленные версией 1.0.128", (_, __) =>
+            settings.Children.Add(Button("Показать / скрыть кнопки докера", (_, __) =>
             {
-                try { SetStatus(CorelToolbarInstaller.RemoveV128AddedControls(), false); }
+                try
+                {
+                    SetStatus(CorelToolbarInstaller.ToggleButtons(), false);
+                }
                 catch (Exception error)
                 {
-                    Log.Error("Could not remove v1.0.128 toolbar buttons.", error);
-                    SetStatus("Не удалось убрать кнопки: " + error.Message, true);
+                    Log.Error("Could not toggle Vanya Tools toolbar buttons.", error);
+                    SetStatus("Не удалось переключить кнопки: " + error.Message, true);
                 }
             }));
-            settings.Children.Add(Button("Убрать старые кнопки обрезки и рамки", (_, __) =>
-            {
-                try { SetStatus(CorelToolbarInstaller.RemoveOldHostedButtons(), false); }
-                catch (Exception error)
-                {
-                    Log.Error("Could not remove old hosted toolbar buttons.", error);
-                    SetStatus("Не удалось убрать кнопки: " + error.Message, true);
-                }
-            }));
-            settings.Children.Add(new TextBlock
-            {
-                Text = "Команды Corel: Настройка → Команды → Плагины. Перетащите нужные кнопки на панель.",
-                FontSize = 10, TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(4, 2, 4, 7)
-            });
             _hotkeys = new CorelHotkeyManager(() => RunTrim(true), RunFitFrame,
                 approvalCopy.CopySelection,
                 (message, isError) => SetStatus(message, isError));
@@ -138,7 +126,7 @@ namespace VanyaTools.Native
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
                     CorelToolbarInstaller.RemoveLegacyDuplicates();
-                    CorelToolbarInstaller.ApplyDockerIcon();
+                    CorelToolbarInstaller.ApplySavedVisibility();
                 }),
                     System.Windows.Threading.DispatcherPriority.Background);
             };

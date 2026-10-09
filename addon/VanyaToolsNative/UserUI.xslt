@@ -30,6 +30,12 @@
       <xsl:if test="not(./item[@guidRef='60cc0805-a158-44eb-a286-49061c3d963d'])">
         <item guidRef="60cc0805-a158-44eb-a286-49061c3d963d" itemFace="imageOnly"/>
       </xsl:if>
+      <xsl:if test="not(./item[@guidRef='a624e7f3-8a23-4b1e-b2e6-58cf6725b9e4'])">
+        <item guidRef="a624e7f3-8a23-4b1e-b2e6-58cf6725b9e4"/>
+      </xsl:if>
+      <xsl:if test="not(./item[@guidRef='96b63d8e-86b4-433f-a315-126381e35e11'])">
+        <item guidRef="96b63d8e-86b4-433f-a315-126381e35e11"/>
+      </xsl:if>
     </xsl:copy>
   </xsl:template>
 

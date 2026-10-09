@@ -13,7 +13,6 @@ namespace VanyaTools.Native
             {
                 _hostApplication = app;
                 Log.Info("Corel host application object received.");
-                CorelPluginCommands.EnsureRegistered(app);
             }
         }
 

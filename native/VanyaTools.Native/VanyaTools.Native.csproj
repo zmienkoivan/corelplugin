@@ -5,10 +5,11 @@
     <OutputType>Library</OutputType>
     <RootNamespace>VanyaTools.Native</RootNamespace>
     <AssemblyName>VanyaTools.Native</AssemblyName>
-    <Version>1.0.130</Version>
+    <Version>1.0.131</Version>
     <PlatformTarget>x64</PlatformTarget>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
+    <Win32Resource>Assets\VanyaToolsIcon.res</Win32Resource>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="Microsoft.CSharp" />
