@@ -16,7 +16,6 @@ using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using WinForms = System.Windows.Forms;
 
 namespace VanyaTools.Native
 {
@@ -203,9 +202,13 @@ namespace VanyaTools.Native
                     StrokeLineJoin = PenLineJoin.Round, Fill = Brushes.Transparent } };
             DockPanel.SetDock(browseFolder, Dock.Right);
             folderRow.Children.Add(browseFolder);
+            var saveFolder = Button("✓", (_, __) => Safe(SaveFileSettings));
+            saveFolder.Width = 36;
+            saveFolder.ToolTip = "Сохранить указанный путь, включая сетевой UNC-путь";
+            DockPanel.SetDock(saveFolder, Dock.Right);
+            folderRow.Children.Add(saveFolder);
             _yearFolder = Input();
-            _yearFolder.IsReadOnly = true;
-            _yearFolder.ToolTip = "Папка года для новых CDR";
+            _yearFolder.ToolTip = "Папка года, например \\\\EVP_NAS\\EVP_files\\Макеты\\2026";
             _yearFolder.Margin = new Thickness(0, 1, 4, 3);
             folderRow.Children.Add(_yearFolder);
             settings.Children.Add(folderRow);
@@ -369,8 +372,10 @@ namespace VanyaTools.Native
             string yearPath = Path.GetFullPath(year);
             if (!Directory.Exists(yearPath))
                 throw new InvalidOperationException("Папка года не найдена: " + yearPath);
-            string month = new CultureInfo("ru-RU").DateTimeFormat.GetMonthName(DateTime.Now.Month)
-                + DateTime.Now.Month.ToString("00", CultureInfo.InvariantCulture);
+            DateTime today = DateTime.Now;
+            string month = today.Month.ToString("00", CultureInfo.InvariantCulture)
+                + new CultureInfo("ru-RU").DateTimeFormat.GetMonthName(today.Month)
+                + today.Year.ToString(CultureInfo.InvariantCulture);
             string folder = Path.Combine(yearPath, month, SafePathPart(customer));
             string baseName = SafePathPart(design);
             string target = Path.Combine(folder, baseName + ".cdr");
@@ -1058,36 +1063,24 @@ namespace VanyaTools.Native
 
         private void ChooseYearFolder()
         {
-            using (var dialog = new WinForms.FolderBrowserDialog
-            {
-                Description = "Выберите папку года для макетов",
-                ShowNewFolderButton = true,
-                SelectedPath = Directory.Exists(_yearFolder.Text) ? _yearFolder.Text : ""
-            })
-            {
-                var source = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
-                WinForms.DialogResult result = source == null
-                    ? dialog.ShowDialog()
-                    : dialog.ShowDialog(new FolderDialogOwner(source.Handle));
-                if (result != WinForms.DialogResult.OK) return;
-                string previous = _yearFolder.Text;
-                _yearFolder.Text = dialog.SelectedPath;
-                try { SaveFileSettings(); }
-                catch { _yearFolder.Text = previous; throw; }
-            }
-        }
-
-        private sealed class FolderDialogOwner : WinForms.IWin32Window
-        {
-            internal FolderDialogOwner(IntPtr handle) { Handle = handle; }
-            public IntPtr Handle { get; }
+            var source = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
+            string selected = WindowsFolderPicker.Pick(source == null ? IntPtr.Zero : source.Handle,
+                _yearFolder.Text.Trim());
+            if (String.IsNullOrWhiteSpace(selected)) return;
+            string previous = _yearFolder.Text;
+            _yearFolder.Text = selected;
+            try { SaveFileSettings(); }
+            catch { _yearFolder.Text = previous; throw; }
         }
 
         private void SaveFileSettings()
         {
             string path = _yearFolder.Text.Trim();
-            if (!Path.IsPathRooted(path) || !Directory.Exists(path))
-                throw new InvalidOperationException("Укажите существующую папку года полным путём.");
+            if (!Path.IsPathRooted(path))
+                throw new InvalidOperationException("Укажите полный путь к папке года.");
+            if (!Directory.Exists(path))
+                throw new InvalidOperationException("Папка недоступна: " + path +
+                    ". Проверьте сетевое подключение и права доступа.");
             path = Path.GetFullPath(path);
             string json = new JavaScriptSerializer().Serialize(new Dictionary<string, string>
                 { ["yearFolder"] = path });
