@@ -19,8 +19,8 @@ namespace VanyaTools.Native
     {
         private readonly Func<string> _capture;
         private readonly Func<string> _token;
-        private readonly Func<string, string> _import;
-        private readonly Func<string, string> _importDtf;
+        private readonly Func<string, string, string> _import;
+        private readonly Func<string, string, string> _importDtf;
         private readonly Action<string, bool> _status;
         private readonly bool _styleOnly;
         private readonly ComboBox _model;
@@ -66,8 +66,8 @@ namespace VanyaTools.Native
         }
 
         public SimpleAiTab(Func<string> capture, Func<string> token,
-            Func<string, string> import, Action<string, bool> status, bool styleOnly,
-            Func<string, string> importDtf = null)
+            Func<string, string, string> import, Action<string, bool> status, bool styleOnly,
+            Func<string, string, string> importDtf = null)
         {
             _capture = capture; _token = token; _import = import;
             _importDtf = importDtf ?? import; _status = status;
@@ -896,7 +896,8 @@ namespace VanyaTools.Native
             bool background = _lastModel == "bria/remove-background" &&
                 !String.IsNullOrEmpty(_lastSource) && File.Exists(_lastSource);
             string png = Path.Combine(Path.GetTempPath(),
-                (background ? "Vanya-Background-Ready-" : "Vanya-Simple-Ready-") +
+                (background ? "Vanya-Background-Ready-" :
+                    _lastModel == TiledUpscaler ? "Vanya-Upscale-Ready-" : "Vanya-Style-Ready-") +
                 Guid.NewGuid().ToString("N") + ".png");
             if (background)
             {
@@ -935,7 +936,8 @@ namespace VanyaTools.Native
                     name.StartsWith("Vanya-Background-Ready-", StringComparison.OrdinalIgnoreCase);
                 Log.Info("Simple AI import starting: " + name +
                     (alreadyCropped ? " (cropped PNG)" : ""));
-                string warning = (alreadyCropped ? _importDtf : _import)(_readyOutput);
+                string warning = (alreadyCropped ? _importDtf : _import)(_readyOutput,
+                    OperationName(name));
                 Log.Info("Simple AI import finished: " + name);
                 _importWarning = warning;
                 _readyOutput = null; _lastInput = null; _lastSource = null;
@@ -946,6 +948,25 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Результат готов, но вставка не удалась. " +
                     "Нажмите «Повторить вставку» без новой оплаты. " + ex.GetBaseException().Message, ex);
             }
+        }
+
+        private string OperationName(string filename)
+        {
+            if (filename.StartsWith("Vanya-Background-Ready-", StringComparison.OrdinalIgnoreCase))
+                return "Удаление фона · AI";
+            if (filename.StartsWith("Vanya-Background-", StringComparison.OrdinalIgnoreCase))
+                return "Удаление фона по цвету";
+            if (filename.StartsWith("Vanya-Alpha-", StringComparison.OrdinalIgnoreCase))
+                return "Удаление полупрозрачности";
+            if (filename.StartsWith("Vanya-Stairs-", StringComparison.OrdinalIgnoreCase))
+                return "Сглаживание лесенки";
+            if (filename.StartsWith("Vanya-Edge-", StringComparison.OrdinalIgnoreCase))
+                return "Обводка края";
+            if (filename.StartsWith("Vanya-Upscale-Ready-", StringComparison.OrdinalIgnoreCase))
+                return "Апскейл ×2";
+            if (filename.StartsWith("Vanya-Style-Ready-", StringComparison.OrdinalIgnoreCase))
+                return _selectedStyle == null ? "Стилизация AI" : "Стилизация · " + _selectedStyle.Name;
+            return "Обработка растра";
         }
 
         private async Task Retry()

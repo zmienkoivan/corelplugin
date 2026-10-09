@@ -22,7 +22,7 @@ namespace VanyaTools.Native
     {
         private const string AnalysisModel = "anthropic/claude-4.5-sonnet";
         private const string ImageModel = "black-forest-labs/flux-2-pro";
-        private readonly Func<string, string> _import;
+        private readonly Func<string, string, string> _import;
         private readonly Action<string, bool> _status;
         private readonly Func<string> _captureSelection, _token;
         private readonly ComboBox _part;
@@ -53,7 +53,7 @@ namespace VanyaTools.Native
             public string TilePath(int index) { return Path.Combine(Directory, "upscale-" + index + ".png"); }
         }
 
-        public SublimationTab(Func<string, string> import, Action<string, bool> status,
+        public SublimationTab(Func<string, string, string> import, Action<string, bool> status,
             Func<string> captureSelection, Func<string> token)
         {
             _import = import; _status = status; _captureSelection = captureSelection; _token = token;
@@ -240,7 +240,7 @@ namespace VanyaTools.Native
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), _job.FinalPath);
                 SetStage("Вставляю результат в CorelDRAW");
-                string warning = _import(_job.FinalPath);
+                string warning = _import(_job.FinalPath, "Развёртка формы · " + _job.Part);
                 try { File.Delete(PendingPath()); } catch { }
                 try { File.Delete(_job.MetadataPath); } catch { }
                 _job = null;

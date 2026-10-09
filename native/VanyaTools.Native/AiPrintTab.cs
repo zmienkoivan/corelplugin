@@ -21,7 +21,7 @@ namespace VanyaTools.Native
     {
         internal FrameworkElement SettingsView { get; private set; }
         internal string GetToken() { return CurrentToken(); }
-        private readonly Func<string, string> _import;
+        private readonly Func<string, string, string> _import;
         private readonly Action<string, bool> _status;
         private readonly Func<string> _captureSelection;
         private readonly ComboBox _operation;
@@ -58,7 +58,7 @@ namespace VanyaTools.Native
             public override string ToString() { return Label; }
         }
 
-        public AiPrintTab(Func<string, string> import, Action<string, bool> status, Func<string> captureSelection)
+        public AiPrintTab(Func<string, string, string> import, Action<string, bool> status, Func<string> captureSelection)
         {
             _import = import; _status = status; _captureSelection = captureSelection;
             var sections = new StackPanel { Margin = new Thickness(5) };
@@ -501,7 +501,7 @@ namespace VanyaTools.Native
 
         private void InsertReadyResult()
         {
-            try { _importWarning = _import(_readyOutput); }
+            try { _importWarning = _import(_readyOutput, Convert.ToString(_operation.SelectedItem) ?? "Восстановление принта"); }
             catch (Exception ex)
             {
                 throw new InvalidOperationException("Файл готов, но вставка не удалась. Нажмите «Повторить вставку» — без новой оплаты. " + ex.GetBaseException().Message, ex);

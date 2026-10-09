@@ -524,35 +524,19 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Выделите один макет или группу объектов.");
             if (_data.Frames.Count >= 10)
                 throw new InvalidOperationException("В карточке может быть не более 10 кадров.");
-            bool grouped = Convert.ToInt32(selection.Count) > 1;
             var frame = new OrderCardFrame { Shapes = new List<OrderCardShape>() };
-            if (grouped)
+            int pageIndex = -1;
+            foreach (dynamic shape in selection.Shapes)
             {
-                int pageIndex = -1;
-                foreach (dynamic shape in selection.Shapes)
-                {
-                    int currentPage = Convert.ToInt32(shape.Page.Index);
-                    if (pageIndex >= 0 && currentPage != pageIndex)
-                        throw new InvalidOperationException("Для одного кадра выделите объекты на одной странице.");
-                    pageIndex = currentPage;
-                }
-                doc.BeginCommandGroup("Vanya Tools - order frame group");
-                try
-                {
-                    dynamic group = selection.Group();
-                    if (group == null) throw new InvalidOperationException("Не удалось сгруппировать объекты кадра.");
-                    frame.Shapes.Add(new OrderCardShape {
-                        Page = Convert.ToInt32(group.Page.Index), Id = Convert.ToInt32(group.StaticID) });
-                }
-                finally { doc.EndCommandGroup(); }
+                int currentPage = Convert.ToInt32(shape.Page.Index);
+                if (pageIndex >= 0 && currentPage != pageIndex)
+                    throw new InvalidOperationException("Для одного кадра выделите объекты на одной странице.");
+                pageIndex = currentPage;
+                frame.Shapes.Add(new OrderCardShape {
+                    Page = currentPage, Id = Convert.ToInt32(shape.StaticID) });
             }
-            else
-                foreach (dynamic shape in selection.Shapes)
-                    frame.Shapes.Add(new OrderCardShape {
-                        Page = Convert.ToInt32(shape.Page.Index), Id = Convert.ToInt32(shape.StaticID) });
             ReadForm(); _data.Frames.Add(frame); SaveData(); RenderFrames(); UpdateCaption();
-            _status("Кадр добавлен" + (grouped ? "; объекты сгруппированы" : "") +
-                ". Сохраните CDR.", false);
+            _status("Кадр добавлен. Исходные объекты не сгруппированы. Сохраните CDR.", false);
         }
 
         private void RenderFrames()

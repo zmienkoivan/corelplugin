@@ -260,10 +260,10 @@ namespace VanyaTools.Native
             Log.Info("VanyaToolsDocker constructor finished.");
         }
 
-        private string ImportAiResult(string path) { return ImportAiResult(path, true); }
-        private string ImportDtfResult(string path) { return ImportAiResult(path, false); }
+        private string ImportAiResult(string path, string operation) { return ImportAiResult(path, operation, true); }
+        private string ImportDtfResult(string path, string operation) { return ImportAiResult(path, operation, false); }
 
-        private string ImportAiResult(string path, bool trimAfterImport)
+        private string ImportAiResult(string path, string operation, bool trimAfterImport)
         {
             try
             {
@@ -272,6 +272,28 @@ namespace VanyaTools.Native
 
                 dynamic app = CorelApp.Get();
                 dynamic doc = app.ActiveDocument;
+                double sourceLeftMm = 0, sourceTopMm = 0;
+                bool hasSourcePosition = false;
+                try
+                {
+                    dynamic source = app.ActiveSelectionRange;
+                    if (source != null && Convert.ToInt32(source.Count) > 0)
+                    {
+                        int oldUnit = Convert.ToInt32(doc.Unit);
+                        try
+                        {
+                            doc.Unit = CorelConstants.CdrMillimeter;
+                            sourceLeftMm = Convert.ToDouble(source.LeftX);
+                            sourceTopMm = Convert.ToDouble(source.TopY);
+                            hasSourcePosition = true;
+                        }
+                        finally { doc.Unit = oldUnit; }
+                    }
+                }
+                catch (Exception positionError)
+                {
+                    Log.Error("Could not read source position for raster import.", positionError);
+                }
                 // Use Automation marshaling explicitly, including a real options object.
                 // The DLR call with null options fails with DISP_E_TYPEMISMATCH on Corel 27.
                 object layer = doc.ActiveLayer;
@@ -282,6 +304,8 @@ namespace VanyaTools.Native
                     new object[] { new BStrWrapper(Path.GetFullPath(path)), 0, options });
                 importFilter.Finish();
                 Log.Info("AI result ImportEx finished: " + Path.GetFileName(path));
+                dynamic importedShape = null;
+                try { importedShape = app.ActiveShape; } catch { }
                 // DTF outputs are already cropped on the worker thread. Other
                 // results still use Corel's alpha-aware crop after import.
                 string trimWarning = null;
@@ -295,6 +319,31 @@ namespace VanyaTools.Native
                 {
                     Log.Error("AI image inserted, but transparent-edge trimming failed.", trimError);
                     trimWarning = "Изображение вставлено. Не удалось обрезать прозрачные поля: " + trimError.Message;
+                }
+                try
+                {
+                    if (importedShape != null && Convert.ToInt32(importedShape.Type) == CorelConstants.CdrBitmapShape)
+                    {
+                        importedShape.Name = "Vanya Tools · " + (String.IsNullOrWhiteSpace(operation) ? "Обработка растра" : operation.Trim()) +
+                            " · " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+                        if (hasSourcePosition)
+                        {
+                            int oldUnit = Convert.ToInt32(doc.Unit);
+                            try
+                            {
+                                doc.Unit = CorelConstants.CdrMillimeter;
+                                importedShape.Move(sourceLeftMm + 10.0 - Convert.ToDouble(importedShape.LeftX),
+                                    sourceTopMm + 10.0 - Convert.ToDouble(importedShape.TopY));
+                            }
+                            finally { doc.Unit = oldUnit; }
+                        }
+                    }
+                }
+                catch (Exception placementError)
+                {
+                    Log.Error("Raster inserted, but naming or offset failed.", placementError);
+                    trimWarning = (trimWarning ?? "Изображение вставлено.") +
+                        " Не удалось задать имя или сдвиг: " + placementError.Message;
                 }
                 // A refresh failure must not turn a completed import into a retry/duplicate.
                 if (trimAfterImport) try { app.ActiveWindow.Refresh(); } catch { }
