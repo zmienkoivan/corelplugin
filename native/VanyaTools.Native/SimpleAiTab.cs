@@ -25,7 +25,8 @@ namespace VanyaTools.Native
         private readonly bool _styleOnly;
         private readonly ComboBox _model;
         private readonly TextBox _prompt;
-        private readonly TextBox _whiteThreshold, _whiteCutPixels;
+        private readonly TextBox _backgroundTolerance, _whiteCutPixels, _backgroundHex;
+        private readonly Border _backgroundSwatch;
         private readonly TextBox _alphaThreshold;
         private readonly TextBox _edgeRadius, _edgeExpansion, _underlayHex;
         private readonly Border _underlaySwatch;
@@ -33,7 +34,7 @@ namespace VanyaTools.Native
         private readonly Image _sourcePreview, _resultPreview;
         private readonly TextBlock _progress;
         private readonly ProgressBar _progressBar;
-        private readonly Button _removeButton, _removeWhiteButton, _upscaleButton,
+        private readonly Button _removeButton, _removeWhiteButton, _backgroundPipetteButton, _upscaleButton,
             _alphaButton, _smoothButton, _stairButton, _pipetteButton,
             _editButton, _cancelButton, _retryButton;
         private readonly List<RadioButton> _styleButtons = new List<RadioButton>();
@@ -79,13 +80,23 @@ namespace VanyaTools.Native
             _removeButton = Button("Удалить фон · AI", async (_, __) => await Run("background"));
             _upscaleButton = Button("Апскейл ×2", async (_, __) => await Run("upscale"));
             var whiteRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 2) };
-            _removeWhiteButton = Button("Белый фон", async (_, __) => await RemoveWhiteBackground());
+            _removeWhiteButton = Button("Удалить фон", async (_, __) => await RemoveWhiteBackground());
             whiteRow.Children.Add(_removeWhiteButton);
-            whiteRow.Children.Add(new TextBlock { Text = "Порог", VerticalAlignment = VerticalAlignment.Center,
+            _backgroundHex = new TextBox { Text = "#FFFFFF", Width = 72, FontSize = 11,
+                Margin = new Thickness(5, 0, 2, 0), VerticalContentAlignment = VerticalAlignment.Center };
+            whiteRow.Children.Add(_backgroundHex);
+            _backgroundSwatch = new Border { Width = 18, Height = 18, Background = Brushes.White,
+                BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Margin = new Thickness(2) };
+            whiteRow.Children.Add(_backgroundSwatch);
+            _backgroundPipetteButton = Button("Пипетка", (_, __) => PickBackgroundFromCanvas());
+            _backgroundPipetteButton.ToolTip = "Выберите цвет на холсте CorelDRAW. Esc — отмена.";
+            whiteRow.Children.Add(_backgroundPipetteButton);
+            _backgroundHex.TextChanged += (_, __) => UpdateBackgroundSwatch();
+            whiteRow.Children.Add(new TextBlock { Text = "Допуск", VerticalAlignment = VerticalAlignment.Center,
                 FontSize = 10, Margin = new Thickness(5, 0, 3, 0) });
-            _whiteThreshold = new TextBox { Text = "245", Width = 40, FontSize = 11,
+            _backgroundTolerance = new TextBox { Text = "10", Width = 34, FontSize = 11,
                 VerticalContentAlignment = VerticalAlignment.Center };
-            whiteRow.Children.Add(_whiteThreshold);
+            whiteRow.Children.Add(_backgroundTolerance);
             whiteRow.Children.Add(new TextBlock { Text = "Подрезать, px", VerticalAlignment = VerticalAlignment.Center,
                 FontSize = 10, Margin = new Thickness(8, 0, 3, 0) });
             _whiteCutPixels = new TextBox { Text = "0", Width = 34, FontSize = 11,
@@ -291,22 +302,26 @@ namespace VanyaTools.Native
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
             { Report("Сначала вставьте готовый результат.", true); return; }
-            int threshold, cutPixels;
-            if (!Int32.TryParse(_whiteThreshold.Text, out threshold) || threshold < 200 || threshold > 255)
-            { Report("Порог белизны: от 200 до 255. Для белого фона начните с 245.", true); return; }
+            int tolerance, cutPixels;
+            Color backgroundColor;
+            if (!TryHexColor(_backgroundHex.Text, out backgroundColor))
+            { Report("Цвет фона: #RRGGBB.", true); return; }
+            if (!Int32.TryParse(_backgroundTolerance.Text, out tolerance) || tolerance < 0 || tolerance > 80)
+            { Report("Допуск цвета: от 0 до 80.", true); return; }
             if (!Int32.TryParse(_whiteCutPixels.Text, out cutPixels) || cutPixels < 0 || cutPixels > 8)
             { Report("Подрезка края: от 0 до 8 пикселей.", true); return; }
-            SetBusy(true, "Удаляю белый фон без AI…");
+            SetBusy(true, "Удаляю выбранный фон…");
             try
             {
                 _importWarning = null;
+                Color[] backgroundVariants = BackgroundVariants(backgroundColor);
                 string source = AiSelectionCapture.Capture();
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
-                string output = Path.Combine(Path.GetTempPath(), "Vanya-White-" + Guid.NewGuid().ToString("N") + ".png");
+                string output = Path.Combine(Path.GetTempPath(), "Vanya-Background-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
-                await Task.Run(() => BackgroundRemovalProcessor.RemoveWhite(
-                    source, output, threshold, cutPixels, cancellation), cancellation);
+                await Task.Run(() => BackgroundRemovalProcessor.RemoveColor(
+                    source, output, backgroundVariants, tolerance, cutPixels, cancellation), cancellation);
                 cancellation.ThrowIfCancellationRequested();
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
@@ -317,7 +332,7 @@ namespace VanyaTools.Native
                 ReportOutcome();
             }
             catch (OperationCanceledException) { Report("Операция отменена.", false); }
-            catch (Exception ex) { Log.Error("Local white background removal failed.", ex);
+            catch (Exception ex) { Log.Error("Local background removal failed.", ex);
                 Report(ex.GetBaseException().Message, true); }
             finally { SetBusy(false, null); }
         }
@@ -776,12 +791,17 @@ namespace VanyaTools.Native
 
         private bool TryUnderlayColor(out Color color)
         {
+            return TryHexColor(_underlayHex.Text, out color);
+        }
+
+        private static bool TryHexColor(string value, out Color color)
+        {
             color = Colors.White;
-            string hex = _underlayHex.Text.Trim().TrimStart('#');
+            string hex = value.Trim().TrimStart('#');
             if (hex.Length != 6) return false;
-            int value;
-            if (!Int32.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out value)) return false;
-            color = Color.FromRgb((byte)(value >> 16), (byte)(value >> 8), (byte)value);
+            int rgbValue;
+            if (!Int32.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out rgbValue)) return false;
+            color = Color.FromRgb((byte)(rgbValue >> 16), (byte)(rgbValue >> 8), (byte)rgbValue);
             return true;
         }
 
@@ -790,6 +810,63 @@ namespace VanyaTools.Native
             Color color;
             _underlaySwatch.Background = TryUnderlayColor(out color) ?
                 new SolidColorBrush(color) : Brushes.Transparent;
+        }
+
+        private void UpdateBackgroundSwatch()
+        {
+            Color color;
+            _backgroundSwatch.Background = TryHexColor(_backgroundHex.Text, out color) ?
+                new SolidColorBrush(color) : Brushes.Transparent;
+        }
+
+        private void PickBackgroundFromCanvas()
+        {
+            if (_busy) return;
+            try
+            {
+                dynamic app = CorelApp.Get();
+                dynamic doc = app.ActiveDocument;
+                if (doc == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
+                Report("Кликните по цвету на холсте CorelDRAW. Esc — отмена.", false);
+                double x = 0, y = 0;
+                int shift = 0;
+                int result = Convert.ToInt32(doc.GetUserClick(ref x, ref y, ref shift,
+                    30, false, 326)); // cdrCursorEyeDrop
+                if (result != 0) { Report("Выбор цвета отменён.", false); return; }
+                dynamic sampled = doc.SampleColorAtPoint(x, y, 99); // cdrColorMixed: retain RGB/CMYK source
+                if (sampled == null) throw new InvalidOperationException("Цвет в этой точке не найден.");
+                dynamic rgb = app.CreateColor();
+                rgb.CopyAssign(sampled);
+                rgb.ConvertToRGB(); // Corel applies the document color profile to CMYK colors.
+                _backgroundHex.Text = String.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}",
+                    (int)rgb.RGBRed, (int)rgb.RGBGreen, (int)rgb.RGBBlue);
+                Report("Цвет фона: " + _backgroundHex.Text, false);
+            }
+            catch (Exception ex) { Log.Error("Corel canvas color pick failed.", ex);
+                Report("Не удалось взять цвет с холста: " + ex.GetBaseException().Message, true); }
+        }
+
+        private static Color[] BackgroundVariants(Color chosen)
+        {
+            int min = Math.Min(chosen.R, Math.Min(chosen.G, chosen.B));
+            int max = Math.Max(chosen.R, Math.Max(chosen.G, chosen.B));
+            bool white = min >= 230 && max - min <= 15;
+            bool black = max <= 60 && max - min <= 15;
+            if (!white && !black) return new[] { chosen };
+            try
+            {
+                dynamic app = CorelApp.Get();
+                dynamic cmyk = app.CreateCMYKColor(0, 0, 0, white ? 0 : 100);
+                cmyk.ConvertToRGB();
+                Color converted = Color.FromRgb((byte)(int)cmyk.RGBRed,
+                    (byte)(int)cmyk.RGBGreen, (byte)(int)cmyk.RGBBlue);
+                return new[] { chosen, white ? Colors.White : Colors.Black, converted };
+            }
+            catch (Exception ex)
+            {
+                Log.Error("CMYK neutral conversion failed; using RGB neutral.", ex);
+                return new[] { chosen, white ? Colors.White : Colors.Black };
+            }
         }
 
         private async Task BeginColorPick()
@@ -915,10 +992,10 @@ namespace VanyaTools.Native
         private void SetBusy(bool busy, string stage)
         {
             _busy = busy;
-            _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
+            _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _backgroundPipetteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
                 _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled =
                 _editButton.IsEnabled = !busy;
-            _model.IsEnabled = _prompt.IsEnabled = _whiteThreshold.IsEnabled = _whiteCutPixels.IsEnabled = _alphaThreshold.IsEnabled =
+            _model.IsEnabled = _prompt.IsEnabled = _backgroundHex.IsEnabled = _backgroundTolerance.IsEnabled = _whiteCutPixels.IsEnabled = _alphaThreshold.IsEnabled =
                 _edgeRadius.IsEnabled = _edgeExpansion.IsEnabled = _underlayHex.IsEnabled = !busy;
             foreach (var choice in _styleButtons) choice.IsEnabled = !busy;
             _cancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;

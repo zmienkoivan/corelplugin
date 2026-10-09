@@ -9,9 +9,9 @@ namespace VanyaTools.Native
 {
     internal static class BackgroundRemovalProcessor
     {
-        // Only whites connected to the image border are background. Enclosed white
-        // lettering and highlights remain part of the artwork.
-        public static void RemoveWhite(string source, string output, int threshold, int cutPixels,
+        // Only pixels connected to the image border are background. The capture is
+        // RGB even when the original artwork contains CMYK objects.
+        public static void RemoveColor(string source, string output, Color[] colors, int tolerance, int cutPixels,
             CancellationToken cancellation)
         {
             BitmapSource input = AiPrintTab.Bitmap(source);
@@ -39,28 +39,28 @@ namespace VanyaTools.Native
             {
                 if ((steps++ & 4095) == 0) cancellation.ThrowIfCancellationRequested();
                 int seed = pending.Pop();
-                if (background[seed] != 0 || !IsWhite(pixels, seed, threshold)) continue;
+                if (background[seed] != 0 || !IsBackground(pixels, seed, colors, tolerance)) continue;
                 int y = seed / width, left = seed % width, right = left;
                 while (left > 0 && background[y * width + left - 1] == 0 &&
-                    IsWhite(pixels, y * width + left - 1, threshold)) left--;
+                    IsBackground(pixels, y * width + left - 1, colors, tolerance)) left--;
                 while (right + 1 < width && background[y * width + right + 1] == 0 &&
-                    IsWhite(pixels, y * width + right + 1, threshold)) right++;
+                    IsBackground(pixels, y * width + right + 1, colors, tolerance)) right++;
                 for (int x = left; x <= right; x++)
                 {
                     background[y * width + x] = 1;
                     removed++;
                 }
-                if (y > 0) PushRuns(y - 1, left, right, width, threshold,
+                if (y > 0) PushRuns(y - 1, left, right, width, colors, tolerance,
                     pixels, background, pending);
-                if (y + 1 < height) PushRuns(y + 1, left, right, width, threshold,
+                if (y + 1 < height) PushRuns(y + 1, left, right, width, colors, tolerance,
                     pixels, background, pending);
             }
             if (removed == 0)
-                throw new InvalidOperationException("Белый фон не найден у края изображения. Уменьшите порог или используйте AI.");
+                throw new InvalidOperationException("Цвет фона не найден у края изображения. Увеличьте допуск или используйте AI.");
             if (cutPixels > 0)
                 background = ExpandBackground(background, width, height, cutPixels, cancellation);
 
-            int softStart = Math.Max(0, threshold - 20);
+            int edgeLimit = tolerance + 35;
             int visible = 0;
             for (int y = 0; y < height; y++)
             {
@@ -75,14 +75,14 @@ namespace VanyaTools.Native
                     }
                     if (pixels[i + 3] == 0) continue;
                     visible++;
-                    // Modify only a one-pixel fringe next to the removed white.
+                    // Modify only a one-pixel fringe next to the removed background.
                     // All other RGB values and alpha remain exactly as captured.
                     if (pixels[i + 3] < 250 || !TouchesBackground(background, width, height, x, y)) continue;
-                    int min = Math.Min(pixels[i], Math.Min(pixels[i + 1], pixels[i + 2]));
-                    int max = Math.Max(pixels[i], Math.Max(pixels[i + 1], pixels[i + 2]));
-                    if (min < softStart || min >= threshold || max - min > 40) continue;
+                    Color color = NearestColor(pixels, i, colors);
+                    int distance = ColorDistance(pixels, i, color);
+                    if (distance > edgeLimit || distance <= tolerance) continue;
                     double alpha = EstimateEdgeAlpha(pixels, background, width, height,
-                        x, y, softStart, min);
+                        x, y, color, edgeLimit, distance);
                     if (alpha >= 0.98) continue;
                     if (alpha <= 0.01)
                     {
@@ -91,14 +91,15 @@ namespace VanyaTools.Native
                     }
                     for (int channel = 0; channel < 3; channel++)
                     {
-                        double foreground = (pixels[i + channel] - 255.0 * (1.0 - alpha)) / alpha;
+                        double backgroundChannel = channel == 0 ? color.B : channel == 1 ? color.G : color.R;
+                        double foreground = (pixels[i + channel] - backgroundChannel * (1.0 - alpha)) / alpha;
                         pixels[i + channel] = (byte)Math.Max(0, Math.Min(255, Math.Round(foreground)));
                     }
                     pixels[i + 3] = (byte)Math.Max(1, Math.Min(255, Math.Round(alpha * 255)));
                 }
             }
             if (visible == 0)
-                throw new InvalidOperationException("На изображении не осталось непрозрачных деталей. Увеличьте порог.");
+                throw new InvalidOperationException("На изображении не осталось непрозрачных деталей. Уменьшите допуск.");
             Save(output, width, height, input.DpiX, input.DpiY, pixels, stride);
         }
 
@@ -232,26 +233,57 @@ namespace VanyaTools.Native
                 result.PixelWidth + "x" + result.PixelHeight + ".");
         }
 
-        private static bool IsWhite(byte[] pixels, int p, int threshold)
+        private static bool IsBackground(byte[] pixels, int p, Color[] colors, int tolerance)
         {
             int i = p * 4;
             if (pixels[i + 3] <= 8) return true;
             int min = Math.Min(pixels[i], Math.Min(pixels[i + 1], pixels[i + 2]));
             int max = Math.Max(pixels[i], Math.Max(pixels[i + 1], pixels[i + 2]));
-            return min >= threshold && max - min <= 20;
+            Color color = colors[0];
+            // Recognize neutral RGB endpoints without deleting colored highlights.
+            // Profile-converted CMYK equivalents are checked below as extra targets.
+            if (color.R >= 240 && color.G >= 240 && color.B >= 240)
+            {
+                if (min >= 255 - tolerance && max - min <= 20) return true;
+            }
+            if (color.R <= 24 && color.G <= 24 && color.B <= 24)
+            {
+                if (max <= tolerance && max - min <= 20) return true;
+            }
+            for (int n = 0; n < colors.Length; n++)
+                if (ColorDistance(pixels, i, colors[n]) <= tolerance) return true;
+            return false;
         }
 
-        private static void PushRuns(int y, int left, int right, int width, int threshold,
+        private static Color NearestColor(byte[] pixels, int i, Color[] colors)
+        {
+            Color best = colors[0];
+            int distance = ColorDistance(pixels, i, best);
+            for (int n = 1; n < colors.Length; n++)
+            {
+                int next = ColorDistance(pixels, i, colors[n]);
+                if (next < distance) { best = colors[n]; distance = next; }
+            }
+            return best;
+        }
+
+        private static int ColorDistance(byte[] pixels, int i, Color color)
+        {
+            return Math.Max(Math.Abs(pixels[i] - color.B),
+                Math.Max(Math.Abs(pixels[i + 1] - color.G), Math.Abs(pixels[i + 2] - color.R)));
+        }
+
+        private static void PushRuns(int y, int left, int right, int width, Color[] colors, int tolerance,
             byte[] pixels, byte[] background, Stack<int> pending)
         {
             int x = left;
             while (x <= right)
             {
                 int p = y * width + x;
-                if (background[p] != 0 || !IsWhite(pixels, p, threshold)) { x++; continue; }
+                if (background[p] != 0 || !IsBackground(pixels, p, colors, tolerance)) { x++; continue; }
                 pending.Push(p);
                 do { x++; p++; }
-                while (x <= right && background[p] == 0 && IsWhite(pixels, p, threshold));
+                while (x <= right && background[p] == 0 && IsBackground(pixels, p, colors, tolerance));
             }
         }
 
@@ -268,7 +300,7 @@ namespace VanyaTools.Native
         }
 
         private static double EstimateEdgeAlpha(byte[] pixels, byte[] background,
-            int width, int height, int x, int y, int softStart, int min)
+            int width, int height, int x, int y, Color color, int edgeLimit, int distance)
         {
             int i = (y * width + x) * 4;
             double bestError = Double.MaxValue, bestAlpha = Double.NaN;
@@ -279,27 +311,28 @@ namespace VanyaTools.Native
                 if (nx < 0 || nx >= width || ny < 0 || ny >= height || (dx == 0 && dy == 0)) continue;
                 int p = ny * width + nx, n = p * 4;
                 if (background[p] != 0 || pixels[n + 3] < 250) continue;
-                int neighborMin = Math.Min(pixels[n], Math.Min(pixels[n + 1], pixels[n + 2]));
-                if (neighborMin >= softStart) continue;
+                if (ColorDistance(pixels, n, color) <= edgeLimit) continue;
                 double numerator = 0, denominator = 0;
                 for (int c = 0; c < 3; c++)
                 {
-                    double fromWhite = 255 - pixels[n + c];
-                    numerator += (255 - pixels[i + c]) * fromWhite;
-                    denominator += fromWhite * fromWhite;
+                    double backgroundChannel = c == 0 ? color.B : c == 1 ? color.G : color.R;
+                    double fromBackground = pixels[n + c] - backgroundChannel;
+                    numerator += (pixels[i + c] - backgroundChannel) * fromBackground;
+                    denominator += fromBackground * fromBackground;
                 }
                 if (denominator < 1) continue;
                 double alpha = Math.Max(0, Math.Min(1, numerator / denominator));
                 double error = 0;
                 for (int c = 0; c < 3; c++)
                 {
-                    double difference = 255 - alpha * (255 - pixels[n + c]) - pixels[i + c];
+                    double backgroundChannel = c == 0 ? color.B : c == 1 ? color.G : color.R;
+                    double difference = backgroundChannel + alpha * (pixels[n + c] - backgroundChannel) - pixels[i + c];
                     error += difference * difference;
                 }
                 if (error < bestError) { bestError = error; bestAlpha = alpha; }
             }
             return Double.IsNaN(bestAlpha)
-                ? Math.Max(0, Math.Min(1, (255.0 - min) / (255.0 - softStart)))
+                ? Math.Max(0, Math.Min(1, distance / (double)Math.Max(1, edgeLimit)))
                 : bestAlpha;
         }
 
