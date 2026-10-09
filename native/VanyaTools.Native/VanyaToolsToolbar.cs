@@ -20,6 +20,7 @@ namespace VanyaTools.Native
                 if (!VanyaToolsDocker.TryRunToolbarTrim())
                     new BitmapTrimService().TrimSelected(TrimMode.TransparentPixels, TrimSides.All, 2, true);
             });
+            CorelToolbarInstaller.RegisterHostedButton(this);
         }
     }
 
@@ -35,6 +36,7 @@ namespace VanyaTools.Native
                 if (!VanyaToolsDocker.TryRunToolbarFitFrame())
                     PrintFrameFitService.FitSelected(PrintFrameAnchor.TopCenter);
             });
+            CorelToolbarInstaller.RegisterHostedButton(this);
         }
     }
 
@@ -76,6 +78,8 @@ namespace VanyaTools.Native
         private const string DockerButton = "60cc0805-a158-44eb-a286-49061c3d963d";
         private const string TrimButton = "a624e7f3-8a23-4b1e-b2e6-58cf6725b9e4";
         private const string FitFrameButton = "96b63d8e-86b4-433f-a315-126381e35e11";
+        private static readonly List<WeakReference<UserControl>> HostedButtons =
+            new List<WeakReference<UserControl>>();
 
         private static string VisibilityPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -83,43 +87,20 @@ namespace VanyaTools.Native
 
         internal static string ToggleButtons()
         {
-            dynamic standard = GetStandardBar();
-            if (standard == null)
-                throw new InvalidOperationException("Стандартная панель Corel не найдена.");
-
-            dynamic controls = standard.Controls;
-            bool anyVisible = false;
-            var present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            for (int i = 1; i <= (int)controls.Count; i++)
+            bool show = File.Exists(VisibilityPath);
+            if (show)
             {
-                dynamic control = controls.Item[i];
-                string id = GetOurControlId(control);
-                if (id == null) continue;
-                present.Add(id);
-                if ((bool)control.Visible) anyVisible = true;
+                File.Delete(VisibilityPath);
+                int shown = SetHostedButtonsVisible(true);
+                Log.Info("Shown Vanya Tools action button hosts: " + shown);
+                return "Кнопки действий показаны.";
             }
-
-            bool show = present.Count < 3 || !anyVisible;
-            if (show) AddMissingButtons(controls);
-
-            int changed = 0;
-            for (int i = 1; i <= (int)controls.Count; i++)
-            {
-                dynamic control = controls.Item[i];
-                if (GetOurControlId(control) == null) continue;
-                control.Visible = show;
-                if ((bool)control.Visible != show)
-                    throw new InvalidOperationException("Corel не изменил видимость кнопки.");
-                changed++;
-            }
-            if (changed == 0)
-                throw new InvalidOperationException("Кнопки Vanya Tools на панели Corel не найдены.");
 
             Directory.CreateDirectory(Path.GetDirectoryName(VisibilityPath));
-            if (show) File.Delete(VisibilityPath);
-            else File.WriteAllText(VisibilityPath, "hidden");
-            Log.Info((show ? "Shown" : "Hidden") + " Vanya Tools toolbar buttons: " + changed);
-            return show ? "Кнопки Vanya Tools показаны." : "Кнопки Vanya Tools скрыты.";
+            File.WriteAllText(VisibilityPath, "hidden");
+            int hidden = SetHostedButtonsVisible(false);
+            Log.Info("Hidden Vanya Tools action button hosts: " + hidden);
+            return "Кнопки действий скрыты.";
         }
 
         internal static void ApplySavedVisibility()
@@ -127,40 +108,32 @@ namespace VanyaTools.Native
             if (!File.Exists(VisibilityPath)) return;
             try
             {
-                dynamic standard = GetStandardBar();
-                if (standard == null) return;
-                dynamic controls = standard.Controls;
-                for (int i = 1; i <= (int)controls.Count; i++)
-                {
-                    dynamic control = controls.Item[i];
-                    if (GetOurControlId(control) != null) control.Visible = false;
-                }
+                SetHostedButtonsVisible(false);
             }
             catch (Exception error) { Log.Error("Could not restore toolbar button visibility.", error); }
         }
 
-        private static void AddMissingButtons(dynamic controls)
+        internal static void RegisterHostedButton(UserControl host)
         {
-            foreach (string id in new[] { DockerButton, TrimButton, FitFrameButton })
-            {
-                bool found = false;
-                for (int i = 1; i <= (int)controls.Count; i++)
-                    if (String.Equals(GetOurControlId(controls.Item[i]), id,
-                        StringComparison.OrdinalIgnoreCase)) { found = true; break; }
-                if (found) continue;
-
-                dynamic added = controls.Add(id, 0, false);
-                try { added.Tag = "VanyaTools:" + id; } catch { }
-                Log.Info("Added missing Vanya Tools toolbar button: " + id);
-            }
+            HostedButtons.Add(new WeakReference<UserControl>(host));
+            host.Visibility = File.Exists(VisibilityPath) ? Visibility.Collapsed : Visibility.Visible;
+            host.Loaded += (_, __) =>
+                host.Visibility = File.Exists(VisibilityPath) ? Visibility.Collapsed : Visibility.Visible;
         }
 
-        private static dynamic GetStandardBar()
+        private static int SetHostedButtonsVisible(bool visible)
         {
-            foreach (dynamic bar in CorelApp.Get().FrameWork.CommandBars)
-                if (String.Equals((string)bar.Name, "Standard", StringComparison.OrdinalIgnoreCase))
-                    return bar;
-            return null;
+            int changed = 0;
+            for (int i = HostedButtons.Count - 1; i >= 0; i--)
+            {
+                UserControl host;
+                if (!HostedButtons[i].TryGetTarget(out host)) { HostedButtons.RemoveAt(i); continue; }
+                var state = visible ? Visibility.Visible : Visibility.Collapsed;
+                if (host.Dispatcher.CheckAccess()) host.Visibility = state;
+                else host.Dispatcher.BeginInvoke(new Action(() => host.Visibility = state));
+                changed++;
+            }
+            return changed;
         }
 
         // v1.0.117 inserted controls through COM as well as UserUI.xslt. On some
