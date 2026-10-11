@@ -262,9 +262,9 @@ namespace VanyaTools.Native
                 _listWorkflow[i] = Button("", async (_, __) => await ChangeWorkflow(action, true));
                 listActions.Children.Add(_listWorkflow[i]);
             }
+            _linkOrder = Button("Открыть файл CDR", async (_, __) => await LinkSelectedOrder());
+            listActions.Children.Add(_linkOrder);
             ordersPanel.Children.Add(listActions);
-            _linkOrder = Button("Связать выбранный с CDR", async (_, __) => await LinkSelectedOrder());
-            ordersPanel.Children.Add(_linkOrder);
             OrdersView = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Content = ordersPanel };
             _ordersSearch.TextChanged += (_, __) => FilterOrders();
@@ -522,6 +522,7 @@ namespace VanyaTools.Native
                 ReadForm(); SaveData();
             }
             doc.Save();
+            RememberCurrentOrderFile();
             _documentName.Text = Path.GetFileName(Convert.ToString(doc.FullFileName)) + " · сохранён";
             _status("CDR сохранён.", false);
         }
@@ -635,6 +636,7 @@ namespace VanyaTools.Native
             finally { _loadingForm = false; }
             _editor.IsEnabled = true;
             _saveDocument.IsEnabled = true;
+            RememberCurrentOrderFile();
             if (report) _status("Карточка загружена из CDR.", false);
         }
 
@@ -1050,6 +1052,7 @@ namespace VanyaTools.Native
         {
             public int Id { get; set; }
             public string Number { get; set; }
+            public string Period { get; set; }
             public string Customer { get; set; }
             public string Source { get; set; }
             public string Technologies { get; set; }
@@ -1217,7 +1220,8 @@ namespace VanyaTools.Native
             string version = index < selected.PhotoVersions.Length
                 ? selected.PhotoVersions[index] : "";
             return _server.Text.Trim() + ":" + selected.Id + ":" +
-                selected.PhotoCount + ":" + index + ":" + version;
+                index + ":" + (version.Length > 0 ? version :
+                    selected.PhotoCount + ":" + selected.Updated);
         }
 
         private static BitmapSource DecodePhoto(byte[] bytes, int maximumWidth)
@@ -1277,6 +1281,7 @@ namespace VanyaTools.Native
                 _photoOriginalBytes -= bytes.Length;
                 _photoOriginals.Remove(key);
             }
+            OrderPhotoDiskCache.Remove(key);
         }
 
         private async Task ShowSelectedPhoto()
@@ -1316,6 +1321,24 @@ namespace VanyaTools.Native
             }
             try
             {
+                byte[] stored = await Task.Run(() => OrderPhotoDiskCache.Read(key, false));
+                if (request != _previewRequest) return;
+                if (stored != null)
+                {
+                    try
+                    {
+                        var cachedImage = DecodePhoto(stored, 640);
+                        RememberThumbnail(key, cachedImage);
+                        _orderPhoto.Source = cachedImage;
+                        _photoMessage.Visibility = Visibility.Collapsed;
+                        return;
+                    }
+                    catch (Exception error)
+                    {
+                        Log.Error("Order thumbnail cache is invalid", error);
+                        OrderPhotoDiskCache.Remove(key);
+                    }
+                }
                 await Task.Delay(150);
                 if (request != _previewRequest) return;
                 int index = _previewIndex;
@@ -1326,6 +1349,7 @@ namespace VanyaTools.Native
                 if (request != _previewRequest) return;
                 _orderPhoto.Source = image;
                 _photoMessage.Visibility = Visibility.Collapsed;
+                await Task.Run(() => OrderPhotoDiskCache.Write(key, false, bytes));
             }
             catch (Exception error)
             {
@@ -1404,15 +1428,33 @@ namespace VanyaTools.Native
             window.Show();
             try
             {
+                bool downloaded = false, fromDisk = false;
                 if (!_photoOriginals.TryGetValue(key, out byte[] bytes))
                 {
+                    bytes = await Task.Run(() => OrderPhotoDiskCache.Read(key, true));
+                    fromDisk = bytes != null;
+                    if (bytes == null)
+                    {
+                        bytes = await OrderServerClient.PhotoOriginal(_server.Text.Trim(),
+                            _key.Password.Trim(), selected.Id, index);
+                        downloaded = true;
+                    }
+                }
+                BitmapSource image;
+                try { image = DecodePhoto(bytes, 4096); }
+                catch (Exception error) when (fromDisk)
+                {
+                    Log.Error("Order original cache is invalid", error);
+                    await Task.Run(() => OrderPhotoDiskCache.Remove(key));
                     bytes = await OrderServerClient.PhotoOriginal(_server.Text.Trim(),
                         _key.Password.Trim(), selected.Id, index);
-                    RememberOriginal(key, bytes);
+                    downloaded = true;
+                    image = DecodePhoto(bytes, 4096);
                 }
-                else RememberOriginal(key, bytes);
+                RememberOriginal(key, bytes);
+                if (downloaded) await Task.Run(() => OrderPhotoDiskCache.Write(key, true, bytes));
                 if (!window.IsVisible) return;
-                photo.Source = DecodePhoto(bytes, 4096);
+                photo.Source = image;
                 message.Text = "Колесо мыши — масштаб";
                 fit();
             }
@@ -1484,6 +1526,7 @@ namespace VanyaTools.Native
                     available.Add(new OrderListItem {
                         Id = Convert.ToInt32(row["id"]),
                         Number = Convert.ToString(row["number"]),
+                        Period = Convert.ToString(OrderValue(row, "period")),
                         Customer = Convert.ToString(row["customer"]),
                         Source = Convert.ToString(row["source"]),
                         Due = OrderDate(OrderValue(row, "dueDate"), true),
@@ -1521,7 +1564,8 @@ namespace VanyaTools.Native
             for (int i = 0; i < current.Count; i++)
             {
                 var a = current[i]; var b = incoming[i];
-                if (a.Id != b.Id || a.Number != b.Number || a.Customer != b.Customer ||
+                if (a.Id != b.Id || a.Number != b.Number || a.Period != b.Period ||
+                    a.Customer != b.Customer ||
                     a.Source != b.Source || a.Technologies != b.Technologies ||
                     a.Created != b.Created || a.Due != b.Due || a.Updated != b.Updated ||
                     a.Completed != b.Completed || a.Status != b.Status ||
@@ -1571,6 +1615,7 @@ namespace VanyaTools.Native
                     var order = new OrderListItem {
                         Id = id,
                         Number = Convert.ToString(row["number"]),
+                        Period = Convert.ToString(OrderValue(row, "period")),
                         Customer = Convert.ToString(row["customer"]),
                         Source = Convert.ToString(row["source"]),
                         Technologies = technologies == null ? "" : String.Join(", ",
@@ -1620,7 +1665,108 @@ namespace VanyaTools.Native
             var selected = _ordersTable.SelectedItem as OrderListItem;
             if (selected == null) { _status("Выберите заказ в таблице.", true); return; }
             if (selected.IsAvailable) await AssignIntake(selected);
-            else await OpenServerOrder(selected.Number);
+            else await OpenSelectedOrderFile(selected);
+        }
+
+        private string YearFolderForOrder(string period, string configuredFolder = null)
+        {
+            try
+            {
+                string configured = configuredFolder ?? _yearFolder.Text.Trim();
+                if (!Path.IsPathRooted(configured)) return null;
+                string root = Path.GetFullPath(configured).TrimEnd(Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+                string year = (period ?? "").Split('-')[0];
+                if (year.Length == 4 && Int32.TryParse(year, out int yearNumber) &&
+                    yearNumber >= 2000 && yearNumber <= 2100 &&
+                    !String.Equals(Path.GetFileName(root), year, StringComparison.OrdinalIgnoreCase))
+                {
+                    string parent = Path.GetDirectoryName(root);
+                    if (!String.IsNullOrEmpty(parent)) root = Path.Combine(parent, year);
+                }
+                return Directory.Exists(root) ? root : null;
+            }
+            catch (Exception error) { Log.Error("Order year folder unavailable", error); return null; }
+        }
+
+        private string YearFolderForDocument(string path)
+        {
+            try
+            {
+                string customer = Path.GetDirectoryName(path);
+                string month = customer == null ? null : Path.GetDirectoryName(customer);
+                string year = month == null ? null : Path.GetDirectoryName(month);
+                if (year != null && Path.GetFileName(year).Length == 4 &&
+                    Int32.TryParse(Path.GetFileName(year), out int parsed) &&
+                    parsed >= 2000 && parsed <= 2100 && Directory.Exists(year)) return year;
+            }
+            catch (Exception error) { Log.Error("Order document year folder unavailable", error); }
+            return YearFolderForOrder(null);
+        }
+
+        private void RememberCurrentOrderFile()
+        {
+            if (_data.ServerOrderId <= 0 || String.IsNullOrWhiteSpace(_documentPath) ||
+                !File.Exists(_documentPath)) return;
+            OrderCdrPathIndex.Remember(_server.Text.Trim(), _data.ServerOrderId,
+                _documentPath, YearFolderForDocument(_documentPath));
+        }
+
+        private string SuggestedOrderFolder(OrderListItem selected, string yearRoot)
+        {
+            if (yearRoot == null) return null;
+            try
+            {
+                if (!DateTime.TryParseExact(selected.Period + "-01", "yyyy-MM-dd",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime date)) return yearRoot;
+                string month = date.Month.ToString("00", CultureInfo.InvariantCulture) +
+                    new CultureInfo("ru-RU").DateTimeFormat.GetMonthName(date.Month) +
+                    date.Year.ToString(CultureInfo.InvariantCulture);
+                string folder = Path.Combine(yearRoot, month, SafePathPart(selected.Customer ?? ""));
+                return Directory.Exists(folder) ? folder : yearRoot;
+            }
+            catch { return yearRoot; }
+        }
+
+        private async Task OpenSelectedOrderFile(OrderListItem selected)
+        {
+            try
+            {
+                string configured = _yearFolder.Text.Trim(), server = _server.Text.Trim();
+                string yearRoot = await Task.Run(() => YearFolderForOrder(selected.Period, configured));
+                string path = await Task.Run(() => OrderCdrPathIndex.Find(server, selected.Id, yearRoot));
+                if (path == null)
+                {
+                    var picker = new Microsoft.Win32.OpenFileDialog {
+                        Title = "Выберите CDR для заказа №" + selected.Number,
+                        Filter = "CorelDRAW (*.cdr)|*.cdr", CheckFileExists = true,
+                        Multiselect = false };
+                    string folder = SuggestedOrderFolder(selected, yearRoot);
+                    if (folder != null) picker.InitialDirectory = folder;
+                    if (picker.ShowDialog(Window.GetWindow(this)) != true) return;
+                    path = picker.FileName;
+                }
+                dynamic app = CorelApp.Get();
+                bool alreadyOpen = false;
+                foreach (dynamic candidate in app.Documents)
+                    if (String.Equals(Convert.ToString(candidate.FullFileName), path,
+                        StringComparison.OrdinalIgnoreCase))
+                    { candidate.Activate(); alreadyOpen = true; break; }
+                if (!alreadyOpen) app.OpenDocument(path);
+                RefreshDocument();
+                if (_data.ServerOrderId > 0 && _data.ServerOrderId != selected.Id)
+                {
+                    _status("Файл открыт, но в нём записан другой заказ. Проверьте выбранный CDR.", true);
+                    return;
+                }
+                await Task.Run(() => OrderCdrPathIndex.Remember(server, selected.Id, path, yearRoot));
+                _status("Открыт CDR заказа №" + selected.Number + ": " + path, false);
+            }
+            catch (Exception error)
+            {
+                Log.Error("Order CDR open failed", error);
+                _status("Открытие CDR: " + error.Message, true);
+            }
         }
 
         private async Task AssignIntake(OrderListItem selected)
@@ -1672,7 +1818,7 @@ namespace VanyaTools.Native
                 ReadForm(); ApplyServerResult(result); _data.PendingIntakeId = 0; SaveData();
                 linked = true;
                 string saveWarning = null;
-                try { if (saveCdr) doc.Save(); }
+                try { if (saveCdr) { doc.Save(); RememberCurrentOrderFile(); } }
                 catch (Exception saveError)
                 {
                     Log.Error("Order assigned but CDR save failed", saveError);
@@ -1822,7 +1968,7 @@ namespace VanyaTools.Native
                 try
                 {
                     SaveData();
-                    if (saveCdr) doc.Save();
+                    if (saveCdr) { doc.Save(); RememberCurrentOrderFile(); }
                 }
                 catch (Exception saveError)
                 {
@@ -2088,7 +2234,7 @@ namespace VanyaTools.Native
             _loadOrders.IsEnabled = !_busy && !_ordersLoading;
             _linkOrder.IsEnabled = !_busy && _ordersTable.SelectedItem != null;
             _linkOrder.Content = (_ordersTable.SelectedItem as OrderListItem)?.IsAvailable == true
-                ? "Связать с CDR" : "Открыть в CDR";
+                ? "Связать с CDR" : "Открыть файл CDR";
             _updateText.Visibility = published ? Visibility.Visible : Visibility.Collapsed;
             bool canWorkflow = assigned && (_data.ServerSendState == "sent" || _data.ServerSendState == "local");
             SetWorkflowButtons(new[] { _state, _blanksPause, _applicationPause, _urgent, _blanksReady },
