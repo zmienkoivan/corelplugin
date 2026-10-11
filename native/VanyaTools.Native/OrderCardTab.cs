@@ -28,13 +28,17 @@ namespace VanyaTools.Native
             _server, _orderNumber, _yearFolder, _ordersSearch;
         private readonly List<RadioButton> _sourceButtons = new List<RadioButton>();
         private readonly PasswordBox _key;
-        private readonly TextBlock _caption, _documentName, _orderInfo, _ordersCount;
+        private readonly TextBlock _caption, _documentName, _orderInfo, _ordersCount,
+            _photoLabel, _photoMessage;
         private readonly StackPanel _frames, _editor;
         private readonly Expander _frameExpander;
         private readonly Button _send, _updateText, _state, _refreshServer,
-            _saveDocument, _linkOrder, _loadOrders, _blanksPause, _applicationPause, _urgent, _blanksReady;
+            _saveDocument, _linkOrder, _loadOrders, _blanksPause, _applicationPause, _urgent, _blanksReady,
+            _previousPhoto, _nextPhoto;
         private readonly Button[] _listWorkflow = new Button[5];
         private readonly DataGrid _ordersTable;
+        private readonly Image _orderPhoto;
+        private readonly Dictionary<string, DataGridColumn> _orderColumns = new Dictionary<string, DataGridColumn>();
         private readonly CheckBox _onlyAvailable;
         private readonly List<OrderListItem> _serverOrders = new List<OrderListItem>();
         private readonly DispatcherTimer _documentWatcher, _serverWatcher;
@@ -47,6 +51,9 @@ namespace VanyaTools.Native
         private string _failedDocumentPath;
         private bool _loadingForm;
         private bool _busy;
+        private bool _restoringOrderSelection;
+        private int _previewOrderId, _previewIndex, _previewRequest;
+        private string _previewKey;
         private string _sourceValue = "";
 
         internal FrameworkElement SettingsView { get; }
@@ -62,6 +69,9 @@ namespace VanyaTools.Native
         private static string FileSettingsPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "VanyaTools", "order-files.json");
+        private static string ColumnsSettingsPath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "VanyaTools", "order-columns.json");
 
         internal OrderCardTab(Action<string, bool> status)
         {
@@ -95,6 +105,15 @@ namespace VanyaTools.Native
             _loadOrders = Button("↻", async (_, __) => await LoadOrders());
             _loadOrders.MinWidth = 32; _loadOrders.ToolTip = "Обновить заказы с сервера";
             DockPanel.SetDock(_loadOrders, Dock.Right); ordersTools.Children.Add(_loadOrders);
+            var columnsMenu = new ContextMenu();
+            Button columnsButton = null;
+            columnsButton = Button("Столбцы ▾", (_, __) => {
+                columnsMenu.PlacementTarget = columnsButton;
+                columnsMenu.Placement = PlacementMode.Bottom;
+                columnsMenu.IsOpen = true;
+            });
+            columnsButton.ToolTip = "Выбрать столбцы таблицы";
+            DockPanel.SetDock(columnsButton, Dock.Right); ordersTools.Children.Add(columnsButton);
             _ordersSearch = Input(); _ordersSearch.ToolTip = "Поиск по номеру и заказчику";
             ordersTools.Children.Add(_ordersSearch); ordersPanel.Children.Add(ordersTools);
             _onlyAvailable = new CheckBox { Content = "Только без макета", Margin = new Thickness(2, 0, 0, 4) };
@@ -106,18 +125,55 @@ namespace VanyaTools.Native
             _ordersTable = new DataGrid { AutoGenerateColumns = false, IsReadOnly = true,
                 CanUserAddRows = false, CanUserDeleteRows = false, CanUserResizeRows = false,
                 HeadersVisibility = DataGridHeadersVisibility.Column, SelectionMode = DataGridSelectionMode.Single,
-                SelectionUnit = DataGridSelectionUnit.FullRow, Height = 360, RowHeight = 24,
+                SelectionUnit = DataGridSelectionUnit.FullRow, Height = 280, RowHeight = 24,
                 Margin = new Thickness(1, 0, 1, 3) };
             _ordersTable.Columns.Add(new DataGridTextColumn { Header = "№", Binding = new Binding("Number"),
                 Width = new DataGridLength(65) });
-            _ordersTable.Columns.Add(new DataGridTextColumn { Header = "Заказчик", Binding = new Binding("Customer"),
-                Width = new DataGridLength(1, DataGridLengthUnitType.Star) });
-            _ordersTable.Columns.Add(new DataGridTextColumn { Header = "Источник", Binding = new Binding("Source"),
-                Width = new DataGridLength(65) });
-            _ordersTable.Columns.Add(new DataGridTextColumn { Header = "Состояние", Binding = new Binding("Status"),
-                Width = new DataGridLength(86) });
-            _ordersTable.SelectionChanged += (_, __) => UpdateActions();
+            var visibleColumns = LoadOrderColumns();
+            AddOrderColumn(columnsMenu, visibleColumns, "customer", "Заказчик", "Customer",
+                new DataGridLength(1, DataGridLengthUnitType.Star), true);
+            AddOrderColumn(columnsMenu, visibleColumns, "source", "Источник", "Source",
+                new DataGridLength(68), false);
+            AddOrderColumn(columnsMenu, visibleColumns, "technologies", "Технология", "Technologies",
+                new DataGridLength(110), false);
+            AddOrderColumn(columnsMenu, visibleColumns, "created", "Принят", "Created",
+                new DataGridLength(94), true);
+            AddOrderColumn(columnsMenu, visibleColumns, "due", "Срок", "Due",
+                new DataGridLength(78), true);
+            AddOrderColumn(columnsMenu, visibleColumns, "updated", "Обновлён", "Updated",
+                new DataGridLength(94), false);
+            AddOrderColumn(columnsMenu, visibleColumns, "completed", "Завершён", "Completed",
+                new DataGridLength(94), false);
+            AddOrderColumn(columnsMenu, visibleColumns, "status", "Состояние", "Status",
+                new DataGridLength(105), true);
+            _ordersTable.SelectionChanged += (_, __) => {
+                UpdateActions();
+                if (!_restoringOrderSelection) _ = ShowSelectedPhoto();
+            };
             ordersPanel.Children.Add(_ordersTable);
+            var photoBar = new DockPanel { Margin = new Thickness(1, 2, 1, 2) };
+            _nextPhoto = Button("›", (_, __) => ChangePhoto(1));
+            _nextPhoto.Width = 32; _nextPhoto.ToolTip = "Следующее фото";
+            DockPanel.SetDock(_nextPhoto, Dock.Right); photoBar.Children.Add(_nextPhoto);
+            _previousPhoto = Button("‹", (_, __) => ChangePhoto(-1));
+            _previousPhoto.Width = 32; _previousPhoto.ToolTip = "Предыдущее фото";
+            DockPanel.SetDock(_previousPhoto, Dock.Right); photoBar.Children.Add(_previousPhoto);
+            var reloadPhoto = Button("↻", (_, __) => { _previewKey = null; _ = ShowSelectedPhoto(); });
+            reloadPhoto.Width = 32; reloadPhoto.ToolTip = "Повторить загрузку фото";
+            DockPanel.SetDock(reloadPhoto, Dock.Right); photoBar.Children.Add(reloadPhoto);
+            _photoLabel = Note("Выберите заказ");
+            photoBar.Children.Add(_photoLabel); ordersPanel.Children.Add(photoBar);
+            var photoStage = new Grid { Height = 175,
+                Background = new SolidColorBrush(Color.FromRgb(235, 238, 240)),
+                Margin = new Thickness(1, 0, 1, 4) };
+            _orderPhoto = new Image { Stretch = Stretch.Uniform, SnapsToDevicePixels = true };
+            photoStage.Children.Add(_orderPhoto);
+            _photoMessage = Note("Выберите заказ для просмотра фото.");
+            _photoMessage.HorizontalAlignment = HorizontalAlignment.Center;
+            _photoMessage.VerticalAlignment = VerticalAlignment.Center;
+            photoStage.Children.Add(_photoMessage);
+            ordersPanel.Children.Add(photoStage);
+            UpdatePhotoNavigation(null);
             var listActions = new UniformGrid { Columns = 2 };
             string[] actions = { "state", "blanks", "application", "urgent", "blanksReady" };
             for (int i = 0; i < actions.Length; i++)
@@ -776,7 +832,14 @@ namespace VanyaTools.Native
             public string Number { get; set; }
             public string Customer { get; set; }
             public string Source { get; set; }
+            public string Technologies { get; set; }
+            public string Created { get; set; }
+            public string Due { get; set; }
+            public string Updated { get; set; }
+            public string Completed { get; set; }
             public string Status { get; set; }
+            public int PhotoCount { get; set; }
+            public string[] PhotoVersions { get; set; } = new string[0];
             public string SendState { get; set; }
             public string State { get; set; }
             public bool BlanksPaused { get; set; }
@@ -784,6 +847,139 @@ namespace VanyaTools.Native
             public bool ApplicationPaused { get; set; }
             public bool Urgent { get; set; }
             public bool IsAvailable => SendState == "reserved";
+        }
+
+        private static HashSet<string> LoadOrderColumns()
+        {
+            try
+            {
+                if (!File.Exists(ColumnsSettingsPath)) return null;
+                var names = new JavaScriptSerializer().Deserialize<string[]>(
+                    File.ReadAllText(ColumnsSettingsPath, Encoding.UTF8));
+                return new HashSet<string>(names ?? new string[0], StringComparer.OrdinalIgnoreCase);
+            }
+            catch (Exception error)
+            {
+                Log.Error("Order columns could not be loaded", error);
+                return null;
+            }
+        }
+
+        private void AddOrderColumn(ContextMenu menu, HashSet<string> visible, string key,
+            string title, string property, DataGridLength width, bool shownByDefault)
+        {
+            bool shown = visible == null ? shownByDefault : visible.Contains(key);
+            var column = new DataGridTextColumn { Header = title, Binding = new Binding(property),
+                Width = width, Visibility = shown ? Visibility.Visible : Visibility.Collapsed };
+            _ordersTable.Columns.Add(column);
+            _orderColumns.Add(key, column);
+            var option = new MenuItem { Header = title, IsCheckable = true, IsChecked = shown };
+            option.Click += (_, __) => {
+                column.Visibility = option.IsChecked ? Visibility.Visible : Visibility.Collapsed;
+                try { SaveOrderColumns(); }
+                catch (Exception error) { _status("Столбцы заказов: " + error.Message, true); }
+            };
+            menu.Items.Add(option);
+        }
+
+        private void SaveOrderColumns()
+        {
+            var visible = _orderColumns.Where(item => item.Value.Visibility == Visibility.Visible)
+                .Select(item => item.Key).ToArray();
+            Directory.CreateDirectory(Path.GetDirectoryName(ColumnsSettingsPath));
+            File.WriteAllText(ColumnsSettingsPath,
+                new JavaScriptSerializer().Serialize(visible), Encoding.UTF8);
+        }
+
+        private static string OrderDate(object value, bool dateOnly = false)
+        {
+            string raw = Convert.ToString(value);
+            if (String.IsNullOrWhiteSpace(raw)) return "";
+            if (dateOnly && DateTime.TryParseExact(raw, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out DateTime exact)) return exact.ToString("dd.MM.yyyy");
+            return DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal, out DateTimeOffset parsed)
+                ? parsed.ToLocalTime().ToString(dateOnly ? "dd.MM.yyyy" : "dd.MM.yy HH:mm") : raw;
+        }
+
+        private static object OrderValue(Dictionary<string, object> row, string key) =>
+            row.TryGetValue(key, out object value) ? value : null;
+
+        private void UpdatePhotoNavigation(OrderListItem selected)
+        {
+            int count = selected?.PhotoCount ?? 0;
+            _previousPhoto.IsEnabled = count > 1 && _previewIndex > 0;
+            _nextPhoto.IsEnabled = count > 1 && _previewIndex < count - 1;
+            _photoLabel.Text = selected == null ? "Выберите заказ" :
+                "Заказ №" + selected.Number + (count > 0
+                    ? " · Фото " + (_previewIndex + 1) + " из " + count : " · Фото нет");
+        }
+
+        private void ChangePhoto(int step)
+        {
+            var selected = _ordersTable.SelectedItem as OrderListItem;
+            if (selected == null || selected.PhotoCount < 2) return;
+            _previewIndex = Math.Max(0, Math.Min(selected.PhotoCount - 1, _previewIndex + step));
+            _ = ShowSelectedPhoto();
+        }
+
+        private async Task ShowSelectedPhoto()
+        {
+            var selected = _ordersTable.SelectedItem as OrderListItem;
+            if (selected == null)
+            {
+                _previewRequest++;
+                _previewOrderId = 0; _previewIndex = 0; _previewKey = null;
+                _orderPhoto.Source = null;
+                _photoMessage.Text = "Выберите заказ для просмотра фото.";
+                _photoMessage.Visibility = Visibility.Visible;
+                UpdatePhotoNavigation(null);
+                return;
+            }
+            if (_previewOrderId != selected.Id)
+            {
+                _previewOrderId = selected.Id;
+                _previewIndex = 0;
+            }
+            _previewIndex = Math.Min(_previewIndex, Math.Max(0, selected.PhotoCount - 1));
+            UpdatePhotoNavigation(selected);
+            string version = _previewIndex < selected.PhotoVersions.Length
+                ? selected.PhotoVersions[_previewIndex] : "";
+            string key = _server.Text.Trim() + ":" + selected.Id + ":" +
+                selected.PhotoCount + ":" + _previewIndex + ":" + version;
+            if (key == _previewKey) return;
+            _previewKey = key;
+            int request = ++_previewRequest;
+            _orderPhoto.Source = null;
+            _photoMessage.Text = selected.PhotoCount == 0 ? "У заказа нет фото." : "Загрузка фото…";
+            _photoMessage.Visibility = Visibility.Visible;
+            if (selected.PhotoCount == 0) return;
+            try
+            {
+                await Task.Delay(150);
+                if (request != _previewRequest) return;
+                byte[] bytes = await OrderServerClient.PhotoThumbnail(_server.Text.Trim(),
+                    _key.Password.Trim(), selected.Id, _previewIndex);
+                if (request != _previewRequest) return;
+                var image = new BitmapImage();
+                using (var stream = new MemoryStream(bytes))
+                {
+                    image.BeginInit();
+                    image.CacheOption = BitmapCacheOption.OnLoad;
+                    image.DecodePixelWidth = 640;
+                    image.StreamSource = stream;
+                    image.EndInit();
+                }
+                image.Freeze();
+                _orderPhoto.Source = image;
+                _photoMessage.Visibility = Visibility.Collapsed;
+            }
+            catch (Exception error)
+            {
+                if (request != _previewRequest) return;
+                Log.Error("Order thumbnail unavailable", error);
+                _photoMessage.Text = "Фото недоступно.";
+            }
         }
 
         private void FilterOrders()
@@ -798,10 +994,16 @@ namespace VanyaTools.Native
                  (row.Customer ?? "").IndexOf(query,
                     StringComparison.OrdinalIgnoreCase) >= 0))
                 .OrderByDescending(row => row.Urgent && row.State != "done").ToList();
-            _ordersTable.ItemsSource = visible;
-            _ordersTable.SelectedItem = visible.FirstOrDefault(row => row.Id == selectedId);
+            _restoringOrderSelection = true;
+            try
+            {
+                _ordersTable.ItemsSource = visible;
+                _ordersTable.SelectedItem = visible.FirstOrDefault(row => row.Id == selectedId);
+            }
+            finally { _restoringOrderSelection = false; }
             _ordersCount.Text = "Показано: " + visible.Count + " из " + _serverOrders.Count;
             UpdateActions();
+            _ = ShowSelectedPhoto();
         }
 
         private async Task LoadOrders(bool automatic = false)
@@ -837,11 +1039,22 @@ namespace VanyaTools.Native
                     if (!seen.Add(id)) continue;
                     string sendState = Convert.ToString(row["sendState"]);
                     string state = Convert.ToString(row["state"]);
+                    var versions = OrderValue(row, "photoVersions") as IList;
+                    var technologies = OrderValue(row, "technologies") as IList;
                     _serverOrders.Add(new OrderListItem {
                         Id = id,
                         Number = Convert.ToString(row["number"]),
                         Customer = Convert.ToString(row["customer"]),
                         Source = Convert.ToString(row["source"]),
+                        Technologies = technologies == null ? "" : String.Join(", ",
+                            technologies.Cast<object>().Select(item => Convert.ToString(item))),
+                        Created = OrderDate(OrderValue(row, "createdAt")),
+                        Due = OrderDate(OrderValue(row, "dueDate"), true),
+                        Updated = OrderDate(OrderValue(row, "updatedAt")),
+                        Completed = OrderDate(OrderValue(row, "completedAt")),
+                        PhotoCount = Convert.ToInt32(OrderValue(row, "photoCount") ?? 0),
+                        PhotoVersions = versions == null ? new string[0] : versions.Cast<object>()
+                            .Select(item => Convert.ToString(item)).ToArray(),
                         SendState = sendState,
                         State = state,
                         BlanksPaused = Flag(row, "blanksPaused"),

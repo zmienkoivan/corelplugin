@@ -60,6 +60,13 @@ namespace VanyaTools.Updater
                     method = "PATCH";
                 }
                 else if (action == "unassigned") route += "/unassigned";
+                else if (action == "photo")
+                {
+                    int id = Convert.ToInt32(job["id"]);
+                    if (id < 1 || !Int32.TryParse(Required(job, "number"), out int index) ||
+                        index < 0 || index > 9) throw new InvalidDataException("Неверный номер фото заказа.");
+                    route += "/" + id + "/photos/" + index + "?thumbnail=1";
+                }
                 else if (action == "assign")
                 {
                     int id = Convert.ToInt32(job["id"]);
@@ -73,19 +80,38 @@ namespace VanyaTools.Updater
                 var request = (HttpWebRequest)WebRequest.Create(new Uri(root, route));
                 request.Method = method;
                 request.Headers["X-Admin-Key"] = key;
-                request.Timeout = 8 * 60 * 1000;
-                request.ReadWriteTimeout = 8 * 60 * 1000;
+                request.Timeout = action == "photo" ? 60 * 1000 : 8 * 60 * 1000;
+                request.ReadWriteTimeout = request.Timeout;
                 request.KeepAlive = false;
                 if (action == "publish") WriteMultipart(request, Required(job, "details"), job["photos"] as IEnumerable);
                 if (action == "state" || action == "pause" || action == "urgency" || action == "blanks-ready" || action == "assign")
                     WriteJson(request, Required(job, "details"));
                 using (var response = (HttpWebResponse)request.GetResponse())
-                using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
                 {
-                    string body = reader.ReadToEnd();
-                    if (action == "unassigned" || action == "list")
-                        body = "{\"orders\":" + body + "}";
-                    Reply(serializer, true, body, null);
+                    if (action == "photo")
+                    {
+                        const int maximum = 5 * 1024 * 1024;
+                        if (response.ContentLength > maximum) throw new InvalidDataException("Миниатюра слишком велика.");
+                        using (var input = response.GetResponseStream())
+                        using (var image = new MemoryStream())
+                        {
+                            var buffer = new byte[8192];
+                            int read;
+                            while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+                            {
+                                if (image.Length + read > maximum) throw new InvalidDataException("Миниатюра слишком велика.");
+                                image.Write(buffer, 0, read);
+                            }
+                            Reply(serializer, true, serializer.Serialize(new { photo = Convert.ToBase64String(image.ToArray()) }), null);
+                        }
+                    }
+                    else using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
+                    {
+                        string body = reader.ReadToEnd();
+                        if (action == "unassigned" || action == "list")
+                            body = "{\"orders\":" + body + "}";
+                        Reply(serializer, true, body, null);
+                    }
                 }
                 return 0;
             }
