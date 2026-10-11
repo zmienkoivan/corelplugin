@@ -782,7 +782,10 @@ namespace VanyaTools.Native
                 {
                     if (_busy || !_data.Frames.Contains(frame) ||
                         !SameDocument(document, (object)CorelApp.Get().ActiveDocument)) return;
-                    frame.Thumbnail = CaptureFrameThumbnail((dynamic)document, frame);
+                    // The newly added shapes are still selected. A lookup by StaticID
+                    // can fail for Corel objects even though they remain on the page.
+                    if (!SelectionMatchesFrame(frame)) return;
+                    frame.Thumbnail = CaptureFrameThumbnail((dynamic)document, frame, true);
                     SaveData(); RenderFrames();
                 }
                 catch (Exception error) { Log.Error("Order frame thumbnail capture failed", error); }
@@ -794,11 +797,23 @@ namespace VanyaTools.Native
             if (_busy) return;
             dynamic doc = EnsureDocument(true, true);
             var frame = _data.Frames[index];
-            frame.Thumbnail = CaptureFrameThumbnail(doc, frame);
+            frame.Thumbnail = CaptureFrameThumbnail(doc, frame, SelectionMatchesFrame(frame));
             SaveData(); RenderFrames();
         }
 
-        private static string CaptureFrameThumbnail(dynamic doc, OrderCardFrame frame)
+        private static bool SelectionMatchesFrame(OrderCardFrame frame)
+        {
+            dynamic selection = CorelApp.Get().ActiveSelectionRange;
+            if (selection == null || Convert.ToInt32(selection.Count) != frame.Shapes.Count) return false;
+            var remaining = new HashSet<string>(frame.Shapes.Select(shape => shape.Page + ":" + shape.Id));
+            foreach (dynamic shape in selection.Shapes)
+                if (!remaining.Remove(Convert.ToInt32(shape.Page.Index) + ":" +
+                    Convert.ToInt32(shape.StaticID))) return false;
+            return remaining.Count == 0;
+        }
+
+        private static string CaptureFrameThumbnail(dynamic doc, OrderCardFrame frame,
+            bool useCurrentSelection = false)
         {
             dynamic app = CorelApp.Get();
             var original = new List<dynamic>();
@@ -807,7 +822,7 @@ namespace VanyaTools.Native
             string path = Path.Combine(Path.GetTempPath(), "Vanya-Order-Thumb-" + Guid.NewGuid().ToString("N") + ".png");
             try
             {
-                SelectShapes(doc, frame);
+                if (!useCurrentSelection) SelectShapes(doc, frame);
                 dynamic selection = app.ActiveSelectionRange;
                 double sourceWidth = Convert.ToDouble(selection.SizeWidth);
                 double sourceHeight = Convert.ToDouble(selection.SizeHeight);
@@ -869,7 +884,7 @@ namespace VanyaTools.Native
             if (missingIndex < 0) _data.Frames.Add(frame);
             else _data.Frames[missingIndex] = frame;
             SaveData(); RenderFrames(); UpdateCaption();
-            QueueFrameThumbnail(frame);
+            if (!_busy) QueueFrameThumbnail(frame);
             return true;
         }
 
@@ -925,7 +940,8 @@ namespace VanyaTools.Native
             if (first) throw new InvalidOperationException("Кадр пуст.");
         }
 
-        private static byte[] CapturePhoto(dynamic doc, OrderCardFrame frame)
+        private static byte[] CapturePhoto(dynamic doc, OrderCardFrame frame,
+            bool useCurrentSelection = false)
         {
             dynamic app = CorelApp.Get();
             var original = new List<dynamic>();
@@ -934,7 +950,7 @@ namespace VanyaTools.Native
             string capturePath = null;
             try
             {
-                SelectShapes(doc, frame);
+                if (!useCurrentSelection) SelectShapes(doc, frame);
                 Log.Info("Order card: rasterizing selected shapes in CorelDRAW.");
                 capturePath = AiSelectionCapture.Capture(9500, 24000000,
                     restoreSelection: false, refreshWindow: false);
@@ -1631,6 +1647,7 @@ namespace VanyaTools.Native
                 dynamic doc = EnsureDocument(true, true); ReadForm();
                 if (_data.PendingIntakeId > 0)
                     throw new InvalidOperationException("Сначала повторите присвоение номера с приёмки.");
+                bool useCurrentSelection = includePhotos && _data.Frames.Count == 0;
                 if (includePhotos && !ResolveSelectionFrame()) return;
                 if (_data.Customer.Length == 0) throw new InvalidOperationException("Введите имя заказчика.");
                 string caption = ComposeCaption();
@@ -1663,13 +1680,13 @@ namespace VanyaTools.Native
                 {
                     _status("Подготовка кадра " + (i + 1) + " из " + _data.Frames.Count + "…", false);
                     byte[] photo;
-                    try { photo = CapturePhoto(doc, _data.Frames[i]); }
+                    try { photo = CapturePhoto(doc, _data.Frames[i], useCurrentSelection && i == 0); }
                     catch (InvalidOperationException error) when (
                         error.Message.StartsWith("Объект кадра удалён", StringComparison.Ordinal) ||
                         error.Message.StartsWith("Страница кадра не найдена", StringComparison.Ordinal))
                     {
                         if (!ResolveSelectionFrame(i)) return;
-                        photo = CapturePhoto(doc, _data.Frames[i]);
+                        photo = CapturePhoto(doc, _data.Frames[i], true);
                     }
                     photos.Add(photo);
                     _data.Frames[i].Thumbnail = ThumbnailFromPhoto(photo);
