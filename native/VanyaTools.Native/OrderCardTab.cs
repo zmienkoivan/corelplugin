@@ -26,11 +26,11 @@ namespace VanyaTools.Native
         private const string PropertyOwner = "CD899165-445C-40F0-91D7-2DF6703B0AF8";
         private readonly Action<string, bool> _status;
         private readonly TextBox _customer, _designName, _description, _items,
-            _server, _orderNumber, _yearFolder, _ordersSearch;
+            _server, _yearFolder, _ordersSearch;
         private readonly List<RadioButton> _sourceButtons = new List<RadioButton>();
         private readonly PasswordBox _key;
         private readonly TextBlock _caption, _documentName, _orderInfo, _ordersCount, _unassignedCount,
-            _photoLabel, _photoMessage;
+            _unassignedHint, _photoLabel, _photoMessage;
         private readonly StackPanel _frames, _editor;
         private readonly Expander _frameExpander;
         private readonly Button _send, _updateText, _state, _refreshServer, _unassignedRefresh,
@@ -98,28 +98,22 @@ namespace VanyaTools.Native
             documentRow.Children.Add(reload);
             documentRow.Children.Add(_documentName);
             panel.Children.Add(documentRow);
-            var openRow = new DockPanel { Margin = new Thickness(0, 1, 0, 2) };
-            var openButton = Button("Открыть заказ", async (_, __) => await OpenServerOrder());
-            DockPanel.SetDock(openButton, Dock.Right); openRow.Children.Add(openButton);
-            var openLabel = Label("ММ###"); openLabel.VerticalAlignment = VerticalAlignment.Center;
-            DockPanel.SetDock(openLabel, Dock.Left); openRow.Children.Add(openLabel);
-            _orderNumber = Input(); openRow.Children.Add(_orderNumber);
             var openPanel = new StackPanel();
-            openPanel.Children.Add(openRow);
-            var unassignedBar = new DockPanel { Margin = new Thickness(0, 4, 0, 2) };
+            var unassignedBar = new DockPanel { Margin = new Thickness(0, 1, 0, 2) };
             _unassignedRefresh = Button("↻", async (_, __) => await LoadUnassignedTable());
             _unassignedRefresh.MinWidth = 32;
             _unassignedRefresh.ToolTip = "Обновить список заказов без макета";
             DockPanel.SetDock(_unassignedRefresh, Dock.Right);
             unassignedBar.Children.Add(_unassignedRefresh);
-            _unassignedCount = Note("Заказы без макета");
+            _unassignedCount = Note("Загрузка списка…");
             unassignedBar.Children.Add(_unassignedCount);
             openPanel.Children.Add(unassignedBar);
             _unassignedTable = new DataGrid { AutoGenerateColumns = false, IsReadOnly = true,
                 CanUserAddRows = false, CanUserDeleteRows = false, CanUserResizeRows = false,
                 HeadersVisibility = DataGridHeadersVisibility.Column,
                 SelectionMode = DataGridSelectionMode.Single, SelectionUnit = DataGridSelectionUnit.FullRow,
-                Height = 164, RowHeight = 25, Margin = new Thickness(0, 0, 0, 2) };
+                Height = 102, RowHeight = 25, Margin = new Thickness(0, 0, 0, 2),
+                Visibility = Visibility.Collapsed };
             _unassignedTable.Columns.Add(new DataGridTextColumn { Header = "№",
                 Binding = new Binding("Number"), Width = new DataGridLength(65) });
             _unassignedTable.Columns.Add(new DataGridTextColumn { Header = "Заказчик",
@@ -131,8 +125,10 @@ namespace VanyaTools.Native
             _unassignedTable.AddHandler(UIElement.MouseLeftButtonUpEvent,
                 new MouseButtonEventHandler(UnassignedRowClicked), true);
             openPanel.Children.Add(_unassignedTable);
-            openPanel.Children.Add(Note("Нажмите на заказ в таблице, чтобы связать его с текущим CDR. Фото можно добавить позже."));
-            var openExpander = new Expander { Header = "Открыть прежний заказ", Content = openPanel,
+            _unassignedHint = Note("Нажмите на заказ, чтобы связать его с текущим CDR.");
+            _unassignedHint.Visibility = Visibility.Collapsed;
+            openPanel.Children.Add(_unassignedHint);
+            var openExpander = new Expander { Header = "Заказы без макета", Content = openPanel,
                 Margin = new Thickness(0, 1, 0, 2) };
             openExpander.Expanded += async (_, __) => await LoadUnassignedTable();
             panel.Children.Add(openExpander);
@@ -467,7 +463,6 @@ namespace VanyaTools.Native
             _failedDocumentIdentity = null;
             _failedDocumentPath = null;
             _data = new OrderCardData();
-            _orderNumber.Text = "";
             _loadingForm = true;
             try
             {
@@ -628,7 +623,6 @@ namespace VanyaTools.Native
                 _documentName.Text = _documentPath == null
                     ? "Новый CDR · " + _data.Frames.Count + " фото · не сохранён"
                     : Path.GetFileName(path) + " · " + _data.Frames.Count + " фото";
-                _orderNumber.Text = _data.ServerOrderNumber ?? "";
                 _customer.Text = _data.Customer ?? "";
                 _designName.Text = _data.DesignName ?? (_documentPath == null ? "" : Path.GetFileNameWithoutExtension(path));
                 SetSourceSelection(_data.Source);
@@ -768,7 +762,7 @@ namespace VanyaTools.Native
         {
             _frameExpander.Header = "Кадры (" + _data.Frames.Count + ")";
             _frames.Children.Clear();
-            if (_data.Frames.Count == 0) { _frames.Children.Add(Note("Кадров нет. Выделите макет и нажмите «Добавить выделение».")); return; }
+            if (_data.Frames.Count == 0) { _frames.Children.Add(Note("Кадров нет. При публикации текущее выделение станет первым кадром.")); return; }
             for (int i = 0; i < _data.Frames.Count; i++)
             {
                 int index = i;
@@ -893,13 +887,12 @@ namespace VanyaTools.Native
             dynamic selection = CorelApp.Get().ActiveSelectionRange;
             if (selection == null || Convert.ToInt32(selection.Count) == 0)
                 throw new InvalidOperationException(missingIndex < 0
-                    ? "Добавьте кадр или выделите макет на холсте."
+                    ? "Выделите макет на холсте или добавьте кадр перед публикацией."
                     : "Объект кадра удалён из CDR. Выделите актуальный макет, чтобы заменить кадр.");
-            string question = missingIndex < 0
-                ? "В карточке нет кадров. Использовать текущее выделение как фото заказа?"
-                : "Кадр " + (missingIndex + 1) + " больше не найден в CDR. Заменить его текущим выделением?";
-            if (MessageBox.Show(question, "Vanya Tools", MessageBoxButton.YesNo,
-                MessageBoxImage.Question) != MessageBoxResult.Yes) return false;
+            if (missingIndex >= 0 && MessageBox.Show("Кадр " + (missingIndex + 1) +
+                    " больше не найден в CDR. Заменить его текущим выделением?",
+                    "Vanya Tools", MessageBoxButton.YesNo,
+                    MessageBoxImage.Question) != MessageBoxResult.Yes) return false;
             var frame = FrameFromSelection();
             if (missingIndex < 0) _data.Frames.Add(frame);
             else _data.Frames[missingIndex] = frame;
@@ -1498,10 +1491,15 @@ namespace VanyaTools.Native
                     });
                 }
                 _unassignedTable.ItemsSource = available;
-                _unassignedCount.Text = "Заказы без макета: " + available.Count;
+                _unassignedTable.Visibility = available.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+                _unassignedHint.Visibility = available.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+                _unassignedCount.Text = available.Count > 0
+                    ? "Найдено: " + available.Count : "Сейчас заказов без макета нет.";
             }
             catch (Exception error)
             {
+                _unassignedTable.Visibility = Visibility.Collapsed;
+                _unassignedHint.Visibility = Visibility.Collapsed;
                 _unassignedCount.Text = "Не удалось загрузить заказы: " + error.Message;
             }
             finally { _unassignedLoading = false; _unassignedRefresh.IsEnabled = true; }
@@ -1701,7 +1699,10 @@ namespace VanyaTools.Native
                 if (remaining != null)
                 {
                     _unassignedTable.ItemsSource = remaining;
-                    _unassignedCount.Text = "Заказы без макета: " + remaining.Count;
+                    _unassignedTable.Visibility = remaining.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+                    _unassignedHint.Visibility = remaining.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+                    _unassignedCount.Text = remaining.Count > 0
+                        ? "Найдено: " + remaining.Count : "Сейчас заказов без макета нет.";
                 }
                 if (OrdersView.IsLoaded) await LoadOrders();
                 await LoadUnassignedTable();
@@ -1759,9 +1760,9 @@ namespace VanyaTools.Native
                 dynamic doc = EnsureDocument(true, true); ReadForm();
                 if (_data.PendingIntakeId > 0)
                     throw new InvalidOperationException("Сначала повторите присвоение номера с приёмки.");
+                if (_data.Customer.Length == 0) throw new InvalidOperationException("Введите имя заказчика.");
                 bool useCurrentSelection = includePhotos && _data.Frames.Count == 0;
                 if (includePhotos && !ResolveSelectionFrame()) return;
-                if (_data.Customer.Length == 0) throw new InvalidOperationException("Введите имя заказчика.");
                 string caption = ComposeCaption();
                 if (caption.Length > 990) throw new InvalidOperationException("Подпись длиннее 990 символов. Сократите описание.");
                 if (_data.ServerOrderId == 0 && _data.TelegramMessageId > 0 &&
@@ -1880,8 +1881,6 @@ namespace VanyaTools.Native
             catch (Exception error) { _status("Загрузка заказа: " + error.Message, true); }
             finally { _busy = false; _refreshServer.IsEnabled = true; }
         }
-
-        private Task OpenServerOrder() => OpenServerOrder(_orderNumber.Text.Trim());
 
         private async Task OpenServerOrder(string number)
         {
@@ -2107,7 +2106,6 @@ namespace VanyaTools.Native
                 (_data.ServerBlanksReady ? " · ❤️ Заготовки готовы" : "") +
                 (_data.ServerBlanksPaused ? " · ⏸ Заготовки" : "") +
                 (_data.ServerApplicationPaused ? " · ⏸ Нанесение" : "") : "";
-            if (assigned) _orderNumber.Text = _data.ServerOrderNumber;
         }
 
         private void SetWorkflowButtons(Button[] buttons, string state, bool blanks, bool application,

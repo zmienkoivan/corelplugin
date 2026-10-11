@@ -135,6 +135,19 @@ namespace VanyaTools.Native
             var tabs = new TabControl { MinHeight = 360 };
             tabs.Items.Add(ThumbnailTabs.Create("Основная", ThumbnailTabs.Crop,
                 Color.FromRgb(46, 112, 124), standardPage));
+            tabs.Items.Add(ThumbnailTabs.Create("Публикация", ThumbnailTabs.Publish,
+                Color.FromRgb(57, 120, 138),
+                new TabControl
+                {
+                    Items =
+                    {
+                        new TabItem { Header = "Карточка заказа", Content = orderCards },
+                        new TabItem { Header = "Превью", Content =
+                            new PreviewLibraryTab((message, isError) => SetStatus(message, isError)) }
+                    }
+                }));
+            tabs.Items.Add(ThumbnailTabs.Create("Заказы", ThumbnailTabs.Orders,
+                Color.FromRgb(68, 126, 104), orderCards.OrdersView));
             tabs.Items.Add(ThumbnailTabs.Create("Стикерпаки", ThumbnailTabs.Stickers,
                 Color.FromRgb(171, 111, 43),
                 new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = stickerTools }));
@@ -153,19 +166,6 @@ namespace VanyaTools.Native
                 new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
                     () => aiTools.GetToken(), ImportAiResult,
                     (message, isError) => SetStatus(message, isError), true)));
-            tabs.Items.Add(ThumbnailTabs.Create("Публикация", ThumbnailTabs.Publish,
-                Color.FromRgb(57, 120, 138),
-                new TabControl
-                {
-                    Items =
-                    {
-                        new TabItem { Header = "Карточка заказа", Content = orderCards },
-                        new TabItem { Header = "Превью", Content =
-                            new PreviewLibraryTab((message, isError) => SetStatus(message, isError)) }
-                    }
-                }));
-            tabs.Items.Add(ThumbnailTabs.Create("Заказы", ThumbnailTabs.Orders,
-                Color.FromRgb(68, 126, 104), orderCards.OrdersView));
             tabs.Items.Add(ThumbnailTabs.Create("Настройки", ThumbnailTabs.Settings,
                 Color.FromRgb(91, 104, 116),
                 new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = settings }));
