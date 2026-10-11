@@ -14,6 +14,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -54,6 +55,11 @@ namespace VanyaTools.Native
         private bool _restoringOrderSelection;
         private int _previewOrderId, _previewIndex, _previewRequest;
         private string _previewKey;
+        private readonly Dictionary<string, BitmapSource> _photoThumbs = new Dictionary<string, BitmapSource>();
+        private readonly LinkedList<string> _photoThumbOrder = new LinkedList<string>();
+        private readonly Dictionary<string, byte[]> _photoOriginals = new Dictionary<string, byte[]>();
+        private readonly LinkedList<string> _photoOriginalOrder = new LinkedList<string>();
+        private long _photoOriginalBytes;
         private string _sourceValue = "";
 
         internal FrameworkElement SettingsView { get; }
@@ -158,7 +164,11 @@ namespace VanyaTools.Native
             _previousPhoto = Button("‹", (_, __) => ChangePhoto(-1));
             _previousPhoto.Width = 32; _previousPhoto.ToolTip = "Предыдущее фото";
             DockPanel.SetDock(_previousPhoto, Dock.Right); photoBar.Children.Add(_previousPhoto);
-            var reloadPhoto = Button("↻", (_, __) => { _previewKey = null; _ = ShowSelectedPhoto(); });
+            var reloadPhoto = Button("↻", (_, __) => {
+                if (_previewKey != null) ForgetPhoto(_previewKey);
+                _previewKey = null;
+                _ = ShowSelectedPhoto();
+            });
             reloadPhoto.Width = 32; reloadPhoto.ToolTip = "Повторить загрузку фото";
             DockPanel.SetDock(reloadPhoto, Dock.Right); photoBar.Children.Add(reloadPhoto);
             _photoLabel = Note("Выберите заказ");
@@ -168,6 +178,9 @@ namespace VanyaTools.Native
                 Margin = new Thickness(1, 0, 1, 4) };
             _orderPhoto = new Image { Stretch = Stretch.Uniform, SnapsToDevicePixels = true };
             photoStage.Children.Add(_orderPhoto);
+            photoStage.Cursor = Cursors.Hand;
+            photoStage.ToolTip = "Нажмите, чтобы увеличить фото";
+            photoStage.MouseLeftButtonUp += (_, __) => _ = ZoomSelectedPhoto();
             _photoMessage = Note("Выберите заказ для просмотра фото.");
             _photoMessage.HorizontalAlignment = HorizontalAlignment.Center;
             _photoMessage.VerticalAlignment = VerticalAlignment.Center;
@@ -923,6 +936,73 @@ namespace VanyaTools.Native
             _ = ShowSelectedPhoto();
         }
 
+        private string PhotoCacheKey(OrderListItem selected, int index)
+        {
+            string version = index < selected.PhotoVersions.Length
+                ? selected.PhotoVersions[index] : "";
+            return _server.Text.Trim() + ":" + selected.Id + ":" +
+                selected.PhotoCount + ":" + index + ":" + version;
+        }
+
+        private static BitmapSource DecodePhoto(byte[] bytes, int maximumWidth)
+        {
+            var image = new BitmapImage();
+            using (var stream = new MemoryStream(bytes))
+            {
+                image.BeginInit();
+                image.CacheOption = BitmapCacheOption.OnLoad;
+                image.DecodePixelWidth = maximumWidth;
+                image.StreamSource = stream;
+                image.EndInit();
+            }
+            image.Freeze();
+            return image;
+        }
+
+        private void RememberThumbnail(string key, BitmapSource image)
+        {
+            _photoThumbs[key] = image;
+            _photoThumbOrder.Remove(key);
+            _photoThumbOrder.AddLast(key);
+            while (_photoThumbOrder.Count > 64)
+            {
+                string oldest = _photoThumbOrder.First.Value;
+                _photoThumbOrder.RemoveFirst();
+                _photoThumbs.Remove(oldest);
+            }
+        }
+
+        private void RememberOriginal(string key, byte[] bytes)
+        {
+            const long limit = 64L * 1024 * 1024;
+            if (bytes.Length > limit) return;
+            if (_photoOriginals.TryGetValue(key, out byte[] previous))
+                _photoOriginalBytes -= previous.Length;
+            _photoOriginals[key] = bytes;
+            _photoOriginalBytes += bytes.Length;
+            _photoOriginalOrder.Remove(key);
+            _photoOriginalOrder.AddLast(key);
+            while (_photoOriginalBytes > limit || _photoOriginalOrder.Count > 4)
+            {
+                string oldest = _photoOriginalOrder.First.Value;
+                _photoOriginalOrder.RemoveFirst();
+                _photoOriginalBytes -= _photoOriginals[oldest].Length;
+                _photoOriginals.Remove(oldest);
+            }
+        }
+
+        private void ForgetPhoto(string key)
+        {
+            _photoThumbOrder.Remove(key);
+            _photoThumbs.Remove(key);
+            _photoOriginalOrder.Remove(key);
+            if (_photoOriginals.TryGetValue(key, out byte[] bytes))
+            {
+                _photoOriginalBytes -= bytes.Length;
+                _photoOriginals.Remove(key);
+            }
+        }
+
         private async Task ShowSelectedPhoto()
         {
             var selected = _ordersTable.SelectedItem as OrderListItem;
@@ -943,10 +1023,7 @@ namespace VanyaTools.Native
             }
             _previewIndex = Math.Min(_previewIndex, Math.Max(0, selected.PhotoCount - 1));
             UpdatePhotoNavigation(selected);
-            string version = _previewIndex < selected.PhotoVersions.Length
-                ? selected.PhotoVersions[_previewIndex] : "";
-            string key = _server.Text.Trim() + ":" + selected.Id + ":" +
-                selected.PhotoCount + ":" + _previewIndex + ":" + version;
+            string key = PhotoCacheKey(selected, _previewIndex);
             if (key == _previewKey) return;
             _previewKey = key;
             int request = ++_previewRequest;
@@ -954,23 +1031,23 @@ namespace VanyaTools.Native
             _photoMessage.Text = selected.PhotoCount == 0 ? "У заказа нет фото." : "Загрузка фото…";
             _photoMessage.Visibility = Visibility.Visible;
             if (selected.PhotoCount == 0) return;
+            if (_photoThumbs.TryGetValue(key, out BitmapSource cached))
+            {
+                RememberThumbnail(key, cached);
+                _orderPhoto.Source = cached;
+                _photoMessage.Visibility = Visibility.Collapsed;
+                return;
+            }
             try
             {
                 await Task.Delay(150);
                 if (request != _previewRequest) return;
+                int index = _previewIndex;
                 byte[] bytes = await OrderServerClient.PhotoThumbnail(_server.Text.Trim(),
-                    _key.Password.Trim(), selected.Id, _previewIndex);
+                    _key.Password.Trim(), selected.Id, index);
+                var image = DecodePhoto(bytes, 640);
+                RememberThumbnail(key, image);
                 if (request != _previewRequest) return;
-                var image = new BitmapImage();
-                using (var stream = new MemoryStream(bytes))
-                {
-                    image.BeginInit();
-                    image.CacheOption = BitmapCacheOption.OnLoad;
-                    image.DecodePixelWidth = 640;
-                    image.StreamSource = stream;
-                    image.EndInit();
-                }
-                image.Freeze();
                 _orderPhoto.Source = image;
                 _photoMessage.Visibility = Visibility.Collapsed;
             }
@@ -979,6 +1056,94 @@ namespace VanyaTools.Native
                 if (request != _previewRequest) return;
                 Log.Error("Order thumbnail unavailable", error);
                 _photoMessage.Text = "Фото недоступно.";
+            }
+        }
+
+        private async Task ZoomSelectedPhoto()
+        {
+            var selected = _ordersTable.SelectedItem as OrderListItem;
+            if (selected == null || selected.PhotoCount == 0 || _orderPhoto.Source == null) return;
+            int index = _previewIndex;
+            string key = PhotoCacheKey(selected, index);
+            var photo = new Image { Source = _orderPhoto.Source, Stretch = Stretch.Fill,
+                SnapsToDevicePixels = true };
+            var scale = new ScaleTransform(1, 1);
+            photo.LayoutTransform = scale;
+            var scroll = new ScrollViewer { Content = photo,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Background = Brushes.Black };
+            var bar = new DockPanel { Margin = new Thickness(8, 4, 8, 4) };
+            var zoomLabel = Note("");
+            var message = Note("Загрузка оригинала…");
+            Action fit = () => {
+                var source = photo.Source as BitmapSource;
+                if (source == null) return;
+                photo.Width = source.PixelWidth;
+                photo.Height = source.PixelHeight;
+                double width = Math.Max(1, scroll.ActualWidth - 24);
+                double height = Math.Max(1, scroll.ActualHeight - 24);
+                double value = Math.Min(width / source.PixelWidth, height / source.PixelHeight);
+                value = Math.Max(0.02, Math.Min(8, value));
+                scale.ScaleX = scale.ScaleY = value;
+                zoomLabel.Text = Math.Round(value * 100) + "%";
+                scroll.ScrollToHome();
+            };
+            Action<double> zoom = factor => {
+                double value = Math.Max(0.02, Math.Min(8, scale.ScaleX * factor));
+                scale.ScaleX = scale.ScaleY = value;
+                zoomLabel.Text = Math.Round(value * 100) + "%";
+            };
+            foreach (var item in new[] { new { Text = "−", Factor = 1 / 1.25 },
+                         new { Text = "+", Factor = 1.25 } })
+            {
+                double factor = item.Factor;
+                var button = Button(item.Text, (_, __) => zoom(factor));
+                button.Width = 34;
+                DockPanel.SetDock(button, Dock.Left);
+                bar.Children.Add(button);
+            }
+            var fitButton = Button("Вписать", (_, __) => fit());
+            DockPanel.SetDock(fitButton, Dock.Left); bar.Children.Add(fitButton);
+            zoomLabel.VerticalAlignment = VerticalAlignment.Center;
+            zoomLabel.Margin = new Thickness(9, 0, 9, 0);
+            DockPanel.SetDock(zoomLabel, Dock.Left); bar.Children.Add(zoomLabel);
+            message.VerticalAlignment = VerticalAlignment.Center;
+            bar.Children.Add(message);
+            var layout = new DockPanel();
+            DockPanel.SetDock(bar, Dock.Top);
+            layout.Children.Add(bar);
+            layout.Children.Add(scroll);
+            var window = new Window { Title = "Фото заказа №" + selected.Number + " · " +
+                (index + 1) + "/" + selected.PhotoCount,
+                Width = 1000, Height = 750, MinWidth = 440, MinHeight = 340,
+                Content = layout, WindowStartupLocation = WindowStartupLocation.CenterScreen };
+            var owner = Window.GetWindow(this);
+            if (owner != null) { window.Owner = owner; window.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
+            window.ContentRendered += (_, __) => fit();
+            scroll.PreviewMouseWheel += (_, args) => {
+                zoom(args.Delta > 0 ? 1.25 : 1 / 1.25);
+                args.Handled = true;
+            };
+            window.Show();
+            try
+            {
+                if (!_photoOriginals.TryGetValue(key, out byte[] bytes))
+                {
+                    bytes = await OrderServerClient.PhotoOriginal(_server.Text.Trim(),
+                        _key.Password.Trim(), selected.Id, index);
+                    RememberOriginal(key, bytes);
+                }
+                else RememberOriginal(key, bytes);
+                if (!window.IsVisible) return;
+                photo.Source = DecodePhoto(bytes, 4096);
+                message.Text = "Колесо мыши — масштаб";
+                fit();
+            }
+            catch (Exception error)
+            {
+                Log.Error("Order photo unavailable", error);
+                if (window.IsVisible) message.Text = "Оригинал недоступен; показана миниатюра.";
             }
         }
 

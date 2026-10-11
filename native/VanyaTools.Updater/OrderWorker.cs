@@ -60,12 +60,13 @@ namespace VanyaTools.Updater
                     method = "PATCH";
                 }
                 else if (action == "unassigned") route += "/unassigned";
-                else if (action == "photo")
+                else if (action == "photo" || action == "photo-full")
                 {
                     int id = Convert.ToInt32(job["id"]);
                     if (id < 1 || !Int32.TryParse(Required(job, "number"), out int index) ||
                         index < 0 || index > 9) throw new InvalidDataException("Неверный номер фото заказа.");
-                    route += "/" + id + "/photos/" + index + "?thumbnail=1";
+                    route += "/" + id + "/photos/" + index +
+                        (action == "photo" ? "?thumbnail=1" : "");
                 }
                 else if (action == "assign")
                 {
@@ -80,7 +81,8 @@ namespace VanyaTools.Updater
                 var request = (HttpWebRequest)WebRequest.Create(new Uri(root, route));
                 request.Method = method;
                 request.Headers["X-Admin-Key"] = key;
-                request.Timeout = action == "photo" ? 60 * 1000 : 8 * 60 * 1000;
+                request.Timeout = action == "photo" || action == "photo-full"
+                    ? 80 * 1000 : 8 * 60 * 1000;
                 request.ReadWriteTimeout = request.Timeout;
                 request.KeepAlive = false;
                 if (action == "publish") WriteMultipart(request, Required(job, "details"), job["photos"] as IEnumerable);
@@ -88,10 +90,10 @@ namespace VanyaTools.Updater
                     WriteJson(request, Required(job, "details"));
                 using (var response = (HttpWebResponse)request.GetResponse())
                 {
-                    if (action == "photo")
+                    if (action == "photo" || action == "photo-full")
                     {
-                        const int maximum = 5 * 1024 * 1024;
-                        if (response.ContentLength > maximum) throw new InvalidDataException("Миниатюра слишком велика.");
+                        int maximum = action == "photo" ? 5 * 1024 * 1024 : 21 * 1024 * 1024;
+                        if (response.ContentLength > maximum) throw new InvalidDataException("Фото слишком велико.");
                         using (var input = response.GetResponseStream())
                         using (var image = new MemoryStream())
                         {
@@ -99,7 +101,7 @@ namespace VanyaTools.Updater
                             int read;
                             while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
                             {
-                                if (image.Length + read > maximum) throw new InvalidDataException("Миниатюра слишком велика.");
+                                if (image.Length + read > maximum) throw new InvalidDataException("Фото слишком велико.");
                                 image.Write(buffer, 0, read);
                             }
                             Reply(serializer, true, serializer.Serialize(new { photo = Convert.ToBase64String(image.ToArray()) }), null);

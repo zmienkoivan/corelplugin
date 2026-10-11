@@ -37,10 +37,17 @@ namespace VanyaTools.Native
             Task.Run(() => RunWorker("list", server, key, 0, null, null));
 
         internal static Task<byte[]> PhotoThumbnail(string server, string key, int orderId, int index) =>
+            Photo(server, key, orderId, index, false);
+
+        internal static Task<byte[]> PhotoOriginal(string server, string key, int orderId, int index) =>
+            Photo(server, key, orderId, index, true);
+
+        private static Task<byte[]> Photo(string server, string key, int orderId, int index, bool original) =>
             Task.Run(() => {
-                var reply = RunWorker("photo", server, key, orderId, index.ToString(), null);
+                var reply = RunWorker(original ? "photo-full" : "photo", server, key,
+                    orderId, index.ToString(), null);
                 if (!reply.TryGetValue("photo", out object encoded) || encoded == null)
-                    throw new InvalidDataException("Сервер не вернул миниатюру заказа.");
+                    throw new InvalidDataException("Сервер не вернул фото заказа.");
                 return Convert.FromBase64String(Convert.ToString(encoded));
             });
 
@@ -111,7 +118,8 @@ namespace VanyaTools.Native
                     process.StandardInput.Write(Convert.ToBase64String(
                         Encoding.UTF8.GetBytes(serializer.Serialize(job))));
                     process.StandardInput.Close();
-                    if (!process.WaitForExit(action == "photo" ? 70 * 1000 : 8 * 60 * 1000))
+                    if (!process.WaitForExit(action == "photo" || action == "photo-full"
+                        ? 90 * 1000 : 8 * 60 * 1000))
                     {
                         try { process.Kill(); } catch { }
                         throw new TimeoutException("Сервер заказов не ответил за 8 минут. Проверьте канал перед повтором.");
