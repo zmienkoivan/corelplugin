@@ -29,15 +29,15 @@ namespace VanyaTools.Native
             _server, _orderNumber, _yearFolder, _ordersSearch;
         private readonly List<RadioButton> _sourceButtons = new List<RadioButton>();
         private readonly PasswordBox _key;
-        private readonly TextBlock _caption, _documentName, _orderInfo, _ordersCount,
+        private readonly TextBlock _caption, _documentName, _orderInfo, _ordersCount, _unassignedCount,
             _photoLabel, _photoMessage;
         private readonly StackPanel _frames, _editor;
         private readonly Expander _frameExpander;
-        private readonly Button _send, _updateText, _state, _refreshServer,
+        private readonly Button _send, _updateText, _state, _refreshServer, _unassignedRefresh,
             _saveDocument, _linkOrder, _loadOrders, _blanksPause, _applicationPause, _urgent, _blanksReady,
             _previousPhoto, _nextPhoto;
         private readonly Button[] _listWorkflow = new Button[5];
-        private readonly DataGrid _ordersTable;
+        private readonly DataGrid _ordersTable, _unassignedTable;
         private readonly Image _orderPhoto;
         private readonly Dictionary<string, DataGridColumn> _orderColumns = new Dictionary<string, DataGridColumn>();
         private readonly CheckBox _onlyAvailable;
@@ -53,6 +53,7 @@ namespace VanyaTools.Native
         private bool _loadingForm;
         private bool _busy;
         private bool _ordersLoading;
+        private bool _unassignedLoading;
         private bool _restoringOrderSelection;
         private int _previewOrderId, _previewIndex, _previewRequest;
         private string _previewKey;
@@ -103,8 +104,38 @@ namespace VanyaTools.Native
             var openLabel = Label("ММ###"); openLabel.VerticalAlignment = VerticalAlignment.Center;
             DockPanel.SetDock(openLabel, Dock.Left); openRow.Children.Add(openLabel);
             _orderNumber = Input(); openRow.Children.Add(_orderNumber);
-            panel.Children.Add(new Expander { Header = "Открыть прежний заказ", Content = openRow,
-                Margin = new Thickness(0, 1, 0, 2) });
+            var openPanel = new StackPanel();
+            openPanel.Children.Add(openRow);
+            var unassignedBar = new DockPanel { Margin = new Thickness(0, 4, 0, 2) };
+            _unassignedRefresh = Button("↻", async (_, __) => await LoadUnassignedTable());
+            _unassignedRefresh.MinWidth = 32;
+            _unassignedRefresh.ToolTip = "Обновить список заказов без макета";
+            DockPanel.SetDock(_unassignedRefresh, Dock.Right);
+            unassignedBar.Children.Add(_unassignedRefresh);
+            _unassignedCount = Note("Заказы без макета");
+            unassignedBar.Children.Add(_unassignedCount);
+            openPanel.Children.Add(unassignedBar);
+            _unassignedTable = new DataGrid { AutoGenerateColumns = false, IsReadOnly = true,
+                CanUserAddRows = false, CanUserDeleteRows = false, CanUserResizeRows = false,
+                HeadersVisibility = DataGridHeadersVisibility.Column,
+                SelectionMode = DataGridSelectionMode.Single, SelectionUnit = DataGridSelectionUnit.FullRow,
+                Height = 164, RowHeight = 25, Margin = new Thickness(0, 0, 0, 2) };
+            _unassignedTable.Columns.Add(new DataGridTextColumn { Header = "№",
+                Binding = new Binding("Number"), Width = new DataGridLength(65) });
+            _unassignedTable.Columns.Add(new DataGridTextColumn { Header = "Заказчик",
+                Binding = new Binding("Customer"), Width = new DataGridLength(1, DataGridLengthUnitType.Star) });
+            _unassignedTable.Columns.Add(new DataGridTextColumn { Header = "Срок",
+                Binding = new Binding("Due"), Width = new DataGridLength(80) });
+            _unassignedTable.AlternationCount = 2;
+            _unassignedTable.AlternatingRowBackground = new SolidColorBrush(Color.FromRgb(246, 248, 250));
+            _unassignedTable.AddHandler(UIElement.MouseLeftButtonUpEvent,
+                new MouseButtonEventHandler(UnassignedRowClicked), true);
+            openPanel.Children.Add(_unassignedTable);
+            openPanel.Children.Add(Note("Нажмите на заказ в таблице, чтобы связать его с текущим CDR. Фото можно добавить позже."));
+            var openExpander = new Expander { Header = "Открыть прежний заказ", Content = openPanel,
+                Margin = new Thickness(0, 1, 0, 2) };
+            openExpander.Expanded += async (_, __) => await LoadUnassignedTable();
+            panel.Children.Add(openExpander);
             _orderInfo = Note(""); panel.Children.Add(_orderInfo);
             var ordersPanel = new StackPanel { Margin = new Thickness(8) };
             ordersPanel.Children.Add(Title("Заказы"));
@@ -819,28 +850,17 @@ namespace VanyaTools.Native
             var original = new List<dynamic>();
             foreach (dynamic shape in app.ActiveSelectionRange.Shapes) original.Add(shape);
             dynamic originalPage = doc.ActivePage;
-            string path = Path.Combine(Path.GetTempPath(), "Vanya-Order-Thumb-" + Guid.NewGuid().ToString("N") + ".png");
+            string path = null;
             try
             {
                 if (!useCurrentSelection) SelectShapes(doc, frame);
-                dynamic selection = app.ActiveSelectionRange;
-                double sourceWidth = Convert.ToDouble(selection.SizeWidth);
-                double sourceHeight = Convert.ToDouble(selection.SizeHeight);
-                if (sourceWidth <= 0 || sourceHeight <= 0)
-                    throw new InvalidOperationException("У кадра нет видимого размера.");
-                double scale = 180.0 / Math.Max(sourceWidth, sourceHeight);
-                int width = Math.Max(1, (int)Math.Round(sourceWidth * scale));
-                int height = Math.Max(1, (int)Math.Round(sourceHeight * scale));
-                dynamic filter = doc.ExportBitmap(path, CorelConstants.CdrPng,
-                    CorelConstants.CdrSelection, CorelConstants.CdrRgbColorImage,
-                    width, height, 72, 72, CorelConstants.CdrNormalAntiAliasing,
-                    false, true, true, false, CorelConstants.CdrCompressionNone);
-                filter.Finish();
+                path = AiSelectionCapture.Capture(320, 102400,
+                    restoreSelection: false, refreshWindow: false);
                 return Convert.ToBase64String(File.ReadAllBytes(path));
             }
             finally
             {
-                try { File.Delete(path); } catch { }
+                if (path != null) try { File.Delete(path); } catch { }
                 try { if (Convert.ToInt32(doc.ActivePage.Index) != Convert.ToInt32(originalPage.Index))
                     originalPage.Activate(); } catch { }
                 try
@@ -1448,6 +1468,55 @@ namespace VanyaTools.Native
             }
         }
 
+        private async Task LoadUnassignedTable()
+        {
+            if (_unassignedLoading || _busy) return;
+            if (String.IsNullOrWhiteSpace(_server.Text) || String.IsNullOrWhiteSpace(_key.Password))
+            {
+                _unassignedCount.Text = "Укажите сервер и ключ в настройках.";
+                return;
+            }
+            _unassignedLoading = true;
+            _unassignedRefresh.IsEnabled = false;
+            _unassignedCount.Text = "Загрузка заказов без макета…";
+            try
+            {
+                var response = await OrderServerClient.Unassigned(_server.Text.Trim(), _key.Password.Trim());
+                if (!response.TryGetValue("orders", out object value) || !(value is IList rows))
+                    throw new InvalidDataException("Сервер вернул неверный список заказов.");
+                var available = new List<OrderListItem>();
+                foreach (object item in rows)
+                {
+                    if (!(item is Dictionary<string, object> row)) continue;
+                    available.Add(new OrderListItem {
+                        Id = Convert.ToInt32(row["id"]),
+                        Number = Convert.ToString(row["number"]),
+                        Customer = Convert.ToString(row["customer"]),
+                        Source = Convert.ToString(row["source"]),
+                        Due = OrderDate(OrderValue(row, "dueDate"), true),
+                        SendState = Convert.ToString(row["sendState"])
+                    });
+                }
+                _unassignedTable.ItemsSource = available;
+                _unassignedCount.Text = "Заказы без макета: " + available.Count;
+            }
+            catch (Exception error)
+            {
+                _unassignedCount.Text = "Не удалось загрузить заказы: " + error.Message;
+            }
+            finally { _unassignedLoading = false; _unassignedRefresh.IsEnabled = true; }
+        }
+
+        private async void UnassignedRowClicked(object sender, MouseButtonEventArgs e)
+        {
+            if (_busy || _unassignedLoading) return;
+            DependencyObject current = e.OriginalSource as DependencyObject;
+            while (current != null && !(current is DataGridRow))
+                current = VisualTreeHelper.GetParent(current);
+            if (current is DataGridRow row && row.Item is OrderListItem selected)
+                await AssignIntake(selected);
+        }
+
         private static bool SameOrders(IList<OrderListItem> current, IList<OrderListItem> incoming)
         {
             if (current.Count != incoming.Count) return false;
@@ -1565,27 +1634,58 @@ namespace VanyaTools.Native
                 if (CorelApp.Get().ActiveDocument == null)
                     throw new InvalidOperationException("Откройте документ CorelDRAW.");
                 RefreshDocument();
+                dynamic doc = EnsureDocument(true, true);
+                if (_data.ServerOrderId > 0) throw new InvalidOperationException("Карточке уже присвоен номер.");
                 if (!String.IsNullOrWhiteSpace(selected.Customer) &&
                     String.IsNullOrWhiteSpace(_customer.Text)) _customer.Text = selected.Customer;
                 if (String.IsNullOrWhiteSpace(_designName.Text))
                     _designName.Text = "Макет №" + selected.Number;
-                var doc = (object)EnsureDocument(); ReadForm();
-                if (_data.ServerOrderId > 0) throw new InvalidOperationException("Карточке уже присвоен номер.");
+                bool saveCdr = !String.IsNullOrWhiteSpace(Convert.ToString(doc.FullFileName));
+                if (!saveCdr)
+                {
+                    var choice = AskUnsavedPublish("Привязка заказа",
+                        "Этот CDR ещё не сохранён. Как привязать заказ №" + selected.Number + "?");
+                    if (choice == UnsavedPublishChoice.Cancel) return;
+                    if (choice == UnsavedPublishChoice.Save)
+                    {
+                        try { saveCdr = SaveNewDocument(doc, false); }
+                        catch (Exception saveError)
+                        {
+                            Log.Error("Order CDR save before assign failed", saveError);
+                            if (MessageBox.Show("CDR не сохранён: " + saveError.Message +
+                                    "\nПродолжить привязку без сохранения?", "Vanya Tools",
+                                    MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                                return;
+                        }
+                    }
+                }
+                ReadForm();
                 if (String.IsNullOrEmpty(_data.ClientKey)) _data.ClientKey = Guid.NewGuid().ToString();
                 if (_data.PendingIntakeId == 0) _data.PendingIntakeId = selected.Id;
                 if (_data.PendingIntakeId != selected.Id)
                     throw new InvalidOperationException("Карточка ожидает другой номер. Выберите прежний заказ.");
                 SaveData();
-                doc.GetType().InvokeMember("Save", BindingFlags.InvokeMethod, null, doc, null);
+                if (saveCdr) doc.Save();
                 _busy = true; UpdateActions();
                 var result = await OrderServerClient.Assign(_server.Text.Trim(), _key.Password.Trim(),
                     _data.PendingIntakeId, _data.ClientKey);
                 if (!SameDocument(doc, (object)CorelApp.Get().ActiveDocument))
                     throw new InvalidOperationException("Вернитесь в исходный CDR и повторите присвоение номера.");
                 ReadForm(); ApplyServerResult(result); _data.PendingIntakeId = 0; SaveData();
-                doc.GetType().InvokeMember("Save", BindingFlags.InvokeMethod, null, doc, null);
-                _status("Заказ №" + _data.ServerOrderNumber + " связан с CDR.", false);
                 linked = true;
+                string saveWarning = null;
+                try { if (saveCdr) doc.Save(); }
+                catch (Exception saveError)
+                {
+                    Log.Error("Order assigned but CDR save failed", saveError);
+                    saveWarning = saveError.Message;
+                }
+                if (saveWarning != null)
+                    _status("Заказ №" + _data.ServerOrderNumber +
+                        " привязан, но CDR не сохранён: " + saveWarning, true);
+                else _status("Заказ №" + _data.ServerOrderNumber +
+                    (saveCdr ? " связан с CDR. Добавьте кадры и опубликуйте фото."
+                        : " привязан. CDR не сохранён; добавьте кадры и опубликуйте фото."), false);
             }
             catch (Exception error)
             {
@@ -1594,22 +1694,34 @@ namespace VanyaTools.Native
                 _status("Присвоение номера: " + error.Message, true);
             }
             finally { _busy = false; UpdateActions(); }
-            if (linked) await LoadOrders();
+            if (linked)
+            {
+                var remaining = (_unassignedTable.ItemsSource as IEnumerable<OrderListItem>)?
+                    .Where(order => order.Id != selected.Id).ToList();
+                if (remaining != null)
+                {
+                    _unassignedTable.ItemsSource = remaining;
+                    _unassignedCount.Text = "Заказы без макета: " + remaining.Count;
+                }
+                if (OrdersView.IsLoaded) await LoadOrders();
+                await LoadUnassignedTable();
+            }
         }
 
         private enum UnsavedPublishChoice { Save, Continue, Cancel }
 
-        private UnsavedPublishChoice AskUnsavedPublish()
+        private UnsavedPublishChoice AskUnsavedPublish(string title = "Публикация карточки",
+            string message = "Этот CDR ещё не сохранён. Как опубликовать карточку?")
         {
             var choice = UnsavedPublishChoice.Cancel;
-            var window = new Window { Title = "Публикация карточки", Width = 475,
+            var window = new Window { Title = title, Width = 475,
                 SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize,
                 WindowStartupLocation = WindowStartupLocation.CenterScreen,
                 ShowInTaskbar = false };
             var owner = Window.GetWindow(this);
             if (owner != null) { window.Owner = owner; window.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
             var panel = new StackPanel { Margin = new Thickness(18) };
-            panel.Children.Add(new TextBlock { Text = "Этот CDR ещё не сохранён. Как опубликовать карточку?",
+            panel.Children.Add(new TextBlock { Text = message,
                 TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 14) });
             var buttons = new StackPanel { Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Right };
@@ -1970,7 +2082,7 @@ namespace VanyaTools.Native
             bool assigned = _data.ServerOrderId > 0;
             bool draft = _data.ServerSendState == "draft";
             bool published = assigned && !draft;
-            _send.Content = published ? "Заменить фото и обновить текст" : draft ? "Сохранить карточку заказа" : "Опубликовать карточку";
+            _send.Content = published ? "Заменить фото и обновить текст" : draft ? "Опубликовать фото заказа" : "Опубликовать карточку";
             _send.IsEnabled = !_busy;
             _send.ToolTip = _busy ? "Дождитесь завершения операции с карточкой." : null;
             ToolTipService.SetShowOnDisabled(_send, true);
