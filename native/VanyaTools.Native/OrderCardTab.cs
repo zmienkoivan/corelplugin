@@ -52,6 +52,7 @@ namespace VanyaTools.Native
         private string _failedDocumentPath;
         private bool _loadingForm;
         private bool _busy;
+        private bool _ordersLoading;
         private bool _restoringOrderSelection;
         private int _previewOrderId, _previewIndex, _previewRequest;
         private string _previewKey;
@@ -312,15 +313,14 @@ namespace VanyaTools.Native
             _documentWatcher.Tick += (_, __) => RefreshDocument();
             _serverWatcher = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
             _serverWatcher.Tick += async (_, __) => await LoadOrders(true);
-            Loaded += async (_, __) => { _documentWatcher.Start(); _serverWatcher.Start(); RefreshDocument();
-                if (!String.IsNullOrWhiteSpace(_key.Password)) await LoadOrders(); };
+            Loaded += (_, __) => { _documentWatcher.Start(); RefreshDocument(); };
             Unloaded += (_, __) => { if (!QuickDocumentFields.IsLoaded) _documentWatcher.Stop();
                 if (!OrdersView.IsLoaded) _serverWatcher.Stop(); };
             QuickDocumentFields.Loaded += (_, __) => { _documentWatcher.Start(); RefreshDocument(); };
             QuickDocumentFields.Unloaded += (_, __) => { if (!IsLoaded) _documentWatcher.Stop(); };
             OrdersView.Loaded += async (_, __) => { _serverWatcher.Start();
                 if (!String.IsNullOrWhiteSpace(_key.Password)) await LoadOrders(); };
-            OrdersView.Unloaded += (_, __) => { if (!IsLoaded) _serverWatcher.Stop(); };
+            OrdersView.Unloaded += (_, __) => _serverWatcher.Stop();
             RenderFrames(); UpdateCaption(); UpdateActions();
         }
 
@@ -1190,13 +1190,13 @@ namespace VanyaTools.Native
 
         private async Task LoadOrders(bool automatic = false)
         {
-            if (_busy) return;
+            if (_busy || _ordersLoading) return;
             if (String.IsNullOrWhiteSpace(_key.Password))
             {
                 _ordersCount.Text = "Укажите ключ публикации в настройках.";
                 return;
             }
-            _busy = true; UpdateActions();
+            _ordersLoading = true; UpdateActions();
             try
             {
                 var reply = await OrderServerClient.List(_server.Text.Trim(), _key.Password.Trim());
@@ -1251,13 +1251,13 @@ namespace VanyaTools.Native
                             (Flag(row, "blanksPaused") ? " ⏸ Заготовки" : "") +
                             (Flag(row, "applicationPaused") ? " ⏸ Нанесение" : "")
                     });
-                    if (id == _data.ServerOrderId) ApplyWorkflowResult(row);
+                    if (!_busy && id == _data.ServerOrderId) ApplyWorkflowResult(row);
                 }
                 int activeId = _data.ServerOrderId;
                 if (activeId > 0 && !seen.Contains(activeId))
                 {
                     var current = await OrderServerClient.Get(_server.Text.Trim(), _key.Password.Trim(), activeId);
-                    if (_data.ServerOrderId == activeId) ApplyWorkflowResult(current);
+                    if (!_busy && _data.ServerOrderId == activeId) ApplyWorkflowResult(current);
                 }
                 FilterOrders();
             }
@@ -1266,7 +1266,7 @@ namespace VanyaTools.Native
                 _ordersCount.Text = "Не удалось загрузить заказы: " + error.Message;
                 if (!automatic) _status("Список заказов: " + error.Message, true);
             }
-            finally { _busy = false; UpdateActions(); }
+            finally { _ordersLoading = false; UpdateActions(); }
         }
 
         private async Task LinkSelectedOrder()
@@ -1352,11 +1352,17 @@ namespace VanyaTools.Native
 
         private async Task Publish(bool includePhotos)
         {
-            if (_busy) return;
+            if (_busy)
+            {
+                _status("Карточка: дождитесь завершения текущей операции.", true);
+                return;
+            }
             string server = _server.Text.Trim(), key = _key.Password.Trim();
             if (server.Length == 0 || key.Length == 0)
             { _status("Укажите адрес и ключ сервера во вкладке «Настройки».", true); return; }
-            _busy = true; _send.IsEnabled = false;
+            _busy = true; UpdateActions();
+            _status("Карточка: подготовка публикации…", false);
+            Log.Info("Order card publish started.");
             try
             {
                 dynamic doc = EnsureDocument(true, true); ReadForm();
@@ -1425,10 +1431,13 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Публикация не завершена. Проверьте канал и загрузите карточку с сервера.");
                 if (saveWarning != null)
                 {
+                    Log.Info("Order card published: " + _data.ServerOrderNumber + " (CDR save warning).");
                     _status("Заказ №" + _data.ServerOrderNumber +
                         " опубликован, но CDR не сохранён: " + saveWarning, true);
                     return;
                 }
+                Log.Info("Order card published: " + _data.ServerOrderNumber +
+                    " (" + _data.ServerSendState + ").");
                 _status("Заказ №" + _data.ServerOrderNumber +
                     (_data.ServerSendState == "local" ? " сохранён на сервере." : " сохранён в Telegram.") +
                     (saveCdr ? " CDR сохранён." : " CDR не сохранён."), false);
@@ -1607,7 +1616,9 @@ namespace VanyaTools.Native
             bool published = assigned && !draft;
             _send.Content = published ? "Заменить фото и обновить текст" : draft ? "Сохранить карточку заказа" : "Опубликовать карточку";
             _send.IsEnabled = !_busy;
-            _loadOrders.IsEnabled = !_busy;
+            _send.ToolTip = _busy ? "Дождитесь завершения операции с карточкой." : null;
+            ToolTipService.SetShowOnDisabled(_send, true);
+            _loadOrders.IsEnabled = !_busy && !_ordersLoading;
             _linkOrder.IsEnabled = !_busy && _ordersTable.SelectedItem != null;
             _linkOrder.Content = (_ordersTable.SelectedItem as OrderListItem)?.IsAvailable == true
                 ? "Связать с CDR" : "Открыть в CDR";
