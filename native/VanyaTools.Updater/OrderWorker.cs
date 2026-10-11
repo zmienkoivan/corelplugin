@@ -52,7 +52,7 @@ namespace VanyaTools.Updater
                     route += "/by-number/" + match.Groups[2].Value;
                     if (match.Groups[1].Success) route += "?year=" + match.Groups[1].Value;
                 }
-                else if (action == "state" || action == "pause" || action == "urgency" || action == "blanks-ready")
+                else if (action == "state" || action == "pause" || action == "urgency" || action == "blanks-ready" || action == "deadline")
                 {
                     int id = Convert.ToInt32(job["id"]);
                     if (id < 1) throw new InvalidDataException("Неверный номер заказа.");
@@ -86,7 +86,7 @@ namespace VanyaTools.Updater
                 request.ReadWriteTimeout = request.Timeout;
                 request.KeepAlive = false;
                 if (action == "publish") WriteMultipart(request, Required(job, "details"), job["photos"] as IEnumerable);
-                if (action == "state" || action == "pause" || action == "urgency" || action == "blanks-ready" || action == "assign")
+                if (action == "state" || action == "pause" || action == "urgency" || action == "blanks-ready" || action == "deadline" || action == "assign")
                     WriteJson(request, Required(job, "details"));
                 using (var response = (HttpWebResponse)request.GetResponse())
                 {

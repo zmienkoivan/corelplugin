@@ -134,6 +134,24 @@ namespace VanyaTools.Native
                 HeadersVisibility = DataGridHeadersVisibility.Column, SelectionMode = DataGridSelectionMode.Single,
                 SelectionUnit = DataGridSelectionUnit.FullRow, Height = 280, RowHeight = 24,
                 Margin = new Thickness(1, 0, 1, 3) };
+            _ordersTable.AlternationCount = 2;
+            _ordersTable.RowBackground = Brushes.White;
+            _ordersTable.AlternatingRowBackground = new SolidColorBrush(Color.FromRgb(246, 248, 250));
+            var orderRowStyle = new Style(typeof(DataGridRow));
+            var urgentRow = new DataTrigger { Binding = new Binding("Urgent"), Value = true };
+            urgentRow.Setters.Add(new Setter(Control.BackgroundProperty,
+                new SolidColorBrush(Color.FromRgb(255, 238, 238))));
+            orderRowStyle.Triggers.Add(urgentRow);
+            var completedRow = new DataTrigger { Binding = new Binding("State"), Value = "done" };
+            completedRow.Setters.Add(new Setter(Control.BackgroundProperty,
+                new SolidColorBrush(Color.FromRgb(234, 246, 255))));
+            orderRowStyle.Triggers.Add(completedRow);
+            var selectedRow = new Trigger { Property = DataGridRow.IsSelectedProperty, Value = true };
+            selectedRow.Setters.Add(new Setter(Control.BackgroundProperty,
+                new SolidColorBrush(Color.FromRgb(207, 230, 247))));
+            selectedRow.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.Black));
+            orderRowStyle.Triggers.Add(selectedRow);
+            _ordersTable.RowStyle = orderRowStyle;
             _ordersTable.Columns.Add(new DataGridTextColumn { Header = "№", Binding = new Binding("Number"),
                 Width = new DataGridLength(65) });
             var visibleColumns = LoadOrderColumns();
@@ -153,6 +171,8 @@ namespace VanyaTools.Native
                 new DataGridLength(94), false);
             AddOrderColumn(columnsMenu, visibleColumns, "status", "Состояние", "Status",
                 new DataGridLength(105), true);
+            _ordersTable.AddHandler(UIElement.MouseLeftButtonUpEvent,
+                new MouseButtonEventHandler(OrderCellClicked), true);
             _ordersTable.SelectionChanged += (_, __) => {
                 UpdateActions();
                 if (!_restoringOrderSelection) _ = ShowSelectedPhoto();
@@ -878,6 +898,75 @@ namespace VanyaTools.Native
             public bool Urgent { get; set; }
             public bool IsAvailable => SendState == "reserved";
         }
+
+        private async void OrderCellClicked(object sender, MouseButtonEventArgs e)
+        {
+            if (_busy || !_orderColumns.TryGetValue("due", out DataGridColumn dueColumn)) return;
+            DependencyObject current = e.OriginalSource as DependencyObject;
+            while (current != null && !(current is DataGridCell))
+                current = VisualTreeHelper.GetParent(current);
+            if (!(current is DataGridCell cell) || cell.Column != dueColumn) return;
+            current = cell;
+            while (current != null && !(current is DataGridRow))
+                current = VisualTreeHelper.GetParent(current);
+            if (current is DataGridRow row && row.Item is OrderListItem order)
+                await EditOrderDue(order);
+        }
+
+        private async Task EditOrderDue(OrderListItem order)
+        {
+            bool accepted = false;
+            string dueDate = null;
+            var window = new Window { Title = "Срок заказа №" + order.Number, Width = 285,
+                SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen, ShowInTaskbar = false };
+            var owner = Window.GetWindow(this);
+            if (owner != null) { window.Owner = owner; window.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
+            var panel = new StackPanel { Margin = new Thickness(14) };
+            panel.Children.Add(new TextBlock { Text = "Дата сдачи", Margin = new Thickness(0, 0, 0, 5) });
+            var picker = new DatePicker { Width = 175, HorizontalAlignment = HorizontalAlignment.Left,
+                SelectedDateFormat = DatePickerFormat.Short };
+            if (DateTime.TryParseExact(order.Due, "dd.MM.yyyy", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out DateTime existing)) picker.SelectedDate = existing;
+            panel.Children.Add(picker);
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
+            var save = Button("Сохранить", (_, __) => {
+                if (!picker.SelectedDate.HasValue) { _status("Выберите дату или нажмите «Очистить».", true); return; }
+                dueDate = picker.SelectedDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                accepted = true; window.Close();
+            });
+            var clear = Button("Очистить", (_, __) => { dueDate = ""; accepted = true; window.Close(); });
+            var cancel = Button("Отмена", (_, __) => window.Close());
+            foreach (var button in new[] { save, clear, cancel })
+            { button.Margin = new Thickness(0, 0, 4, 0); buttons.Children.Add(button); }
+            panel.Children.Add(buttons);
+            window.Content = panel;
+            window.ShowDialog();
+            if (!accepted || _busy || (dueDate == "" && String.IsNullOrEmpty(order.Due)) ||
+                dueDate == DateTimeToServerDate(order.Due)) return;
+            _busy = true; UpdateActions();
+            try
+            {
+                string server = _server.Text.Trim(), key = _key.Password.Trim();
+                var current = await OrderServerClient.Get(server, key, order.Id);
+                int revision = Convert.ToInt32(current["revision"]);
+                var updated = await OrderServerClient.SetDeadline(server, key, order.Id, dueDate, revision);
+                if (order.Id == _data.ServerOrderId && _data.ServerRevision == revision)
+                    _data.ServerRevision = Convert.ToInt32(updated["revision"]);
+                order.Due = OrderDate(OrderValue(updated, "dueDate"), true);
+                _ordersTable.Items.Refresh();
+                _status("Срок заказа №" + order.Number + (dueDate == "" ? " очищен." : " сохранён."), false);
+            }
+            catch (Exception error) { _status("Срок заказа: " + error.Message, true); }
+            finally { _busy = false; UpdateActions(); }
+            await LoadOrders();
+        }
+
+        private static string DateTimeToServerDate(string displayed) =>
+            DateTime.TryParseExact(displayed, "dd.MM.yyyy", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out DateTime date)
+                ? date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : "";
 
         private static HashSet<string> LoadOrderColumns()
         {

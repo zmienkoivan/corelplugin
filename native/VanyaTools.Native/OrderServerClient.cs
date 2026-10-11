@@ -67,6 +67,11 @@ namespace VanyaTools.Native
             Task.Run(() => RunWorker("pause", server, key, orderId, null,
                 new JavaScriptSerializer().Serialize(new { stage, paused, revision })));
 
+        internal static Task<Dictionary<string, object>> SetDeadline(string server, string key,
+            int orderId, string dueDate, int revision) =>
+            Task.Run(() => RunWorker("deadline", server, key, orderId, null,
+                new JavaScriptSerializer().Serialize(new { dueDate, revision })));
+
         internal static Task<Dictionary<string, object>> SetUrgency(string server, string key,
             int orderId, bool urgent, int revision) =>
             Task.Run(() => RunWorker("urgency", server, key, orderId, null,
