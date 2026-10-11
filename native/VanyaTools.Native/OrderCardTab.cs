@@ -324,16 +324,28 @@ namespace VanyaTools.Native
             RenderFrames(); UpdateCaption(); UpdateActions();
         }
 
-        private dynamic EnsureDocument(bool loadIfChanged = true)
+        private dynamic EnsureDocument(bool loadIfChanged = true, bool allowUnsaved = false)
         {
             dynamic doc = CorelApp.Get().ActiveDocument;
             if (doc == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
             string path = Convert.ToString(doc.FullFileName);
             if (String.IsNullOrWhiteSpace(path))
             {
-                if (!SaveNewDocument(doc))
-                    throw new OperationCanceledException("Сохранение CDR отменено.");
-                path = Convert.ToString(doc.FullFileName);
+                if (!allowUnsaved)
+                {
+                    if (!SaveNewDocument(doc))
+                        throw new OperationCanceledException("Сохранение CDR отменено.");
+                    path = Convert.ToString(doc.FullFileName);
+                }
+                else
+                {
+                    if (!SameDocument(_documentIdentity, (object)doc) || _documentPath != null)
+                    {
+                        LoadUnsavedDocument(doc);
+                        if (loadIfChanged) LoadDocument(false);
+                    }
+                    return doc;
+                }
             }
             if (loadIfChanged && (!SameDocument(_documentIdentity, (object)doc) ||
                 !String.Equals(path, _documentPath, StringComparison.OrdinalIgnoreCase)))
@@ -355,7 +367,7 @@ namespace VanyaTools.Native
                 if (String.IsNullOrWhiteSpace(path))
                 {
                     if (!SameDocument(_documentIdentity, candidate) || _documentPath != null)
-                        LoadUnsavedDocument(doc);
+                        LoadDocument(false);
                     return;
                 }
                 if (SameDocument(_failedDocumentIdentity, candidate) &&
@@ -449,7 +461,7 @@ namespace VanyaTools.Native
             _status("CDR сохранён.", false);
         }
 
-        private bool SaveNewDocument(dynamic doc)
+        private bool SaveNewDocument(dynamic doc, bool confirm = true)
         {
             string year = _yearFolder.Text.Trim();
             if (!Path.IsPathRooted(year))
@@ -478,14 +490,17 @@ namespace VanyaTools.Native
             string target = Path.Combine(folder, baseName + ".cdr");
             for (int suffix = 2; File.Exists(target); suffix++)
                 target = Path.Combine(folder, baseName + " (" + suffix + ").cdr");
-            if (MessageBox.Show("Сохранить макет?\n" + target, "Vanya Tools",
+            if (confirm && MessageBox.Show("Сохранить макет?\n" + target, "Vanya Tools",
                 MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return false;
             Directory.CreateDirectory(folder);
             ReadForm();
             WriteData(doc);
-            doc.SaveAs(target);
+            object options = CorelApp.Get().CreateStructSaveAsOptions();
+            doc.GetType().InvokeMember("SaveAs", BindingFlags.InvokeMethod,
+                null, (object)doc, new object[] { target, options });
             string saved = Convert.ToString(doc.FullFileName);
-            if (!String.Equals(Path.GetFullPath(saved), target, StringComparison.OrdinalIgnoreCase))
+            if (String.IsNullOrWhiteSpace(saved) ||
+                !String.Equals(Path.GetFullPath(saved), target, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("CorelDRAW сохранил файл по другому адресу: " + saved);
             LoadDocument(false);
             _status("CDR сохранён: " + target, false);
@@ -510,7 +525,7 @@ namespace VanyaTools.Native
 
         private void LoadDocument(bool report)
         {
-            dynamic doc = EnsureDocument(false);
+            dynamic doc = EnsureDocument(false, true);
             string path = Convert.ToString(doc.FullFileName);
             dynamic properties = doc.Properties;
             var loadedData = new OrderCardData();
@@ -532,7 +547,7 @@ namespace VanyaTools.Native
                 if (String.IsNullOrWhiteSpace(_data.Customer)) _data.Customer = pathCustomer;
                 if (String.IsNullOrWhiteSpace(_data.DesignName)) _data.DesignName = pathDesign;
             }
-            _documentPath = path;
+            _documentPath = String.IsNullOrWhiteSpace(path) ? null : path;
             _documentIdentity = (object)doc;
             _failedDocumentIdentity = null;
             _failedDocumentPath = null;
@@ -540,10 +555,12 @@ namespace VanyaTools.Native
             _loadingForm = true;
             try
             {
-                _documentName.Text = Path.GetFileName(path) + " · " + _data.Frames.Count + " фото";
+                _documentName.Text = _documentPath == null
+                    ? "Новый CDR · " + _data.Frames.Count + " фото · не сохранён"
+                    : Path.GetFileName(path) + " · " + _data.Frames.Count + " фото";
                 _orderNumber.Text = _data.ServerOrderNumber ?? "";
                 _customer.Text = _data.Customer ?? "";
-                _designName.Text = _data.DesignName ?? Path.GetFileNameWithoutExtension(path);
+                _designName.Text = _data.DesignName ?? (_documentPath == null ? "" : Path.GetFileNameWithoutExtension(path));
                 SetSourceSelection(_data.Source);
                 _description.Text = _data.Description ?? "";
                 _items.Text = _data.Items ?? "";
@@ -590,8 +607,7 @@ namespace VanyaTools.Native
             {
                 if (String.IsNullOrWhiteSpace(_documentPath))
                 {
-                    ReadForm();
-                    _documentName.Text = "Новый CDR · нажмите «Сохранить CDR»";
+                    ReadForm(); SaveData();
                     return;
                 }
                 object previous = _documentIdentity;
@@ -628,10 +644,11 @@ namespace VanyaTools.Native
 
         private void SaveData()
         {
-            dynamic doc = EnsureDocument(false);
+            dynamic doc = EnsureDocument(false, true);
             WriteData(doc);
-            _documentName.Text = Path.GetFileName(_documentPath) + " · " + _data.Frames.Count +
-                " фото · Ctrl+S";
+            _documentName.Text = _documentPath == null
+                ? "Новый CDR · " + _data.Frames.Count + " фото · не сохранён"
+                : Path.GetFileName(_documentPath) + " · " + _data.Frames.Count + " фото · Ctrl+S";
         }
 
         private void WriteData(dynamic doc)
@@ -649,7 +666,7 @@ namespace VanyaTools.Native
 
         private void AddSelection()
         {
-            dynamic doc = EnsureDocument();
+            dynamic doc = EnsureDocument(true, true);
             dynamic app = CorelApp.Get();
             dynamic selection = app.ActiveSelectionRange;
             if (selection == null || Convert.ToInt32(selection.Count) == 0)
@@ -668,7 +685,7 @@ namespace VanyaTools.Native
                     Page = currentPage, Id = Convert.ToInt32(shape.StaticID) });
             }
             ReadForm(); _data.Frames.Add(frame); SaveData(); RenderFrames(); UpdateCaption();
-            _status("Кадр добавлен. Исходные объекты не сгруппированы. Сохраните CDR.", false);
+            _status("Кадр добавлен. Исходные объекты не сгруппированы.", false);
         }
 
         private void RenderFrames()
@@ -697,7 +714,7 @@ namespace VanyaTools.Native
 
         private void MoveFrame(int index, int offset)
         {
-            EnsureDocument(); int target = index + offset;
+            EnsureDocument(true, true); int target = index + offset;
             if (target < 0 || target >= _data.Frames.Count) return;
             ReadForm(); var item = _data.Frames[index];
             _data.Frames[index] = _data.Frames[target]; _data.Frames[target] = item;
@@ -706,13 +723,13 @@ namespace VanyaTools.Native
 
         private void RemoveFrame(int index)
         {
-            EnsureDocument(); ReadForm(); _data.Frames.RemoveAt(index);
+            EnsureDocument(true, true); ReadForm(); _data.Frames.RemoveAt(index);
             SaveData(); RenderFrames(); _status("Кадр удалён из карточки.", false);
         }
 
         private void ClearCard()
         {
-            EnsureDocument();
+            EnsureDocument(true, true);
             if (MessageBox.Show("Очистить карточку в этом CDR? Макет останется без изменений.",
                 "Vanya Tools", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
             _data = new OrderCardData(); SaveData(); LoadDocument(false);
@@ -721,7 +738,7 @@ namespace VanyaTools.Native
 
         private void SelectFrame(int index)
         {
-            dynamic doc = EnsureDocument();
+            dynamic doc = EnsureDocument(true, true);
             SelectShapes(doc, _data.Frames[index]);
             _status("Объекты кадра выделены на холсте.", false);
         }
@@ -1301,6 +1318,38 @@ namespace VanyaTools.Native
             if (linked) await LoadOrders();
         }
 
+        private enum UnsavedPublishChoice { Save, Continue, Cancel }
+
+        private UnsavedPublishChoice AskUnsavedPublish()
+        {
+            var choice = UnsavedPublishChoice.Cancel;
+            var window = new Window { Title = "Публикация карточки", Width = 475,
+                SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                ShowInTaskbar = false };
+            var owner = Window.GetWindow(this);
+            if (owner != null) { window.Owner = owner; window.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
+            var panel = new StackPanel { Margin = new Thickness(18) };
+            panel.Children.Add(new TextBlock { Text = "Этот CDR ещё не сохранён. Как опубликовать карточку?",
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 14) });
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right };
+            foreach (var option in new[] {
+                new { Text = "Сохранить", Choice = UnsavedPublishChoice.Save },
+                new { Text = "Продолжить без сохранения", Choice = UnsavedPublishChoice.Continue },
+                new { Text = "Отмена", Choice = UnsavedPublishChoice.Cancel }
+            })
+            {
+                var button = Button(option.Text, (_, __) => { choice = option.Choice; window.Close(); });
+                button.Margin = new Thickness(0, 0, 5, 0);
+                buttons.Children.Add(button);
+            }
+            panel.Children.Add(buttons);
+            window.Content = panel;
+            window.ShowDialog();
+            return choice;
+        }
+
         private async Task Publish(bool includePhotos)
         {
             if (_busy) return;
@@ -1310,7 +1359,7 @@ namespace VanyaTools.Native
             _busy = true; _send.IsEnabled = false;
             try
             {
-                dynamic doc = EnsureDocument(); ReadForm();
+                dynamic doc = EnsureDocument(true, true); ReadForm();
                 if (_data.PendingIntakeId > 0)
                     throw new InvalidOperationException("Сначала повторите присвоение номера с приёмки.");
                 if (includePhotos && _data.Frames.Count == 0)
@@ -1322,6 +1371,24 @@ namespace VanyaTools.Native
                     MessageBox.Show("Эта карточка уже отправлена напрямую в Telegram. Опубликовать новую серверную карточку?",
                         "Vanya Tools", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
                 if (String.IsNullOrEmpty(_data.ClientKey)) _data.ClientKey = Guid.NewGuid().ToString();
+                bool saveCdr = !String.IsNullOrWhiteSpace(Convert.ToString(doc.FullFileName));
+                if (!saveCdr)
+                {
+                    var choice = AskUnsavedPublish();
+                    if (choice == UnsavedPublishChoice.Cancel) return;
+                    if (choice == UnsavedPublishChoice.Save)
+                    {
+                        try { saveCdr = SaveNewDocument(doc, false); }
+                        catch (Exception saveError)
+                        {
+                            Log.Error("Order CDR save before publish failed", saveError);
+                            if (MessageBox.Show("CDR не сохранён: " + saveError.Message +
+                                    "\nПродолжить публикацию без сохранения?", "Vanya Tools",
+                                    MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                                return;
+                        }
+                    }
+                }
                 SaveData(); SaveServerSettings(false);
                 var photos = new List<byte[]>();
                 if (includePhotos) for (int i = 0; i < _data.Frames.Count; i++)
@@ -1342,14 +1409,29 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Вернитесь в исходный CDR и загрузите заказ с сервера.");
                 _data.PublishedAtUtc = DateTime.UtcNow.ToString("o");
                 ApplyServerResult(result);
-                SaveData();
-                doc.Save();
+                string saveWarning = null;
+                try
+                {
+                    SaveData();
+                    if (saveCdr) doc.Save();
+                }
+                catch (Exception saveError)
+                {
+                    Log.Error("Order published but CDR save failed", saveError);
+                    saveWarning = saveError.Message;
+                }
                 UpdateActions();
                 if (Convert.ToString(result["sendState"]) != "sent" && Convert.ToString(result["sendState"]) != "local")
                     throw new InvalidOperationException("Публикация не завершена. Проверьте канал и загрузите карточку с сервера.");
+                if (saveWarning != null)
+                {
+                    _status("Заказ №" + _data.ServerOrderNumber +
+                        " опубликован, но CDR не сохранён: " + saveWarning, true);
+                    return;
+                }
                 _status("Заказ №" + _data.ServerOrderNumber +
                     (_data.ServerSendState == "local" ? " сохранён на сервере." : " сохранён в Telegram.") +
-                    " CDR сохранён.", false);
+                    (saveCdr ? " CDR сохранён." : " CDR не сохранён."), false);
             }
             catch (Exception error)
             {
