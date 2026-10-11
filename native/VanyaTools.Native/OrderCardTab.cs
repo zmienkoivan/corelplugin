@@ -1348,6 +1348,8 @@ namespace VanyaTools.Native
                 var all = new List<object>();
                 foreach (object order in orders) all.Add(order);
                 var pending = await pendingTask;
+                // Ignore a snapshot started before a local workflow change.
+                if (_busy) return;
                 if (pending != null) foreach (object row in pending) all.Add(row);
                 var incoming = new List<OrderListItem>();
                 var seen = new HashSet<int>();
@@ -1361,7 +1363,7 @@ namespace VanyaTools.Native
                     string state = Convert.ToString(row["state"]);
                     var versions = OrderValue(row, "photoVersions") as IList;
                     var technologies = OrderValue(row, "technologies") as IList;
-                    incoming.Add(new OrderListItem {
+                    var order = new OrderListItem {
                         Id = id,
                         Number = Convert.ToString(row["number"]),
                         Customer = Convert.ToString(row["customer"]),
@@ -1380,15 +1382,10 @@ namespace VanyaTools.Native
                         BlanksPaused = Flag(row, "blanksPaused"),
                         BlanksReady = Flag(row, "blanksReady"),
                         ApplicationPaused = Flag(row, "applicationPaused"),
-                        Urgent = Flag(row, "isUrgent"),
-                        Status = (sendState == "reserved" ? "Без макета" :
-                            state == "done" ? "🔥 Готов" :
-                            sendState == "draft" ? "Черновик" : "🌲 В работе") +
-                            (Flag(row, "isUrgent") ? " ⚡" : "") +
-                            (Flag(row, "blanksReady") ? " ❤️ Заготовки" : "") +
-                            (Flag(row, "blanksPaused") ? " ⏸ Заготовки" : "") +
-                            (Flag(row, "applicationPaused") ? " ⏸ Нанесение" : "")
-                    });
+                        Urgent = Flag(row, "isUrgent")
+                    };
+                    order.Status = OrderStatus(order);
+                    incoming.Add(order);
                     if (!_busy && id == _data.ServerOrderId) ApplyWorkflowResult(row);
                 }
                 int activeId = _data.ServerOrderId;
@@ -1695,6 +1692,45 @@ namespace VanyaTools.Native
             _data.ServerUrgent = Flag(result, "isUrgent");
         }
 
+        private static string OrderStatus(OrderListItem order) =>
+            (order.SendState == "reserved" ? "Без макета" :
+                order.State == "done" ? "🔥 Готов" :
+                order.SendState == "draft" ? "Черновик" : "🌲 В работе") +
+            (order.Urgent ? " ⚡" : "") +
+            (order.BlanksReady ? " ❤️ Заготовки" : "") +
+            (order.BlanksPaused ? " ⏸ Заготовки" : "") +
+            (order.ApplicationPaused ? " ⏸ Нанесение" : "");
+
+        private static void ApplyWorkflowResult(OrderListItem order, Dictionary<string, object> result)
+        {
+            order.State = Convert.ToString(result["state"]);
+            order.SendState = Convert.ToString(result["sendState"]);
+            order.BlanksPaused = Flag(result, "blanksPaused");
+            order.BlanksReady = Flag(result, "blanksReady");
+            order.ApplicationPaused = Flag(result, "applicationPaused");
+            order.Urgent = Flag(result, "isUrgent");
+            order.Updated = OrderDate(OrderValue(result, "updatedAt"));
+            order.Completed = OrderDate(OrderValue(result, "completedAt"));
+            order.Status = OrderStatus(order);
+        }
+
+        private static void ApplyOptimisticWorkflow(OrderListItem order, string action)
+        {
+            switch (action)
+            {
+                case "state":
+                    order.State = order.State == "done" ? "new" : "done";
+                    order.Completed = order.State == "done" ? DateTime.Now.ToString("dd.MM.yy HH:mm") : "";
+                    break;
+                case "blanks": order.BlanksPaused = !order.BlanksPaused; break;
+                case "application": order.ApplicationPaused = !order.ApplicationPaused; break;
+                case "urgent": order.Urgent = !order.Urgent; break;
+                case "blanksReady": order.BlanksReady = !order.BlanksReady; break;
+            }
+            order.Updated = DateTime.Now.ToString("dd.MM.yy HH:mm");
+            order.Status = OrderStatus(order);
+        }
+
         private async Task ChangeWorkflow(string action, bool fromList = false)
         {
             var selected = fromList ? _ordersTable.SelectedItem as OrderListItem : null;
@@ -1705,7 +1741,14 @@ namespace VanyaTools.Native
             bool blanksReady = fromList ? selected.BlanksReady : _data.ServerBlanksReady;
             bool application = fromList ? selected.ApplicationPaused : _data.ServerApplicationPaused;
             bool urgent = fromList ? selected.Urgent : _data.ServerUrgent;
-            _busy = true; UpdateActions();
+            string previousUpdated = selected?.Updated, previousCompleted = selected?.Completed;
+            _busy = true;
+            if (selected != null)
+            {
+                ApplyOptimisticWorkflow(selected, action);
+                FilterOrders();
+            }
+            UpdateActions();
             try
             {
                 object doc = fromList ? null : (object)EnsureDocument();
@@ -1722,6 +1765,11 @@ namespace VanyaTools.Native
                     ? await OrderServerClient.SetBlanksReady(server, key, id, !blanksReady, revision)
                     : await OrderServerClient.SetPause(server, key, id, action,
                         action == "blanks" ? !blanks : !application, revision);
+                if (selected != null)
+                {
+                    ApplyWorkflowResult(selected, result);
+                    FilterOrders();
+                }
                 if (id == _data.ServerOrderId && (doc == null ||
                     SameDocument(doc, (object)CorelApp.Get().ActiveDocument)))
                 {
@@ -1732,7 +1780,22 @@ namespace VanyaTools.Native
                 }
                 _status("Состояние заказа №" + Convert.ToString(result["number"]) + " обновлено.", false);
             }
-            catch (Exception error) { _status("Состояние заказа: " + error.Message, true); }
+            catch (Exception error)
+            {
+                if (selected != null)
+                {
+                    selected.State = state;
+                    selected.BlanksPaused = blanks;
+                    selected.BlanksReady = blanksReady;
+                    selected.ApplicationPaused = application;
+                    selected.Urgent = urgent;
+                    selected.Updated = previousUpdated;
+                    selected.Completed = previousCompleted;
+                    selected.Status = OrderStatus(selected);
+                    FilterOrders();
+                }
+                _status("Состояние заказа: " + error.Message, true);
+            }
             finally { _busy = false; UpdateActions(); }
             await LoadOrders();
         }
