@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -31,11 +32,12 @@ namespace VanyaTools.Native
         private readonly StackPanel _frames, _editor;
         private readonly Expander _frameExpander;
         private readonly Button _send, _updateText, _state, _refreshServer,
-            _saveDocument, _linkOrder, _loadOrders;
+            _saveDocument, _linkOrder, _loadOrders, _blanksPause, _applicationPause, _urgent, _blanksReady;
+        private readonly Button[] _listWorkflow = new Button[5];
         private readonly DataGrid _ordersTable;
         private readonly CheckBox _onlyAvailable;
         private readonly List<OrderListItem> _serverOrders = new List<OrderListItem>();
-        private readonly DispatcherTimer _documentWatcher;
+        private readonly DispatcherTimer _documentWatcher, _serverWatcher;
         private readonly List<CheckBox> _technologies = new List<CheckBox>();
         private OrderCardData _data = new OrderCardData();
         private string _documentPath;
@@ -95,7 +97,7 @@ namespace VanyaTools.Native
             DockPanel.SetDock(_loadOrders, Dock.Right); ordersTools.Children.Add(_loadOrders);
             _ordersSearch = Input(); _ordersSearch.ToolTip = "Поиск по номеру и заказчику";
             ordersTools.Children.Add(_ordersSearch); ordersPanel.Children.Add(ordersTools);
-            _onlyAvailable = new CheckBox { Content = "Без макета", Margin = new Thickness(2, 0, 0, 4) };
+            _onlyAvailable = new CheckBox { Content = "Только без макета", Margin = new Thickness(2, 0, 0, 4) };
             _onlyAvailable.Checked += (_, __) => FilterOrders();
             _onlyAvailable.Unchecked += (_, __) => FilterOrders();
             ordersPanel.Children.Add(_onlyAvailable);
@@ -116,6 +118,15 @@ namespace VanyaTools.Native
                 Width = new DataGridLength(86) });
             _ordersTable.SelectionChanged += (_, __) => UpdateActions();
             ordersPanel.Children.Add(_ordersTable);
+            var listActions = new UniformGrid { Columns = 2 };
+            string[] actions = { "state", "blanks", "application", "urgent", "blanksReady" };
+            for (int i = 0; i < actions.Length; i++)
+            {
+                string action = actions[i];
+                _listWorkflow[i] = Button("", async (_, __) => await ChangeWorkflow(action, true));
+                listActions.Children.Add(_listWorkflow[i]);
+            }
+            ordersPanel.Children.Add(listActions);
             _linkOrder = Button("Связать выбранный с CDR", async (_, __) => await LinkSelectedOrder());
             ordersPanel.Children.Add(_linkOrder);
             OrdersView = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -146,7 +157,7 @@ namespace VanyaTools.Native
             _editor.Children.Add(sourceRow);
             _editor.Children.Add(Label("Технология печати"));
             var techGrid = new UniformGrid { Columns = 2 };
-            foreach (string name in new[] { "ДТФ", "Шелкография", "Вышивка", "Сублимация", "Лазер" })
+            foreach (string name in new[] { "ДТФ", "Шелкография", "ПУФ", "Вышивка", "Сублимация", "Лазер" })
             {
                 var box = new CheckBox { Content = name, Margin = new Thickness(2, 1, 2, 1) };
                 _technologies.Add(box); techGrid.Children.Add(box);
@@ -164,8 +175,15 @@ namespace VanyaTools.Native
             _editor.Children.Add(_send);
             _updateText = Button("Обновить текст без экспорта фото", async (_, __) => await Publish(false));
             _editor.Children.Add(_updateText);
-            _state = Button("Отметить выполненным", async (_, __) => await ToggleState());
-            _editor.Children.Add(_state);
+            var workflow = new UniformGrid { Columns = 2 };
+            _state = Button("", async (_, __) => await ChangeWorkflow("state"));
+            _blanksPause = Button("", async (_, __) => await ChangeWorkflow("blanks"));
+            _applicationPause = Button("", async (_, __) => await ChangeWorkflow("application"));
+            _urgent = Button("", async (_, __) => await ChangeWorkflow("urgent"));
+            _blanksReady = Button("", async (_, __) => await ChangeWorkflow("blanksReady"));
+            foreach (var button in new[] { _state, _blanksPause, _applicationPause, _urgent, _blanksReady })
+                workflow.Children.Add(button);
+            _editor.Children.Add(workflow);
             _refreshServer = Button("Загрузить карточку с сервера", async (_, __) => await RefreshServer());
             _editor.Children.Add(_refreshServer);
             var more = new StackPanel();
@@ -223,11 +241,17 @@ namespace VanyaTools.Native
             QuickDocumentFields = CreateQuickDocumentFields();
             _documentWatcher = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
             _documentWatcher.Tick += (_, __) => RefreshDocument();
-            Loaded += async (_, __) => { _documentWatcher.Start(); RefreshDocument();
+            _serverWatcher = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            _serverWatcher.Tick += async (_, __) => await LoadOrders(true);
+            Loaded += async (_, __) => { _documentWatcher.Start(); _serverWatcher.Start(); RefreshDocument();
                 if (!String.IsNullOrWhiteSpace(_key.Password)) await LoadOrders(); };
-            Unloaded += (_, __) => { if (!QuickDocumentFields.IsLoaded) _documentWatcher.Stop(); };
+            Unloaded += (_, __) => { if (!QuickDocumentFields.IsLoaded) _documentWatcher.Stop();
+                if (!OrdersView.IsLoaded) _serverWatcher.Stop(); };
             QuickDocumentFields.Loaded += (_, __) => { _documentWatcher.Start(); RefreshDocument(); };
             QuickDocumentFields.Unloaded += (_, __) => { if (!IsLoaded) _documentWatcher.Stop(); };
+            OrdersView.Loaded += async (_, __) => { _serverWatcher.Start();
+                if (!String.IsNullOrWhiteSpace(_key.Password)) await LoadOrders(); };
+            OrdersView.Unloaded += (_, __) => { if (!IsLoaded) _serverWatcher.Stop(); };
             RenderFrames(); UpdateCaption(); UpdateActions();
         }
 
@@ -754,6 +778,11 @@ namespace VanyaTools.Native
             public string Source { get; set; }
             public string Status { get; set; }
             public string SendState { get; set; }
+            public string State { get; set; }
+            public bool BlanksPaused { get; set; }
+            public bool BlanksReady { get; set; }
+            public bool ApplicationPaused { get; set; }
+            public bool Urgent { get; set; }
             public bool IsAvailable => SendState == "reserved";
         }
 
@@ -767,28 +796,36 @@ namespace VanyaTools.Native
                 (query.Length == 0 || (row.Number ?? "").IndexOf(query,
                     StringComparison.OrdinalIgnoreCase) >= 0 ||
                  (row.Customer ?? "").IndexOf(query,
-                    StringComparison.OrdinalIgnoreCase) >= 0)).ToList();
+                    StringComparison.OrdinalIgnoreCase) >= 0))
+                .OrderByDescending(row => row.Urgent && row.State != "done").ToList();
             _ordersTable.ItemsSource = visible;
             _ordersTable.SelectedItem = visible.FirstOrDefault(row => row.Id == selectedId);
             _ordersCount.Text = "Показано: " + visible.Count + " из " + _serverOrders.Count;
             UpdateActions();
         }
 
-        private async Task LoadOrders()
+        private async Task LoadOrders(bool automatic = false)
         {
             if (_busy) return;
+            if (String.IsNullOrWhiteSpace(_key.Password))
+            {
+                _ordersCount.Text = "Укажите ключ публикации в настройках.";
+                return;
+            }
             _busy = true; UpdateActions();
             try
             {
                 var reply = await OrderServerClient.List(_server.Text.Trim(), _key.Password.Trim());
                 _serverOrders.Clear();
-                var orders = reply.TryGetValue("orders", out object value) ? value as object[] : null;
-                var all = new List<object>(orders ?? new object[0]);
+                if (!reply.TryGetValue("orders", out object value) || !(value is IList orders))
+                    throw new InvalidDataException("Сервер вернул неверный список заказов.");
+                var all = new List<object>();
+                foreach (object order in orders) all.Add(order);
                 try
                 {
                     var available = await OrderServerClient.Unassigned(_server.Text.Trim(), _key.Password.Trim());
-                    if (available.TryGetValue("orders", out object pending) && pending is object[] rows)
-                        all.AddRange(rows);
+                    if (available.TryGetValue("orders", out object pending) && pending is IList rows)
+                        foreach (object row in rows) all.Add(row);
                 }
                 catch (Exception error) { Log.Error("Order intake list unavailable", error); }
                 var seen = new HashSet<int>();
@@ -806,14 +843,34 @@ namespace VanyaTools.Native
                         Customer = Convert.ToString(row["customer"]),
                         Source = Convert.ToString(row["source"]),
                         SendState = sendState,
-                        Status = sendState == "reserved" ? "Без макета" :
-                            state == "done" ? "Готов" :
-                            sendState == "draft" ? "Черновик" : "В работе"
+                        State = state,
+                        BlanksPaused = Flag(row, "blanksPaused"),
+                        BlanksReady = Flag(row, "blanksReady"),
+                        ApplicationPaused = Flag(row, "applicationPaused"),
+                        Urgent = Flag(row, "isUrgent"),
+                        Status = (sendState == "reserved" ? "Без макета" :
+                            state == "done" ? "🔥 Готов" :
+                            sendState == "draft" ? "Черновик" : "🌲 В работе") +
+                            (Flag(row, "isUrgent") ? " ⚡" : "") +
+                            (Flag(row, "blanksReady") ? " ❤️ Заготовки" : "") +
+                            (Flag(row, "blanksPaused") ? " ⏸ Заготовки" : "") +
+                            (Flag(row, "applicationPaused") ? " ⏸ Нанесение" : "")
                     });
+                    if (id == _data.ServerOrderId) ApplyWorkflowResult(row);
+                }
+                int activeId = _data.ServerOrderId;
+                if (activeId > 0 && !seen.Contains(activeId))
+                {
+                    var current = await OrderServerClient.Get(_server.Text.Trim(), _key.Password.Trim(), activeId);
+                    if (_data.ServerOrderId == activeId) ApplyWorkflowResult(current);
                 }
                 FilterOrders();
             }
-            catch (Exception error) { _status("Список заказов: " + error.Message, true); }
+            catch (Exception error)
+            {
+                _ordersCount.Text = "Не удалось загрузить заказы: " + error.Message;
+                if (!automatic) _status("Список заказов: " + error.Message, true);
+            }
             finally { _busy = false; UpdateActions(); }
         }
 
@@ -929,8 +986,7 @@ namespace VanyaTools.Native
             _data.ServerOrderId = Convert.ToInt32(result["id"]);
             _data.ServerOrderNumber = Convert.ToString(result["number"]);
             _data.ServerRevision = Convert.ToInt32(result["revision"]);
-            _data.ServerState = Convert.ToString(result["state"]);
-            _data.ServerSendState = Convert.ToString(result["sendState"]);
+            ApplyWorkflowResult(result);
             if (result.TryGetValue("photoIds", out object ids) && ids is object[] photos && photos.Length > 0)
                 _data.TelegramMessageId = Convert.ToInt32(photos[0]);
         }
@@ -1012,23 +1068,60 @@ namespace VanyaTools.Native
             finally { _loadingForm = false; }
         }
 
-        private async Task ToggleState()
+        private static bool Flag(Dictionary<string, object> result, string key) =>
+            result.TryGetValue(key, out object value) && value != null && Convert.ToBoolean(value);
+
+        private void ApplyWorkflowResult(Dictionary<string, object> result)
         {
-            if (_busy || _data.ServerOrderId == 0) return;
-            _busy = true; _state.IsEnabled = false;
+            // Keep the editor revision: polling must not make stale text safe to overwrite remotely.
+            _data.ServerState = Convert.ToString(result["state"]);
+            _data.ServerSendState = Convert.ToString(result["sendState"]);
+            _data.ServerBlanksPaused = Flag(result, "blanksPaused");
+            _data.ServerBlanksReady = Flag(result, "blanksReady");
+            _data.ServerApplicationPaused = Flag(result, "applicationPaused");
+            _data.ServerUrgent = Flag(result, "isUrgent");
+        }
+
+        private async Task ChangeWorkflow(string action, bool fromList = false)
+        {
+            var selected = fromList ? _ordersTable.SelectedItem as OrderListItem : null;
+            int id = fromList ? selected?.Id ?? 0 : _data.ServerOrderId;
+            if (_busy || id == 0) return;
+            string state = fromList ? selected.State : _data.ServerState;
+            bool blanks = fromList ? selected.BlanksPaused : _data.ServerBlanksPaused;
+            bool blanksReady = fromList ? selected.BlanksReady : _data.ServerBlanksReady;
+            bool application = fromList ? selected.ApplicationPaused : _data.ServerApplicationPaused;
+            bool urgent = fromList ? selected.Urgent : _data.ServerUrgent;
+            _busy = true; UpdateActions();
             try
             {
-                object doc = (object)EnsureDocument();
-                var result = await OrderServerClient.SetState(_server.Text.Trim(), _key.Password.Trim(),
-                    _data.ServerOrderId, _data.ServerState == "done" ? "new" : "done", _data.ServerRevision);
-                if (!SameDocument(doc, (object)CorelApp.Get().ActiveDocument))
-                    throw new InvalidOperationException("Вернитесь в исходный CDR и загрузите статус с сервера.");
-                ApplyServerResult(result); SaveData(); UpdateActions();
-                CorelApp.Get().ActiveDocument.Save();
-                _status("Статус заказа №" + _data.ServerOrderNumber + " обновлён.", false);
+                object doc = fromList ? null : (object)EnsureDocument();
+                if (!fromList && id != _data.ServerOrderId)
+                    throw new InvalidOperationException("Документ изменился. Проверьте открытую карточку и повторите действие.");
+                string server = _server.Text.Trim(), key = _key.Password.Trim();
+                var current = await OrderServerClient.Get(server, key, id);
+                int revision = Convert.ToInt32(current["revision"]);
+                var result = action == "state"
+                    ? await OrderServerClient.SetState(server, key, id, state == "done" ? "new" : "done", revision)
+                    : action == "urgent"
+                    ? await OrderServerClient.SetUrgency(server, key, id, !urgent, revision)
+                    : action == "blanksReady"
+                    ? await OrderServerClient.SetBlanksReady(server, key, id, !blanksReady, revision)
+                    : await OrderServerClient.SetPause(server, key, id, action,
+                        action == "blanks" ? !blanks : !application, revision);
+                if (id == _data.ServerOrderId && (doc == null ||
+                    SameDocument(doc, (object)CorelApp.Get().ActiveDocument)))
+                {
+                    ApplyWorkflowResult(result);
+                    if (_data.ServerRevision == revision)
+                        _data.ServerRevision = Convert.ToInt32(result["revision"]);
+                    if (doc != null) { SaveData(); CorelApp.Get().ActiveDocument.Save(); }
+                }
+                _status("Состояние заказа №" + Convert.ToString(result["number"]) + " обновлено.", false);
             }
-            catch (Exception error) { _status("Статус заказа: " + error.Message, true); }
-            finally { _busy = false; _state.IsEnabled = true; }
+            catch (Exception error) { _status("Состояние заказа: " + error.Message, true); }
+            finally { _busy = false; UpdateActions(); }
+            await LoadOrders();
         }
 
         private string ComposeCaption()
@@ -1059,12 +1152,43 @@ namespace VanyaTools.Native
             _linkOrder.Content = (_ordersTable.SelectedItem as OrderListItem)?.IsAvailable == true
                 ? "Связать с CDR" : "Открыть в CDR";
             _updateText.Visibility = published ? Visibility.Visible : Visibility.Collapsed;
-            _state.Visibility = published ? Visibility.Visible : Visibility.Collapsed;
+            bool canWorkflow = assigned && (_data.ServerSendState == "sent" || _data.ServerSendState == "local");
+            SetWorkflowButtons(new[] { _state, _blanksPause, _applicationPause, _urgent, _blanksReady },
+                _data.ServerState, _data.ServerBlanksPaused, _data.ServerApplicationPaused, _data.ServerUrgent,
+                _data.ServerBlanksReady, canWorkflow, assigned);
+            var selected = _ordersTable.SelectedItem as OrderListItem;
+            SetWorkflowButtons(_listWorkflow, selected?.State, selected?.BlanksPaused == true,
+                selected?.ApplicationPaused == true, selected?.Urgent == true,
+                selected?.BlanksReady == true,
+                selected != null && (selected.SendState == "sent" || selected.SendState == "local"), selected != null);
             _refreshServer.Visibility = published ? Visibility.Visible : Visibility.Collapsed;
-            _state.Content = _data.ServerState == "done" ? "Вернуть в работу" : "Отметить выполненным";
             _orderInfo.Text = assigned ? "Заказ №" + _data.ServerOrderNumber + " · " +
-                (draft ? "карточка заполняется" : _data.ServerState == "done" ? "выполнен" : "в работе") : "";
+                (draft ? "карточка заполняется" : _data.ServerState == "done" ? "🔥 Готов" : "🌲 В работе") +
+                (_data.ServerUrgent ? " · ⚡ Срочно" : "") +
+                (_data.ServerBlanksReady ? " · ❤️ Заготовки готовы" : "") +
+                (_data.ServerBlanksPaused ? " · ⏸ Заготовки" : "") +
+                (_data.ServerApplicationPaused ? " · ⏸ Нанесение" : "") : "";
             if (assigned) _orderNumber.Text = _data.ServerOrderNumber;
+        }
+
+        private void SetWorkflowButtons(Button[] buttons, string state, bool blanks, bool application,
+            bool urgent, bool blanksReady, bool published, bool assigned)
+        {
+            string[] labels = { state == "done" ? "🌲 Вернуть в работу" : "🔥 Готов",
+                blanks ? "▶ Заготовки продолжить" : "⏸ Заготовки пауза",
+                application ? "▶ Нанесение продолжить" : "⏸ Нанесение пауза",
+                urgent ? "⚡ Снять срочность" : "⚡ Срочно",
+                blanksReady ? "❤️ Снять готовность заготовок" : "🤍 Заготовки готовы" };
+            bool[] active = { state == "done", blanks, application, urgent, blanksReady };
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                if (buttons[i] == null) continue;
+                buttons[i].Content = labels[i]; buttons[i].ToolTip = labels[i];
+                buttons[i].IsEnabled = !_busy && (i == 3 ? assigned : published);
+                buttons[i].FontWeight = active[i] ? FontWeights.Bold : FontWeights.Normal;
+                if (active[i]) buttons[i].Foreground = Brushes.Firebrick;
+                else buttons[i].ClearValue(Control.ForegroundProperty);
+            }
         }
 
         private void SaveServerSettings(bool report = true)
@@ -1214,6 +1338,10 @@ namespace VanyaTools.Native
         public int ServerOrderId { get; set; }
         public string ServerOrderNumber { get; set; }
         public int ServerRevision { get; set; }
+        public bool ServerBlanksPaused { get; set; }
+        public bool ServerBlanksReady { get; set; }
+        public bool ServerApplicationPaused { get; set; }
+        public bool ServerUrgent { get; set; }
         public string ServerState { get; set; }
         public string ServerSendState { get; set; }
         public int PendingIntakeId { get; set; }

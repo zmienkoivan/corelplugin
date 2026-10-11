@@ -47,6 +47,21 @@ namespace VanyaTools.Native
                 new JavaScriptSerializer().Serialize(new { state, revision })));
         }
 
+        internal static Task<Dictionary<string, object>> SetPause(string server, string key,
+            int orderId, string stage, bool paused, int revision) =>
+            Task.Run(() => RunWorker("pause", server, key, orderId, null,
+                new JavaScriptSerializer().Serialize(new { stage, paused, revision })));
+
+        internal static Task<Dictionary<string, object>> SetUrgency(string server, string key,
+            int orderId, bool urgent, int revision) =>
+            Task.Run(() => RunWorker("urgency", server, key, orderId, null,
+                new JavaScriptSerializer().Serialize(new { isUrgent = urgent, revision })));
+
+        internal static Task<Dictionary<string, object>> SetBlanksReady(string server, string key,
+            int orderId, bool ready, int revision) =>
+            Task.Run(() => RunWorker("blanks-ready", server, key, orderId, null,
+                new JavaScriptSerializer().Serialize(new { blanksReady = ready, revision })));
+
         private static Dictionary<string, object> RunWorker(string action, string server, string key,
             int orderId, string number, string details, IList<byte[]> photos = null)
         {

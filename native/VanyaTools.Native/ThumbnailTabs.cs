@@ -43,6 +43,7 @@ namespace VanyaTools.Native
         public const string ColorProof = "M3,3 L10,3 L10,10 L3,10 Z M13,3 L20,3 L20,10 L13,10 Z M3,13 L10,13 L10,20 L3,20 Z M13,13 L20,13 L20,20 L13,20 Z";
         public const string Style = "M4,19 L18,5 M3,21 C5,21 8,20 8,17 M15,4 L20,9 M4,19 L8,20";
         public const string Publish = "M3,5 L21,5 L21,19 L3,19 Z M3,16 L8,11 L12,15 L15,12 L21,18 M17,8 L18,9";
+        public const string Orders = "M4,3 L20,3 L20,21 L4,21 Z M7,7 L9,9 L12,5 M14,7 L18,7 M7,14 L9,16 L12,12 M14,14 L18,14";
         public const string Settings = "M12,3 L14,5 L17,4 L18,7 L21,8 L20,11 L22,13 L20,15 L21,18 L18,19 L17,22 L14,21 L12,23 L10,21 L7,22 L6,19 L3,18 L4,15 L2,13 L4,11 L3,8 L6,7 L7,4 L10,5 Z M12,10 A3,3 0 1 0 12,16 A3,3 0 1 0 12,10";
         public const string Restore = "M4,20 L9,5 L15,5 L20,20 M6,15 L18,15 M20,3 L20,9 M17,6 L23,6";
     }

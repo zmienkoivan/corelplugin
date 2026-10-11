@@ -160,11 +160,12 @@ namespace VanyaTools.Native
                     Items =
                     {
                         new TabItem { Header = "Карточка заказа", Content = orderCards },
-                        new TabItem { Header = "Заказы", Content = orderCards.OrdersView },
                         new TabItem { Header = "Превью", Content =
                             new PreviewLibraryTab((message, isError) => SetStatus(message, isError)) }
                     }
                 }));
+            tabs.Items.Add(ThumbnailTabs.Create("Заказы", ThumbnailTabs.Orders,
+                Color.FromRgb(68, 126, 104), orderCards.OrdersView));
             tabs.Items.Add(ThumbnailTabs.Create("Настройки", ThumbnailTabs.Settings,
                 Color.FromRgb(91, 104, 116),
                 new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = settings }));
