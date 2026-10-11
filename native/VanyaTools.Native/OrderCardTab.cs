@@ -144,7 +144,7 @@ namespace VanyaTools.Native
             orderRowStyle.Triggers.Add(urgentRow);
             var completedRow = new DataTrigger { Binding = new Binding("State"), Value = "done" };
             completedRow.Setters.Add(new Setter(Control.BackgroundProperty,
-                new SolidColorBrush(Color.FromRgb(234, 246, 255))));
+                new SolidColorBrush(Color.FromRgb(201, 218, 248))));
             orderRowStyle.Triggers.Add(completedRow);
             var selectedRow = new Trigger { Property = DataGridRow.IsSelectedProperty, Value = true };
             selectedRow.Setters.Add(new Setter(Control.BackgroundProperty,
@@ -152,6 +152,25 @@ namespace VanyaTools.Native
             selectedRow.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.Black));
             orderRowStyle.Triggers.Add(selectedRow);
             _ordersTable.RowStyle = orderRowStyle;
+            // DataGrid may paint cell backgrounds over row backgrounds; tint both layers.
+            var orderCellStyle = new Style(typeof(DataGridCell));
+            orderCellStyle.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
+            var urgentCell = new DataTrigger { Binding = new Binding("Urgent"), Value = true };
+            urgentCell.Setters.Add(new Setter(Control.BackgroundProperty,
+                new SolidColorBrush(Color.FromRgb(255, 238, 238))));
+            orderCellStyle.Triggers.Add(urgentCell);
+            var completedCell = new DataTrigger { Binding = new Binding("State"), Value = "done" };
+            completedCell.Setters.Add(new Setter(Control.BackgroundProperty,
+                new SolidColorBrush(Color.FromRgb(201, 218, 248))));
+            orderCellStyle.Triggers.Add(completedCell);
+            var selectedCell = new DataTrigger { Binding = new Binding("IsSelected") {
+                RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(DataGridRow), 1) },
+                Value = true };
+            selectedCell.Setters.Add(new Setter(Control.BackgroundProperty,
+                new SolidColorBrush(Color.FromRgb(207, 230, 247))));
+            selectedCell.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.Black));
+            orderCellStyle.Triggers.Add(selectedCell);
+            _ordersTable.CellStyle = orderCellStyle;
             _ordersTable.Columns.Add(new DataGridTextColumn { Header = "№", Binding = new Binding("Number"),
                 Width = new DataGridLength(65) });
             var visibleColumns = LoadOrderColumns();
@@ -331,7 +350,7 @@ namespace VanyaTools.Native
             QuickDocumentFields = CreateQuickDocumentFields();
             _documentWatcher = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
             _documentWatcher.Tick += (_, __) => RefreshDocument();
-            _serverWatcher = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            _serverWatcher = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             _serverWatcher.Tick += async (_, __) => await LoadOrders(true);
             Loaded += (_, __) => { _documentWatcher.Start(); RefreshDocument(); };
             Unloaded += (_, __) => { if (!QuickDocumentFields.IsLoaded) _documentWatcher.Stop();
@@ -1277,6 +1296,39 @@ namespace VanyaTools.Native
             _ = ShowSelectedPhoto();
         }
 
+        private async Task<IList> LoadUnassignedOrders(string server, string key)
+        {
+            try
+            {
+                var response = await OrderServerClient.Unassigned(server, key);
+                return response.TryGetValue("orders", out object rows) ? rows as IList : null;
+            }
+            catch (Exception error)
+            {
+                Log.Error("Order intake list unavailable", error);
+                return null;
+            }
+        }
+
+        private static bool SameOrders(IList<OrderListItem> current, IList<OrderListItem> incoming)
+        {
+            if (current.Count != incoming.Count) return false;
+            for (int i = 0; i < current.Count; i++)
+            {
+                var a = current[i]; var b = incoming[i];
+                if (a.Id != b.Id || a.Number != b.Number || a.Customer != b.Customer ||
+                    a.Source != b.Source || a.Technologies != b.Technologies ||
+                    a.Created != b.Created || a.Due != b.Due || a.Updated != b.Updated ||
+                    a.Completed != b.Completed || a.Status != b.Status ||
+                    a.SendState != b.SendState || a.State != b.State ||
+                    a.PhotoCount != b.PhotoCount || a.Urgent != b.Urgent ||
+                    a.BlanksPaused != b.BlanksPaused || a.BlanksReady != b.BlanksReady ||
+                    a.ApplicationPaused != b.ApplicationPaused ||
+                    !a.PhotoVersions.SequenceEqual(b.PhotoVersions)) return false;
+            }
+            return true;
+        }
+
         private async Task LoadOrders(bool automatic = false)
         {
             if (_busy || _ordersLoading) return;
@@ -1288,19 +1340,16 @@ namespace VanyaTools.Native
             _ordersLoading = true; UpdateActions();
             try
             {
-                var reply = await OrderServerClient.List(_server.Text.Trim(), _key.Password.Trim());
-                _serverOrders.Clear();
+                string server = _server.Text.Trim(), key = _key.Password.Trim();
+                var pendingTask = LoadUnassignedOrders(server, key);
+                var reply = await OrderServerClient.List(server, key);
                 if (!reply.TryGetValue("orders", out object value) || !(value is IList orders))
                     throw new InvalidDataException("Сервер вернул неверный список заказов.");
                 var all = new List<object>();
                 foreach (object order in orders) all.Add(order);
-                try
-                {
-                    var available = await OrderServerClient.Unassigned(_server.Text.Trim(), _key.Password.Trim());
-                    if (available.TryGetValue("orders", out object pending) && pending is IList rows)
-                        foreach (object row in rows) all.Add(row);
-                }
-                catch (Exception error) { Log.Error("Order intake list unavailable", error); }
+                var pending = await pendingTask;
+                if (pending != null) foreach (object row in pending) all.Add(row);
+                var incoming = new List<OrderListItem>();
                 var seen = new HashSet<int>();
                 foreach (var item in all)
                 {
@@ -1312,7 +1361,7 @@ namespace VanyaTools.Native
                     string state = Convert.ToString(row["state"]);
                     var versions = OrderValue(row, "photoVersions") as IList;
                     var technologies = OrderValue(row, "technologies") as IList;
-                    _serverOrders.Add(new OrderListItem {
+                    incoming.Add(new OrderListItem {
                         Id = id,
                         Number = Convert.ToString(row["number"]),
                         Customer = Convert.ToString(row["customer"]),
@@ -1345,10 +1394,16 @@ namespace VanyaTools.Native
                 int activeId = _data.ServerOrderId;
                 if (activeId > 0 && !seen.Contains(activeId))
                 {
-                    var current = await OrderServerClient.Get(_server.Text.Trim(), _key.Password.Trim(), activeId);
+                    var current = await OrderServerClient.Get(server, key, activeId);
                     if (!_busy && _data.ServerOrderId == activeId) ApplyWorkflowResult(current);
                 }
-                FilterOrders();
+                if (!SameOrders(_serverOrders, incoming))
+                {
+                    _serverOrders.Clear();
+                    _serverOrders.AddRange(incoming);
+                    FilterOrders();
+                }
+                else _ordersCount.Text = "Показано: " + _ordersTable.Items.Count + " из " + _serverOrders.Count;
             }
             catch (Exception error)
             {
