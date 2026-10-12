@@ -1730,6 +1730,7 @@ namespace VanyaTools.Native
 
         private async Task OpenSelectedOrderFile(OrderListItem selected)
         {
+            if (_busy) return;
             try
             {
                 string configured = _yearFolder.Text.Trim(), server = _server.Text.Trim();
@@ -1754,13 +1755,55 @@ namespace VanyaTools.Native
                     { candidate.Activate(); alreadyOpen = true; break; }
                 if (!alreadyOpen) app.OpenDocument(path);
                 RefreshDocument();
+                if (!SameDocument(_documentIdentity, (object)app.ActiveDocument) ||
+                    !String.Equals(_documentPath, path, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Не удалось прочитать карточку из выбранного CDR.");
                 if (_data.ServerOrderId > 0 && _data.ServerOrderId != selected.Id)
                 {
                     _status("Файл открыт, но в нём записан другой заказ. Проверьте выбранный CDR.", true);
                     return;
                 }
+                if (_data.ServerOrderId == 0)
+                {
+                    string question = "Файл «" + Path.GetFileName(path) +
+                        "» ещё не привязан к заказу.\nПривязать его к заказу №" +
+                        selected.Number + " и сохранить CDR?";
+                    if (MessageBox.Show(question, "Vanya Tools", MessageBoxButton.YesNo,
+                        MessageBoxImage.Question) != MessageBoxResult.Yes)
+                    {
+                        _status("CDR открыт без привязки к заказу №" + selected.Number + ".", false);
+                        return;
+                    }
+
+                    object openedDocument = (object)app.ActiveDocument;
+                    _busy = true;
+                    UpdateActions();
+                    try
+                    {
+                        var result = await OrderServerClient.Get(server, _key.Password.Trim(), selected.Id);
+                        if (!SameDocument(openedDocument, (object)CorelApp.Get().ActiveDocument))
+                            throw new InvalidOperationException("Вернитесь в выбранный CDR и повторите привязку.");
+                        if (Convert.ToInt32(result["id"]) != selected.Id)
+                            throw new InvalidOperationException("Сервер вернул другой заказ. Привязка отменена.");
+                        if (Convert.ToString(result["sendState"]) == "reserved")
+                            throw new InvalidOperationException("Заказ ещё без макета. Используйте «Связать с CDR».");
+                        string clientKey = Convert.ToString(result["clientKey"]);
+                        if (String.IsNullOrWhiteSpace(clientKey))
+                            throw new InvalidOperationException("Сервер не вернул ID карточки заказа.");
+
+                        FillEmptyFieldsFromServer(result);
+                        ReadForm();
+                        _data.ClientKey = clientKey;
+                        ApplyServerResult(result);
+                        SaveData();
+                        ((dynamic)openedDocument).Save();
+                        UpdateCaption();
+                        _documentName.Text = Path.GetFileName(path) + " · сохранён";
+                    }
+                    finally { _busy = false; UpdateActions(); }
+                }
                 await Task.Run(() => OrderCdrPathIndex.Remember(server, selected.Id, path, yearRoot));
-                _status("Открыт CDR заказа №" + selected.Number + ": " + path, false);
+                _status("Открыт и привязан CDR заказа №" + selected.Number + ": " + path, false);
             }
             catch (Exception error)
             {
@@ -2080,6 +2123,30 @@ namespace VanyaTools.Native
                 var technologies = result["technologies"] as object[] ?? new object[0];
                 foreach (var box in _technologies)
                     box.IsChecked = technologies.Any(x => Convert.ToString(x) == Convert.ToString(box.Content));
+            }
+            finally { _loadingForm = false; }
+        }
+
+        private void FillEmptyFieldsFromServer(Dictionary<string, object> result)
+        {
+            _loadingForm = true;
+            try
+            {
+                if (String.IsNullOrWhiteSpace(_customer.Text))
+                    _customer.Text = Convert.ToString(result["customer"]);
+                if (String.IsNullOrWhiteSpace(_sourceValue))
+                    SetSourceSelection(Convert.ToString(result["source"]));
+                if (String.IsNullOrWhiteSpace(_description.Text))
+                    _description.Text = Convert.ToString(result["description"]);
+                if (String.IsNullOrWhiteSpace(_items.Text))
+                    _items.Text = Convert.ToString(result["items"]);
+                if (!_technologies.Any(box => box.IsChecked == true))
+                {
+                    var technologies = result["technologies"] as object[] ?? new object[0];
+                    foreach (var box in _technologies)
+                        box.IsChecked = technologies.Any(x =>
+                            Convert.ToString(x) == Convert.ToString(box.Content));
+                }
             }
             finally { _loadingForm = false; }
         }
