@@ -2098,6 +2098,38 @@ namespace VanyaTools.Native
                     }
                 }
                 SaveData(); SaveServerSettings(false);
+                int requestRevision = _data.ServerRevision;
+                if (_data.ServerOrderId > 0)
+                {
+                    _status("Проверка изменений заказа на сервере…", false);
+                    var current = await OrderServerClient.Get(server, key, _data.ServerOrderId);
+                    if (!SameDocument((object)doc, (object)CorelApp.Get().ActiveDocument))
+                        throw new InvalidOperationException("Вернитесь в исходный CDR и повторите обновление.");
+                    if (!String.Equals(Convert.ToString(current["clientKey"]), _data.ClientKey,
+                        StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Этот CDR связан с другой карточкой заказа.");
+                    int latestRevision = Convert.ToInt32(current["revision"]);
+                    if (latestRevision != requestRevision)
+                    {
+                        string currentFingerprint = ServerContentFingerprint(current);
+                        bool contentUnchanged = !String.IsNullOrEmpty(_data.ServerContentFingerprint) &&
+                            String.Equals(_data.ServerContentFingerprint, currentFingerprint,
+                                StringComparison.Ordinal);
+                        if (!contentUnchanged && MessageBox.Show(
+                            "Заказ №" + _data.ServerOrderNumber +
+                            " изменился на сервере после последнего сохранения этого CDR. " +
+                            "Там могли обновить текст или фото.\n\n" +
+                            "Опубликовать текущие поля и кадры из CDR поверх серверной карточки? " +
+                            "При отмене правки останутся в открытом CDR; при необходимости сохраните его Ctrl+S.",
+                            "Vanya Tools · конфликт карточки", MessageBoxButton.YesNo,
+                            MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                        {
+                            _status("Обновление отменено. Поля и кадры в открытом CDR не заменены.", false);
+                            return;
+                        }
+                        requestRevision = latestRevision;
+                    }
+                }
                 var photos = new List<byte[]>();
                 if (includePhotos) for (int i = 0; i < _data.Frames.Count; i++)
                 {
@@ -2115,13 +2147,18 @@ namespace VanyaTools.Native
                     _data.Frames[i].Thumbnail = ThumbnailFromPhoto(photo);
                 }
                 if (photos.Count > 0) { SaveData(); RenderFrames(); }
+                ReadForm();
+                if (_data.Customer.Length == 0) throw new InvalidOperationException("Введите имя заказчика.");
+                caption = ComposeCaption();
+                if (caption.Length > 990) throw new InvalidOperationException("Подпись длиннее 990 символов. Сократите описание.");
+                SaveData();
                 _status(_data.ServerOrderId == 0 ? "Публикация через сервер…" : "Обновление карточки…", false);
                 var details = new Dictionary<string, object> {
                     ["clientKey"] = _data.ClientKey, ["caption"] = caption,
                     ["customer"] = _data.Customer, ["source"] = _data.Source,
                     ["technologies"] = _data.Technologies,
                     ["description"] = _data.Description, ["items"] = _data.Items,
-                    ["revision"] = _data.ServerRevision
+                    ["revision"] = requestRevision
                 };
                 var result = await OrderServerClient.Publish(server, key, details, photos, _data.ServerOrderId);
                 if (!SameDocument((object)doc, (object)CorelApp.Get().ActiveDocument))
@@ -2158,7 +2195,9 @@ namespace VanyaTools.Native
             catch (Exception error)
             {
                 Log.Error("Order card publish failed", error);
-                _status("Карточка: " + error.Message.Replace(key, "[скрыто]"), true);
+                _status(error.Message.Contains("Карточка изменена")
+                    ? "Заказ снова изменился во время отправки. Текущий CDR сохраните и повторите обновление."
+                    : "Карточка: " + error.Message.Replace(key, "[скрыто]"), true);
             }
             finally { _busy = false; UpdateActions(); }
         }
@@ -2168,9 +2207,30 @@ namespace VanyaTools.Native
             _data.ServerOrderId = Convert.ToInt32(result["id"]);
             _data.ServerOrderNumber = Convert.ToString(result["number"]);
             _data.ServerRevision = Convert.ToInt32(result["revision"]);
+            if (result.TryGetValue("clientKey", out object clientKey) &&
+                !String.IsNullOrWhiteSpace(Convert.ToString(clientKey)))
+                _data.ClientKey = Convert.ToString(clientKey);
+            _data.ServerContentFingerprint = ServerContentFingerprint(result);
             ApplyWorkflowResult(result);
             if (result.TryGetValue("photoIds", out object ids) && ids is object[] photos && photos.Length > 0)
                 _data.TelegramMessageId = Convert.ToInt32(photos[0]);
+        }
+
+        private static string ServerContentFingerprint(Dictionary<string, object> result)
+        {
+            string[] Strings(string key) => (OrderValue(result, key) as IList)?
+                .Cast<object>().Select(item => Convert.ToString(item)).ToArray() ?? new string[0];
+            string json = new JavaScriptSerializer().Serialize(new {
+                caption = Convert.ToString(OrderValue(result, "caption")),
+                customer = Convert.ToString(OrderValue(result, "customer")),
+                source = Convert.ToString(OrderValue(result, "source")),
+                technologies = Strings("technologies"),
+                description = Convert.ToString(OrderValue(result, "description")),
+                items = Convert.ToString(OrderValue(result, "items")),
+                photoVersions = Strings("photoVersions")
+            });
+            using (var hash = SHA256.Create())
+                return Convert.ToBase64String(hash.ComputeHash(Encoding.UTF8.GetBytes(json)));
         }
 
         private async Task RefreshServer()
@@ -2183,6 +2243,16 @@ namespace VanyaTools.Native
                 var result = await OrderServerClient.Get(_server.Text.Trim(), _key.Password.Trim(), _data.ServerOrderId);
                 if (!SameDocument(doc, (object)CorelApp.Get().ActiveDocument))
                     throw new InvalidOperationException("Вернитесь в исходный CDR и повторите загрузку.");
+                if (ServerTextDiffers(result) && MessageBox.Show(
+                    "Текстовые поля в CDR отличаются от данных на сервере. " +
+                    "Заменить имя заказчика, источник, технологию, описание и изделия серверными данными? " +
+                    "Кадры макета останутся в CDR.",
+                    "Vanya Tools · загрузка карточки", MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                {
+                    _status("Загрузка отменена. Текстовые поля CDR не изменены.", false);
+                    return;
+                }
                 LoadServerFields(result);
                 ReadForm(); ApplyServerResult(result); SaveData(); UpdateCaption(); UpdateActions();
                 CorelApp.Get().ActiveDocument.Save();
@@ -2190,6 +2260,24 @@ namespace VanyaTools.Native
             }
             catch (Exception error) { _status("Загрузка заказа: " + error.Message, true); }
             finally { _busy = false; _refreshServer.IsEnabled = true; }
+        }
+
+        private bool ServerTextDiffers(Dictionary<string, object> result)
+        {
+            if (!String.Equals(_customer.Text.Trim(), Convert.ToString(OrderValue(result, "customer")),
+                StringComparison.Ordinal) ||
+                !String.Equals(_sourceValue.Trim(), Convert.ToString(OrderValue(result, "source")),
+                    StringComparison.Ordinal) ||
+                !String.Equals(_description.Text.Trim(), Convert.ToString(OrderValue(result, "description")),
+                    StringComparison.Ordinal) ||
+                !String.Equals(_items.Text.Trim(), Convert.ToString(OrderValue(result, "items")),
+                    StringComparison.Ordinal)) return true;
+            var local = new HashSet<string>(_technologies.Where(box => box.IsChecked == true)
+                .Select(box => Convert.ToString(box.Content)), StringComparer.Ordinal);
+            var server = new HashSet<string>((OrderValue(result, "technologies") as IList)?
+                .Cast<object>().Select(item => Convert.ToString(item)) ?? Enumerable.Empty<string>(),
+                StringComparer.Ordinal);
+            return !local.SetEquals(server);
         }
 
         private async Task OpenServerOrder(string number)
@@ -2609,6 +2697,7 @@ namespace VanyaTools.Native
         public int ServerOrderId { get; set; }
         public string ServerOrderNumber { get; set; }
         public int ServerRevision { get; set; }
+        public string ServerContentFingerprint { get; set; }
         public bool ServerBlanksPaused { get; set; }
         public bool ServerBlanksReady { get; set; }
         public bool ServerApplicationPaused { get; set; }
