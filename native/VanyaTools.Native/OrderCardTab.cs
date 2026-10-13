@@ -45,7 +45,7 @@ namespace VanyaTools.Native
             _selectedOrderDates, _selectedOrderDescription, _selectedOrderItems;
         private readonly Dictionary<string, DataGridColumn> _orderColumns = new Dictionary<string, DataGridColumn>();
         private readonly DispatcherTimer _orderLayoutSaveTimer;
-        private readonly CheckBox _onlyAvailable;
+        private readonly CheckBox _onlyAvailable, _hideCompleted;
         private readonly List<OrderListItem> _serverOrders = new List<OrderListItem>();
         private readonly DispatcherTimer _documentWatcher, _serverWatcher;
         private readonly List<CheckBox> _technologies = new List<CheckBox>();
@@ -86,7 +86,7 @@ namespace VanyaTools.Native
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "VanyaTools", "order-columns.json");
 
-        internal OrderCardTab(Action<string, bool> status)
+        internal OrderCardTab(Action<string, bool> status, bool standaloneOrders = false)
         {
             _status = status;
             var panel = new StackPanel { Margin = new Thickness(8) };
@@ -155,10 +155,21 @@ namespace VanyaTools.Native
             DockPanel.SetDock(columnsButton, Dock.Right); ordersTools.Children.Add(columnsButton);
             _ordersSearch = Input(); _ordersSearch.ToolTip = "Поиск по номеру и заказчику";
             ordersTools.Children.Add(_ordersSearch); ordersPanel.Children.Add(ordersTools);
+            if (!standaloneOrders)
+                ordersPanel.Children.Add(Button("Открыть заказы отдельным докером ↗", (_, __) => {
+                    try { CorelApp.Get().FrameWork.ShowDocker(VanyaOrdersDocker.DockerGuid); }
+                    catch (Exception error) { _status("Открытие докера заказов: " + error.Message, true); }
+                }));
+            var orderFilters = new WrapPanel { Margin = new Thickness(2, 0, 0, 4) };
             _onlyAvailable = new CheckBox { Content = "Только без макета", Margin = new Thickness(2, 0, 0, 4) };
             _onlyAvailable.Checked += (_, __) => FilterOrders();
             _onlyAvailable.Unchecked += (_, __) => FilterOrders();
-            ordersPanel.Children.Add(_onlyAvailable);
+            orderFilters.Children.Add(_onlyAvailable);
+            _hideCompleted = new CheckBox { Content = "Скрыть готовые", Margin = new Thickness(12, 0, 0, 4) };
+            _hideCompleted.Checked += (_, __) => FilterOrders();
+            _hideCompleted.Unchecked += (_, __) => FilterOrders();
+            orderFilters.Children.Add(_hideCompleted);
+            ordersPanel.Children.Add(orderFilters);
             _ordersCount = Note("Список загружается с сервера.");
             ordersPanel.Children.Add(_ordersCount);
             _ordersTable = new DataGrid { AutoGenerateColumns = false, IsReadOnly = true,
@@ -1122,6 +1133,7 @@ namespace VanyaTools.Native
             public string Due { get; set; }
             public string Updated { get; set; }
             public string Completed { get; set; }
+            public DateTimeOffset? CompletedAt { get; set; }
             public string Status { get; set; }
             public int PhotoCount { get; set; }
             public string[] PhotoVersions { get; set; } = new string[0];
@@ -1345,6 +1357,14 @@ namespace VanyaTools.Native
             return DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal, out DateTimeOffset parsed)
                 ? parsed.ToLocalTime().ToString(dateOnly ? "dd.MM.yyyy" : "dd.MM.yy HH:mm") : raw;
+        }
+
+        private static DateTimeOffset? OrderTimestamp(object value)
+        {
+            string raw = Convert.ToString(value);
+            return DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal, out DateTimeOffset parsed)
+                ? parsed.ToUniversalTime() : (DateTimeOffset?)null;
         }
 
         private static object OrderValue(Dictionary<string, object> row, string key) =>
@@ -1665,11 +1685,17 @@ namespace VanyaTools.Native
             string query = (_ordersSearch?.Text ?? "").Trim();
             var visible = _serverOrders.Where(row =>
                 (_onlyAvailable?.IsChecked != true || row.IsAvailable) &&
+                (_hideCompleted?.IsChecked != true || row.State != "done") &&
                 (query.Length == 0 || (row.Number ?? "").IndexOf(query,
                     StringComparison.OrdinalIgnoreCase) >= 0 ||
                  (row.Customer ?? "").IndexOf(query,
                     StringComparison.OrdinalIgnoreCase) >= 0))
-                .OrderByDescending(row => row.Urgent && row.State != "done").ToList();
+                .OrderBy(row => row.State == "done" ? 1 : 0)
+                .ThenByDescending(row => row.State != "done" && row.Urgent)
+                .ThenByDescending(row => row.State == "done"
+                    ? row.CompletedAt ?? DateTimeOffset.MinValue : DateTimeOffset.MinValue)
+                .ThenByDescending(row => row.State == "done" ? row.Id : 0)
+                .ToList();
             _restoringOrderSelection = true;
             try
             {
@@ -1762,7 +1788,8 @@ namespace VanyaTools.Native
                     a.Source != b.Source || a.Technologies != b.Technologies ||
                     a.Description != b.Description || a.Items != b.Items ||
                     a.Created != b.Created || a.Due != b.Due || a.Updated != b.Updated ||
-                    a.Completed != b.Completed || a.Status != b.Status ||
+                    a.Completed != b.Completed || a.CompletedAt != b.CompletedAt ||
+                    a.Status != b.Status ||
                     a.SendState != b.SendState || a.State != b.State ||
                     a.PhotoCount != b.PhotoCount || a.Urgent != b.Urgent ||
                     a.BlanksPaused != b.BlanksPaused || a.BlanksReady != b.BlanksReady ||
@@ -1820,6 +1847,7 @@ namespace VanyaTools.Native
                         Due = OrderDate(OrderValue(row, "dueDate"), true),
                         Updated = OrderDate(OrderValue(row, "updatedAt")),
                         Completed = OrderDate(OrderValue(row, "completedAt")),
+                        CompletedAt = OrderTimestamp(OrderValue(row, "completedAt")),
                         PhotoCount = Convert.ToInt32(OrderValue(row, "photoCount") ?? 0),
                         PhotoVersions = versions == null ? new string[0] : versions.Cast<object>()
                             .Select(item => Convert.ToString(item)).ToArray(),
@@ -2468,6 +2496,7 @@ namespace VanyaTools.Native
             order.Urgent = Flag(result, "isUrgent");
             order.Updated = OrderDate(OrderValue(result, "updatedAt"));
             order.Completed = OrderDate(OrderValue(result, "completedAt"));
+            order.CompletedAt = OrderTimestamp(OrderValue(result, "completedAt"));
             order.Status = OrderStatus(order);
         }
 
@@ -2478,6 +2507,7 @@ namespace VanyaTools.Native
                 case "state":
                     order.State = order.State == "done" ? "new" : "done";
                     order.Completed = order.State == "done" ? DateTime.Now.ToString("dd.MM.yy HH:mm") : "";
+                    order.CompletedAt = order.State == "done" ? DateTimeOffset.Now : (DateTimeOffset?)null;
                     break;
                 case "blanks": order.BlanksPaused = !order.BlanksPaused; break;
                 case "application": order.ApplicationPaused = !order.ApplicationPaused; break;
@@ -2499,6 +2529,7 @@ namespace VanyaTools.Native
             bool application = fromList ? selected.ApplicationPaused : _data.ServerApplicationPaused;
             bool urgent = fromList ? selected.Urgent : _data.ServerUrgent;
             string previousUpdated = selected?.Updated, previousCompleted = selected?.Completed;
+            DateTimeOffset? previousCompletedAt = selected?.CompletedAt;
             _busy = true;
             if (selected != null)
             {
@@ -2548,6 +2579,7 @@ namespace VanyaTools.Native
                     selected.Urgent = urgent;
                     selected.Updated = previousUpdated;
                     selected.Completed = previousCompleted;
+                    selected.CompletedAt = previousCompletedAt;
                     selected.Status = OrderStatus(selected);
                     FilterOrders();
                 }

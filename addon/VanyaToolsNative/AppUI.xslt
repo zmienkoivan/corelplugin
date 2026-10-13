@@ -30,6 +30,20 @@
                 icon="guid://08a71b5b-25a1-4f68-a3f4-12d22b04e675"
                 enable="true" />
 
+      <itemData guid="d0c694e4-8866-48ef-9047-d3412b5444e6"
+                type="checkButton"
+                check="*Docker('6f479847-f853-4cf0-8071-189529d141be')"
+                userCaption="Vanya Tools — Заказы"
+                userToolTip="Открыть отдельный список заказов"
+                icon="guid://08a71b5b-25a1-4f68-a3f4-12d22b04e675"
+                enable="true"/>
+
+      <itemData guid="3e1ade5b-9d8d-414c-ac2d-c57563bb1923"
+                type="wpfhost"
+                hostedType="Addons\VanyaToolsNative\VanyaTools.Native.dll,VanyaTools.Native.VanyaOrdersDocker"
+                icon="guid://08a71b5b-25a1-4f68-a3f4-12d22b04e675"
+                enable="true" />
+
       <itemData guid="a624e7f3-8a23-4b1e-b2e6-58cf6725b9e4"
                 type="wpfhost"
                 hostedType="Addons\VanyaToolsNative\VanyaTools.Native.dll,VanyaTools.Native.VanyaToolsTrimButton"
@@ -59,6 +73,15 @@
                   icon="guid://08a71b5b-25a1-4f68-a3f4-12d22b04e675">
         <container>
           <item dock="fill" margin="0,0,0,0" guidRef="459dee79-83a1-40c9-adba-7d61a6cb8f00"/>
+        </container>
+      </dockerData>
+      <dockerData guid="6f479847-f853-4cf0-8071-189529d141be"
+                  userCaption="Vanya Tools — Заказы"
+                  wantReturn="true"
+                  focusStyle="noThrow"
+                  icon="guid://08a71b5b-25a1-4f68-a3f4-12d22b04e675">
+        <container>
+          <item dock="fill" margin="0,0,0,0" guidRef="3e1ade5b-9d8d-414c-ac2d-c57563bb1923"/>
         </container>
       </dockerData>
     </xsl:copy>

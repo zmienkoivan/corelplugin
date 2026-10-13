@@ -21,6 +21,9 @@
       <xsl:if test="not(./item[@guidRef='60cc0805-a158-44eb-a286-49061c3d963d'])">
         <item guidRef="60cc0805-a158-44eb-a286-49061c3d963d"/>
       </xsl:if>
+      <xsl:if test="not(./item[@guidRef='d0c694e4-8866-48ef-9047-d3412b5444e6'])">
+        <item guidRef="d0c694e4-8866-48ef-9047-d3412b5444e6"/>
+      </xsl:if>
     </xsl:copy>
   </xsl:template>
 
