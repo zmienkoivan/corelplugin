@@ -17,6 +17,8 @@ namespace VanyaTools.Native
         private readonly Action<string, bool> _status;
         private readonly TextBox _names;
         private readonly ComboBox _font;
+        private readonly ComboBox _letterCase;
+        private readonly CheckBox _bold, _italic;
         private readonly TextBox _size;
         private readonly ComboBox _unit;
         private readonly TextBox _maxWidth;
@@ -76,6 +78,30 @@ namespace VanyaTools.Native
                 _font.Items.Add(family);
             _font.Text = "Arial";
             panel.Children.Add(_font);
+
+            panel.Children.Add(Label("Регистр имён"));
+            _letterCase = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 6) };
+            _letterCase.Items.Add("Как в списке");
+            _letterCase.Items.Add("все строчные");
+            _letterCase.Items.Add("Каждое слово с заглавной");
+            _letterCase.Items.Add("ВСЕ ПРОПИСНЫЕ");
+            _letterCase.SelectedIndex = 0;
+            _letterCase.SelectionChanged += (_, __) => UpdatePreview();
+            panel.Children.Add(_letterCase);
+
+            var styleRow = new StackPanel { Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 0, 0, 8) };
+            _bold = new CheckBox { Content = "Жирный", FontSize = 11,
+                FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 18, 0) };
+            _italic = new CheckBox { Content = "Курсив", FontSize = 11,
+                FontStyle = FontStyles.Italic };
+            foreach (var modifier in new[] { _bold, _italic })
+            {
+                modifier.Checked += (_, __) => UpdatePreview();
+                modifier.Unchecked += (_, __) => UpdatePreview();
+                styleRow.Children.Add(modifier);
+            }
+            panel.Children.Add(styleRow);
 
             var sizeRow = new Grid { Margin = new Thickness(0, 0, 0, 8) };
             sizeRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -179,7 +205,10 @@ namespace VanyaTools.Native
                     HorizontalGapMm = NonNegative(_horizontalGap.Text, "Расстояние между колонками"),
                     VerticalGapMm = NonNegative(_verticalGap.Text, "Расстояние между строками"),
                     CenterInCell = _center.IsChecked == true,
-                    TwoLines = _twoLines.IsChecked == true
+                    TwoLines = _twoLines.IsChecked == true,
+                    LetterCase = (NamesGridLetterCase)_letterCase.SelectedIndex,
+                    Bold = _bold.IsChecked == true,
+                    Italic = _italic.IsChecked == true
                 };
                 var result = new NamesGridService().Create(names, options);
                 _status("Создано: " + result.Count + ". Уменьшено по ширине: " + result.ReducedCount +
@@ -202,8 +231,12 @@ namespace VanyaTools.Native
                 _count.Text = names.Count + " надписей" +
                     (customWidths > 0 ? " · " + customWidths + " пометок ширины" : "");
                 bool twoLines = _twoLines != null && _twoLines.IsChecked == true;
+                var letterCase = _letterCase == null ? NamesGridLetterCase.Original
+                    : (NamesGridLetterCase)_letterCase.SelectedIndex;
+                _preview.FontWeight = _bold?.IsChecked == true ? FontWeights.Bold : FontWeights.Normal;
+                _preview.FontStyle = _italic?.IsChecked == true ? FontStyles.Italic : FontStyles.Normal;
                 _preview.Text = String.Join(twoLines ? Environment.NewLine + Environment.NewLine : Environment.NewLine,
-                    names.Select(name => name.PrintText(twoLines).Replace("\r", Environment.NewLine)));
+                    names.Select(name => name.PrintText(twoLines, letterCase).Replace("\r", Environment.NewLine)));
             }
             catch (InvalidOperationException ex)
             {

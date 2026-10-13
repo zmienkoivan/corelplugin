@@ -1,18 +1,30 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace VanyaTools.Native
 {
+    internal enum NamesGridLetterCase { Original, Lower, Title, Upper }
+
     internal sealed class NamesGridEntry
     {
         public string Text;
         public double? MaxWidthMm;
 
-        public string PrintText(bool twoLines)
+        public string PrintText(bool twoLines, NamesGridLetterCase letterCase)
         {
-            if (!twoLines) return Text;
-            int separator = Text.IndexOf(' ');
-            return separator < 0 ? Text : Text.Substring(0, separator) + "\r" + Text.Substring(separator + 1);
+            var culture = CultureInfo.GetCultureInfo("ru-RU");
+            string text = Text;
+            switch (letterCase)
+            {
+                case NamesGridLetterCase.Lower: text = text.ToLower(culture); break;
+                case NamesGridLetterCase.Title:
+                    text = culture.TextInfo.ToTitleCase(text.ToLower(culture)); break;
+                case NamesGridLetterCase.Upper: text = text.ToUpper(culture); break;
+            }
+            if (!twoLines) return text;
+            int separator = text.IndexOf(' ');
+            return separator < 0 ? text : text.Substring(0, separator) + "\r" + text.Substring(separator + 1);
         }
     }
 
@@ -26,6 +38,9 @@ namespace VanyaTools.Native
         public double VerticalGapMm;
         public bool CenterInCell;
         public bool TwoLines;
+        public NamesGridLetterCase LetterCase;
+        public bool Bold;
+        public bool Italic;
     }
 
     internal sealed class NamesGridResult
@@ -68,8 +83,9 @@ namespace VanyaTools.Native
                 {
                     // Wide text keeps Cyrillic and other Unicode characters intact.
                     dynamic shape = layer.CreateArtisticTextWide(
-                        0.0, 0.0, names[i].PrintText(options.TwoLines), 0, -1,
-                        options.FontName, (float)options.FontSizePt);
+                        0.0, 0.0, names[i].PrintText(options.TwoLines, options.LetterCase), 0, -1,
+                        options.FontName, (float)options.FontSizePt,
+                        options.Bold ? -1 : 0, options.Italic ? -1 : 0);
                     shapes.Add(shape);
                     range.Add(shape);
                     if (options.TwoLines)
