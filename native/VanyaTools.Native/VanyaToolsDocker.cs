@@ -40,6 +40,9 @@ namespace VanyaTools.Native
         private readonly CorelHotkeyManager _hotkeys;
         private static WeakReference<VanyaToolsDocker> _toolbarTarget;
         private PrintFrameAnchor _printFrameAnchor = PrintFrameAnchor.TopCenter;
+        private static readonly string TabsPlacementPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "VanyaTools", "tabs-placement.txt");
 
         public VanyaToolsDocker()
             : this(null)
@@ -113,6 +116,13 @@ namespace VanyaTools.Native
                     SetStatus("Не удалось переключить кнопки: " + error.Message, true);
                 }
             }));
+            var verticalTabs = LoadVerticalTabs();
+            var tabsPlacementSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
+            var horizontalTabsButton = AddRadioButton(tabsPlacementSettings,
+                "Горизонтально (сверху)", "DockerTabsPlacement", !verticalTabs);
+            var verticalTabsButton = AddRadioButton(tabsPlacementSettings,
+                "Вертикально (слева)", "DockerTabsPlacement", verticalTabs);
+            AddSettingsExpander(settings, "Расположение вкладок", tabsPlacementSettings);
             _hotkeys = new CorelHotkeyManager(() => RunTrim(true), RunFitFrame,
                 approvalCopy.CopySelection,
                 (message, isError) => SetStatus(message, isError));
@@ -132,7 +142,13 @@ namespace VanyaTools.Native
             };
             Unloaded += (_, __) => _hotkeys.Detach();
 
-            var tabs = new TabControl { MinHeight = 360 };
+            var tabs = new TabControl
+            {
+                MinHeight = 360,
+                TabStripPlacement = verticalTabs ? Dock.Left : Dock.Top
+            };
+            horizontalTabsButton.Checked += (_, __) => SetTabsPlacement(tabs, false);
+            verticalTabsButton.Checked += (_, __) => SetTabsPlacement(tabs, true);
             tabs.Items.Add(ThumbnailTabs.Create("Основная", ThumbnailTabs.Crop,
                 Color.FromRgb(46, 112, 124), standardPage));
             tabs.Items.Add(ThumbnailTabs.Create("Публикация", ThumbnailTabs.Publish,
@@ -610,6 +626,36 @@ namespace VanyaTools.Native
             _status.Foreground = isError
                 ? new SolidColorBrush(Color.FromRgb(138, 31, 17))
                 : new SolidColorBrush(Color.FromRgb(66, 81, 91));
+        }
+
+        private static bool LoadVerticalTabs()
+        {
+            try
+            {
+                return File.Exists(TabsPlacementPath) &&
+                    String.Equals(File.ReadAllText(TabsPlacementPath).Trim(), "vertical",
+                        StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception error)
+            {
+                Log.Error("Could not read docker tabs placement.", error);
+                return false;
+            }
+        }
+
+        private void SetTabsPlacement(TabControl tabs, bool vertical)
+        {
+            tabs.TabStripPlacement = vertical ? Dock.Left : Dock.Top;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(TabsPlacementPath));
+                File.WriteAllText(TabsPlacementPath, vertical ? "vertical" : "horizontal");
+            }
+            catch (Exception error)
+            {
+                Log.Error("Could not save docker tabs placement.", error);
+                SetStatus("Расположение вкладок изменено, но не сохранено: " + error.Message, true);
+            }
         }
 
         private static void AddSettingsExpander(Panel root, string title, Panel content)
