@@ -41,6 +41,8 @@ namespace VanyaTools.Native
         public NamesGridLetterCase LetterCase;
         public bool Bold;
         public bool Italic;
+        public bool CustomLineSpacing;
+        public double LineSpacingPercent;
     }
 
     internal sealed class NamesGridResult
@@ -89,7 +91,11 @@ namespace VanyaTools.Native
                     shapes.Add(shape);
                     range.Add(shape);
                     if (options.TwoLines)
+                    {
                         shape.Text.Story.Alignment = 3;
+                        if (options.CustomLineSpacing)
+                            shape.Text.Story.SetLineSpacing(2, (float)options.LineSpacingPercent);
+                    }
                     shape.Fill.UniformColor.RGBAssign(0, 0, 0);
                     shape.Outline.SetNoOutline();
 

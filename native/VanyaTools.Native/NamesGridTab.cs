@@ -27,6 +27,8 @@ namespace VanyaTools.Native
         private readonly TextBox _verticalGap;
         private readonly CheckBox _center;
         private readonly CheckBox _twoLines;
+        private readonly CheckBox _lineSpacingToggle;
+        private readonly TextBox _lineSpacing;
         private readonly TextBlock _count;
         private readonly TextBox _preview;
         private bool _sizeIsMm;
@@ -126,9 +128,29 @@ namespace VanyaTools.Native
             _verticalGap = AddNumberRow(panel, "Между строками, мм", "8");
             _twoLines = new CheckBox { Content = "Фамилия и имя в две строки", IsChecked = false,
                 FontSize = 11, Margin = new Thickness(0, 3, 0, 3) };
-            _twoLines.Checked += (_, __) => UpdatePreview();
-            _twoLines.Unchecked += (_, __) => UpdatePreview();
+            _twoLines.Checked += (_, __) => { UpdateLineSpacingAvailability(); UpdatePreview(); };
+            _twoLines.Unchecked += (_, __) => { UpdateLineSpacingAvailability(); UpdatePreview(); };
             panel.Children.Add(_twoLines);
+            var spacingRow = new Grid { Margin = new Thickness(0, 0, 0, 5) };
+            spacingRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            spacingRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(66) });
+            spacingRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            _lineSpacingToggle = new CheckBox { Content = "Межстрочный интервал", FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+                ToolTip = "Расстояние между фамилией и именем в одной надписи" };
+            _lineSpacingToggle.Checked += (_, __) => UpdateLineSpacingAvailability();
+            _lineSpacingToggle.Unchecked += (_, __) => UpdateLineSpacingAvailability();
+            spacingRow.Children.Add(_lineSpacingToggle);
+            _lineSpacing = Field("100");
+            _lineSpacing.ToolTip = "В процентах от размера шрифта; 100% — шаг равен размеру шрифта";
+            Grid.SetColumn(_lineSpacing, 1);
+            spacingRow.Children.Add(_lineSpacing);
+            var percent = Label("%");
+            percent.Margin = new Thickness(4, 0, 0, 0);
+            Grid.SetColumn(percent, 2);
+            spacingRow.Children.Add(percent);
+            panel.Children.Add(spacingRow);
+            UpdateLineSpacingAvailability();
             _center = new CheckBox { Content = "По центру ячеек", IsChecked = true, FontSize = 11,
                 Margin = new Thickness(0, 3, 0, 9) };
             panel.Children.Add(_center);
@@ -174,6 +196,13 @@ namespace VanyaTools.Native
             _sizeIsMm = toMm;
         }
 
+        private void UpdateLineSpacingAvailability()
+        {
+            bool twoLines = _twoLines.IsChecked == true;
+            _lineSpacingToggle.IsEnabled = twoLines;
+            _lineSpacing.IsEnabled = twoLines && _lineSpacingToggle.IsChecked == true;
+        }
+
         private void CreateGrid(object sender, RoutedEventArgs e)
         {
             try
@@ -199,6 +228,11 @@ namespace VanyaTools.Native
                 int columns;
                 if (!Int32.TryParse(_columns.Text.Trim(), out columns) || columns < 1 || columns > 20)
                     throw new InvalidOperationException("Укажите от 1 до 20 колонок.");
+                bool customLineSpacing = _twoLines.IsChecked == true && _lineSpacingToggle.IsChecked == true;
+                double lineSpacingPercent = customLineSpacing
+                    ? Positive(_lineSpacing.Text, "Межстрочный интервал") : 100;
+                if (lineSpacingPercent < 10 || lineSpacingPercent > 500)
+                    throw new InvalidOperationException("Межстрочный интервал: укажите от 10 до 500%.");
                 var options = new NamesGridOptions {
                     FontName = font, FontSizePt = fontSizePt, MaxWidthMm = maxWidth,
                     Columns = Math.Min(columns, names.Count),
@@ -208,7 +242,9 @@ namespace VanyaTools.Native
                     TwoLines = _twoLines.IsChecked == true,
                     LetterCase = (NamesGridLetterCase)_letterCase.SelectedIndex,
                     Bold = _bold.IsChecked == true,
-                    Italic = _italic.IsChecked == true
+                    Italic = _italic.IsChecked == true,
+                    CustomLineSpacing = customLineSpacing,
+                    LineSpacingPercent = lineSpacingPercent
                 };
                 var result = new NamesGridService().Create(names, options);
                 _status("Создано: " + result.Count + ". Уменьшено по ширине: " + result.ReducedCount +
