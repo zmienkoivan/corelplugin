@@ -40,6 +40,9 @@ namespace VanyaTools.Native
         private readonly Button[] _listWorkflow = new Button[5];
         private readonly DataGrid _ordersTable, _unassignedTable;
         private readonly Image _orderPhoto;
+        private readonly Border _selectedOrderCard;
+        private readonly TextBlock _selectedOrderHeading, _selectedOrderNumber, _selectedOrderSummary,
+            _selectedOrderDates, _selectedOrderDescription, _selectedOrderItems;
         private readonly Dictionary<string, DataGridColumn> _orderColumns = new Dictionary<string, DataGridColumn>();
         private readonly DispatcherTimer _orderLayoutSaveTimer;
         private readonly CheckBox _onlyAvailable;
@@ -276,6 +279,32 @@ namespace VanyaTools.Native
             _photoMessage.VerticalAlignment = VerticalAlignment.Center;
             photoStage.Children.Add(_photoMessage);
             ordersPanel.Children.Add(photoStage);
+            var selectedOrderBody = new StackPanel();
+            var selectedOrderHeader = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+            _selectedOrderNumber = new TextBlock { FontSize = 12, FontWeight = FontWeights.SemiBold,
+                Foreground = Brushes.DimGray, VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 0, 0) };
+            DockPanel.SetDock(_selectedOrderNumber, Dock.Right);
+            selectedOrderHeader.Children.Add(_selectedOrderNumber);
+            _selectedOrderHeading = new TextBlock { FontSize = 15, FontWeight = FontWeights.SemiBold,
+                TextWrapping = TextWrapping.Wrap };
+            selectedOrderHeader.Children.Add(_selectedOrderHeading);
+            selectedOrderBody.Children.Add(selectedOrderHeader);
+            _selectedOrderSummary = OrderDetailText();
+            _selectedOrderDates = OrderDetailText();
+            _selectedOrderDescription = OrderDetailText();
+            _selectedOrderItems = OrderDetailText();
+            selectedOrderBody.Children.Add(_selectedOrderSummary);
+            selectedOrderBody.Children.Add(_selectedOrderDates);
+            selectedOrderBody.Children.Add(_selectedOrderDescription);
+            selectedOrderBody.Children.Add(_selectedOrderItems);
+            _selectedOrderCard = new Border { Child = selectedOrderBody,
+                Background = new SolidColorBrush(Color.FromRgb(247, 249, 250)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(219, 226, 230)),
+                BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(9, 8, 9, 7), Margin = new Thickness(1, 0, 1, 7),
+                Visibility = Visibility.Collapsed };
+            ordersPanel.Children.Add(_selectedOrderCard);
             UpdatePhotoNavigation(null);
             var listActions = new UniformGrid { Columns = 2 };
             string[] actions = { "state", "blanks", "application", "urgent", "blanksReady" };
@@ -1087,6 +1116,8 @@ namespace VanyaTools.Native
             public string Customer { get; set; }
             public string Source { get; set; }
             public string Technologies { get; set; }
+            public string Description { get; set; }
+            public string Items { get; set; }
             public string Created { get; set; }
             public string Due { get; set; }
             public string Updated { get; set; }
@@ -1160,6 +1191,7 @@ namespace VanyaTools.Native
                     _data.ServerRevision = Convert.ToInt32(updated["revision"]);
                 order.Due = OrderDate(OrderValue(updated, "dueDate"), true);
                 _ordersTable.Items.Refresh();
+                RenderSelectedOrderDetails(_ordersTable.SelectedItem as OrderListItem);
                 _status("Срок заказа №" + order.Number + (dueDate == "" ? " очищен." : " сохранён."), false);
             }
             catch (Exception error) { _status("Срок заказа: " + error.Message, true); }
@@ -1405,9 +1437,49 @@ namespace VanyaTools.Native
             OrderPhotoDiskCache.Remove(key);
         }
 
+        private static TextBlock OrderDetailText() => new TextBlock {
+            FontSize = 12, TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 4)
+        };
+
+        private static void SetOrderDetail(TextBlock target, string label, string value)
+        {
+            string content = (value ?? "").Trim();
+            target.Visibility = content.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+            target.Text = content.Length == 0 ? "" : label + ": " + content;
+        }
+
+        private void RenderSelectedOrderDetails(OrderListItem selected)
+        {
+            _selectedOrderCard.Visibility = selected == null ? Visibility.Collapsed : Visibility.Visible;
+            if (selected == null) return;
+
+            _selectedOrderHeading.Text = String.IsNullOrWhiteSpace(selected.Customer)
+                ? "Заказ без имени" : selected.Customer.Trim();
+            _selectedOrderNumber.Text = "№" + selected.Number;
+
+            var summary = new List<string>();
+            if (!String.IsNullOrWhiteSpace(selected.Status)) summary.Add(selected.Status);
+            if (!String.IsNullOrWhiteSpace(selected.Source)) summary.Add("Источник: " + selected.Source);
+            if (!String.IsNullOrWhiteSpace(selected.Technologies))
+                summary.Add("Технология: " + selected.Technologies);
+            _selectedOrderSummary.Text = String.Join(" · ", summary);
+
+            var dates = new List<string>();
+            if (!String.IsNullOrWhiteSpace(selected.Created)) dates.Add("Принят: " + selected.Created);
+            dates.Add("Срок: " + (String.IsNullOrWhiteSpace(selected.Due) ? "не указан" : selected.Due));
+            if (!String.IsNullOrWhiteSpace(selected.Updated)) dates.Add("Обновлён: " + selected.Updated);
+            if (!String.IsNullOrWhiteSpace(selected.Completed)) dates.Add("Завершён: " + selected.Completed);
+            _selectedOrderDates.Text = String.Join(" · ", dates);
+
+            SetOrderDetail(_selectedOrderDescription, "Описание", selected.Description);
+            SetOrderDetail(_selectedOrderItems, "Изделия и количество", selected.Items);
+        }
+
         private async Task ShowSelectedPhoto()
         {
             var selected = _ordersTable.SelectedItem as OrderListItem;
+            RenderSelectedOrderDetails(selected);
             if (selected == null)
             {
                 _previewRequest++;
@@ -1688,6 +1760,7 @@ namespace VanyaTools.Native
                 if (a.Id != b.Id || a.Number != b.Number || a.Period != b.Period ||
                     a.Customer != b.Customer ||
                     a.Source != b.Source || a.Technologies != b.Technologies ||
+                    a.Description != b.Description || a.Items != b.Items ||
                     a.Created != b.Created || a.Due != b.Due || a.Updated != b.Updated ||
                     a.Completed != b.Completed || a.Status != b.Status ||
                     a.SendState != b.SendState || a.State != b.State ||
@@ -1741,6 +1814,8 @@ namespace VanyaTools.Native
                         Source = Convert.ToString(row["source"]),
                         Technologies = technologies == null ? "" : String.Join(", ",
                             technologies.Cast<object>().Select(item => Convert.ToString(item))),
+                        Description = Convert.ToString(OrderValue(row, "description")),
+                        Items = Convert.ToString(OrderValue(row, "items")),
                         Created = OrderDate(OrderValue(row, "createdAt")),
                         Due = OrderDate(OrderValue(row, "dueDate"), true),
                         Updated = OrderDate(OrderValue(row, "updatedAt")),
