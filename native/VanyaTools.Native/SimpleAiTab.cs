@@ -28,6 +28,7 @@ namespace VanyaTools.Native
         private readonly TextBox _backgroundTolerance, _whiteCutPixels, _backgroundHex;
         private readonly Border _backgroundSwatch;
         private readonly TextBox _alphaThreshold;
+        private readonly ComboBox _highlightColor;
         private readonly TextBox _edgeRadius, _edgeExpansion, _underlayHex;
         private readonly Border _underlaySwatch;
         private readonly TextBlock _edgeUnits;
@@ -35,7 +36,7 @@ namespace VanyaTools.Native
         private readonly TextBlock _progress;
         private readonly ProgressBar _progressBar;
         private readonly Button _removeButton, _removeWhiteButton, _backgroundPipetteButton, _upscaleButton,
-            _alphaButton, _smoothButton, _stairButton, _pipetteButton,
+            _alphaButton, _highlightButton, _smoothButton, _stairButton, _pipetteButton,
             _editButton, _cancelButton, _retryButton;
         private readonly List<RadioButton> _styleButtons = new List<RadioButton>();
         private readonly DispatcherTimer _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -123,8 +124,20 @@ namespace VanyaTools.Native
             alphaRow.Children.Add(_alphaThreshold);
             if (!styleOnly) panel.Children.Add(alphaRow);
 
+            var highlightRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 2) };
+            _highlightButton = Button("Подсветить полупрозрачные", async (_, __) => await HighlightSemiTransparent());
+            _highlightButton.ToolTip = "Создаёт рядом с оригиналом копию с яркой отметкой пикселей, у которых прозрачность между 0 и 100%.";
+            highlightRow.Children.Add(_highlightButton);
+            _highlightColor = new ComboBox { Width = 78, FontSize = 10,
+                Margin = new Thickness(3, 1, 0, 1), VerticalAlignment = VerticalAlignment.Center };
+            _highlightColor.Items.Add("Зелёный");
+            _highlightColor.Items.Add("Красный");
+            _highlightColor.SelectedIndex = 0;
+            highlightRow.Children.Add(_highlightColor);
+            if (!styleOnly) panel.Children.Add(highlightRow);
+
             _stairButton = Button("Сгладить лесенку", async (_, __) => await SmoothStairs());
-            _stairButton.ToolTip = "Уточняет край в более плотной сетке; прозрачность остаётся только 0 или 100%.";
+            _stairButton.ToolTip = "Создаёт в 2–4 раза более плотную сетку пикселей и сглаживает край и цветовые границы рисунка. Прозрачность результата остаётся 0 или 100%.";
             if (!styleOnly) panel.Children.Add(_stairButton);
 
             var edgeRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 1) };
@@ -391,6 +404,94 @@ namespace VanyaTools.Native
             using (var stream = File.Create(output)) encoder.Save(stream);
         }
 
+        private async Task HighlightSemiTransparent()
+        {
+            if (_busy) return;
+            if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
+            { Report("Сначала вставьте готовый результат.", true); return; }
+            bool red = _highlightColor.SelectedIndex == 1;
+            SetBusy(true, "Ищу полупрозрачные пиксели…");
+            try
+            {
+                _importWarning = null;
+                string source = AiSelectionCapture.Capture();
+                _sourcePreview.Source = PreviewBitmap(source);
+                _resultPreview.Source = null;
+                string output = Path.Combine(Path.GetTempPath(),
+                    "Vanya-Alpha-Highlight-" + Guid.NewGuid().ToString("N") + ".png");
+                CancellationToken cancellation = _cancellation.Token;
+                long count = await Task.Run(() => MarkSemiTransparent(source, output, red, cancellation), cancellation);
+                cancellation.ThrowIfCancellationRequested();
+                if (count == 0)
+                {
+                    Report("Полупрозрачных пикселей не найдено в подготовленном растре.", false);
+                    return;
+                }
+                _readyOutput = output;
+                Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
+                File.WriteAllText(PendingPath(), output);
+                _resultPreview.Source = PreviewBitmap(output);
+                SetStage("Вставляю подсвеченную копию в Corel…");
+                InsertReady();
+                string warning = _importWarning;
+                Report(String.IsNullOrEmpty(warning)
+                    ? "Подсвечено полупрозрачных пикселей: " + count.ToString("N0", CultureInfo.CurrentCulture) + ". Копия вставлена рядом."
+                    : warning, !String.IsNullOrEmpty(warning));
+                _importWarning = null;
+            }
+            catch (OperationCanceledException) { Report("Операция отменена.", false); }
+            catch (Exception ex) { Log.Error("Semi-transparent pixel highlight failed.", ex);
+                Report(ex.GetBaseException().Message, true); }
+            finally { SetBusy(false, null); }
+        }
+
+        private static long MarkSemiTransparent(string source, string output, bool red,
+            CancellationToken cancellation)
+        {
+            BitmapSource input = AiPrintTab.Bitmap(source);
+            var bgra = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
+            int width = bgra.PixelWidth, height = bgra.PixelHeight;
+            int length = checked(width * height), stride = checked(width * 4);
+            byte[] pixels = new byte[checked(stride * height)];
+            byte[] mask = new byte[length], work = new byte[length];
+            bgra.CopyPixels(pixels, stride, 0);
+            long count = 0;
+            for (int p = 0; p < length; p++)
+            {
+                if ((p & 0xfffff) == 0) cancellation.ThrowIfCancellationRequested();
+                byte alpha = pixels[p * 4 + 3];
+                if (alpha > 0 && alpha < 255) { mask[p] = 255; count++; }
+            }
+            if (count == 0) return 0;
+
+            // Two-pixel halo makes even a one-pixel translucent fringe visible.
+            DilateHorizontal(mask, work, width, height, 2, cancellation);
+            DilateVertical(work, mask, width, height, 2, cancellation);
+            byte markerB = red ? (byte)32 : (byte)50;
+            byte markerG = red ? (byte)45 : (byte)255;
+            byte markerR = red ? (byte)255 : (byte)20;
+            for (int p = 0; p < length; p++)
+            {
+                if ((p & 0xfffff) == 0) cancellation.ThrowIfCancellationRequested();
+                if (mask[p] == 0) continue;
+                int i = p * 4;
+                byte originalAlpha = pixels[i + 3];
+                bool center = originalAlpha > 0 && originalAlpha < 255;
+                int strength = center ? 210 : 115;
+                pixels[i] = (byte)((pixels[i] * (255 - strength) + markerB * strength + 127) / 255);
+                pixels[i + 1] = (byte)((pixels[i + 1] * (255 - strength) + markerG * strength + 127) / 255);
+                pixels[i + 2] = (byte)((pixels[i + 2] * (255 - strength) + markerR * strength + 127) / 255);
+                pixels[i + 3] = (byte)Math.Max((int)originalAlpha, center ? 220 : 115);
+            }
+            var result = BitmapSource.Create(width, height, input.DpiX, input.DpiY,
+                PixelFormats.Bgra32, null, pixels, stride);
+            cancellation.ThrowIfCancellationRequested();
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(result));
+            using (var stream = File.Create(output)) encoder.Save(stream);
+            return count;
+        }
+
         private async Task SmoothStairs()
         {
             if (_busy) return;
@@ -404,13 +505,14 @@ namespace VanyaTools.Native
             {
                 _importWarning = null;
                 Log.Info("Opaque stair smoothing capture starting.");
-                string source = AiSelectionCapture.Capture();
+                // Leave room for at least a 2x result, including on large prints.
+                string source = AiSelectionCapture.Capture(8000, 8000000);
                 Log.Info("Opaque stair smoothing capture finished.");
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Stairs-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
-                await Task.Run(() => SmoothOpaqueStairs(source, output, threshold, cancellation), cancellation);
+                int scale = await Task.Run(() => SmoothOpaqueStairs(source, output, threshold, cancellation), cancellation);
                 Log.Info("Opaque stair smoothing PNG finished.");
                 cancellation.ThrowIfCancellationRequested();
                 _readyOutput = output;
@@ -419,27 +521,29 @@ namespace VanyaTools.Native
                 _resultPreview.Source = PreviewBitmap(output);
                 SetStage("Вставляю результат в Corel…");
                 InsertReady();
-                ReportOutcome();
+                string warning = _importWarning;
+                Report(String.IsNullOrEmpty(warning)
+                    ? "Готово: рисунок сглажен, пиксельная сетка ×" + scale + ". Результат вставлен рядом."
+                    : warning, !String.IsNullOrEmpty(warning));
+                _importWarning = null;
             }
             catch (OperationCanceledException) { Report("Операция отменена.", false); }
             catch (Exception ex) { Log.Error("Opaque stair smoothing failed.", ex); Report(ex.GetBaseException().Message, true); }
             finally { SetBusy(false, null); }
         }
 
-        private static void SmoothOpaqueStairs(string source, string output, int threshold,
+        private static int SmoothOpaqueStairs(string source, string output, int threshold,
             CancellationToken cancellation)
         {
             BitmapSource input = AiPrintTab.Bitmap(source);
             var bgra = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
             int width = bgra.PixelWidth, height = bgra.PixelHeight;
             int length = checked(width * height), stride = checked(width * 4);
-            // Keep the output under about 16 MP when enlarging. Large print
-            // rasters are smoothed at their existing resolution to avoid a
-            // second full-size RGBA buffer inside the Corel process.
-            double scale = length <= 4000000 ? 2.0 : length <= 8000000 ? 1.4 : 1.0;
-            if (width > 16000 || height > 16000) scale = 1.0;
-            int outWidth = checked((int)Math.Round(width * scale));
-            int outHeight = checked((int)Math.Round(height * scale));
+            // The capture is limited to 8 MP. An integer grid keeps every
+            // generated pixel small and the final image within about 32 MP.
+            int scale = length <= 2000000 ? 4 : length <= 3500000 ? 3 : 2;
+            int outWidth = checked(width * scale);
+            int outHeight = checked(height * scale);
             Log.Info("Opaque stair smoothing: " + width + "x" + height +
                 " -> " + outWidth + "x" + outHeight + ".");
             byte[] pixels = new byte[checked(stride * height)];
@@ -458,63 +562,7 @@ namespace VanyaTools.Native
             {
                 int original = pixels[p * 4 + 3] >= threshold && pixels[p * 4 + 3] > 0 ? 255 : 0;
                 work[p] = (byte)original;
-                mask[p] = (byte)(scale == 1.0
-                    ? (mask[p] * 75 + original * 25 + 50) / 100
-                    : (mask[p] * 45 + original * 55 + 50) / 100);
-            }
-            if (scale == 1.0)
-            {
-                for (int y = 0; y < height; y++)
-                {
-                    if ((y & 63) == 0) cancellation.ThrowIfCancellationRequested();
-                    for (int x = 0; x < width; x++)
-                    {
-                        int p = y * width + x, i = p * 4;
-                        if (mask[p] < 128)
-                        {
-                            if (work[p] != 0)
-                            {
-                                int neighbors = 0;
-                                for (int dy = -1; dy <= 1; dy++)
-                                for (int dx = -1; dx <= 1; dx++)
-                                {
-                                    int nx = x + dx, ny = y + dy;
-                                    if ((dx != 0 || dy != 0) && nx >= 0 && nx < width &&
-                                        ny >= 0 && ny < height && work[ny * width + nx] != 0)
-                                        neighbors++;
-                                }
-                                if (neighbors <= 2) { pixels[i + 3] = 255; continue; }
-                            }
-                            pixels[i + 3] = 0;
-                            continue;
-                        }
-                        if (work[p] != 0) { pixels[i + 3] = 255; continue; }
-                        int neighbor = -1;
-                        for (int dy = -1; dy <= 1 && neighbor < 0; dy++)
-                        for (int dx = -1; dx <= 1; dx++)
-                        {
-                            int nx = x + dx, ny = y + dy;
-                            if (nx >= 0 && nx < width && ny >= 0 && ny < height &&
-                                work[ny * width + nx] != 0)
-                            { neighbor = (ny * width + nx) * 4; break; }
-                        }
-                        if (neighbor < 0) { pixels[i + 3] = 0; continue; }
-                        pixels[i] = pixels[neighbor];
-                        pixels[i + 1] = pixels[neighbor + 1];
-                        pixels[i + 2] = pixels[neighbor + 2];
-                        pixels[i + 3] = 255;
-                    }
-                }
-                for (int p = 0; p < length; p++)
-                {
-                    if ((p & 0xfffff) == 0) cancellation.ThrowIfCancellationRequested();
-                    if (pixels[p * 4 + 3] == 0)
-                        pixels[p * 4] = pixels[p * 4 + 1] = pixels[p * 4 + 2] = 0;
-                }
-                Log.Info("Opaque stair smoothing pixels ready; saving PNG.");
-                SaveBinaryResult(output, pixels, width, height,
-                    input.DpiX, input.DpiY, cancellation);
-                return;
+                mask[p] = (byte)((mask[p] * 65 + original * 35 + 50) / 100);
             }
             byte[] resultPixels = new byte[checked(outWidth * outHeight * 4)];
             double scaleX = (double)outWidth / width, scaleY = (double)outHeight / height;
@@ -560,6 +608,7 @@ namespace VanyaTools.Native
             Log.Info("Opaque stair smoothing pixels ready; saving PNG.");
             SaveBinaryResult(output, resultPixels, outWidth, outHeight,
                 input.DpiX * scaleX, input.DpiY * scaleY, cancellation);
+            return scale;
         }
 
         private void UpdateEdgeUnits()
@@ -933,6 +982,7 @@ namespace VanyaTools.Native
                 string name = Path.GetFileName(_readyOutput);
                 bool alreadyCropped = name.StartsWith("Vanya-Edge-", StringComparison.OrdinalIgnoreCase) ||
                     name.StartsWith("Vanya-Stairs-", StringComparison.OrdinalIgnoreCase) ||
+                    name.StartsWith("Vanya-Alpha-Highlight-", StringComparison.OrdinalIgnoreCase) ||
                     name.StartsWith("Vanya-Background-Ready-", StringComparison.OrdinalIgnoreCase);
                 Log.Info("Simple AI import starting: " + name +
                     (alreadyCropped ? " (cropped PNG)" : ""));
@@ -957,7 +1007,8 @@ namespace VanyaTools.Native
             if (filename.StartsWith("Vanya-Background-", StringComparison.OrdinalIgnoreCase))
                 return "Удаление фона по цвету";
             if (filename.StartsWith("Vanya-Alpha-", StringComparison.OrdinalIgnoreCase))
-                return "Удаление полупрозрачности";
+                return filename.StartsWith("Vanya-Alpha-Highlight-", StringComparison.OrdinalIgnoreCase)
+                    ? "Подсветка полупрозрачных пикселей" : "Удаление полупрозрачности";
             if (filename.StartsWith("Vanya-Stairs-", StringComparison.OrdinalIgnoreCase))
                 return "Сглаживание лесенки";
             if (filename.StartsWith("Vanya-Edge-", StringComparison.OrdinalIgnoreCase))
@@ -1014,10 +1065,11 @@ namespace VanyaTools.Native
         {
             _busy = busy;
             _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _backgroundPipetteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
-                _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled =
+                _highlightButton.IsEnabled = _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled =
                 _editButton.IsEnabled = !busy;
             _model.IsEnabled = _prompt.IsEnabled = _backgroundHex.IsEnabled = _backgroundTolerance.IsEnabled = _whiteCutPixels.IsEnabled = _alphaThreshold.IsEnabled =
                 _edgeRadius.IsEnabled = _edgeExpansion.IsEnabled = _underlayHex.IsEnabled = !busy;
+            _highlightColor.IsEnabled = !busy;
             foreach (var choice in _styleButtons) choice.IsEnabled = !busy;
             _cancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             _cancelButton.IsEnabled = busy;
