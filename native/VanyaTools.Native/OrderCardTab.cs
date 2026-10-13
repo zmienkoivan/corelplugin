@@ -49,6 +49,7 @@ namespace VanyaTools.Native
         private readonly List<OrderListItem> _serverOrders = new List<OrderListItem>();
         private readonly DispatcherTimer _documentWatcher, _serverWatcher;
         private readonly List<CheckBox> _technologies = new List<CheckBox>();
+        private readonly CheckBox _delivery;
         private OrderCardData _data = new OrderCardData();
         private string _documentPath;
         private string _lastWrittenJson;
@@ -362,6 +363,9 @@ namespace VanyaTools.Native
                 _technologies.Add(box); techGrid.Children.Add(box);
             }
             _editor.Children.Add(techGrid);
+            _delivery = new CheckBox { Content = "🚚 ДОСТАВКА",
+                Margin = new Thickness(2, 5, 2, 5) };
+            _editor.Children.Add(_delivery);
             _editor.Children.Add(Label("Описание"));
             _description = Input(48); _editor.Children.Add(_description);
             _editor.Children.Add(Label("Изделия и количество"));
@@ -437,6 +441,8 @@ namespace VanyaTools.Native
                 input.TextChanged += (_, __) => FormChanged();
             foreach (var box in _technologies) box.Checked += (_, __) => FormChanged();
             foreach (var box in _technologies) box.Unchecked += (_, __) => FormChanged();
+            _delivery.Checked += (_, __) => FormChanged();
+            _delivery.Unchecked += (_, __) => FormChanged();
             QuickDocumentFields = CreateQuickDocumentFields();
             _documentWatcher = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
             _documentWatcher.Tick += (_, __) => RefreshDocument();
@@ -540,6 +546,7 @@ namespace VanyaTools.Native
                 _customer.Text = ""; _designName.Text = ""; SetSourceSelection("");
                 _description.Text = ""; _items.Text = "";
                 foreach (var box in _technologies) box.IsChecked = false;
+                _delivery.IsChecked = false;
                 RenderFrames(); UpdateCaption(); UpdateActions();
             }
             finally { _loadingForm = false; }
@@ -702,6 +709,7 @@ namespace VanyaTools.Native
                 _items.Text = _data.Items ?? "";
                 foreach (var box in _technologies)
                     box.IsChecked = _data.Technologies.Contains(Convert.ToString(box.Content));
+                _delivery.IsChecked = _data.IsDelivery;
                 RenderFrames(); UpdateCaption(); UpdateActions();
             }
             finally { _loadingForm = false; }
@@ -768,6 +776,7 @@ namespace VanyaTools.Native
             _data.Items = _items.Text.Trim();
             _data.Technologies = _technologies.Where(x => x.IsChecked == true)
                 .Select(x => Convert.ToString(x.Content)).ToList();
+            _data.IsDelivery = _delivery.IsChecked == true;
         }
 
         private void SetSourceSelection(string source)
@@ -1143,6 +1152,7 @@ namespace VanyaTools.Native
             public bool BlanksReady { get; set; }
             public bool ApplicationPaused { get; set; }
             public bool Urgent { get; set; }
+            public bool Delivery { get; set; }
             public bool IsAvailable => SendState == "reserved";
         }
 
@@ -1792,6 +1802,7 @@ namespace VanyaTools.Native
                     a.Status != b.Status ||
                     a.SendState != b.SendState || a.State != b.State ||
                     a.PhotoCount != b.PhotoCount || a.Urgent != b.Urgent ||
+                    a.Delivery != b.Delivery ||
                     a.BlanksPaused != b.BlanksPaused || a.BlanksReady != b.BlanksReady ||
                     a.ApplicationPaused != b.ApplicationPaused ||
                     !a.PhotoVersions.SequenceEqual(b.PhotoVersions)) return false;
@@ -1856,7 +1867,8 @@ namespace VanyaTools.Native
                         BlanksPaused = Flag(row, "blanksPaused"),
                         BlanksReady = Flag(row, "blanksReady"),
                         ApplicationPaused = Flag(row, "applicationPaused"),
-                        Urgent = Flag(row, "isUrgent")
+                        Urgent = Flag(row, "isUrgent"),
+                        Delivery = Flag(row, "isDelivery")
                     };
                     order.Status = OrderStatus(order);
                     incoming.Add(order);
@@ -2263,6 +2275,8 @@ namespace VanyaTools.Native
                     ["description"] = _data.Description, ["items"] = _data.Items,
                     ["revision"] = requestRevision
                 };
+                if (_data.ServerOrderId == 0 || _data.IsDelivery != _data.ServerDelivery)
+                    details["isDelivery"] = _data.IsDelivery;
                 var result = await OrderServerClient.Publish(server, key, details, photos, _data.ServerOrderId);
                 if (!SameDocument((object)doc, (object)CorelApp.Get().ActiveDocument))
                     throw new InvalidOperationException("Вернитесь в исходный CDR и загрузите заказ с сервера.");
@@ -2315,6 +2329,8 @@ namespace VanyaTools.Native
                 _data.ClientKey = Convert.ToString(clientKey);
             _data.ServerContentFingerprint = ServerContentFingerprint(result);
             ApplyWorkflowResult(result);
+            _data.IsDelivery = _data.ServerDelivery;
+            _delivery.IsChecked = _data.IsDelivery;
             if (result.TryGetValue("photoIds", out object ids) && ids is object[] photos && photos.Length > 0)
                 _data.TelegramMessageId = Convert.ToInt32(photos[0]);
         }
@@ -2435,6 +2451,7 @@ namespace VanyaTools.Native
                 var technologies = result["technologies"] as object[] ?? new object[0];
                 foreach (var box in _technologies)
                     box.IsChecked = technologies.Any(x => Convert.ToString(x) == Convert.ToString(box.Content));
+                _delivery.IsChecked = Flag(result, "isDelivery");
             }
             finally { _loadingForm = false; }
         }
@@ -2459,6 +2476,8 @@ namespace VanyaTools.Native
                         box.IsChecked = technologies.Any(x =>
                             Convert.ToString(x) == Convert.ToString(box.Content));
                 }
+                if (_data.IsDelivery == _data.ServerDelivery)
+                    _delivery.IsChecked = Flag(result, "isDelivery");
             }
             finally { _loadingForm = false; }
         }
@@ -2475,6 +2494,15 @@ namespace VanyaTools.Native
             _data.ServerBlanksReady = Flag(result, "blanksReady");
             _data.ServerApplicationPaused = Flag(result, "applicationPaused");
             _data.ServerUrgent = Flag(result, "isUrgent");
+            bool serverDelivery = Flag(result, "isDelivery");
+            if (_data.IsDelivery == _data.ServerDelivery && _delivery != null)
+            {
+                _data.IsDelivery = serverDelivery;
+                _loadingForm = true;
+                try { _delivery.IsChecked = serverDelivery; }
+                finally { _loadingForm = false; }
+            }
+            _data.ServerDelivery = serverDelivery;
         }
 
         private static string OrderStatus(OrderListItem order) =>
@@ -2482,6 +2510,7 @@ namespace VanyaTools.Native
                 order.State == "done" ? "🔥 Готов" :
                 order.SendState == "draft" ? "Черновик" : "🌲 В работе") +
             (order.Urgent ? " ⚡" : "") +
+            (order.Delivery ? " 🚚 ДОСТАВКА" : "") +
             (order.BlanksReady ? " ❤️ Заготовки" : "") +
             (order.BlanksPaused ? " ⏸ Заготовки" : "") +
             (order.ApplicationPaused ? " ⏸ Нанесение" : "");
@@ -2494,6 +2523,7 @@ namespace VanyaTools.Native
             order.BlanksReady = Flag(result, "blanksReady");
             order.ApplicationPaused = Flag(result, "applicationPaused");
             order.Urgent = Flag(result, "isUrgent");
+            order.Delivery = Flag(result, "isDelivery");
             order.Updated = OrderDate(OrderValue(result, "updatedAt"));
             order.Completed = OrderDate(OrderValue(result, "completedAt"));
             order.CompletedAt = OrderTimestamp(OrderValue(result, "completedAt"));
@@ -2632,6 +2662,7 @@ namespace VanyaTools.Native
             _orderInfo.Text = assigned ? "Заказ №" + _data.ServerOrderNumber + " · " +
                 (draft ? "карточка заполняется" : _data.ServerState == "done" ? "🔥 Готов" : "🌲 В работе") +
                 (_data.ServerUrgent ? " · ⚡ Срочно" : "") +
+                (_data.ServerDelivery ? " · 🚚 ДОСТАВКА" : "") +
                 (_data.ServerBlanksReady ? " · ❤️ Заготовки готовы" : "") +
                 (_data.ServerBlanksPaused ? " · ⏸ Заготовки" : "") +
                 (_data.ServerApplicationPaused ? " · ⏸ Нанесение" : "") : "";
@@ -2797,6 +2828,7 @@ namespace VanyaTools.Native
         public List<string> Technologies { get; set; } = new List<string>();
         public string Description { get; set; }
         public string Items { get; set; }
+        public bool IsDelivery { get; set; }
         public List<OrderCardFrame> Frames { get; set; } = new List<OrderCardFrame>();
         public string PublishedAtUtc { get; set; }
         public int TelegramMessageId { get; set; }
@@ -2809,6 +2841,7 @@ namespace VanyaTools.Native
         public bool ServerBlanksReady { get; set; }
         public bool ServerApplicationPaused { get; set; }
         public bool ServerUrgent { get; set; }
+        public bool ServerDelivery { get; set; }
         public string ServerState { get; set; }
         public string ServerSendState { get; set; }
         public int PendingIntakeId { get; set; }

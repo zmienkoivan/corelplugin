@@ -116,12 +116,14 @@ namespace VanyaTools.Native
                     SetStatus("Не удалось переключить кнопки: " + error.Message, true);
                 }
             }));
-            var verticalTabs = LoadVerticalTabs();
+            var tabsPlacement = LoadTabsPlacement();
             var tabsPlacementSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
             var horizontalTabsButton = AddRadioButton(tabsPlacementSettings,
-                "Горизонтально (сверху)", "DockerTabsPlacement", !verticalTabs);
-            var verticalTabsButton = AddRadioButton(tabsPlacementSettings,
-                "Вертикально (слева)", "DockerTabsPlacement", verticalTabs);
+                "Горизонтально (сверху)", "DockerTabsPlacement", tabsPlacement == Dock.Top);
+            var leftTabsButton = AddRadioButton(tabsPlacementSettings,
+                "Вертикально (слева)", "DockerTabsPlacement", tabsPlacement == Dock.Left);
+            var rightTabsButton = AddRadioButton(tabsPlacementSettings,
+                "Вертикально (справа)", "DockerTabsPlacement", tabsPlacement == Dock.Right);
             AddSettingsExpander(settings, "Расположение вкладок", tabsPlacementSettings);
             _hotkeys = new CorelHotkeyManager(() => RunTrim(true), RunFitFrame,
                 approvalCopy.CopySelection,
@@ -145,10 +147,11 @@ namespace VanyaTools.Native
             var tabs = new TabControl
             {
                 MinHeight = 360,
-                TabStripPlacement = verticalTabs ? Dock.Left : Dock.Top
+                TabStripPlacement = tabsPlacement
             };
-            horizontalTabsButton.Checked += (_, __) => SetTabsPlacement(tabs, false);
-            verticalTabsButton.Checked += (_, __) => SetTabsPlacement(tabs, true);
+            horizontalTabsButton.Checked += (_, __) => SetTabsPlacement(tabs, Dock.Top);
+            leftTabsButton.Checked += (_, __) => SetTabsPlacement(tabs, Dock.Left);
+            rightTabsButton.Checked += (_, __) => SetTabsPlacement(tabs, Dock.Right);
             tabs.Items.Add(ThumbnailTabs.Create("Основная", ThumbnailTabs.Crop,
                 Color.FromRgb(46, 112, 124), standardPage));
             tabs.Items.Add(ThumbnailTabs.Create("Публикация", ThumbnailTabs.Publish,
@@ -628,28 +631,32 @@ namespace VanyaTools.Native
                 : new SolidColorBrush(Color.FromRgb(66, 81, 91));
         }
 
-        private static bool LoadVerticalTabs()
+        private static Dock LoadTabsPlacement()
         {
             try
             {
-                return File.Exists(TabsPlacementPath) &&
-                    String.Equals(File.ReadAllText(TabsPlacementPath).Trim(), "vertical",
-                        StringComparison.OrdinalIgnoreCase);
+                if (!File.Exists(TabsPlacementPath)) return Dock.Top;
+                string saved = File.ReadAllText(TabsPlacementPath).Trim();
+                if (String.Equals(saved, "right", StringComparison.OrdinalIgnoreCase)) return Dock.Right;
+                if (String.Equals(saved, "vertical", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(saved, "left", StringComparison.OrdinalIgnoreCase)) return Dock.Left;
+                return Dock.Top;
             }
             catch (Exception error)
             {
                 Log.Error("Could not read docker tabs placement.", error);
-                return false;
+                return Dock.Top;
             }
         }
 
-        private void SetTabsPlacement(TabControl tabs, bool vertical)
+        private void SetTabsPlacement(TabControl tabs, Dock placement)
         {
-            tabs.TabStripPlacement = vertical ? Dock.Left : Dock.Top;
+            tabs.TabStripPlacement = placement;
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(TabsPlacementPath));
-                File.WriteAllText(TabsPlacementPath, vertical ? "vertical" : "horizontal");
+                File.WriteAllText(TabsPlacementPath,
+                    placement == Dock.Right ? "right" : placement == Dock.Left ? "left" : "horizontal");
             }
             catch (Exception error)
             {
