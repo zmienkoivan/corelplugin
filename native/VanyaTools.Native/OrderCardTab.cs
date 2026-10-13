@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -40,6 +41,7 @@ namespace VanyaTools.Native
         private readonly DataGrid _ordersTable, _unassignedTable;
         private readonly Image _orderPhoto;
         private readonly Dictionary<string, DataGridColumn> _orderColumns = new Dictionary<string, DataGridColumn>();
+        private readonly DispatcherTimer _orderLayoutSaveTimer;
         private readonly CheckBox _onlyAvailable;
         private readonly List<OrderListItem> _serverOrders = new List<OrderListItem>();
         private readonly DispatcherTimer _documentWatcher, _serverWatcher;
@@ -158,9 +160,12 @@ namespace VanyaTools.Native
             ordersPanel.Children.Add(_ordersCount);
             _ordersTable = new DataGrid { AutoGenerateColumns = false, IsReadOnly = true,
                 CanUserAddRows = false, CanUserDeleteRows = false, CanUserResizeRows = false,
+                CanUserResizeColumns = true, CanUserReorderColumns = true,
                 HeadersVisibility = DataGridHeadersVisibility.Column, SelectionMode = DataGridSelectionMode.Single,
-                SelectionUnit = DataGridSelectionUnit.FullRow, Height = 280, RowHeight = 24,
+                SelectionUnit = DataGridSelectionUnit.FullRow, Height = 280, RowHeight = 31,
                 Margin = new Thickness(1, 0, 1, 3) };
+            _ordersTable.SetValue(ScrollViewer.HorizontalScrollBarVisibilityProperty,
+                ScrollBarVisibility.Auto);
             _ordersTable.AlternationCount = 2;
             _ordersTable.RowBackground = Brushes.White;
             _ordersTable.AlternatingRowBackground = new SolidColorBrush(Color.FromRgb(246, 248, 250));
@@ -198,25 +203,43 @@ namespace VanyaTools.Native
             selectedCell.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.Black));
             orderCellStyle.Triggers.Add(selectedCell);
             _ordersTable.CellStyle = orderCellStyle;
-            _ordersTable.Columns.Add(new DataGridTextColumn { Header = "№", Binding = new Binding("Number"),
-                Width = new DataGridLength(65) });
-            var visibleColumns = LoadOrderColumns();
-            AddOrderColumn(columnsMenu, visibleColumns, "customer", "Заказчик", "Customer",
-                new DataGridLength(1, DataGridLengthUnitType.Star), true);
-            AddOrderColumn(columnsMenu, visibleColumns, "source", "Источник", "Source",
+            var numberColumn = new DataGridTextColumn { Header = "№", Binding = new Binding("Number"),
+                Width = new DataGridLength(58), MinWidth = 52 };
+            _ordersTable.Columns.Add(numberColumn);
+            _orderColumns.Add("number", numberColumn);
+            var tableSettings = LoadOrderTableSettings();
+            AddOrderColumn(columnsMenu, tableSettings.Visible, "customer", "Заказчик", "Customer",
+                new DataGridLength(1, DataGridLengthUnitType.Star), true, 170);
+            AddOrderColumn(columnsMenu, tableSettings.Visible, "source", "Источник", "Source",
                 new DataGridLength(68), false);
-            AddOrderColumn(columnsMenu, visibleColumns, "technologies", "Технология", "Technologies",
+            AddOrderColumn(columnsMenu, tableSettings.Visible, "technologies", "Технология", "Technologies",
                 new DataGridLength(110), false);
-            AddOrderColumn(columnsMenu, visibleColumns, "created", "Принят", "Created",
-                new DataGridLength(94), true);
-            AddOrderColumn(columnsMenu, visibleColumns, "due", "Срок", "Due",
-                new DataGridLength(78), true);
-            AddOrderColumn(columnsMenu, visibleColumns, "updated", "Обновлён", "Updated",
+            AddOrderColumn(columnsMenu, tableSettings.Visible, "created", "Принят", "Created",
                 new DataGridLength(94), false);
-            AddOrderColumn(columnsMenu, visibleColumns, "completed", "Завершён", "Completed",
+            AddOrderColumn(columnsMenu, tableSettings.Visible, "due", "Срок", "Due",
+                new DataGridLength(83), true);
+            AddOrderColumn(columnsMenu, tableSettings.Visible, "updated", "Обновлён", "Updated",
                 new DataGridLength(94), false);
-            AddOrderColumn(columnsMenu, visibleColumns, "status", "Состояние", "Status",
-                new DataGridLength(105), true);
+            AddOrderColumn(columnsMenu, tableSettings.Visible, "completed", "Завершён", "Completed",
+                new DataGridLength(94), false);
+            AddOrderColumn(columnsMenu, tableSettings.Visible, "status", "Состояние", "Status",
+                new DataGridLength(100), true);
+            columnsMenu.Items.Add(new Separator());
+            var resetTable = new MenuItem { Header = "Сбросить вид таблицы" };
+            resetTable.Click += (_, __) => ResetOrderTableLayout(columnsMenu);
+            columnsMenu.Items.Add(resetTable);
+            ApplyOrderTableLayout(tableSettings);
+            _orderLayoutSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
+            _orderLayoutSaveTimer.Tick += (_, __) => {
+                _orderLayoutSaveTimer.Stop();
+                try { SaveOrderTableSettings(); }
+                catch (Exception error) { Log.Error("Order table layout save failed", error); }
+            };
+            var widthDescriptor = DependencyPropertyDescriptor.FromProperty(
+                DataGridColumn.WidthProperty, typeof(DataGridColumn));
+            foreach (var column in _orderColumns.Values)
+                widthDescriptor.AddValueChanged(column, (_, __) => ScheduleOrderTableSave());
+            _ordersTable.ColumnReordered += (_, __) => ScheduleOrderTableSave();
             _ordersTable.AddHandler(UIElement.MouseLeftButtonUpEvent,
                 new MouseButtonEventHandler(OrderCellClicked), true);
             _ordersTable.SelectionChanged += (_, __) => {
@@ -386,7 +409,15 @@ namespace VanyaTools.Native
             QuickDocumentFields.Unloaded += (_, __) => { if (!IsLoaded) _documentWatcher.Stop(); };
             OrdersView.Loaded += async (_, __) => { _serverWatcher.Start();
                 if (!String.IsNullOrWhiteSpace(_key.Password)) await LoadOrders(); };
-            OrdersView.Unloaded += (_, __) => _serverWatcher.Stop();
+            OrdersView.Unloaded += (_, __) => {
+                _serverWatcher.Stop();
+                if (_orderLayoutSaveTimer.IsEnabled)
+                {
+                    _orderLayoutSaveTimer.Stop();
+                    try { SaveOrderTableSettings(); }
+                    catch (Exception error) { Log.Error("Order table layout save failed", error); }
+                }
+            };
             RenderFrames(); UpdateCaption(); UpdateActions();
         }
 
@@ -1141,46 +1172,136 @@ namespace VanyaTools.Native
                 DateTimeStyles.None, out DateTime date)
                 ? date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : "";
 
-        private static HashSet<string> LoadOrderColumns()
+        private sealed class OrderTableSettings
+        {
+            public OrderTableSettings() { }
+            public string[] Visible { get; set; }
+            public Dictionary<string, double> Widths { get; set; }
+            public string[] Order { get; set; }
+        }
+
+        private static OrderTableSettings LoadOrderTableSettings()
         {
             try
             {
-                if (!File.Exists(ColumnsSettingsPath)) return null;
-                var names = new JavaScriptSerializer().Deserialize<string[]>(
-                    File.ReadAllText(ColumnsSettingsPath, Encoding.UTF8));
-                return new HashSet<string>(names ?? new string[0], StringComparer.OrdinalIgnoreCase);
+                if (!File.Exists(ColumnsSettingsPath)) return new OrderTableSettings();
+                string json = File.ReadAllText(ColumnsSettingsPath, Encoding.UTF8).Trim();
+                var serializer = new JavaScriptSerializer();
+                if (json.StartsWith("[", StringComparison.Ordinal))
+                    return new OrderTableSettings { Visible = serializer.Deserialize<string[]>(json) };
+                return serializer.Deserialize<OrderTableSettings>(json) ?? new OrderTableSettings();
             }
             catch (Exception error)
             {
-                Log.Error("Order columns could not be loaded", error);
-                return null;
+                Log.Error("Order table layout could not be loaded", error);
+                return new OrderTableSettings();
             }
         }
 
-        private void AddOrderColumn(ContextMenu menu, HashSet<string> visible, string key,
-            string title, string property, DataGridLength width, bool shownByDefault)
+        private void AddOrderColumn(ContextMenu menu, string[] visible, string key,
+            string title, string property, DataGridLength width, bool shownByDefault,
+            double minWidth = 45)
         {
-            bool shown = visible == null ? shownByDefault : visible.Contains(key);
+            bool shown = visible == null ? shownByDefault : visible.Any(name =>
+                String.Equals(name, key, StringComparison.OrdinalIgnoreCase));
             var column = new DataGridTextColumn { Header = title, Binding = new Binding(property),
-                Width = width, Visibility = shown ? Visibility.Visible : Visibility.Collapsed };
+                Width = width, MinWidth = minWidth,
+                Visibility = shown ? Visibility.Visible : Visibility.Collapsed };
+            if (key == "customer")
+            {
+                var nameStyle = new Style(typeof(TextBlock));
+                nameStyle.Setters.Add(new Setter(TextBlock.FontSizeProperty, 15.0));
+                nameStyle.Setters.Add(new Setter(TextBlock.FontWeightProperty, FontWeights.SemiBold));
+                nameStyle.Setters.Add(new Setter(TextBlock.TextTrimmingProperty,
+                    TextTrimming.CharacterEllipsis));
+                nameStyle.Setters.Add(new Setter(FrameworkElement.VerticalAlignmentProperty,
+                    VerticalAlignment.Center));
+                nameStyle.Setters.Add(new Setter(FrameworkElement.MarginProperty,
+                    new Thickness(4, 0, 2, 0)));
+                column.ElementStyle = nameStyle;
+            }
             _ordersTable.Columns.Add(column);
             _orderColumns.Add(key, column);
-            var option = new MenuItem { Header = title, IsCheckable = true, IsChecked = shown };
+            var option = new MenuItem { Header = title, Tag = key,
+                IsCheckable = true, IsChecked = shown };
             option.Click += (_, __) => {
                 column.Visibility = option.IsChecked ? Visibility.Visible : Visibility.Collapsed;
-                try { SaveOrderColumns(); }
-                catch (Exception error) { _status("Столбцы заказов: " + error.Message, true); }
+                ScheduleOrderTableSave();
             };
             menu.Items.Add(option);
         }
 
-        private void SaveOrderColumns()
+        private void ApplyOrderTableLayout(OrderTableSettings settings)
         {
-            var visible = _orderColumns.Where(item => item.Value.Visibility == Visibility.Visible)
-                .Select(item => item.Key).ToArray();
+            if (settings.Widths != null)
+                foreach (var item in settings.Widths)
+                    if (_orderColumns.TryGetValue(item.Key, out DataGridColumn column) &&
+                        !Double.IsNaN(item.Value) && !Double.IsInfinity(item.Value) &&
+                        item.Value >= 40 && item.Value <= 1600)
+                        column.Width = new DataGridLength(Math.Max(column.MinWidth, item.Value));
+            if (settings.Order == null) return;
+            var savedKeys = settings.Order.Where(_orderColumns.ContainsKey)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var keys = savedKeys.Concat(_orderColumns.Keys.Where(key =>
+                    !savedKeys.Contains(key, StringComparer.OrdinalIgnoreCase)))
+                .ToArray();
+            for (int index = 0; index < keys.Length; index++)
+                _orderColumns[keys[index]].DisplayIndex = index;
+        }
+
+        private void ResetOrderTableLayout(ContextMenu menu)
+        {
+            var visible = new HashSet<string>(new[] { "customer", "due", "status" });
+            foreach (var item in _orderColumns)
+                item.Value.Visibility = item.Key == "number" || visible.Contains(item.Key)
+                    ? Visibility.Visible : Visibility.Collapsed;
+            foreach (var option in menu.Items.OfType<MenuItem>())
+                if (option.Tag is string key) option.IsChecked = visible.Contains(key);
+            _orderColumns["number"].Width = new DataGridLength(58);
+            _orderColumns["customer"].Width = new DataGridLength(1, DataGridLengthUnitType.Star);
+            _orderColumns["source"].Width = new DataGridLength(68);
+            _orderColumns["technologies"].Width = new DataGridLength(110);
+            _orderColumns["created"].Width = new DataGridLength(94);
+            _orderColumns["due"].Width = new DataGridLength(83);
+            _orderColumns["updated"].Width = new DataGridLength(94);
+            _orderColumns["completed"].Width = new DataGridLength(94);
+            _orderColumns["status"].Width = new DataGridLength(100);
+            int displayIndex = 0;
+            foreach (var key in _orderColumns.Keys)
+                _orderColumns[key].DisplayIndex = displayIndex++;
+            _orderLayoutSaveTimer.Stop();
+            try { if (File.Exists(ColumnsSettingsPath)) File.Delete(ColumnsSettingsPath); }
+            catch (Exception error) { _status("Сброс таблицы: " + error.Message, true); }
+        }
+
+        private void ScheduleOrderTableSave()
+        {
+            if (_orderLayoutSaveTimer == null) return;
+            _orderLayoutSaveTimer.Stop();
+            _orderLayoutSaveTimer.Start();
+        }
+
+        private void SaveOrderTableSettings()
+        {
+            var widths = new Dictionary<string, double>();
+            foreach (var item in _orderColumns)
+            {
+                double actual = item.Value.ActualWidth;
+                if (item.Value.Visibility == Visibility.Visible && actual >= item.Value.MinWidth &&
+                    actual <= 1600) widths[item.Key] = actual;
+                else if (item.Value.Width.IsAbsolute)
+                    widths[item.Key] = item.Value.Width.Value;
+            }
+            var settings = new OrderTableSettings {
+                Visible = _orderColumns.Where(item => item.Key != "number" &&
+                    item.Value.Visibility == Visibility.Visible).Select(item => item.Key).ToArray(),
+                Widths = widths,
+                Order = _orderColumns.OrderBy(item => item.Value.DisplayIndex)
+                    .Select(item => item.Key).ToArray()
+            };
             Directory.CreateDirectory(Path.GetDirectoryName(ColumnsSettingsPath));
             File.WriteAllText(ColumnsSettingsPath,
-                new JavaScriptSerializer().Serialize(visible), Encoding.UTF8);
+                new JavaScriptSerializer().Serialize(settings), Encoding.UTF8);
         }
 
         private static string OrderDate(object value, bool dateOnly = false)
