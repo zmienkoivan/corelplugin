@@ -182,9 +182,19 @@ namespace VanyaTools.Native
                 new ColorProofTab((message, isError) => SetStatus(message, isError))));
             tabs.Items.Add(ThumbnailTabs.Create("Стилизация", ThumbnailTabs.Style,
                 Color.FromRgb(167, 83, 123),
-                new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
-                    () => aiTools.GetToken(), ImportAiResult,
-                    (message, isError) => SetStatus(message, isError), true)));
+                new TabControl
+                {
+                    Items =
+                    {
+                        new TabItem { Header = "Стили", Content =
+                            new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
+                                () => aiTools.GetToken(), ImportAiResult,
+                                (message, isError) => SetStatus(message, isError), true) },
+                        new TabItem { Header = "Генеративная заливка", Content =
+                            new GenerativeFillTab(() => aiTools.GetToken(), ImportGenerativeFillResult,
+                                (message, isError) => SetStatus(message, isError)) }
+                    }
+                }));
             tabs.Items.Add(ThumbnailTabs.Create("Настройки", ThumbnailTabs.Settings,
                 Color.FromRgb(91, 104, 116),
                 new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = settings }));
@@ -302,6 +312,37 @@ namespace VanyaTools.Native
 
         private string ImportAiResult(string path, string operation) { return ImportAiResult(path, operation, true); }
         private string ImportDtfResult(string path, string operation) { return ImportAiResult(path, operation, false); }
+
+        private string ImportGenerativeFillResult(string path, string operation,
+            GenerativeFillCapture.Prepared prepared)
+        {
+            if (prepared == null || prepared.WidthMm <= 0 || prepared.HeightMm <= 0)
+                throw new InvalidOperationException("Положение результата AI не сохранено.");
+            string warning = ImportAiResult(path, operation, false);
+            dynamic app = CorelApp.Get();
+            dynamic doc = app.ActiveDocument;
+            dynamic shape = app.ActiveShape;
+            if (doc == null || shape == null || Convert.ToInt32(shape.Type) != CorelConstants.CdrBitmapShape)
+                return (warning ?? "Результат вставлен.") +
+                    " CorelDRAW не вернул импортированный растр для размещения; проверьте его размер и положение.";
+            int oldUnit = Convert.ToInt32(doc.Unit);
+            try
+            {
+                doc.Unit = CorelConstants.CdrMillimeter;
+                shape.SetSize(prepared.WidthMm, prepared.HeightMm);
+                shape.Move(prepared.LeftMm + 10.0 - Convert.ToDouble(shape.LeftX),
+                    prepared.TopMm + 10.0 - Convert.ToDouble(shape.TopY));
+            }
+            catch (Exception placementError)
+            {
+                Log.Error("Generative fill result inserted but placement failed.", placementError);
+                warning = (warning ?? "Результат вставлен.") +
+                    " Не удалось выставить исходный размер и положение: " + placementError.Message;
+            }
+            finally { doc.Unit = oldUnit; }
+            try { app.ActiveWindow.Refresh(); } catch { }
+            return warning;
+        }
 
         private string ImportAiResult(string path, string operation, bool trimAfterImport)
         {
