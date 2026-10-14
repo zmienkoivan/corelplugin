@@ -434,6 +434,29 @@ namespace VanyaTools.Native
             _yearFolder.Margin = new Thickness(0, 1, 4, 3);
             folderRow.Children.Add(_yearFolder);
             settings.Children.Add(folderRow);
+            settings.Children.Add(Label("Версия сохранения CDR"));
+            var saveVersion = new ComboBox { Margin = new Thickness(0, 0, 0, 4),
+                FontSize = 11, MinHeight = 26 };
+            saveVersion.Items.Add(new ComboBoxItem { Content = "По умолчанию (как в CorelDRAW)", Tag = 0 });
+            int installedVersion = CorelDocumentSaver.InstalledVersion;
+            for (int version = Math.Min(installedVersion - 1, 27); version >= 5; version--)
+                saveVersion.Items.Add(new ComboBoxItem {
+                    Content = CorelDocumentSaver.VersionLabel(version), Tag = version });
+            int selectedVersion = CorelDocumentSaver.SelectedVersion;
+            for (int index = 0; index < saveVersion.Items.Count; index++)
+                if (Convert.ToInt32(((ComboBoxItem)saveVersion.Items[index]).Tag) == selectedVersion)
+                    saveVersion.SelectedIndex = index;
+            if (saveVersion.SelectedIndex < 0) saveVersion.SelectedIndex = 0;
+            saveVersion.SelectionChanged += (_, __) => Safe(() => {
+                var choice = saveVersion.SelectedItem as ComboBoxItem;
+                if (choice == null) return;
+                int version = Convert.ToInt32(choice.Tag);
+                CorelDocumentSaver.SelectVersion(version);
+                _status(version == 0 ? "CDR будет сохраняться по правилам CorelDRAW." :
+                    "Версия сохранения CDR: " + CorelDocumentSaver.VersionLabel(version) + ".", false);
+            });
+            settings.Children.Add(saveVersion);
+            settings.Children.Add(Note("Применяется к сохранению через Vanya Tools. При выборе старой версии новые эффекты Corel могут измениться. Ctrl+S работает по настройкам CorelDRAW."));
             SettingsView = settings;
             LoadServerSettings();
             LoadFileSettings();
@@ -599,7 +622,7 @@ namespace VanyaTools.Native
             {
                 ReadForm(); SaveData();
             }
-            doc.Save();
+            CorelDocumentSaver.Save(doc);
             RememberCurrentOrderFile();
             _documentName.Text = Path.GetFileName(Convert.ToString(doc.FullFileName)) + " · сохранён";
             _status("CDR сохранён.", false);
@@ -639,9 +662,7 @@ namespace VanyaTools.Native
             Directory.CreateDirectory(folder);
             ReadForm();
             WriteData(doc);
-            object options = CorelApp.Get().CreateStructSaveAsOptions();
-            doc.GetType().InvokeMember("SaveAs", BindingFlags.InvokeMethod,
-                null, (object)doc, new object[] { target, options });
+            CorelDocumentSaver.SaveAs(doc, target);
             string saved = Convert.ToString(doc.FullFileName);
             if (String.IsNullOrWhiteSpace(saved) ||
                 !String.Equals(Path.GetFullPath(saved), target, StringComparison.OrdinalIgnoreCase))
@@ -794,7 +815,8 @@ namespace VanyaTools.Native
             WriteData(doc);
             _documentName.Text = _documentPath == null
                 ? "Новый CDR · " + _data.Frames.Count + " фото · не сохранён"
-                : Path.GetFileName(_documentPath) + " · " + _data.Frames.Count + " фото · Ctrl+S";
+                : Path.GetFileName(_documentPath) + " · " + _data.Frames.Count + " фото · " +
+                    (CorelDocumentSaver.SelectedVersion == 0 ? "Ctrl+S" : "сохраните через Vanya Tools");
         }
 
         private void WriteData(dynamic doc)
@@ -2032,7 +2054,7 @@ namespace VanyaTools.Native
                         _data.ClientKey = clientKey;
                         ApplyServerResult(result);
                         SaveData();
-                        ((dynamic)openedDocument).Save();
+                        CorelDocumentSaver.Save((dynamic)openedDocument);
                         UpdateCaption();
                         _documentName.Text = Path.GetFileName(path) + " · сохранён";
                     }
@@ -2088,7 +2110,7 @@ namespace VanyaTools.Native
                 if (_data.PendingIntakeId != selected.Id)
                     throw new InvalidOperationException("Карточка ожидает другой номер. Выберите прежний заказ.");
                 SaveData();
-                if (saveCdr) doc.Save();
+                if (saveCdr) CorelDocumentSaver.Save(doc);
                 _busy = true; UpdateActions();
                 var result = await OrderServerClient.Assign(_server.Text.Trim(), _key.Password.Trim(),
                     _data.PendingIntakeId, _data.ClientKey);
@@ -2097,7 +2119,7 @@ namespace VanyaTools.Native
                 ReadForm(); ApplyServerResult(result); _data.PendingIntakeId = 0; SaveData();
                 linked = true;
                 string saveWarning = null;
-                try { if (saveCdr) { doc.Save(); RememberCurrentOrderFile(); } }
+                try { if (saveCdr) { CorelDocumentSaver.Save(doc); RememberCurrentOrderFile(); } }
                 catch (Exception saveError)
                 {
                     Log.Error("Order assigned but CDR save failed", saveError);
@@ -2286,7 +2308,7 @@ namespace VanyaTools.Native
                 try
                 {
                     SaveData();
-                    if (saveCdr) { doc.Save(); RememberCurrentOrderFile(); }
+                    if (saveCdr) { CorelDocumentSaver.Save(doc); RememberCurrentOrderFile(); }
                 }
                 catch (Exception saveError)
                 {
@@ -2374,7 +2396,7 @@ namespace VanyaTools.Native
                 }
                 LoadServerFields(result);
                 ReadForm(); ApplyServerResult(result); SaveData(); UpdateCaption(); UpdateActions();
-                CorelApp.Get().ActiveDocument.Save();
+                CorelDocumentSaver.Save(CorelApp.Get().ActiveDocument);
                 _status("Заказ №" + _data.ServerOrderNumber + " загружен с сервера. CDR сохранён.", false);
             }
             catch (Exception error) { _status("Загрузка заказа: " + error.Message, true); }
@@ -2432,7 +2454,7 @@ namespace VanyaTools.Native
                     _data = new OrderCardData { ClientKey = Convert.ToString(result["clientKey"]) };
                 LoadServerFields(result);
                 ReadForm(); ApplyServerResult(result); SaveData(); RenderFrames(); UpdateCaption(); UpdateActions();
-                doc.Save();
+                CorelDocumentSaver.Save(doc);
                 _status("Заказ №" + number + " открыт в CDR.", false);
             }
             catch (Exception error) { _status("Открытие заказа: " + error.Message, true); }
@@ -2594,7 +2616,7 @@ namespace VanyaTools.Native
                     ApplyWorkflowResult(result);
                     if (_data.ServerRevision == revision)
                         _data.ServerRevision = Convert.ToInt32(result["revision"]);
-                    if (doc != null) { SaveData(); CorelApp.Get().ActiveDocument.Save(); }
+                    if (doc != null) { SaveData(); CorelDocumentSaver.Save(CorelApp.Get().ActiveDocument); }
                 }
                 _status("Состояние заказа №" + Convert.ToString(result["number"]) + " обновлено.", false);
             }
