@@ -2349,6 +2349,7 @@ namespace VanyaTools.Native
                 int requestRevision = _data.ServerRevision;
                 string knownDueDate = _data.ServerDueDate ?? "";
                 string currentDueDate = knownDueDate;
+                bool confirmNoTelegramMessage = false;
                 if (_data.ServerOrderId > 0)
                 {
                     _status("Проверка изменений заказа на сервере…", false);
@@ -2379,6 +2380,26 @@ namespace VanyaTools.Native
                             return;
                         }
                         requestRevision = latestRevision;
+                    }
+                    string currentSendState = Convert.ToString(current["sendState"]);
+                    _data.ServerSendState = currentSendState;
+                    if (currentSendState == "uncertain" || currentSendState == "sending")
+                    {
+                        if (!includePhotos)
+                            throw new InvalidOperationException("Для повторной публикации добавьте фото.");
+                        if (MessageBox.Show(
+                            "Заказ №" + _data.ServerOrderNumber +
+                            " создан на сайте, но отправка в Telegram не подтверждена.\n\n" +
+                            "Вы проверили канал и карточки этого заказа там нет? " +
+                            "Повторно отправить фото с тем же номером заказа? " +
+                            "Если Telegram доставил первое сообщение без ответа серверу, может появиться дубль.",
+                            "Vanya Tools · повтор публикации", MessageBoxButton.YesNo,
+                            MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
+                        {
+                            _status("Повторная публикация отменена.", false);
+                            return;
+                        }
+                        confirmNoTelegramMessage = true;
                     }
                 }
                 if (includePhotos && _data.ServerOrderId > 0 &&
@@ -2456,6 +2477,7 @@ namespace VanyaTools.Native
                     ["description"] = _data.Description, ["items"] = _data.Items,
                     ["revision"] = requestRevision
                 };
+                if (confirmNoTelegramMessage) details["confirmNoTelegramMessage"] = true;
                 if (_data.ServerOrderId == 0 || _data.IsDelivery != _data.ServerDelivery)
                     details["isDelivery"] = _data.IsDelivery;
                 var result = await OrderServerClient.Publish(server, key, details, photos, _data.ServerOrderId);
@@ -2465,7 +2487,9 @@ namespace VanyaTools.Native
                 ApplyServerResult(result);
                 refreshOrders = true;
                 string deadlineWarning = null;
-                if (deadlineEdited && !String.Equals(requestedDueDate, ServerDueDate(result),
+                string resultSendState = Convert.ToString(result["sendState"]);
+                if ((resultSendState == "sent" || resultSendState == "local") &&
+                    deadlineEdited && !String.Equals(requestedDueDate, ServerDueDate(result),
                     StringComparison.Ordinal))
                 {
                     try
@@ -2497,8 +2521,14 @@ namespace VanyaTools.Native
                     saveWarning = saveError.Message;
                 }
                 UpdateActions();
-                if (Convert.ToString(result["sendState"]) != "sent" && Convert.ToString(result["sendState"]) != "local")
-                    throw new InvalidOperationException("Публикация не завершена. Проверьте канал и загрузите карточку с сервера.");
+                if (resultSendState != "sent" && resultSendState != "local")
+                {
+                    string reason = result.TryGetValue("publishError", out object publishError)
+                        ? Convert.ToString(publishError) : null;
+                    throw new InvalidOperationException(String.IsNullOrWhiteSpace(reason)
+                        ? "Публикация не завершена. Проверьте канал и повторите отправку этого заказа."
+                        : reason);
+                }
                 if (saveWarning != null || deadlineWarning != null)
                 {
                     Log.Info("Order card published: " + _data.ServerOrderNumber + " (save warning).");
@@ -2741,8 +2771,10 @@ namespace VanyaTools.Native
 
         private static string OrderStatus(OrderListItem order) =>
             (order.SendState == "reserved" ? "Без макета" :
+                order.SendState == "uncertain" ? "Отправка не подтверждена" :
+                order.SendState == "sending" ? "Отправляется" :
                 order.State == "done" ? "🔥 Готов" :
-                order.SendState == "draft" ? "Черновик" : "🌲 В работе") +
+                order.SendState == "draft" ? "Ожидает публикации" : "🌲 В работе") +
             (order.Urgent ? " ⚡" : "") +
             (order.Delivery ? " 🚚 ДОСТАВКА" : "") +
             (order.BlanksReady ? " ❤️ Заготовки" : "") +
@@ -2873,8 +2905,11 @@ namespace VanyaTools.Native
             if (_send == null) return;
             bool assigned = _data.ServerOrderId > 0;
             bool draft = _data.ServerSendState == "draft";
-            bool published = assigned && !draft;
-            _send.Content = published ? "Заменить фото и обновить текст" : draft ? "Опубликовать фото заказа" : "Опубликовать карточку";
+            bool published = assigned && (_data.ServerSendState == "sent" || _data.ServerSendState == "local");
+            bool pending = assigned && (_data.ServerSendState == "uncertain" || _data.ServerSendState == "sending");
+            _send.Content = published ? "Заменить фото и обновить текст" :
+                pending ? "Проверить и повторить публикацию" :
+                draft ? "Опубликовать фото заказа" : "Опубликовать карточку";
             _send.IsEnabled = !_busy;
             _send.ToolTip = _busy ? "Дождитесь завершения операции с карточкой." : null;
             ToolTipService.SetShowOnDisabled(_send, true);
@@ -2892,9 +2927,10 @@ namespace VanyaTools.Native
                 selected?.ApplicationPaused == true, selected?.Urgent == true,
                 selected?.BlanksReady == true,
                 selected != null && (selected.SendState == "sent" || selected.SendState == "local"), selected != null);
-            _refreshServer.Visibility = published ? Visibility.Visible : Visibility.Collapsed;
+            _refreshServer.Visibility = assigned ? Visibility.Visible : Visibility.Collapsed;
             _orderInfo.Text = assigned ? "Заказ №" + _data.ServerOrderNumber + " · " +
-                (draft ? "карточка заполняется" : _data.ServerState == "done" ? "🔥 Готов" : "🌲 В работе") +
+                (pending ? "карточка не опубликована" : draft ? "ожидает публикации" :
+                    _data.ServerState == "done" ? "🔥 Готов" : "🌲 В работе") +
                 (_data.ServerUrgent ? " · ⚡ Срочно" : "") +
                 (_data.ServerDelivery ? " · 🚚 ДОСТАВКА" : "") +
                 (_data.ServerBlanksReady ? " · ❤️ Заготовки готовы" : "") +

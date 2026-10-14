@@ -56,17 +56,29 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
   }
 
   async function api(method, fields, photos = []) {
-    const form = new FormData();
-    for (const [key, value] of Object.entries(fields)) form.set(key, typeof value === 'string' ? value : JSON.stringify(value));
-    for (let i = 0; i < photos.length; i++)
-      form.set(method === 'sendPhoto' ? 'photo' : `photo${i}`,
-        new Blob([photos[i]], { type: 'image/jpeg' }), `order-${i + 1}.jpg`);
-    const timeoutMs = photos.length ? 6 * 60 * 1000 : method === 'getUpdates' ? 35_000 : 60_000;
-    const response = await fetch(`https://api.telegram.org/bot${token}/${method}`,
-      { method: 'POST', body: form, signal: AbortSignal.timeout(timeoutMs) });
-    const body = await response.json();
-    if (!response.ok || !body.ok) throw new Error(`Telegram ${method}: ${body.description || response.status}`);
-    return body.result;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const form = new FormData();
+      for (const [key, value] of Object.entries(fields))
+        form.set(key, typeof value === 'string' ? value : JSON.stringify(value));
+      for (let i = 0; i < photos.length; i++)
+        form.set(method === 'sendPhoto' ? 'photo' : `photo${i}`,
+          new Blob([photos[i]], { type: 'image/jpeg' }), `order-${i + 1}.jpg`);
+      const timeoutMs = photos.length ? 6 * 60 * 1000 : method === 'getUpdates' ? 35_000 : 60_000;
+      const response = await fetch(`https://api.telegram.org/bot${token}/${method}`,
+        { method: 'POST', body: form, signal: AbortSignal.timeout(timeoutMs) });
+      const body = await response.json();
+      if (response.ok && body.ok) return body.result;
+      const retryAfter = Number(body.parameters?.retry_after ||
+        /retry after (\d+)/i.exec(body.description || '')?.[1] || 0);
+      if (method === 'sendRichMessage' && response.status === 429 &&
+          retryAfter > 0 && retryAfter <= 120 && attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, (retryAfter + 1) * 1000));
+        continue;
+      }
+      const error = new Error(`Telegram ${method}: ${body.description || response.status}`);
+      error.telegramRejected = true;
+      throw error;
+    }
   }
 
   const get = id => db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
@@ -249,6 +261,10 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
       id = Number(inserted.lastInsertRowid);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
+    return publishFirst(id, photos);
+  }
+
+  async function publishFirst(id, photos) {
     const assignedRow = get(id);
     try {
       const message = await api('sendRichMessage', { chat_id: channel,
@@ -267,19 +283,43 @@ export function createOrders({ dataRoot, token, channel, allowedUsers }) {
       catch (error) { console.error(`Order ${id} pin failed:`, error.message); }
       return publicOrder(get(id));
     } catch (error) {
-      db.prepare("UPDATE orders SET send_state='uncertain', updated_at=? WHERE id=?").run(now(), id);
-      throw new Error(`Заказ №${assignedRow.order_number}: ${error.message}. Проверьте канал; повтор не создаст дубль.`);
+      const state = error.telegramRejected ? 'draft' : 'uncertain';
+      db.prepare('UPDATE orders SET send_state=?, updated_at=? WHERE id=?').run(state, now(), id);
+      const message = `Заказ №${assignedRow.order_number}: ${error.message}. ` +
+        (state === 'draft' ? 'Telegram отклонил отправку; повторите публикацию этого заказа.' :
+          'Ответ Telegram неизвестен. Проверьте канал перед повтором.');
+      console.error('Order publish failed:', message);
+      return { ...publicOrder(get(id)), publishError: message };
     }
   }
 
   async function update(id, req) {
     const row = get(id);
     if (!row) throw new Error('Заказ не найден.');
-    if (row.send_state !== 'sent') throw new Error('Публикация заказа не завершена. Проверьте канал.');
     const { details, photos } = await readRequest(req);
     const value = fields(details);
     if (value.clientKey !== row.client_key) throw new Error('ID карточки не совпадает.');
     if (Number(details.revision) !== row.revision) throw new Error('Карточка изменена на другом ПК. Обновите данные.');
+    if (['draft', 'uncertain', 'sending'].includes(row.send_state)) {
+      if (!photos.length) throw new Error('Добавьте хотя бы одно фото для публикации.');
+      if (value.caption.length > 990) throw new Error('Подпись слишком длинная для карточки Telegram.');
+      if (row.chat_id || row.status_message_id || JSON.parse(row.photo_ids).length ||
+          JSON.parse(row.rich_photo_files).length)
+        throw new Error('У заказа уже есть сообщение Telegram. Загрузите карточку с сервера.');
+      if (row.send_state === 'sending' &&
+          Date.now() - Date.parse(row.updated_at) < 10 * 60 * 1000)
+        throw new Error('Отправка ещё выполняется. Подождите 10 минут и проверьте канал.');
+      if (row.send_state !== 'draft' && details.confirmNoTelegramMessage !== true)
+        throw new Error('Подтвердите, что карточки заказа нет в канале Telegram.');
+      const result = db.prepare(`UPDATE orders SET caption=?,customer=?,source=?,technologies=?,
+        description=?,items=?,send_state='sending',revision=revision+1,updated_at=?
+        WHERE id=? AND revision=?`).run(value.caption, value.customer, value.source,
+          value.technologies, value.description, value.items, now(), id, row.revision);
+      if (result.changes !== 1) throw new Error('Карточка изменена на другом ПК.');
+      return publishFirst(id, photos);
+    }
+    if (row.send_state !== 'sent')
+      throw new Error('Публикация заказа не завершена. Проверьте канал.');
     if (row.publication_mode === 'rich') {
       const next = { ...row, caption: value.caption, customer: value.customer,
         revision: row.revision + 1 };
