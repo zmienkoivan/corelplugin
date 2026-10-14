@@ -172,6 +172,7 @@ namespace VanyaTools.Native
             int stride = checked(width * 4), maskStride = checked(maskWidth * 4);
             var pixels = new byte[checked(stride * height)];
             var mask = new byte[checked(maskStride * maskHeight)];
+            var sourceAlpha = new byte[checked(width * height)];
             originalBgra.CopyPixels(pixels, stride, 0);
             modelBgra.CopyPixels(mask, maskStride, 0);
             bool hasTransparency = false;
@@ -201,10 +202,10 @@ namespace VanyaTools.Native
                     double top = a00 + (a10 - a00) * fx;
                     double bottom = a01 + (a11 - a01) * fx;
                     int i = (y * width + x) * 4;
+                    sourceAlpha[y * width + x] = pixels[i + 3];
                     int alpha = (int)Math.Round(pixels[i + 3] *
                         (top + (bottom - top) * fy) / 255.0);
                     pixels[i + 3] = (byte)Math.Max(0, Math.Min(255, alpha));
-                    if (alpha == 0) pixels[i] = pixels[i + 1] = pixels[i + 2] = 0;
                     if (alpha > 10)
                     {
                         if (x < minX) minX = x;
@@ -214,6 +215,12 @@ namespace VanyaTools.Native
                     }
                 }
             }
+            int repaired = RepairSmallInteriorMaskHoles(pixels, sourceAlpha, width, height, cancellation);
+            if (repaired > 0) Log.Info("AI background mask: restored " + repaired +
+                " small enclosed holes from the original photo.");
+            for (int p = 0; p < sourceAlpha.Length; p++)
+                if (pixels[p * 4 + 3] == 0)
+                    pixels[p * 4] = pixels[p * 4 + 1] = pixels[p * 4 + 2] = 0;
             if (maxX < 0)
                 throw new InvalidOperationException("Модель удалила всё изображение. Результат не вставлен.");
             const int padding = 2;
@@ -231,6 +238,76 @@ namespace VanyaTools.Native
             using (var stream = File.Create(output)) encoder.Save(stream);
             Log.Info("Background mask cropped: " + width + "x" + height + " -> " +
                 result.PixelWidth + "x" + result.PixelHeight + ".");
+        }
+
+        private static int RepairSmallInteriorMaskHoles(byte[] pixels, byte[] sourceAlpha,
+            int width, int height, CancellationToken cancellation)
+        {
+            int length = checked(width * height);
+            int maxArea = Math.Max(64, Math.Min(3000, length / 6000));
+            var visited = new byte[length];
+            var queue = new Queue<int>();
+            var members = new List<int>();
+            int repaired = 0, examined = 0;
+            for (int start = 0; start < length; start++)
+            {
+                if ((start & 8191) == 0) cancellation.ThrowIfCancellationRequested();
+                if (visited[start] != 0 || pixels[start * 4 + 3] >= 224 ||
+                    sourceAlpha[start] < 240) continue;
+                visited[start] = 1;
+                queue.Enqueue(start);
+                members.Clear();
+                int area = 0, edgeCount = 0;
+                long insideB = 0, insideG = 0, insideR = 0;
+                long edgeB = 0, edgeG = 0, edgeR = 0;
+                bool touchesBorder = false, touchesOriginalTransparency = false;
+                while (queue.Count > 0)
+                {
+                    if ((examined++ & 8191) == 0) cancellation.ThrowIfCancellationRequested();
+                    int p = queue.Dequeue();
+                    int x = p % width, y = p / width;
+                    int i = p * 4;
+                    area++;
+                    if (members.Count < maxArea) members.Add(p);
+                    insideB += pixels[i]; insideG += pixels[i + 1]; insideR += pixels[i + 2];
+                    if (x == 0 || y == 0 || x == width - 1 || y == height - 1)
+                        touchesBorder = true;
+                    // Four-connected components avoid treating a diagonal touch as
+                    // a genuine opening in the silhouette.
+                    Visit(x > 0 ? p - 1 : -1);
+                    Visit(x + 1 < width ? p + 1 : -1);
+                    Visit(y > 0 ? p - width : -1);
+                    Visit(y + 1 < height ? p + width : -1);
+                }
+                if (touchesBorder || touchesOriginalTransparency || area > maxArea ||
+                    edgeCount == 0) continue;
+                int difference = Math.Max(Math.Abs((int)(insideB / area - edgeB / edgeCount)),
+                    Math.Max(Math.Abs((int)(insideG / area - edgeG / edgeCount)),
+                        Math.Abs((int)(insideR / area - edgeR / edgeCount))));
+                if (difference > 40) continue;
+                foreach (int p in members) pixels[p * 4 + 3] = sourceAlpha[p];
+                repaired++;
+
+                void Visit(int neighbor)
+                {
+                    if (neighbor < 0) return;
+                    int offset = neighbor * 4;
+                    if (sourceAlpha[neighbor] < 240)
+                    { touchesOriginalTransparency = true; return; }
+                    if (pixels[offset + 3] >= 224)
+                    {
+                        edgeCount++;
+                        edgeB += pixels[offset]; edgeG += pixels[offset + 1];
+                        edgeR += pixels[offset + 2];
+                    }
+                    else if (visited[neighbor] == 0)
+                    {
+                        visited[neighbor] = 1;
+                        queue.Enqueue(neighbor);
+                    }
+                }
+            }
+            return repaired;
         }
 
         private static bool IsBackground(byte[] pixels, int p, Color[] colors, int tolerance)
