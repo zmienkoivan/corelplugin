@@ -898,6 +898,7 @@ namespace VanyaTools.Native
             _frameExpander.Header = "Кадры (" + _data.Frames.Count + ")";
             _frames.Children.Clear();
             if (_data.Frames.Count == 0) { _frames.Children.Add(Note("Кадров нет. При публикации текущее выделение станет первым кадром.")); return; }
+            _frames.Children.Add(Note("После изменения макета выделите объекты и нажмите ↻ у нужного кадра."));
             for (int i = 0; i < _data.Frames.Count; i++)
             {
                 int index = i;
@@ -941,6 +942,11 @@ namespace VanyaTools.Native
         private void RecaptureFrame(int index)
         {
             if (_busy) return;
+            ReplaceFrameFromSelection(index);
+        }
+
+        private void ReplaceFrameFromSelection(int index)
+        {
             dynamic doc = EnsureDocument(true, true);
             var frame = FrameFromSelection();
             _status("Создание нового растрового кадра…", false);
@@ -2303,6 +2309,7 @@ namespace VanyaTools.Native
             string server = _server.Text.Trim(), key = _key.Password.Trim();
             if (server.Length == 0 || key.Length == 0)
             { _status("Укажите адрес и ключ сервера во вкладке «Настройки».", true); return; }
+            bool refreshOrders = false;
             _busy = true; UpdateActions();
             _status("Карточка: подготовка публикации…", false);
             Log.Info("Order card publish started.");
@@ -2374,6 +2381,26 @@ namespace VanyaTools.Native
                         requestRevision = latestRevision;
                     }
                 }
+                if (includePhotos && _data.ServerOrderId > 0 &&
+                    _data.Frames.Count == 1 && !useCurrentSelection)
+                {
+                    dynamic selection = CorelApp.Get().ActiveSelectionRange;
+                    bool selected = selection != null && Convert.ToInt32(selection.Count) > 0;
+                    if (selected)
+                    {
+                        var choice = MessageBox.Show(
+                            "В карточке есть сохранённый кадр. Переснять текущее выделение перед обновлением фото?\n\n" +
+                            "Да — отправить выделенные объекты. Нет — отправить сохранённый кадр. Отмена — не обновлять заказ.",
+                            "Vanya Tools · обновление фото", MessageBoxButton.YesNoCancel,
+                            MessageBoxImage.Question, MessageBoxResult.Yes);
+                        if (choice != MessageBoxResult.Yes && choice != MessageBoxResult.No) return;
+                        if (choice == MessageBoxResult.Yes) ReplaceFrameFromSelection(0);
+                    }
+                    else if (MessageBox.Show(
+                        "На холсте ничего не выделено. Отправить сохранённый кадр без изменений?",
+                        "Vanya Tools · обновление фото", MessageBoxButton.YesNo,
+                        MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+                }
                 var photos = new List<byte[]>();
                 if (includePhotos) for (int i = 0; i < _data.Frames.Count; i++)
                 {
@@ -2436,6 +2463,7 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Вернитесь в исходный CDR и загрузите заказ с сервера.");
                 _data.PublishedAtUtc = DateTime.UtcNow.ToString("o");
                 ApplyServerResult(result);
+                refreshOrders = true;
                 string deadlineWarning = null;
                 if (deadlineEdited && !String.Equals(requestedDueDate, ServerDueDate(result),
                     StringComparison.Ordinal))
@@ -2493,7 +2521,11 @@ namespace VanyaTools.Native
                     ? "Заказ снова изменился во время отправки. Текущий CDR сохраните и повторите обновление."
                     : "Карточка: " + error.Message.Replace(key, "[скрыто]"), true);
             }
-            finally { _busy = false; UpdateActions(); }
+            finally
+            {
+                _busy = false; UpdateActions();
+                if (refreshOrders && OrdersView.IsLoaded) await LoadOrders();
+            }
         }
 
         private void ApplyServerResult(Dictionary<string, object> result)
