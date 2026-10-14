@@ -25,6 +25,10 @@ namespace VanyaTools.Native
         private readonly bool _styleOnly;
         private readonly ComboBox _model;
         private readonly ComboBox _backgroundModel;
+        private readonly ComboBox _localPreset;
+        private readonly Slider _localStrength, _localContrast, _localWarmth,
+            _localSaturation, _localBrightness;
+        private readonly Button _localApplyButton;
         private readonly TextBox _prompt;
         private readonly TextBox _backgroundTolerance, _whiteCutPixels, _backgroundHex;
         private readonly Border _backgroundSwatch;
@@ -177,12 +181,40 @@ namespace VanyaTools.Native
             edgeRow.MouseEnter += (_, __) => UpdateEdgeUnits();
             UpdateEdgeUnits();
 
+            var localPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 5) };
+            _localPreset = new ComboBox { FontSize = 11, Margin = new Thickness(1, 2, 1, 3) };
+            _localPreset.Items.Add("Чёрно-белый");
+            _localPreset.Items.Add("Сепия");
+            _localPreset.Items.Add("Благородное золото");
+            _localPreset.Items.Add("Тёплый матовый");
+            _localPreset.Items.Add("Свой тон");
+            _localPreset.SelectedIndex = 2;
+            localPanel.Children.Add(_localPreset);
+            _localStrength = AddLocalStyleSlider(localPanel, "Сила эффекта", 0, 100, 100, "%");
+            var localFineTuning = new StackPanel { Margin = new Thickness(3, 2, 3, 3) };
+            _localContrast = AddLocalStyleSlider(localFineTuning, "Контраст", -50, 50, 0, "");
+            _localWarmth = AddLocalStyleSlider(localFineTuning, "Тепло", -50, 50, 0, "");
+            _localSaturation = AddLocalStyleSlider(localFineTuning, "Насыщенность", 0, 150, 100, "%");
+            _localBrightness = AddLocalStyleSlider(localFineTuning, "Светлота", -50, 50, 0, "");
+            localPanel.Children.Add(new Expander { Header = "Тонкая настройка", Content = localFineTuning,
+                IsExpanded = false, FontSize = 10, Margin = new Thickness(1, 1, 1, 3) });
+            _localApplyButton = DockerTheme.Primary(Button("Применить локальный стиль",
+                async (_, __) => await ApplyLocalStyle()));
+            _localApplyButton.ToolTip = "Обрабатывает выделение на этом ПК без Replicate. Оригинал остаётся на холсте.";
+            localPanel.Children.Add(_localApplyButton);
+            if (styleOnly)
+            {
+                panel.Children.Add(Label("Локальные фотоэффекты · без интернета", true));
+                panel.Children.Add(localPanel);
+                panel.Children.Add(new Separator { Margin = new Thickness(0, 3, 0, 3) });
+            }
+
             var previews = new UniformGrid { Columns = 2 };
-            previews.Children.Add(Preview("Выделение", out _sourcePreview));
-            previews.Children.Add(Preview("Результат", out _resultPreview));
+            previews.Children.Add(Preview("Выделение", out _sourcePreview, styleOnly ? 112 : 72));
+            previews.Children.Add(Preview("Результат", out _resultPreview, styleOnly ? 112 : 72));
             panel.Children.Add(previews);
 
-            if (styleOnly) panel.Children.Add(Label("Пресеты", true));
+            if (styleOnly) panel.Children.Add(Label("ИИ-стили", true));
             var styles = new UniformGrid { Columns = 3 };
             foreach (var style in new[]
             {
@@ -266,6 +298,77 @@ namespace VanyaTools.Native
                 image.Freeze();
                 return image;
             }
+        }
+
+        private static Slider AddLocalStyleSlider(Panel panel, string title,
+            double minimum, double maximum, double initial, string suffix)
+        {
+            var header = new DockPanel { Margin = new Thickness(1, 1, 1, 0) };
+            var current = new TextBlock { Width = 42, TextAlignment = TextAlignment.Right,
+                FontSize = 10, VerticalAlignment = VerticalAlignment.Center };
+            DockPanel.SetDock(current, Dock.Right);
+            header.Children.Add(current);
+            header.Children.Add(new TextBlock { Text = title, FontSize = 10,
+                VerticalAlignment = VerticalAlignment.Center });
+            panel.Children.Add(header);
+            var slider = new Slider { Minimum = minimum, Maximum = maximum, Value = initial,
+                TickFrequency = 1, Margin = new Thickness(3, 0, 3, 2) };
+            current.Text = Math.Round(initial).ToString(CultureInfo.CurrentCulture) + suffix;
+            slider.ValueChanged += (_, __) => current.Text =
+                Math.Round(slider.Value).ToString(CultureInfo.CurrentCulture) + suffix;
+            panel.Children.Add(slider);
+            return slider;
+        }
+
+        private async Task ApplyLocalStyle()
+        {
+            if (_busy) return;
+            if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
+            { Report("Сначала вставьте готовый результат кнопкой «Повторить вставку».", true); return; }
+            if (_localPreset.SelectedIndex < 0)
+            { Report("Выберите локальный стиль.", true); return; }
+            var settings = new LocalPhotoStyleSettings
+            {
+                Preset = (LocalPhotoPreset)_localPreset.SelectedIndex,
+                Strength = (int)Math.Round(_localStrength.Value),
+                Contrast = (int)Math.Round(_localContrast.Value),
+                Warmth = (int)Math.Round(_localWarmth.Value),
+                Saturation = (int)Math.Round(_localSaturation.Value),
+                Brightness = (int)Math.Round(_localBrightness.Value)
+            };
+            string presetName = Convert.ToString(_localPreset.SelectedItem, CultureInfo.CurrentCulture);
+            SetBusy(true, "Подготавливаю фото…");
+            try
+            {
+                _importWarning = null;
+                _lastModel = _lastOutput = _lastSource = null;
+                _lastInput = null;
+                string source = AiSelectionCapture.Capture();
+                _sourcePreview.Source = PreviewBitmap(source);
+                _resultPreview.Source = null;
+                string output = Path.Combine(Path.GetTempPath(),
+                    "Vanya-Local-Style-" + Guid.NewGuid().ToString("N") + ".png");
+                CancellationToken cancellation = _cancellation.Token;
+                SetStage("Обрабатываю фото локально…");
+                await Task.Run(() => LocalPhotoStyleProcessor.Apply(source, output,
+                    settings, cancellation), cancellation);
+                cancellation.ThrowIfCancellationRequested();
+                _readyOutput = output;
+                Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
+                File.WriteAllText(PendingPath(), output);
+                _resultPreview.Source = PreviewBitmap(output);
+                SetStage("Вставляю результат в Corel…");
+                InsertReady();
+                string warning = _importWarning;
+                Report(String.IsNullOrEmpty(warning)
+                    ? "Готово: " + presetName + ". Обработанная копия вставлена рядом."
+                    : warning, !String.IsNullOrEmpty(warning));
+                _importWarning = null;
+            }
+            catch (OperationCanceledException) { Report("Операция отменена.", false); }
+            catch (Exception ex) { Log.Error("Local photo style failed.", ex);
+                Report(ex.GetBaseException().Message, true); }
+            finally { SetBusy(false, null); }
         }
 
         private async Task Run(string action)
@@ -1040,7 +1143,8 @@ namespace VanyaTools.Native
                 bool alreadyCropped = name.StartsWith("Vanya-Edge-", StringComparison.OrdinalIgnoreCase) ||
                     name.StartsWith("Vanya-Stairs-", StringComparison.OrdinalIgnoreCase) ||
                     name.StartsWith("Vanya-Alpha-Highlight-", StringComparison.OrdinalIgnoreCase) ||
-                    name.StartsWith("Vanya-Background-Ready-", StringComparison.OrdinalIgnoreCase);
+                    name.StartsWith("Vanya-Background-Ready-", StringComparison.OrdinalIgnoreCase) ||
+                    name.StartsWith("Vanya-Local-Style-", StringComparison.OrdinalIgnoreCase);
                 Log.Info("Simple AI import starting: " + name +
                     (alreadyCropped ? " (cropped PNG)" : ""));
                 string warning = (alreadyCropped ? _importDtf : _import)(_readyOutput,
@@ -1074,6 +1178,8 @@ namespace VanyaTools.Native
                 return "Апскейл ×2";
             if (filename.StartsWith("Vanya-Style-Ready-", StringComparison.OrdinalIgnoreCase))
                 return _selectedStyle == null ? "Стилизация AI" : "Стилизация · " + _selectedStyle.Name;
+            if (filename.StartsWith("Vanya-Local-Style-", StringComparison.OrdinalIgnoreCase))
+                return "Локальная стилизация фото";
             return "Обработка растра";
         }
 
@@ -1123,9 +1229,11 @@ namespace VanyaTools.Native
             _busy = busy;
             _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _backgroundPipetteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
                 _highlightButton.IsEnabled = _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled =
-                _editButton.IsEnabled = !busy;
-            _model.IsEnabled = _backgroundModel.IsEnabled = _prompt.IsEnabled = _backgroundHex.IsEnabled = _backgroundTolerance.IsEnabled = _whiteCutPixels.IsEnabled = _alphaThreshold.IsEnabled =
+                _editButton.IsEnabled = _localApplyButton.IsEnabled = !busy;
+            _model.IsEnabled = _backgroundModel.IsEnabled = _localPreset.IsEnabled = _prompt.IsEnabled = _backgroundHex.IsEnabled = _backgroundTolerance.IsEnabled = _whiteCutPixels.IsEnabled = _alphaThreshold.IsEnabled =
                 _edgeRadius.IsEnabled = _edgeExpansion.IsEnabled = _underlayHex.IsEnabled = !busy;
+            _localStrength.IsEnabled = _localContrast.IsEnabled = _localWarmth.IsEnabled =
+                _localSaturation.IsEnabled = _localBrightness.IsEnabled = !busy;
             _highlightColor.IsEnabled = !busy;
             foreach (var choice in _styleButtons) choice.IsEnabled = !busy;
             _cancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
@@ -1202,11 +1310,11 @@ namespace VanyaTools.Native
             { Content = text, FontSize = 10, MinHeight = 24, Margin = new Thickness(1),
               Padding = new Thickness(3, 1, 3, 1) };
             button.Click += handler; return button; }
-        private static Border Preview(string title, out Image image)
+        private static Border Preview(string title, out Image image, int height)
         {
-            image = new Image { Height = 72, Stretch = Stretch.Uniform };
+            image = new Image { Height = height, Stretch = Stretch.Uniform };
             var stack = new StackPanel(); stack.Children.Add(Label(title, false));
-            stack.Children.Add(new Border { Height = 76, BorderThickness = new Thickness(1),
+            stack.Children.Add(new Border { Height = height + 4, BorderThickness = new Thickness(1),
                 BorderBrush = Brushes.LightGray, Child = image });
             return new Border { Margin = new Thickness(2), Child = stack };
         }

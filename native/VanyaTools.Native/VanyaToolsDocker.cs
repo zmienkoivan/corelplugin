@@ -187,9 +187,10 @@ namespace VanyaTools.Native
                     Items =
                     {
                         new TabItem { Header = "Стили", Content =
-                            new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
+                            new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                                Content = new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
                                 () => aiTools.GetToken(), ImportAiResult,
-                                (message, isError) => SetStatus(message, isError), true) },
+                                (message, isError) => SetStatus(message, isError), true, ImportDtfResult) } },
                         new TabItem { Header = "Генеративная заливка", Content =
                             new GenerativeFillTab(() => aiTools.GetToken(), ImportGenerativeFillResult,
                                 (message, isError) => SetStatus(message, isError)) }
