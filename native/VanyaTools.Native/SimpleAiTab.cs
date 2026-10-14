@@ -24,6 +24,7 @@ namespace VanyaTools.Native
         private readonly Action<string, bool> _status;
         private readonly bool _styleOnly;
         private readonly ComboBox _model;
+        private readonly ComboBox _backgroundModel;
         private readonly TextBox _prompt;
         private readonly TextBox _backgroundTolerance, _whiteCutPixels, _backgroundHex;
         private readonly Border _backgroundSwatch;
@@ -49,13 +50,14 @@ namespace VanyaTools.Native
         private StyleChoice _selectedStyle;
 
         private const string TiledUpscaler = "xinntao/realesrgan:1b976a4d456ed9e4d1a846597b7614e79eadad3032e9124fa63859db0fd59b56";
+        private const string BiRefNet = "sprited/birefnet:d6ec17201fa9a19b3c6c5b1250c11f8e0ade3e1f97874b9f4cf3ac6826447384";
 
         private sealed class ModelChoice
         {
-            public readonly string Id, Name;
+            public readonly string Id, Name, Variant;
             public readonly decimal EstimatedCost;
-            public ModelChoice(string id, string name, decimal estimatedCost)
-            { Id = id; Name = name; EstimatedCost = estimatedCost; }
+            public ModelChoice(string id, string name, decimal estimatedCost, string variant = null)
+            { Id = id; Name = name; EstimatedCost = estimatedCost; Variant = variant; }
             public override string ToString() { return Name; }
         }
 
@@ -79,6 +81,12 @@ namespace VanyaTools.Native
             if (styleOnly) panel.Children.Add(Label("Стилизация", true));
             panel.Children.Add(Note("Выделите объект или группу."));
             _removeButton = Button("Удалить фон · AI", async (_, __) => await Run("background"));
+            _backgroundModel = new ComboBox { FontSize = 11, Margin = new Thickness(0, 2, 0, 4) };
+            _backgroundModel.Items.Add(new ModelChoice(BiRefNet, "BiRefNet · фото 2K", 0m, "general-hr"));
+            _backgroundModel.Items.Add(new ModelChoice(BiRefNet, "BiRefNet · портрет", 0m, "portrait"));
+            _backgroundModel.Items.Add(new ModelChoice("bria/remove-background", "Bria · прежняя модель", 0.018m));
+            _backgroundModel.SelectedIndex = 0;
+            _backgroundModel.ToolTip = "Модель строит маску прозрачности. Настоящие отверстия в объекте автоматически не закрашиваются.";
             _upscaleButton = Button("Апскейл ×2", async (_, __) => await Run("upscale"));
             var whiteRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 2) };
             _removeWhiteButton = Button("Удалить фон", async (_, __) => await RemoveWhiteBackground());
@@ -111,6 +119,8 @@ namespace VanyaTools.Native
                 aiRow.Children.Add(_removeButton);
                 aiRow.Children.Add(_upscaleButton);
                 panel.Children.Add(aiRow);
+                panel.Children.Add(Label("Модель удаления фона", false));
+                panel.Children.Add(_backgroundModel);
                 panel.Children.Add(new Separator { Margin = new Thickness(0, 4, 0, 2) });
                 panel.Children.Add(Label("ДТФ", true));
             }
@@ -265,15 +275,21 @@ namespace VanyaTools.Native
             { Report("Сначала вставьте готовый результат кнопкой «Повторить вставку».", true); return; }
             var selectedModel = _model.SelectedItem as ModelChoice;
             if (selectedModel == null) { Report("Выберите модель.", true); return; }
+            var backgroundModel = _backgroundModel.SelectedItem as ModelChoice;
+            if (action == "background" && backgroundModel == null)
+            { Report("Выберите модель удаления фона.", true); return; }
             string prompt = _prompt.Text.Trim();
             if (action == "edit" && prompt.Length == 0) { Report("Выберите стиль или введите промпт.", true); return; }
-            string model = action == "background" ? "bria/remove-background" :
+            string model = action == "background" ? backgroundModel.Id :
                 action == "upscale" ? TiledUpscaler : selectedModel.Id;
             string key = _token();
             if (key.Length < 8) { Report("Укажите ключ Replicate во вкладке «Настройки».", true); return; }
-            decimal cost = action == "background" ? 0.018m : action == "upscale" ? 0.006m : selectedModel.EstimatedCost;
-            string price = "Платный запрос Replicate · ориентировочно $" +
-                cost.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) + ".";
+            decimal cost = action == "background" ? backgroundModel.EstimatedCost :
+                action == "upscale" ? 0.006m : selectedModel.EstimatedCost;
+            string price = cost > 0m
+                ? "Платный запрос Replicate · ориентировочно $" +
+                    cost.ToString("0.000", CultureInfo.InvariantCulture) + "."
+                : "Платный запрос Replicate · стоимость зависит от времени обработки.";
             if (MessageBox.Show(price + " Продолжить?", "Vanya Tools", MessageBoxButton.YesNo,
                 MessageBoxImage.Information) != MessageBoxResult.Yes) return;
             SetBusy(true, "Подготавливаю выделение…");
@@ -294,8 +310,11 @@ namespace VanyaTools.Native
                         action == "upscale" ? 1900000 : 4000000);
                 Dictionary<string, object> input;
                 if (action == "background")
-                    input = new Dictionary<string, object> { ["image"] = image,
-                        ["preserve_alpha"] = true, ["content_moderation"] = false };
+                    input = model == BiRefNet
+                        ? new Dictionary<string, object> { ["image"] = image,
+                            ["variant"] = backgroundModel.Variant, ["output_format"] = "cutout" }
+                        : new Dictionary<string, object> { ["image"] = image,
+                            ["preserve_alpha"] = true, ["content_moderation"] = false };
                 else if (action == "upscale")
                     input = new Dictionary<string, object> { ["img"] = image,
                         ["scale"] = 2, ["tile"] = 200, ["version"] = "General - v3", ["face_enhance"] = false };
@@ -942,7 +961,8 @@ namespace VanyaTools.Native
                 _lastOutput, UpdateProgress, cancellation));
             cancellation.ThrowIfCancellationRequested();
             SetStage("Подготавливаю результат…");
-            bool background = _lastModel == "bria/remove-background" &&
+            bool background = (_lastModel == "bria/remove-background" ||
+                _lastModel == BiRefNet) &&
                 !String.IsNullOrEmpty(_lastSource) && File.Exists(_lastSource);
             string png = Path.Combine(Path.GetTempPath(),
                 (background ? "Vanya-Background-Ready-" :
@@ -1067,7 +1087,7 @@ namespace VanyaTools.Native
             _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _backgroundPipetteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
                 _highlightButton.IsEnabled = _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled =
                 _editButton.IsEnabled = !busy;
-            _model.IsEnabled = _prompt.IsEnabled = _backgroundHex.IsEnabled = _backgroundTolerance.IsEnabled = _whiteCutPixels.IsEnabled = _alphaThreshold.IsEnabled =
+            _model.IsEnabled = _backgroundModel.IsEnabled = _prompt.IsEnabled = _backgroundHex.IsEnabled = _backgroundTolerance.IsEnabled = _whiteCutPixels.IsEnabled = _alphaThreshold.IsEnabled =
                 _edgeRadius.IsEnabled = _edgeExpansion.IsEnabled = _underlayHex.IsEnabled = !busy;
             _highlightColor.IsEnabled = !busy;
             foreach (var choice in _styleButtons) choice.IsEnabled = !busy;
