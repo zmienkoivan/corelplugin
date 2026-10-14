@@ -39,15 +39,11 @@ namespace VanyaTools.Native
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Content = panel };
             panel.Children.Add(Note("Выделите фотографию и нарисованный поверх неё прямоугольник. Прямоугольник задаёт область замены и может выходить за край фото."));
-            var presets = new UniformGrid { Columns = 3, Margin = new Thickness(0, 4, 0, 4) };
-            presets.Children.Add(Preset("Убрать предмет", "Remove the object in the masked area. Fill it with the natural surrounding background, matching texture, perspective and lighting."));
-            presets.Children.Add(Preset("Дорисовать край", "Naturally extend the existing photograph into the masked area. Continue the subject and background with matching perspective, details and lighting."));
-            presets.Children.Add(Preset("Открыть глаз", "Open the person's eye naturally in the masked area. Match the other eye, preserve identity, facial expression, skin texture and lighting."));
-            panel.Children.Add(presets);
-            panel.Children.Add(Note("Описание результата (можно написать своё):"));
+            panel.Children.Add(Note("Что нужно сделать в выделенной области:"));
             _prompt = new TextBox { MinHeight = 64, MaxHeight = 105, AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Text = "Remove the object in the masked area. Fill it with the natural surrounding background, matching texture, perspective and lighting." };
+                Text = LoadPrompt() };
+            _prompt.LostFocus += (_, __) => SavePrompt();
             panel.Children.Add(_prompt);
             panel.Children.Add(Note("Модель FLUX Fill Pro · ориентировочно $0.05 за результат. Исходное фото останется на холсте."));
             var previews = new UniformGrid { Columns = 3, Margin = new Thickness(0, 4, 0, 5) };
@@ -76,11 +72,6 @@ namespace VanyaTools.Native
             button.Click += handler; return button;
         }
 
-        private Button Preset(string label, string prompt)
-        {
-            return Button(label, (_, __) => _prompt.Text = prompt);
-        }
-
         private static TextBlock Note(string text)
         {
             return new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap,
@@ -105,6 +96,7 @@ namespace VanyaTools.Native
             { Report("Сначала вставьте готовый результат кнопкой «Повторить / вставить».", true); return; }
             string prompt = _prompt.Text.Trim();
             if (prompt.Length == 0) { Report("Опишите, что должно появиться в области правки.", true); return; }
+            SavePrompt();
             string key = _token();
             if (key.Length < 8) { Report("Введите ключ Replicate в настройках.", true); return; }
             if (MessageBox.Show("Платный запрос Replicate · ориентировочно $0.05. Продолжить?",
@@ -256,6 +248,28 @@ namespace VanyaTools.Native
         {
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "VanyaTools", "pending-generative-fill.json");
+        }
+
+        private static string PromptPath()
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "VanyaTools", "generative-fill-prompt.txt");
+        }
+
+        private static string LoadPrompt()
+        {
+            try { return File.Exists(PromptPath()) ? File.ReadAllText(PromptPath()) : ""; }
+            catch (Exception ex) { Log.Error("Could not load generative fill prompt.", ex); return ""; }
+        }
+
+        private void SavePrompt()
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(PromptPath()));
+                File.WriteAllText(PromptPath(), _prompt.Text);
+            }
+            catch (Exception ex) { Log.Error("Could not save generative fill prompt.", ex); }
         }
 
         private void SavePending()
