@@ -669,7 +669,7 @@ namespace VanyaTools.Native
                 _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Edge-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
-                await Task.Run(() => SmoothBinaryEdge(source, output, threshold, radius,
+                Tuple<double, double> edgeOffset = await Task.Run(() => SmoothBinaryEdge(source, output, threshold, radius,
                     expansion, fill, cancellation), cancellation);
                 cancellation.ThrowIfCancellationRequested();
                 _readyOutput = output;
@@ -678,6 +678,13 @@ namespace VanyaTools.Native
                 _resultPreview.Source = PreviewBitmap(output);
                 SetStage("Вставляю результат в Corel…");
                 InsertReady();
+                try { MoveImportedEdge(edgeOffset); }
+                catch (Exception placementError)
+                {
+                    Log.Error("Edge result inserted but placement correction failed.", placementError);
+                    _importWarning = (_importWarning ?? "Обводка вставлена.") +
+                        " Проверьте положение результата: " + placementError.GetBaseException().Message;
+                }
                 ReportOutcome();
             }
             catch (OperationCanceledException) { Report("Операция отменена.", false); }
@@ -685,28 +692,33 @@ namespace VanyaTools.Native
             finally { SetBusy(false, null); }
         }
 
-        private static void SmoothBinaryEdge(string source, string output, int threshold,
+        private static Tuple<double, double> SmoothBinaryEdge(string source, string output, int threshold,
             int radius, int expansion, Color fill, CancellationToken cancellation)
         {
             BitmapSource input = AiPrintTab.Bitmap(source);
             var bgra = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
             int width = bgra.PixelWidth, height = bgra.PixelHeight;
-            int stride = checked(width * 4), length = checked(width * height);
-            byte[] pixels = new byte[checked(stride * height)];
+            int padding = checked(expansion + radius + 2);
+            int canvasWidth = checked(width + 2 * padding);
+            int canvasHeight = checked(height + 2 * padding);
+            int length = checked(canvasWidth * canvasHeight);
+            byte[] pixels = new byte[checked(length * 4)];
             byte[] mask = new byte[length];
             byte[] work = new byte[length];
-            bgra.CopyPixels(pixels, stride, 0);
+            bgra.CopyPixels(new Int32Rect(0, 0, width, height), pixels,
+                checked(canvasWidth * 4), checked(((padding * canvasWidth) + padding) * 4));
+            cancellation.ThrowIfCancellationRequested();
             for (int p = 0; p < length; p++)
                 mask[p] = pixels[p * 4 + 3] > 0 && pixels[p * 4 + 3] >= threshold ? (byte)255 : (byte)0;
             if (expansion > 0)
             {
-                DilateHorizontal(mask, work, width, height, expansion, cancellation);
-                DilateVertical(work, mask, width, height, expansion, cancellation);
+                DilateHorizontal(mask, work, canvasWidth, canvasHeight, expansion, cancellation);
+                DilateVertical(work, mask, canvasWidth, canvasHeight, expansion, cancellation);
             }
             if (radius > 0)
             {
-                GaussianHorizontal(mask, work, width, height, radius, cancellation);
-                GaussianVertical(work, mask, width, height, radius, cancellation);
+                GaussianHorizontal(mask, work, canvasWidth, canvasHeight, radius, cancellation);
+                GaussianVertical(work, mask, canvasWidth, canvasHeight, radius, cancellation);
             }
             for (int p = 0; p < length; p++)
             {
@@ -725,12 +737,33 @@ namespace VanyaTools.Native
                     pixels[i + 3] = 255;
                 }
             }
-            SaveBinaryResult(output, pixels, width, height, input.DpiX, input.DpiY, cancellation);
+            Int32Rect crop = SaveBinaryResult(output, pixels, canvasWidth, canvasHeight,
+                input.DpiX, input.DpiY, cancellation);
+            double dpiX = input.DpiX > 0 ? input.DpiX : 96.0;
+            double dpiY = input.DpiY > 0 ? input.DpiY : 96.0;
+            return Tuple.Create((padding - crop.X) * 25.4 / dpiX,
+                (padding - crop.Y) * 25.4 / dpiY);
+        }
+
+        private static void MoveImportedEdge(Tuple<double, double> offsetMm)
+        {
+            dynamic app = CorelApp.Get();
+            dynamic doc = app.ActiveDocument;
+            dynamic shape = app.ActiveShape;
+            if (doc == null || shape == null || Convert.ToInt32(shape.Type) != CorelConstants.CdrBitmapShape)
+                throw new InvalidOperationException("CorelDRAW не вернул вставленную обводку для размещения.");
+            int oldUnit = Convert.ToInt32(doc.Unit);
+            try
+            {
+                doc.Unit = CorelConstants.CdrMillimeter;
+                shape.Move(-offsetMm.Item1, offsetMm.Item2);
+            }
+            finally { doc.Unit = oldUnit; }
         }
 
         // Crop on the worker thread, before Corel imports the result. The old
         // post-import Corel bitmap scan blocked the docker on large prints.
-        private static void SaveBinaryResult(string output, byte[] pixels, int width,
+        private static Int32Rect SaveBinaryResult(string output, byte[] pixels, int width,
             int height, double dpiX, double dpiY, CancellationToken cancellation)
         {
             int minX = width, minY = height, maxX = -1, maxY = -1;
@@ -750,6 +783,7 @@ namespace VanyaTools.Native
             var bitmap = BitmapSource.Create(width, height, dpiX, dpiY,
                 PixelFormats.Bgra32, null, pixels, checked(width * 4));
             BitmapSource result = bitmap;
+            var crop = new Int32Rect(0, 0, width, height);
             if (maxX >= 0)
             {
                 const int padding = 2;
@@ -757,13 +791,16 @@ namespace VanyaTools.Native
                 int right = Math.Min(width - 1, maxX + padding);
                 int bottom = Math.Min(height - 1, maxY + padding);
                 if (left != 0 || top != 0 || right != width - 1 || bottom != height - 1)
-                    result = new CroppedBitmap(bitmap,
-                        new Int32Rect(left, top, right - left + 1, bottom - top + 1));
+                {
+                    crop = new Int32Rect(left, top, right - left + 1, bottom - top + 1);
+                    result = new CroppedBitmap(bitmap, crop);
+                }
             }
             cancellation.ThrowIfCancellationRequested();
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(result));
             using (var stream = File.Create(output)) encoder.Save(stream);
+            return crop;
         }
 
         private static void DilateHorizontal(byte[] source, byte[] target, int width,
