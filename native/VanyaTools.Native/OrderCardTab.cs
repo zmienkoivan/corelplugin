@@ -50,6 +50,7 @@ namespace VanyaTools.Native
         private readonly DispatcherTimer _documentWatcher, _serverWatcher;
         private readonly List<CheckBox> _technologies = new List<CheckBox>();
         private readonly CheckBox _delivery;
+        private readonly DatePicker _dueDate;
         private OrderCardData _data = new OrderCardData();
         private string _documentPath;
         private string _lastWrittenJson;
@@ -366,6 +367,21 @@ namespace VanyaTools.Native
             _delivery = new CheckBox { Content = "🚚 ДОСТАВКА",
                 Margin = new Thickness(2, 5, 2, 5) };
             _editor.Children.Add(_delivery);
+            _editor.Children.Add(Label("Срок сдачи"));
+            var dueRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+            var clearDue = Button("Очистить", (_, __) => _dueDate.SelectedDate = null);
+            clearDue.ToolTip = "Убрать срок заказа";
+            DockPanel.SetDock(clearDue, Dock.Right);
+            dueRow.Children.Add(clearDue);
+            _dueDate = new DatePicker { SelectedDateFormat = DatePickerFormat.Short,
+                FontSize = 11, MinHeight = 27, Margin = new Thickness(1, 1, 4, 3) };
+            _dueDate.ToolTip = "Выберите дату сдачи. Срок сохранится на сервере при публикации карточки.";
+            _dueDate.DateValidationError += (_, error) => {
+                error.ThrowException = false;
+                _status("Срок сдачи: выберите корректную дату.", true);
+            };
+            dueRow.Children.Add(_dueDate);
+            _editor.Children.Add(dueRow);
             _editor.Children.Add(Label("Описание"));
             _description = Input(48); _editor.Children.Add(_description);
             _editor.Children.Add(Label("Изделия и количество"));
@@ -466,6 +482,7 @@ namespace VanyaTools.Native
             foreach (var box in _technologies) box.Unchecked += (_, __) => FormChanged();
             _delivery.Checked += (_, __) => FormChanged();
             _delivery.Unchecked += (_, __) => FormChanged();
+            _dueDate.SelectedDateChanged += (_, __) => FormChanged();
             QuickDocumentFields = CreateQuickDocumentFields();
             _documentWatcher = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
             _documentWatcher.Tick += (_, __) => RefreshDocument();
@@ -568,6 +585,7 @@ namespace VanyaTools.Native
             {
                 _customer.Text = ""; _designName.Text = ""; SetSourceSelection("");
                 _description.Text = ""; _items.Text = "";
+                _dueDate.SelectedDate = null;
                 foreach (var box in _technologies) box.IsChecked = false;
                 _delivery.IsChecked = false;
                 RenderFrames(); UpdateCaption(); UpdateActions();
@@ -728,6 +746,7 @@ namespace VanyaTools.Native
                 SetSourceSelection(_data.Source);
                 _description.Text = _data.Description ?? "";
                 _items.Text = _data.Items ?? "";
+                _dueDate.SelectedDate = ParseServerDate(_data.DueDate);
                 foreach (var box in _technologies)
                     box.IsChecked = _data.Technologies.Contains(Convert.ToString(box.Content));
                 _delivery.IsChecked = _data.IsDelivery;
@@ -795,6 +814,7 @@ namespace VanyaTools.Native
             _data.Source = _sourceValue.Trim();
             _data.Description = _description.Text.Trim();
             _data.Items = _items.Text.Trim();
+            _data.DueDate = SelectedDueDate();
             _data.Technologies = _technologies.Where(x => x.IsChecked == true)
                 .Select(x => Convert.ToString(x.Content)).ToList();
             _data.IsDelivery = _delivery.IsChecked == true;
@@ -821,7 +841,7 @@ namespace VanyaTools.Native
 
         private void WriteData(dynamic doc)
         {
-            _data.SchemaVersion = 4;
+            _data.SchemaVersion = 5;
             string json = new JavaScriptSerializer().Serialize(_data);
             if (!String.Equals(json, _lastWrittenJson, StringComparison.Ordinal))
             {
@@ -1233,6 +1253,7 @@ namespace VanyaTools.Native
                 var updated = await OrderServerClient.SetDeadline(server, key, order.Id, dueDate, revision);
                 if (order.Id == _data.ServerOrderId && _data.ServerRevision == revision)
                     _data.ServerRevision = Convert.ToInt32(updated["revision"]);
+                if (order.Id == _data.ServerOrderId) MergeServerDueDate(updated);
                 order.Due = OrderDate(OrderValue(updated, "dueDate"), true);
                 _ordersTable.Items.Refresh();
                 RenderSelectedOrderDetails(_ordersTable.SelectedItem as OrderListItem);
@@ -1247,6 +1268,19 @@ namespace VanyaTools.Native
             DateTime.TryParseExact(displayed, "dd.MM.yyyy", CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out DateTime date)
                 ? date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : "";
+
+        private static DateTime? ParseServerDate(string value) =>
+            DateTime.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out DateTime date) ? date : (DateTime?)null;
+
+        private string SelectedDueDate()
+        {
+            if (_dueDate.SelectedDate.HasValue)
+                return _dueDate.SelectedDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            if (!String.IsNullOrWhiteSpace(_dueDate.Text))
+                throw new InvalidOperationException("Срок сдачи: выберите корректную дату или очистите поле.");
+            return "";
+        }
 
         private sealed class OrderTableSettings
         {
@@ -2236,10 +2270,13 @@ namespace VanyaTools.Native
                 }
                 SaveData(); SaveServerSettings(false);
                 int requestRevision = _data.ServerRevision;
+                string knownDueDate = _data.ServerDueDate ?? "";
+                string currentDueDate = knownDueDate;
                 if (_data.ServerOrderId > 0)
                 {
                     _status("Проверка изменений заказа на сервере…", false);
                     var current = await OrderServerClient.Get(server, key, _data.ServerOrderId);
+                    currentDueDate = ServerDueDate(current);
                     if (!SameDocument((object)doc, (object)CorelApp.Get().ActiveDocument))
                         throw new InvalidOperationException("Вернитесь в исходный CDR и повторите обновление.");
                     if (!String.Equals(Convert.ToString(current["clientKey"]), _data.ClientKey,
@@ -2286,6 +2323,30 @@ namespace VanyaTools.Native
                 if (photos.Count > 0) { SaveData(); RenderFrames(); }
                 ReadForm();
                 if (_data.Customer.Length == 0) throw new InvalidOperationException("Введите имя заказчика.");
+                string requestedDueDate = _data.DueDate ?? "";
+                bool deadlineEdited = !String.Equals(requestedDueDate, knownDueDate,
+                    StringComparison.Ordinal);
+                if (_data.ServerOrderId > 0 && !deadlineEdited &&
+                    !String.Equals(currentDueDate, knownDueDate, StringComparison.Ordinal))
+                {
+                    requestedDueDate = currentDueDate;
+                    _data.DueDate = currentDueDate;
+                    _data.ServerDueDate = currentDueDate;
+                    _loadingForm = true;
+                    try { _dueDate.SelectedDate = ParseServerDate(currentDueDate); }
+                    finally { _loadingForm = false; }
+                }
+                else if (_data.ServerOrderId > 0 && deadlineEdited &&
+                    !String.Equals(currentDueDate, knownDueDate, StringComparison.Ordinal) &&
+                    !String.Equals(currentDueDate, requestedDueDate, StringComparison.Ordinal) &&
+                    MessageBox.Show("Срок заказа изменился на сервере после последнего сохранения CDR. " +
+                        "Записать дату из этой карточки поверх серверного срока?",
+                        "Vanya Tools · конфликт срока", MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                {
+                    _status("Публикация отменена: срок изменился на сервере.", false);
+                    return;
+                }
                 caption = ComposeCaption();
                 if (caption.Length > 990) throw new InvalidOperationException("Подпись длиннее 990 символов. Сократите описание.");
                 SaveData();
@@ -2304,6 +2365,27 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Вернитесь в исходный CDR и загрузите заказ с сервера.");
                 _data.PublishedAtUtc = DateTime.UtcNow.ToString("o");
                 ApplyServerResult(result);
+                string deadlineWarning = null;
+                if (deadlineEdited && !String.Equals(requestedDueDate, ServerDueDate(result),
+                    StringComparison.Ordinal))
+                {
+                    try
+                    {
+                        _status("Сохраняю срок заказа…", false);
+                        var deadlineResult = await OrderServerClient.SetDeadline(server, key,
+                            _data.ServerOrderId, requestedDueDate, _data.ServerRevision);
+                        if (!SameDocument((object)doc, (object)CorelApp.Get().ActiveDocument))
+                            throw new InvalidOperationException("Вернитесь в исходный CDR и загрузите срок с сервера.");
+                        ApplyServerResult(deadlineResult);
+                    }
+                    catch (Exception deadlineError)
+                    {
+                        Log.Error("Order published but deadline save failed", deadlineError);
+                        deadlineWarning = deadlineError.Message;
+                    }
+                }
+                if (!SameDocument((object)doc, (object)CorelApp.Get().ActiveDocument))
+                    throw new InvalidOperationException("Вернитесь в исходный CDR и загрузите заказ с сервера.");
                 string saveWarning = null;
                 try
                 {
@@ -2318,11 +2400,13 @@ namespace VanyaTools.Native
                 UpdateActions();
                 if (Convert.ToString(result["sendState"]) != "sent" && Convert.ToString(result["sendState"]) != "local")
                     throw new InvalidOperationException("Публикация не завершена. Проверьте канал и загрузите карточку с сервера.");
-                if (saveWarning != null)
+                if (saveWarning != null || deadlineWarning != null)
                 {
-                    Log.Info("Order card published: " + _data.ServerOrderNumber + " (CDR save warning).");
+                    Log.Info("Order card published: " + _data.ServerOrderNumber + " (save warning).");
                     _status("Заказ №" + _data.ServerOrderNumber +
-                        " опубликован, но CDR не сохранён: " + saveWarning, true);
+                        " опубликован." + (deadlineWarning == null ? "" :
+                            " Срок не сохранён: " + deadlineWarning + ".") +
+                        (saveWarning == null ? "" : " CDR не сохранён: " + saveWarning), true);
                     return;
                 }
                 Log.Info("Order card published: " + _data.ServerOrderNumber +
@@ -2386,7 +2470,7 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Вернитесь в исходный CDR и повторите загрузку.");
                 if (ServerTextDiffers(result) && MessageBox.Show(
                     "Текстовые поля в CDR отличаются от данных на сервере. " +
-                    "Заменить имя заказчика, источник, технологию, описание и изделия серверными данными? " +
+                    "Заменить заказчика, срок, источник, технологию, описание и изделия серверными данными? " +
                     "Кадры макета останутся в CDR.",
                     "Vanya Tools · загрузка карточки", MessageBoxButton.YesNo,
                     MessageBoxImage.Warning) != MessageBoxResult.Yes)
@@ -2405,6 +2489,8 @@ namespace VanyaTools.Native
 
         private bool ServerTextDiffers(Dictionary<string, object> result)
         {
+            if (!String.Equals(SelectedDueDate(), ServerDueDate(result),
+                StringComparison.Ordinal)) return true;
             if (!String.Equals(_customer.Text.Trim(), Convert.ToString(OrderValue(result, "customer")),
                 StringComparison.Ordinal) ||
                 !String.Equals(_sourceValue.Trim(), Convert.ToString(OrderValue(result, "source")),
@@ -2466,6 +2552,7 @@ namespace VanyaTools.Native
             _loadingForm = true;
             try
             {
+                _dueDate.SelectedDate = ParseServerDate(ServerDueDate(result));
                 _customer.Text = Convert.ToString(result["customer"]);
                 SetSourceSelection(Convert.ToString(result["source"]));
                 _description.Text = Convert.ToString(result["description"]);
@@ -2483,6 +2570,8 @@ namespace VanyaTools.Native
             _loadingForm = true;
             try
             {
+                if (!_dueDate.SelectedDate.HasValue)
+                    _dueDate.SelectedDate = ParseServerDate(ServerDueDate(result));
                 if (String.IsNullOrWhiteSpace(_customer.Text))
                     _customer.Text = Convert.ToString(result["customer"]);
                 if (String.IsNullOrWhiteSpace(_sourceValue))
@@ -2507,9 +2596,29 @@ namespace VanyaTools.Native
         private static bool Flag(Dictionary<string, object> result, string key) =>
             result.TryGetValue(key, out object value) && value != null && Convert.ToBoolean(value);
 
+        private static string ServerDueDate(Dictionary<string, object> result) =>
+            Convert.ToString(OrderValue(result, "dueDate")) ?? "";
+
+        private void MergeServerDueDate(Dictionary<string, object> result)
+        {
+            if (_dueDate.IsKeyboardFocusWithin) return;
+            string serverDate = ServerDueDate(result);
+            if (String.Equals(_data.DueDate ?? "", _data.ServerDueDate ?? "",
+                StringComparison.Ordinal))
+            {
+                _data.DueDate = serverDate;
+                bool wasLoading = _loadingForm;
+                _loadingForm = true;
+                try { _dueDate.SelectedDate = ParseServerDate(serverDate); }
+                finally { _loadingForm = wasLoading; }
+            }
+            _data.ServerDueDate = serverDate;
+        }
+
         private void ApplyWorkflowResult(Dictionary<string, object> result)
         {
             // Keep the editor revision: polling must not make stale text safe to overwrite remotely.
+            MergeServerDueDate(result);
             _data.ServerState = Convert.ToString(result["state"]);
             _data.ServerSendState = Convert.ToString(result["sendState"]);
             _data.ServerBlanksPaused = Flag(result, "blanksPaused");
@@ -2853,13 +2962,15 @@ namespace VanyaTools.Native
 
     public sealed class OrderCardData
     {
-        public int SchemaVersion { get; set; } = 4;
+        public int SchemaVersion { get; set; } = 5;
         public string Customer { get; set; }
         public string DesignName { get; set; }
         public string Source { get; set; }
         public List<string> Technologies { get; set; } = new List<string>();
         public string Description { get; set; }
         public string Items { get; set; }
+        public string DueDate { get; set; }
+        public string ServerDueDate { get; set; }
         public bool IsDelivery { get; set; }
         public List<OrderCardFrame> Frames { get; set; } = new List<OrderCardFrame>();
         public string PublishedAtUtc { get; set; }
