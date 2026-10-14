@@ -28,7 +28,7 @@ namespace VanyaTools.Native
         private readonly ComboBox _localPreset;
         private readonly Slider _localStrength, _localContrast, _localWarmth,
             _localSaturation, _localBrightness;
-        private readonly Button _localApplyButton;
+        private readonly Button _localApplyButton, _localPreviewButton;
         private readonly TextBox _prompt;
         private readonly TextBox _backgroundTolerance, _whiteCutPixels, _backgroundHex;
         private readonly Border _backgroundSwatch;
@@ -45,11 +45,15 @@ namespace VanyaTools.Native
             _editButton, _cancelButton, _retryButton;
         private readonly List<RadioButton> _styleButtons = new List<RadioButton>();
         private readonly DispatcherTimer _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        private readonly DispatcherTimer _localPreviewTimer = new DispatcherTimer
+            { Interval = TimeSpan.FromMilliseconds(70) };
         private readonly Stopwatch _elapsed = new Stopwatch();
         private CancellationTokenSource _cancellation;
         private bool _busy;
         private string _stage, _lastModel, _lastOutput, _lastSource, _readyOutput;
         private string _importWarning;
+        private string _localSourcePath;
+        private BitmapSource _localPreviewSource;
         private Dictionary<string, object> _lastInput;
         private StyleChoice _selectedStyle;
 
@@ -182,13 +186,18 @@ namespace VanyaTools.Native
             UpdateEdgeUnits();
 
             var localPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 5) };
+            _localPreviewButton = Button("Загрузить выделение для предпросмотра",
+                async (_, __) => await LoadLocalPreview());
+            _localPreviewButton.ToolTip = "Один раз подготавливает выделение. Затем пресеты и ползунки меняют предпросмотр сразу, без повторной работы CorelDRAW.";
+            localPanel.Children.Add(_localPreviewButton);
             _localPreset = new ComboBox { FontSize = 11, Margin = new Thickness(1, 2, 1, 3) };
             _localPreset.Items.Add("Чёрно-белый");
             _localPreset.Items.Add("Сепия");
             _localPreset.Items.Add("Благородное золото");
             _localPreset.Items.Add("Тёплый матовый");
+            _localPreset.Items.Add("Винтаж · серо-коричневый (как на фото)");
             _localPreset.Items.Add("Свой тон");
-            _localPreset.SelectedIndex = 2;
+            _localPreset.SelectedIndex = 4;
             localPanel.Children.Add(_localPreset);
             _localStrength = AddLocalStyleSlider(localPanel, "Сила эффекта", 0, 100, 100, "%");
             var localFineTuning = new StackPanel { Margin = new Thickness(3, 2, 3, 3) };
@@ -210,9 +219,21 @@ namespace VanyaTools.Native
             }
 
             var previews = new UniformGrid { Columns = 2 };
-            previews.Children.Add(Preview("Выделение", out _sourcePreview, styleOnly ? 112 : 72));
-            previews.Children.Add(Preview("Результат", out _resultPreview, styleOnly ? 112 : 72));
+            previews.Children.Add(Preview("Выделение", out _sourcePreview, styleOnly ? 220 : 72));
+            previews.Children.Add(Preview("Результат", out _resultPreview, styleOnly ? 220 : 72));
             panel.Children.Add(previews);
+            if (styleOnly)
+            {
+                _localPreviewTimer.Tick += (_, __) =>
+                {
+                    _localPreviewTimer.Stop();
+                    UpdateLocalPreview();
+                };
+                _localPreset.SelectionChanged += (_, __) => QueueLocalPreview();
+                foreach (Slider slider in new[] { _localStrength, _localContrast, _localWarmth,
+                    _localSaturation, _localBrightness })
+                    slider.ValueChanged += (_, __) => QueueLocalPreview();
+            }
 
             if (styleOnly) panel.Children.Add(Label("ИИ-стили", true));
             var styles = new UniformGrid { Columns = 3 };
@@ -259,6 +280,19 @@ namespace VanyaTools.Native
             panel.Children.Add(_progress); panel.Children.Add(_progressBar);
             _timer.Tick += (_, __) => _progress.Text = _stage + " · " + (int)_elapsed.Elapsed.TotalSeconds + " с";
             RestorePending();
+            if (styleOnly) Unloaded += (_, __) =>
+            {
+                _localPreviewTimer.Stop();
+                if (_busy) return;
+                string source = _localSourcePath;
+                _localSourcePath = null;
+                _localPreviewSource = null;
+                _sourcePreview.Source = null;
+                if (String.IsNullOrEmpty(_readyOutput)) _resultPreview.Source = null;
+                if (!String.IsNullOrEmpty(source))
+                    try { File.Delete(source); } catch { }
+                _localPreviewButton.Content = "Загрузить выделение для предпросмотра";
+            };
         }
 
         private Border StyleCard(StyleChoice style)
@@ -320,14 +354,9 @@ namespace VanyaTools.Native
             return slider;
         }
 
-        private async Task ApplyLocalStyle()
+        private LocalPhotoStyleSettings LocalSettings()
         {
-            if (_busy) return;
-            if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
-            { Report("Сначала вставьте готовый результат кнопкой «Повторить вставку».", true); return; }
-            if (_localPreset.SelectedIndex < 0)
-            { Report("Выберите локальный стиль.", true); return; }
-            var settings = new LocalPhotoStyleSettings
+            return new LocalPhotoStyleSettings
             {
                 Preset = (LocalPhotoPreset)_localPreset.SelectedIndex,
                 Strength = (int)Math.Round(_localStrength.Value),
@@ -336,6 +365,75 @@ namespace VanyaTools.Native
                 Saturation = (int)Math.Round(_localSaturation.Value),
                 Brightness = (int)Math.Round(_localBrightness.Value)
             };
+        }
+
+        private void QueueLocalPreview()
+        {
+            if (!_styleOnly || _busy || _localPreviewSource == null ||
+                _localPreset.SelectedIndex < 0) return;
+            // Throttle rather than debounce: the image must keep changing while dragging.
+            if (!_localPreviewTimer.IsEnabled) _localPreviewTimer.Start();
+        }
+
+        private void UpdateLocalPreview()
+        {
+            if (_busy || _localPreviewSource == null || _localPreset.SelectedIndex < 0) return;
+            try
+            {
+                _resultPreview.Source = LocalPhotoStyleProcessor.Render(_localPreviewSource,
+                    LocalSettings(), CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Local photo style preview failed.", ex);
+                Report("Не удалось обновить предпросмотр: " + ex.GetBaseException().Message, true);
+            }
+        }
+
+        private async Task LoadLocalPreview()
+        {
+            if (_busy) return;
+            _localPreviewTimer.Stop();
+            SetBusy(true, "Подготавливаю выделение для предпросмотра…");
+            string captured = null;
+            try
+            {
+                await Dispatcher.Yield(DispatcherPriority.Background);
+                captured = AiSelectionCapture.Capture();
+                BitmapSource preview = PreviewBitmap(captured);
+                string previous = _localSourcePath;
+                _localSourcePath = captured;
+                captured = null;
+                _localPreviewSource = preview;
+                _sourcePreview.Source = preview;
+                _resultPreview.Source = LocalPhotoStyleProcessor.Render(preview,
+                    LocalSettings(), CancellationToken.None);
+                _localPreviewButton.Content = "Обновить выделение для предпросмотра";
+                if (!String.IsNullOrEmpty(previous))
+                    try { File.Delete(previous); } catch { }
+                Report("Предпросмотр готов. Пресеты и ползунки обновляют его сразу.", false);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Local photo style preview capture failed.", ex);
+                Report(ex.GetBaseException().Message, true);
+            }
+            finally
+            {
+                if (!String.IsNullOrEmpty(captured))
+                    try { File.Delete(captured); } catch { }
+                SetBusy(false, null);
+            }
+        }
+
+        private async Task ApplyLocalStyle()
+        {
+            if (_busy) return;
+            if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
+            { Report("Сначала вставьте готовый результат кнопкой «Повторить вставку».", true); return; }
+            if (_localPreset.SelectedIndex < 0)
+            { Report("Выберите локальный стиль.", true); return; }
+            var settings = LocalSettings();
             string presetName = Convert.ToString(_localPreset.SelectedItem, CultureInfo.CurrentCulture);
             SetBusy(true, "Подготавливаю фото…");
             try
@@ -343,9 +441,15 @@ namespace VanyaTools.Native
                 _importWarning = null;
                 _lastModel = _lastOutput = _lastSource = null;
                 _lastInput = null;
-                string source = AiSelectionCapture.Capture();
-                _sourcePreview.Source = PreviewBitmap(source);
-                _resultPreview.Source = null;
+                string source = _localSourcePath;
+                if (String.IsNullOrEmpty(source) || !File.Exists(source))
+                {
+                    source = AiSelectionCapture.Capture();
+                    _localSourcePath = source;
+                    _localPreviewSource = PreviewBitmap(source);
+                    _sourcePreview.Source = _localPreviewSource;
+                    _localPreviewButton.Content = "Обновить выделение для предпросмотра";
+                }
                 string output = Path.Combine(Path.GetTempPath(),
                     "Vanya-Local-Style-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
@@ -1229,7 +1333,7 @@ namespace VanyaTools.Native
             _busy = busy;
             _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _backgroundPipetteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
                 _highlightButton.IsEnabled = _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled =
-                _editButton.IsEnabled = _localApplyButton.IsEnabled = !busy;
+                _editButton.IsEnabled = _localApplyButton.IsEnabled = _localPreviewButton.IsEnabled = !busy;
             _model.IsEnabled = _backgroundModel.IsEnabled = _localPreset.IsEnabled = _prompt.IsEnabled = _backgroundHex.IsEnabled = _backgroundTolerance.IsEnabled = _whiteCutPixels.IsEnabled = _alphaThreshold.IsEnabled =
                 _edgeRadius.IsEnabled = _edgeExpansion.IsEnabled = _underlayHex.IsEnabled = !busy;
             _localStrength.IsEnabled = _localContrast.IsEnabled = _localWarmth.IsEnabled =

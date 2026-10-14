@@ -12,6 +12,7 @@ namespace VanyaTools.Native
         Sepia,
         NobleGold,
         WarmMatte,
+        VintageTaupe,
         Custom
     }
 
@@ -28,6 +29,17 @@ namespace VanyaTools.Native
         {
             if (settings == null) throw new ArgumentNullException(nameof(settings));
             BitmapSource input = AiPrintTab.Bitmap(source);
+            BitmapSource result = Render(input, settings, cancellation);
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(result));
+            using (var stream = File.Create(output)) encoder.Save(stream);
+        }
+
+        public static BitmapSource Render(BitmapSource input, LocalPhotoStyleSettings settings,
+            CancellationToken cancellation)
+        {
+            if (input == null) throw new ArgumentNullException(nameof(input));
+            if (settings == null) throw new ArgumentNullException(nameof(settings));
             var bitmap = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
             int width = bitmap.PixelWidth, height = bitmap.PixelHeight;
             int stride = checked(width * 4);
@@ -85,6 +97,32 @@ namespace VanyaTools.Native
                             styledG = 128 + (styledG - 128) * 0.90 + 5;
                             styledB = 128 + (styledB - 128) * 0.90 + 5;
                             break;
+                        case LocalPhotoPreset.VintageTaupe:
+                            // Brown shadows, nearly neutral midtones and ivory highlights.
+                            // The reference look is greige rather than the yellow of classic sepia.
+                            double value = luminance / 255.0;
+                            if (value < 0.20)
+                            {
+                                double t = value / 0.20;
+                                styledR = Lerp(24, 57, t);
+                                styledG = Lerp(19, 44, t);
+                                styledB = Lerp(19, 40, t);
+                            }
+                            else if (value < 0.55)
+                            {
+                                double t = (value - 0.20) / 0.35;
+                                styledR = Lerp(57, 145, t);
+                                styledG = Lerp(44, 139, t);
+                                styledB = Lerp(40, 131, t);
+                            }
+                            else
+                            {
+                                double t = (value - 0.55) / 0.45;
+                                styledR = Lerp(145, 244, t);
+                                styledG = Lerp(139, 241, t);
+                                styledB = Lerp(131, 234, t);
+                            }
+                            break;
                         default:
                             styledR = r; styledG = g; styledB = b;
                             break;
@@ -110,9 +148,8 @@ namespace VanyaTools.Native
             cancellation.ThrowIfCancellationRequested();
             var result = BitmapSource.Create(width, height, input.DpiX, input.DpiY,
                 PixelFormats.Bgra32, null, pixels, stride);
-            var encoder = new PngBitmapEncoder();
-            encoder.Frames.Add(BitmapFrame.Create(result));
-            using (var stream = File.Create(output)) encoder.Save(stream);
+            result.Freeze();
+            return result;
         }
 
         private static double Lerp(double from, double to, double amount)
