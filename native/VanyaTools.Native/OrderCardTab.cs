@@ -49,7 +49,8 @@ namespace VanyaTools.Native
         private readonly List<OrderListItem> _serverOrders = new List<OrderListItem>();
         private readonly DispatcherTimer _documentWatcher, _serverWatcher;
         private readonly List<CheckBox> _technologies = new List<CheckBox>();
-        private readonly CheckBox _delivery;
+        private readonly CheckBox _delivery, _customerTextile, _selectedCustomerTextile;
+        private bool _loadingSelectedTextile;
         private readonly DatePicker _dueDate;
         private OrderCardData _data = new OrderCardData();
         private string _documentPath;
@@ -307,6 +308,10 @@ namespace VanyaTools.Native
             _selectedOrderDates = OrderDetailText();
             _selectedOrderDescription = OrderDetailText();
             _selectedOrderItems = OrderDetailText();
+            _selectedCustomerTextile = new CheckBox { Content = "Текстиль клиента", Margin = new Thickness(0, 2, 0, 5) };
+            _selectedCustomerTextile.Checked += async (_, __) => { if (!_loadingSelectedTextile) await ChangeWorkflow("customerTextile", true); };
+            _selectedCustomerTextile.Unchecked += async (_, __) => { if (!_loadingSelectedTextile) await ChangeWorkflow("customerTextile", true); };
+            selectedOrderBody.Children.Add(_selectedCustomerTextile);
             selectedOrderBody.Children.Add(_selectedOrderSummary);
             selectedOrderBody.Children.Add(_selectedOrderDates);
             selectedOrderBody.Children.Add(_selectedOrderDescription);
@@ -366,6 +371,8 @@ namespace VanyaTools.Native
             _editor.Children.Add(techGrid);
             _delivery = new CheckBox { Content = "🚚 ДОСТАВКА",
                 Margin = new Thickness(2, 5, 2, 5) };
+            _customerTextile = new CheckBox { Content = "Текстиль клиента", ToolTip = "Изделия или текстиль предоставлены заказчиком", Margin = new Thickness(2, 5, 2, 5) };
+            _editor.Children.Add(_customerTextile);
             _editor.Children.Add(_delivery);
             _editor.Children.Add(Label("Срок сдачи"));
             var dueRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
@@ -480,6 +487,8 @@ namespace VanyaTools.Native
                 input.TextChanged += (_, __) => FormChanged();
             foreach (var box in _technologies) box.Checked += (_, __) => FormChanged();
             foreach (var box in _technologies) box.Unchecked += (_, __) => FormChanged();
+            _customerTextile.Checked += (_, __) => FormChanged();
+            _customerTextile.Unchecked += (_, __) => FormChanged();
             _delivery.Checked += (_, __) => FormChanged();
             _delivery.Unchecked += (_, __) => FormChanged();
             _dueDate.SelectedDateChanged += (_, __) => FormChanged();
@@ -587,6 +596,7 @@ namespace VanyaTools.Native
                 _description.Text = ""; _items.Text = "";
                 _dueDate.SelectedDate = null;
                 foreach (var box in _technologies) box.IsChecked = false;
+                _customerTextile.IsChecked = false;
                 _delivery.IsChecked = false;
                 RenderFrames(); UpdateCaption(); UpdateActions();
             }
@@ -756,6 +766,7 @@ namespace VanyaTools.Native
                 _dueDate.SelectedDate = ParseServerDate(_data.DueDate);
                 foreach (var box in _technologies)
                     box.IsChecked = _data.Technologies.Contains(Convert.ToString(box.Content));
+                _customerTextile.IsChecked = _data.IsCustomerTextile;
                 _delivery.IsChecked = _data.IsDelivery;
                 RenderFrames(); UpdateCaption(); UpdateActions();
             }
@@ -824,6 +835,7 @@ namespace VanyaTools.Native
             _data.DueDate = SelectedDueDate();
             _data.Technologies = _technologies.Where(x => x.IsChecked == true)
                 .Select(x => Convert.ToString(x.Content)).ToList();
+            _data.IsCustomerTextile = _customerTextile.IsChecked == true;
             _data.IsDelivery = _delivery.IsChecked == true;
         }
 
@@ -1270,6 +1282,7 @@ namespace VanyaTools.Native
             public bool BlanksReady { get; set; }
             public bool ApplicationPaused { get; set; }
             public bool Urgent { get; set; }
+            public bool CustomerTextile { get; set; }
             public bool Delivery { get; set; }
             public bool IsAvailable => SendState == "reserved";
         }
@@ -1615,6 +1628,10 @@ namespace VanyaTools.Native
         {
             _selectedOrderCard.Visibility = selected == null ? Visibility.Collapsed : Visibility.Visible;
             if (selected == null) return;
+            _loadingSelectedTextile = true;
+            try { _selectedCustomerTextile.IsChecked = selected.CustomerTextile; }
+            finally { _loadingSelectedTextile = false; }
+            _selectedCustomerTextile.IsEnabled = !_busy && selected.SendState != "sending" && selected.SendState != "uncertain";
 
             _selectedOrderHeading.Text = String.IsNullOrWhiteSpace(selected.Customer)
                 ? "Заказ без имени" : selected.Customer.Trim();
@@ -1934,7 +1951,7 @@ namespace VanyaTools.Native
                     a.Status != b.Status ||
                     a.SendState != b.SendState || a.State != b.State ||
                     a.PhotoCount != b.PhotoCount || a.Urgent != b.Urgent ||
-                    a.Delivery != b.Delivery ||
+                    a.Delivery != b.Delivery || a.CustomerTextile != b.CustomerTextile ||
                     a.BlanksPaused != b.BlanksPaused || a.BlanksReady != b.BlanksReady ||
                     a.ApplicationPaused != b.ApplicationPaused ||
                     !a.PhotoVersions.SequenceEqual(b.PhotoVersions)) return false;
@@ -1982,8 +1999,7 @@ namespace VanyaTools.Native
                         Period = Convert.ToString(OrderValue(row, "period")),
                         Customer = Convert.ToString(row["customer"]),
                         Source = Convert.ToString(row["source"]),
-                        Technologies = technologies == null ? "" : String.Join(", ",
-                            technologies.Cast<object>().Select(item => Convert.ToString(item))),
+                        Technologies = OrderTags(row),
                         Description = Convert.ToString(OrderValue(row, "description")),
                         Items = Convert.ToString(OrderValue(row, "items")),
                         Created = OrderDate(OrderValue(row, "createdAt")),
@@ -2000,6 +2016,7 @@ namespace VanyaTools.Native
                         BlanksReady = Flag(row, "blanksReady"),
                         ApplicationPaused = Flag(row, "applicationPaused"),
                         Urgent = Flag(row, "isUrgent"),
+                        CustomerTextile = Flag(row, "isCustomerTextile"),
                         Delivery = Flag(row, "isDelivery")
                     };
                     order.Status = OrderStatus(order);
@@ -2478,6 +2495,8 @@ namespace VanyaTools.Native
                     ["revision"] = requestRevision
                 };
                 if (confirmNoTelegramMessage) details["confirmNoTelegramMessage"] = true;
+                if (_data.ServerOrderId == 0 || _data.IsCustomerTextile != _data.ServerCustomerTextile)
+                    details["isCustomerTextile"] = _data.IsCustomerTextile;
                 if (_data.ServerOrderId == 0 || _data.IsDelivery != _data.ServerDelivery)
                     details["isDelivery"] = _data.IsDelivery;
                 var result = await OrderServerClient.Publish(server, key, details, photos, _data.ServerOrderId);
@@ -2568,6 +2587,8 @@ namespace VanyaTools.Native
                 _data.ClientKey = Convert.ToString(clientKey);
             _data.ServerContentFingerprint = ServerContentFingerprint(result);
             ApplyWorkflowResult(result);
+            _data.IsCustomerTextile = _data.ServerCustomerTextile;
+            _customerTextile.IsChecked = _data.IsCustomerTextile;
             _data.IsDelivery = _data.ServerDelivery;
             _delivery.IsChecked = _data.IsDelivery;
             if (result.TryGetValue("photoIds", out object ids) && ids is object[] photos && photos.Length > 0)
@@ -2693,6 +2714,7 @@ namespace VanyaTools.Native
                 var technologies = result["technologies"] as object[] ?? new object[0];
                 foreach (var box in _technologies)
                     box.IsChecked = technologies.Any(x => Convert.ToString(x) == Convert.ToString(box.Content));
+                _customerTextile.IsChecked = Flag(result, "isCustomerTextile");
                 _delivery.IsChecked = Flag(result, "isDelivery");
             }
             finally { _loadingForm = false; }
@@ -2720,6 +2742,8 @@ namespace VanyaTools.Native
                         box.IsChecked = technologies.Any(x =>
                             Convert.ToString(x) == Convert.ToString(box.Content));
                 }
+                if (_data.IsCustomerTextile == _data.ServerCustomerTextile)
+                    _customerTextile.IsChecked = Flag(result, "isCustomerTextile");
                 if (_data.IsDelivery == _data.ServerDelivery)
                     _delivery.IsChecked = Flag(result, "isDelivery");
             }
@@ -2758,6 +2782,15 @@ namespace VanyaTools.Native
             _data.ServerBlanksReady = Flag(result, "blanksReady");
             _data.ServerApplicationPaused = Flag(result, "applicationPaused");
             _data.ServerUrgent = Flag(result, "isUrgent");
+            bool serverCustomerTextile = Flag(result, "isCustomerTextile");
+            if (_data.IsCustomerTextile == _data.ServerCustomerTextile && _customerTextile != null)
+            {
+                _data.IsCustomerTextile = serverCustomerTextile;
+                _loadingForm = true;
+                try { _customerTextile.IsChecked = serverCustomerTextile; }
+                finally { _loadingForm = false; }
+            }
+            _data.ServerCustomerTextile = serverCustomerTextile;
             bool serverDelivery = Flag(result, "isDelivery");
             if (_data.IsDelivery == _data.ServerDelivery && _delivery != null)
             {
@@ -2767,6 +2800,14 @@ namespace VanyaTools.Native
                 finally { _loadingForm = false; }
             }
             _data.ServerDelivery = serverDelivery;
+        }
+
+        private static string OrderTags(Dictionary<string, object> result)
+        {
+            var values = OrderValue(result, "technologies") as IList;
+            var tags = values == null ? new List<string>() : values.Cast<object>().Select(item => Convert.ToString(item)).ToList();
+            if (Flag(result, "isCustomerTextile")) tags.Insert(0, "Текстиль клиента");
+            return String.Join(" · ", tags);
         }
 
         private static string OrderStatus(OrderListItem order) =>
@@ -2789,6 +2830,8 @@ namespace VanyaTools.Native
             order.BlanksReady = Flag(result, "blanksReady");
             order.ApplicationPaused = Flag(result, "applicationPaused");
             order.Urgent = Flag(result, "isUrgent");
+            order.CustomerTextile = Flag(result, "isCustomerTextile");
+            order.Technologies = OrderTags(result);
             order.Delivery = Flag(result, "isDelivery");
             order.Updated = OrderDate(OrderValue(result, "updatedAt"));
             order.Completed = OrderDate(OrderValue(result, "completedAt"));
@@ -2809,6 +2852,7 @@ namespace VanyaTools.Native
                 case "application": order.ApplicationPaused = !order.ApplicationPaused; break;
                 case "urgent": order.Urgent = !order.Urgent; break;
                 case "blanksReady": order.BlanksReady = !order.BlanksReady; break;
+                case "customerTextile": order.CustomerTextile = !order.CustomerTextile; break;
             }
             order.Updated = DateTime.Now.ToString("dd.MM.yy HH:mm");
             order.Status = OrderStatus(order);
@@ -2824,6 +2868,7 @@ namespace VanyaTools.Native
             bool blanksReady = fromList ? selected.BlanksReady : _data.ServerBlanksReady;
             bool application = fromList ? selected.ApplicationPaused : _data.ServerApplicationPaused;
             bool urgent = fromList ? selected.Urgent : _data.ServerUrgent;
+            bool customerTextile = fromList ? selected.CustomerTextile : _data.ServerCustomerTextile;
             string previousUpdated = selected?.Updated, previousCompleted = selected?.Completed;
             DateTimeOffset? previousCompletedAt = selected?.CompletedAt;
             _busy = true;
@@ -2845,6 +2890,8 @@ namespace VanyaTools.Native
                     ? await OrderServerClient.SetState(server, key, id, state == "done" ? "new" : "done", revision)
                     : action == "urgent"
                     ? await OrderServerClient.SetUrgency(server, key, id, !urgent, revision)
+                    : action == "customerTextile"
+                    ? await OrderServerClient.SetPause(server, key, id, "customer-textile", !customerTextile, revision)
                     : action == "blanksReady"
                     ? await OrderServerClient.SetBlanksReady(server, key, id, !blanksReady, revision)
                     : await OrderServerClient.SetPause(server, key, id, action,
@@ -2872,6 +2919,7 @@ namespace VanyaTools.Native
                     selected.BlanksPaused = blanks;
                     selected.BlanksReady = blanksReady;
                     selected.ApplicationPaused = application;
+                    selected.CustomerTextile = customerTextile;
                     selected.Urgent = urgent;
                     selected.Updated = previousUpdated;
                     selected.Completed = previousCompleted;
@@ -2927,6 +2975,7 @@ namespace VanyaTools.Native
                 selected?.ApplicationPaused == true, selected?.Urgent == true,
                 selected?.BlanksReady == true,
                 selected != null && (selected.SendState == "sent" || selected.SendState == "local"), selected != null);
+            _selectedCustomerTextile.IsEnabled = !_busy && selected != null && selected.SendState != "sending" && selected.SendState != "uncertain";
             _refreshServer.Visibility = assigned ? Visibility.Visible : Visibility.Collapsed;
             _orderInfo.Text = assigned ? "Заказ №" + _data.ServerOrderNumber + " · " +
                 (pending ? "карточка не опубликована" : draft ? "ожидает публикации" :
@@ -3111,6 +3160,7 @@ namespace VanyaTools.Native
         public string Items { get; set; }
         public string DueDate { get; set; }
         public string ServerDueDate { get; set; }
+        public bool IsCustomerTextile { get; set; }
         public bool IsDelivery { get; set; }
         public List<OrderCardFrame> Frames { get; set; } = new List<OrderCardFrame>();
         public string PublishedAtUtc { get; set; }
@@ -3124,6 +3174,7 @@ namespace VanyaTools.Native
         public bool ServerBlanksReady { get; set; }
         public bool ServerApplicationPaused { get; set; }
         public bool ServerUrgent { get; set; }
+        public bool ServerCustomerTextile { get; set; }
         public bool ServerDelivery { get; set; }
         public string ServerState { get; set; }
         public string ServerSendState { get; set; }
