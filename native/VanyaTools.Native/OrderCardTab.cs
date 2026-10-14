@@ -641,9 +641,12 @@ namespace VanyaTools.Native
                 ReadForm(); SaveData();
             }
             CorelDocumentSaver.Save(doc);
+            bool framesCopied = MirrorFrameSnapshots(Convert.ToString(doc.FullFileName));
             RememberCurrentOrderFile();
             _documentName.Text = Path.GetFileName(Convert.ToString(doc.FullFileName)) + " · сохранён";
-            _status("CDR сохранён.", false);
+            _status(framesCopied ? "CDR и растровые кадры сохранены." :
+                "CDR сохранён, но кадры доступны только на этом ПК. Проверьте доступ к папке CDR.",
+                !framesCopied);
         }
 
         private bool SaveNewDocument(dynamic doc, bool confirm = true)
@@ -685,8 +688,11 @@ namespace VanyaTools.Native
             if (String.IsNullOrWhiteSpace(saved) ||
                 !String.Equals(Path.GetFullPath(saved), target, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("CorelDRAW сохранил файл по другому адресу: " + saved);
+            bool framesCopied = MirrorFrameSnapshots(saved);
             LoadDocument(false);
-            _status("CDR сохранён: " + target, false);
+            _status((framesCopied ? "CDR и кадры сохранены: " :
+                "CDR сохранён, но кадры доступны только на этом ПК: ") + target,
+                !framesCopied);
             return true;
         }
 
@@ -731,6 +737,7 @@ namespace VanyaTools.Native
                 if (String.IsNullOrWhiteSpace(_data.DesignName)) _data.DesignName = pathDesign;
             }
             _documentPath = String.IsNullOrWhiteSpace(path) ? null : path;
+            MirrorFrameSnapshots(_documentPath);
             _documentIdentity = (object)doc;
             _failedDocumentIdentity = null;
             _failedDocumentPath = null;
@@ -841,7 +848,7 @@ namespace VanyaTools.Native
 
         private void WriteData(dynamic doc)
         {
-            _data.SchemaVersion = 5;
+            _data.SchemaVersion = 6;
             string json = new JavaScriptSerializer().Serialize(_data);
             if (!String.Equals(json, _lastWrittenJson, StringComparison.Ordinal))
             {
@@ -854,13 +861,15 @@ namespace VanyaTools.Native
 
         private void AddSelection()
         {
-            EnsureDocument(true, true);
+            dynamic doc = EnsureDocument(true, true);
             if (_data.Frames.Count >= 10)
                 throw new InvalidOperationException("В карточке может быть не более 10 кадров.");
             var frame = FrameFromSelection();
+            _status("Создание растрового кадра в высоком разрешении…", false);
+            bool shared = SaveFrameSnapshot(frame, CapturePhoto(doc, frame, true));
             ReadForm(); _data.Frames.Add(frame); SaveData(); RenderFrames(); UpdateCaption();
-            QueueFrameThumbnail(frame);
-            _status("Кадр добавлен. Исходные объекты не сгруппированы.", false);
+            _status(shared ? "Растровый кадр сохранён. Исходные объекты можно менять или разгруппировать." :
+                "Кадр сохранён только на этом ПК. Проверьте доступ к папке CDR.", !shared);
         }
 
         private static OrderCardFrame FrameFromSelection()
@@ -868,7 +877,8 @@ namespace VanyaTools.Native
             dynamic selection = CorelApp.Get().ActiveSelectionRange;
             if (selection == null || Convert.ToInt32(selection.Count) == 0)
                 throw new InvalidOperationException("Выделите один макет или группу объектов.");
-            var frame = new OrderCardFrame { Shapes = new List<OrderCardShape>() };
+            var frame = new OrderCardFrame { Shapes = new List<OrderCardShape>(),
+                ObjectCount = Convert.ToInt32(selection.Count) };
             int pageIndex = -1;
             foreach (dynamic shape in selection.Shapes)
             {
@@ -876,8 +886,9 @@ namespace VanyaTools.Native
                 if (pageIndex >= 0 && currentPage != pageIndex)
                     throw new InvalidOperationException("Для одного кадра выделите объекты на одной странице.");
                 pageIndex = currentPage;
-                frame.Shapes.Add(new OrderCardShape {
-                    Page = currentPage, Id = Convert.ToInt32(shape.StaticID) });
+                try { frame.Shapes.Add(new OrderCardShape {
+                    Page = currentPage, Id = Convert.ToInt32(shape.StaticID) }); }
+                catch (Exception error) { Log.Error("Order frame shape reference unavailable", error); }
             }
             return frame;
         }
@@ -896,7 +907,7 @@ namespace VanyaTools.Native
                     Background = new SolidColorBrush(Color.FromRgb(240, 242, 244)),
                     BorderBrush = new SolidColorBrush(Color.FromRgb(213, 219, 224)),
                     BorderThickness = new Thickness(1), Cursor = Cursors.Hand,
-                    ToolTip = "Нажмите, чтобы обновить миниатюру" };
+                    ToolTip = "Показать сохранённый растровый кадр" };
                 try
                 {
                     string encoded = _data.Frames[i].Thumbnail;
@@ -905,92 +916,53 @@ namespace VanyaTools.Native
                             Stretch = Stretch.Uniform };
                 }
                 catch (Exception error) { Log.Error("Order frame thumbnail unavailable", error); }
-                thumbnail.MouseLeftButtonUp += (_, __) => Safe(() => RefreshFrameThumbnail(index));
+                thumbnail.MouseLeftButtonUp += (_, __) => Safe(() => PreviewFrame(index));
                 DockPanel.SetDock(thumbnail, Dock.Left);
                 row.Children.Add(thumbnail);
-                row.Children.Add(new TextBlock { Text = (i + 1) + ". Кадр · " + _data.Frames[i].Shapes.Count + " объект(ов)",
+                int count = _data.Frames[i].ObjectCount > 0 ? _data.Frames[i].ObjectCount
+                    : _data.Frames[i].Shapes.Count;
+                row.Children.Add(new TextBlock { Text = (i + 1) + ". Кадр · " + count + " объект(ов)",
                     VerticalAlignment = VerticalAlignment.Center, Width = 145 });
                 foreach (var action in new[] { ("Показать", (Action)(() => SelectFrame(index))),
+                    ("↻", (Action)(() => RecaptureFrame(index))),
                     ("↑", (Action)(() => MoveFrame(index, -1))),
                     ("↓", (Action)(() => MoveFrame(index, 1))),
                     ("×", (Action)(() => RemoveFrame(index))) })
                 {
                     var button = Button(action.Item1, (_, __) => Safe(action.Item2));
                     button.MinWidth = action.Item1 == "Показать" ? 67 : 27;
+                    if (action.Item1 == "↻") button.ToolTip = "Переснять кадр из текущего выделения";
                     row.Children.Add(button);
                 }
                 _frames.Children.Add(row);
             }
         }
 
-        private void QueueFrameThumbnail(OrderCardFrame frame)
-        {
-            object document = _documentIdentity;
-            Dispatcher.BeginInvoke(new Action(() => {
-                try
-                {
-                    if (_busy || !_data.Frames.Contains(frame) ||
-                        !SameDocument(document, (object)CorelApp.Get().ActiveDocument)) return;
-                    // The newly added shapes are still selected. A lookup by StaticID
-                    // can fail for Corel objects even though they remain on the page.
-                    if (!SelectionMatchesFrame(frame)) return;
-                    frame.Thumbnail = CaptureFrameThumbnail((dynamic)document, frame, true);
-                    SaveData(); RenderFrames();
-                }
-                catch (Exception error) { Log.Error("Order frame thumbnail capture failed", error); }
-            }), DispatcherPriority.ApplicationIdle);
-        }
-
-        private void RefreshFrameThumbnail(int index)
+        private void RecaptureFrame(int index)
         {
             if (_busy) return;
             dynamic doc = EnsureDocument(true, true);
-            var frame = _data.Frames[index];
-            frame.Thumbnail = CaptureFrameThumbnail(doc, frame, SelectionMatchesFrame(frame));
+            var frame = FrameFromSelection();
+            _status("Создание нового растрового кадра…", false);
+            bool shared = SaveFrameSnapshot(frame, CapturePhoto(doc, frame, true));
+            _data.Frames[index] = frame;
             SaveData(); RenderFrames();
+            _status(shared ? "Кадр заменён снимком текущего выделения." :
+                "Кадр заменён, но снимок доступен только на этом ПК.", !shared);
         }
 
-        private static bool SelectionMatchesFrame(OrderCardFrame frame)
+        private void PreviewFrame(int index)
         {
-            dynamic selection = CorelApp.Get().ActiveSelectionRange;
-            if (selection == null || Convert.ToInt32(selection.Count) != frame.Shapes.Count) return false;
-            var remaining = new HashSet<string>(frame.Shapes.Select(shape => shape.Page + ":" + shape.Id));
-            foreach (dynamic shape in selection.Shapes)
-                if (!remaining.Remove(Convert.ToInt32(shape.Page.Index) + ":" +
-                    Convert.ToInt32(shape.StaticID))) return false;
-            return remaining.Count == 0;
-        }
-
-        private static string CaptureFrameThumbnail(dynamic doc, OrderCardFrame frame,
-            bool useCurrentSelection = false)
-        {
-            dynamic app = CorelApp.Get();
-            var original = new List<dynamic>();
-            foreach (dynamic shape in app.ActiveSelectionRange.Shapes) original.Add(shape);
-            dynamic originalPage = doc.ActivePage;
-            string path = null;
-            try
-            {
-                if (!useCurrentSelection) SelectShapes(doc, frame);
-                path = AiSelectionCapture.Capture(320, 102400,
-                    restoreSelection: false, refreshWindow: false);
-                return Convert.ToBase64String(File.ReadAllBytes(path));
-            }
-            finally
-            {
-                if (path != null) try { File.Delete(path); } catch { }
-                try { if (Convert.ToInt32(doc.ActivePage.Index) != Convert.ToInt32(originalPage.Index))
-                    originalPage.Activate(); } catch { }
-                try
-                {
-                    if (original.Count == 0) doc.ClearSelection();
-                    else for (int i = 0; i < original.Count; i++)
-                    {
-                        if (i == 0) original[i].CreateSelection(); else original[i].AddToSelection();
-                    }
-                }
-                catch { }
-            }
+            var bytes = ReadFrameSnapshot(_data.Frames[index]);
+            if (bytes == null)
+                throw new InvalidOperationException("Растровый кадр недоступен. Выделите макет и нажмите «Переснять».");
+            var image = new Image { Source = DecodePhoto(bytes, 4096), Stretch = Stretch.Uniform };
+            var window = new Window { Title = "Кадр " + (index + 1), Width = 950, Height = 720,
+                MinWidth = 400, MinHeight = 300, Content = image,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen };
+            var owner = Window.GetWindow(this);
+            if (owner != null) { window.Owner = owner; window.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
+            window.Show();
         }
 
         private static string ThumbnailFromPhoto(byte[] bytes)
@@ -1005,6 +977,95 @@ namespace VanyaTools.Native
             }
         }
 
+        private static string SnapshotPath(string storeId, string snapshotId, string documentPath)
+        {
+            if (!Guid.TryParseExact(storeId, "N", out Guid parsedStore) ||
+                !Guid.TryParseExact(snapshotId, "N", out Guid parsedSnapshot))
+                throw new InvalidOperationException("Неверный идентификатор растрового кадра в CDR.");
+            string root = String.IsNullOrWhiteSpace(documentPath)
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "VanyaTools", "order-frame-cache")
+                : Path.Combine(Path.GetDirectoryName(Path.GetFullPath(documentPath)), ".vanya-frames");
+            return Path.Combine(root, storeId, snapshotId + ".jpg");
+        }
+
+        private bool SaveFrameSnapshot(OrderCardFrame frame, byte[] photo)
+        {
+            if (String.IsNullOrEmpty(_data.FrameStoreId))
+                _data.FrameStoreId = Guid.NewGuid().ToString("N");
+            frame.SnapshotId = Guid.NewGuid().ToString("N");
+            string local = SnapshotPath(_data.FrameStoreId, frame.SnapshotId, null);
+            Directory.CreateDirectory(Path.GetDirectoryName(local));
+            File.WriteAllBytes(local, photo);
+            bool sharedCopy = true;
+            if (!String.IsNullOrWhiteSpace(_documentPath))
+            {
+                try
+                {
+                    string shared = SnapshotPath(_data.FrameStoreId, frame.SnapshotId, _documentPath);
+                    Directory.CreateDirectory(Path.GetDirectoryName(shared));
+                    File.Copy(local, shared, true);
+                }
+                catch (Exception error)
+                {
+                    Log.Error("Order frame snapshot could not be copied to CDR folder", error);
+                    sharedCopy = false;
+                }
+            }
+            frame.Thumbnail = ThumbnailFromPhoto(photo);
+            return sharedCopy;
+        }
+
+        private byte[] ReadFrameSnapshot(OrderCardFrame frame)
+        {
+            if (String.IsNullOrWhiteSpace(frame.SnapshotId) ||
+                String.IsNullOrWhiteSpace(_data.FrameStoreId)) return null;
+            if (!String.IsNullOrWhiteSpace(_documentPath))
+            {
+                string shared = SnapshotPath(_data.FrameStoreId, frame.SnapshotId, _documentPath);
+                if (File.Exists(shared)) return File.ReadAllBytes(shared);
+            }
+            string local = SnapshotPath(_data.FrameStoreId, frame.SnapshotId, null);
+            return File.Exists(local) ? File.ReadAllBytes(local) : null;
+        }
+
+        private bool MirrorFrameSnapshots(string documentPath)
+        {
+            if (String.IsNullOrWhiteSpace(documentPath) ||
+                String.IsNullOrWhiteSpace(_data.FrameStoreId)) return true;
+            bool complete = true;
+            foreach (var frame in _data.Frames)
+            {
+                if (String.IsNullOrWhiteSpace(frame.SnapshotId)) continue;
+                try
+                {
+                    string shared = SnapshotPath(_data.FrameStoreId, frame.SnapshotId, documentPath);
+                    if (File.Exists(shared)) continue;
+                    string local = SnapshotPath(_data.FrameStoreId, frame.SnapshotId, null);
+                    if (!File.Exists(local)) { complete = false; continue; }
+                    Directory.CreateDirectory(Path.GetDirectoryName(shared));
+                    File.Copy(local, shared, false);
+                }
+                catch (Exception error)
+                {
+                    Log.Error("Order frame snapshot could not be copied to CDR folder", error);
+                    complete = false;
+                }
+            }
+            return complete;
+        }
+
+        private byte[] PhotoForFrame(dynamic doc, OrderCardFrame frame, bool useCurrentSelection)
+        {
+            if (!String.IsNullOrWhiteSpace(frame.SnapshotId))
+                return ReadFrameSnapshot(frame) ?? throw new InvalidOperationException(
+                    "Растровый кадр не найден. Выделите макет и переснимите кадр.");
+            // Older CDRs contain only Corel shape references. Freeze the frame on first use.
+            byte[] photo = CapturePhoto(doc, frame, useCurrentSelection);
+            SaveFrameSnapshot(frame, photo);
+            return photo;
+        }
+
         private bool ResolveSelectionFrame(int missingIndex = -1)
         {
             if (missingIndex < 0 && _data.Frames.Count > 0) return true;
@@ -1012,16 +1073,18 @@ namespace VanyaTools.Native
             if (selection == null || Convert.ToInt32(selection.Count) == 0)
                 throw new InvalidOperationException(missingIndex < 0
                     ? "Выделите макет на холсте или добавьте кадр перед публикацией."
-                    : "Объект кадра удалён из CDR. Выделите актуальный макет, чтобы заменить кадр.");
+                    : "Кадр недоступен. Выделите актуальный макет, чтобы заменить его снимок.");
             if (missingIndex >= 0 && MessageBox.Show("Кадр " + (missingIndex + 1) +
-                    " больше не найден в CDR. Заменить его текущим выделением?",
+                    " недоступен. Заменить его текущим выделением?",
                     "Vanya Tools", MessageBoxButton.YesNo,
                     MessageBoxImage.Question) != MessageBoxResult.Yes) return false;
             var frame = FrameFromSelection();
+            dynamic doc = CorelApp.Get().ActiveDocument;
+            _status("Создание растрового кадра из выделения…", false);
+            SaveFrameSnapshot(frame, CapturePhoto(doc, frame, true));
             if (missingIndex < 0) _data.Frames.Add(frame);
             else _data.Frames[missingIndex] = frame;
             SaveData(); RenderFrames(); UpdateCaption();
-            if (!_busy) QueueFrameThumbnail(frame);
             return true;
         }
 
@@ -1052,8 +1115,15 @@ namespace VanyaTools.Native
         private void SelectFrame(int index)
         {
             dynamic doc = EnsureDocument(true, true);
-            SelectShapes(doc, _data.Frames[index]);
-            _status("Объекты кадра выделены на холсте.", false);
+            try
+            {
+                SelectShapes(doc, _data.Frames[index]);
+                _status("Объекты кадра выделены на холсте.", false);
+            }
+            catch (InvalidOperationException) when (!String.IsNullOrWhiteSpace(_data.Frames[index].SnapshotId))
+            {
+                PreviewFrame(index);
+            }
         }
 
         private static void SelectShapes(dynamic doc, OrderCardFrame frame)
@@ -2309,13 +2379,14 @@ namespace VanyaTools.Native
                 {
                     _status("Подготовка кадра " + (i + 1) + " из " + _data.Frames.Count + "…", false);
                     byte[] photo;
-                    try { photo = CapturePhoto(doc, _data.Frames[i], useCurrentSelection && i == 0); }
+                    try { photo = PhotoForFrame(doc, _data.Frames[i], useCurrentSelection && i == 0); }
                     catch (InvalidOperationException error) when (
                         error.Message.StartsWith("Объект кадра удалён", StringComparison.Ordinal) ||
-                        error.Message.StartsWith("Страница кадра не найдена", StringComparison.Ordinal))
+                        error.Message.StartsWith("Страница кадра не найдена", StringComparison.Ordinal) ||
+                        error.Message.StartsWith("Растровый кадр не найден", StringComparison.Ordinal))
                     {
                         if (!ResolveSelectionFrame(i)) return;
-                        photo = CapturePhoto(doc, _data.Frames[i], true);
+                        photo = PhotoForFrame(doc, _data.Frames[i], true);
                     }
                     photos.Add(photo);
                     _data.Frames[i].Thumbnail = ThumbnailFromPhoto(photo);
@@ -2962,7 +3033,8 @@ namespace VanyaTools.Native
 
     public sealed class OrderCardData
     {
-        public int SchemaVersion { get; set; } = 5;
+        public int SchemaVersion { get; set; } = 6;
+        public string FrameStoreId { get; set; }
         public string Customer { get; set; }
         public string DesignName { get; set; }
         public string Source { get; set; }
@@ -2993,6 +3065,8 @@ namespace VanyaTools.Native
     {
         public List<OrderCardShape> Shapes { get; set; } = new List<OrderCardShape>();
         public string Thumbnail { get; set; }
+        public string SnapshotId { get; set; }
+        public int ObjectCount { get; set; }
     }
     public sealed class OrderCardShape
     {
