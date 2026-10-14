@@ -2801,6 +2801,7 @@ namespace VanyaTools.Native
             var grid = new Grid();
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             var labels = new[] { "Заказчик", "Имя макета" };
@@ -2823,6 +2824,15 @@ namespace VanyaTools.Native
                 Grid.SetColumn(input, 1);
                 grid.Children.Add(input);
             }
+            var save = Button("Сохранить", (_, __) => Safe(SaveCurrentDocument));
+            save.ToolTip = "Сохранить CDR и данные карточки заказа";
+            save.MinWidth = 76;
+            save.Margin = new Thickness(5, 1, 0, 3);
+            save.VerticalAlignment = VerticalAlignment.Stretch;
+            save.SetBinding(IsEnabledProperty, new Binding("IsEnabled") { Source = _saveDocument });
+            Grid.SetColumn(save, 2);
+            Grid.SetRowSpan(save, 2);
+            grid.Children.Add(save);
             var border = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(218, 238, 218)),
