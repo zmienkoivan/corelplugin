@@ -775,15 +775,26 @@ namespace VanyaTools.Native
                 outputPage.Activate();
                 Log.Info("Sport model transfer: paste start, layer " + sourceLayerName);
                 dynamic pasted = outputLayer.PasteEx(app.CreateStructPasteOptions());
-                foreach (dynamic shape in pasted) copied.Add(shape);
+                foreach (dynamic shape in pasted)
+                {
+                    copied.Add(shape);
+                    Log.Info("Sport model transfer: pasted root type=" +
+                        Convert.ToInt32(shape.Type) + ", name=" + Convert.ToString(shape.Name));
+                }
                 Log.Info("Sport model transfer: pasted " + copied.Count + " shapes");
             }
-            if (copied.Count != sources.Count)
-                throw new InvalidOperationException("CorelDRAW перенёс " + copied.Count +
-                    " из " + sources.Count + " объектов модели «" + sourceLayerName + "».");
+            var transferred = new List<dynamic>();
+            foreach (dynamic shape in copied)
+                UnwrapTransferredShape(shape, transferred, 0);
+            Log.Info("Sport model transfer: unpacked " + transferred.Count +
+                " shapes from " + copied.Count + " pasted roots, layer " + sourceLayerName);
+            if (transferred.Count != sources.Count)
+                throw new InvalidOperationException("CorelDRAW перенёс " + transferred.Count +
+                    " из " + sources.Count + " объектов модели «" + sourceLayerName +
+                    "» после раскрытия групп.");
             dynamic copiedTop = null;
             var named = new Dictionary<string, Piece>(StringComparer.OrdinalIgnoreCase);
-            foreach (dynamic shape in copied)
+            foreach (dynamic shape in transferred)
             {
                 string name = Convert.ToString(shape.Name);
                 if (String.Equals(name, "VT_TOP", StringComparison.OrdinalIgnoreCase))
@@ -822,6 +833,36 @@ namespace VanyaTools.Native
                 RightSleeveFrame = Required("VT_SPORT_ZONE_RIGHT_SLEEVE"),
                 NeckFrame = Optional("VT_SPORT_ZONE_NECK")
             };
+        }
+
+        private static void UnwrapTransferredShape(dynamic shape, List<dynamic> result,
+            int depth)
+        {
+            if (depth > 8)
+                throw new InvalidOperationException("Слишком глубокая вложенность объектов модели.");
+            string name = Convert.ToString(shape.Name);
+            int type = Convert.ToInt32(shape.Type);
+            if (String.Equals(name, "VT_TOP", StringComparison.OrdinalIgnoreCase) &&
+                type == CorelConstants.CdrGroupShape &&
+                Convert.ToInt32(shape.Shapes.Count) == 5)
+            {
+                result.Add(shape);
+                return;
+            }
+            if (type != CorelConstants.CdrGroupShape && name != null &&
+                name.StartsWith("VT_SPORT_ZONE_", StringComparison.OrdinalIgnoreCase))
+            {
+                result.Add(shape);
+                return;
+            }
+            if (type == CorelConstants.CdrGroupShape)
+            {
+                dynamic children = shape.UngroupEx();
+                foreach (dynamic child in children)
+                    UnwrapTransferredShape(child, result, depth + 1);
+                return;
+            }
+            result.Add(shape);
         }
 
         private static Garment CopyGarment(Garment source, dynamic layer,
