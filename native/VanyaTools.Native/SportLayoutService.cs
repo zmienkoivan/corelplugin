@@ -39,6 +39,9 @@ namespace VanyaTools.Native
         public double SheetWidthMm;
         public double GapMm;
         public bool RotateSleeves;
+        public NamesGridLetterCase FrontNameCase;
+        public bool FrontNameTwoLines;
+        public double FrontLineSpacingPercent;
     }
 
     internal sealed class SportTextStyle
@@ -825,12 +828,34 @@ namespace VanyaTools.Native
         private static Piece AddMasterArtwork(dynamic app, dynamic layer,
             string path, Piece part, string key)
         {
-            if (String.IsNullOrWhiteSpace(path)) return null;
-            dynamic image = ImportPattern(app, layer, path);
-            PositionPattern(image, part);
-            image.Name = "VT_SPORT_ART_" + key;
-            image.OrderToBack();
-            return Describe(image);
+            dynamic image = null;
+            if (!String.IsNullOrWhiteSpace(path))
+            {
+                image = ImportPattern(app, layer, path);
+                PositionPattern(image, part);
+            }
+            // Corel needs at least two shapes for a group. Unpainted shapes
+            // keep the group editable even when this part has no source art.
+            dynamic frame = layer.CreateRectangle2(image == null ? part.Left : Convert.ToDouble(image.LeftX),
+                image == null ? part.Bottom : Convert.ToDouble(image.BottomY),
+                image == null ? part.Width : Convert.ToDouble(image.SizeWidth),
+                image == null ? part.Height : Convert.ToDouble(image.SizeHeight));
+            frame.Fill.ApplyNoFill();
+            frame.Outline.SetNoOutline();
+            dynamic range = app.CreateShapeRange();
+            if (image != null) range.Add(image);
+            range.Add(frame);
+            if (image == null)
+            {
+                dynamic anchor = layer.CreateRectangle2(part.CenterX, part.CenterY, 1, 1);
+                anchor.Fill.ApplyNoFill();
+                anchor.Outline.SetNoOutline();
+                range.Add(anchor);
+            }
+            dynamic group = range.Group();
+            group.Name = "VT_SPORT_ART_" + key;
+            group.OrderToBack();
+            return Describe(group);
         }
 
         private static void StretchMaster(dynamic app, Garment garment, double scale)
@@ -972,10 +997,8 @@ namespace VanyaTools.Native
             var pieces = new List<NestedPiece>();
             if (!selectedPart.HasValue || selectedPart == SportLayoutPart.Front)
             {
-                // The garment faces the viewer: the wearer's left chest is on
-                // the right side of the template page.
-                Piece frontName = options.FrontNameOnRight ? garment.FrontLeft : garment.FrontRight;
-                Piece extra = options.FrontNameOnRight ? garment.FrontRight : garment.FrontLeft;
+                Piece frontName = options.FrontNameOnRight ? garment.FrontRight : garment.FrontLeft;
+                Piece extra = options.FrontNameOnRight ? garment.FrontLeft : garment.FrontRight;
                 pieces.Add(BuildNestedPart(app, layer, garment.Front,
                     new[] { frontName, extra }, garment.FrontArtwork, "ПЕРЕД", row, size,
                     index, options, scale, frontName, null, null));
@@ -1034,18 +1057,22 @@ namespace VanyaTools.Native
             groupRange.Add(AddCaption(layer, part, partName, row, size, options.WhiteText));
             if (frontName != null)
             {
-                dynamic text = AddCenteredText(layer, frontName, row.Name,
-                    options.NameStyle, "VT_PLAYER_NAME_FRONT");
+                string chestName = FormatFrontName(row.Name, options);
+                dynamic text = AddCenteredText(layer, frontName, chestName,
+                    options.NameStyle, "VT_PLAYER_NAME_FRONT",
+                    options.FrontNameTwoLines ? options.FrontLineSpacingPercent : 0);
                 if (text != null) groupRange.Add(text);
             }
             if (backText != null)
             {
                 if (backNumber == null)
-                    foreach (dynamic text in AddLegacyBackText(layer, backText, row.Name,
+                    foreach (dynamic text in AddLegacyBackText(layer, backText,
+                        (row.Name ?? "").Replace('|', ' '),
                         row.Number, options)) groupRange.Add(text);
                 else
                 {
-                    dynamic name = AddCenteredText(layer, backText, row.Name,
+                    dynamic name = AddCenteredText(layer, backText,
+                        (row.Name ?? "").Replace('|', ' '),
                         options.NameStyle, "VT_PLAYER_NAME_BACK");
                     dynamic number = AddCenteredText(layer, backNumber, row.Number,
                         options.NumberStyle, "VT_PLAYER_NUMBER_BACK");
@@ -1296,33 +1323,95 @@ namespace VanyaTools.Native
         private static dynamic AddCaption(dynamic layer, Piece piece, string part,
             SportLayoutPlayer row, string size, bool white)
         {
-            string caption = String.Join(" · ", new[] { row.Name,
+            string caption = String.Join(" · ", new[] { (row.Name ?? "").Replace('|', ' '),
                 String.IsNullOrWhiteSpace(row.Number) ? "" : "№" + row.Number,
-                size, part }
+                size, ShortPartName(part) }
                 .Where(value => !String.IsNullOrWhiteSpace(value)));
-            dynamic text = layer.CreateArtisticTextWide(piece.Left + 8,
+            GetBottomSpan(piece, out double bottomLeft, out double bottomRight);
+            double left = bottomLeft + 10;
+            double allowed = Math.Max(1, bottomRight - bottomLeft - 20);
+            dynamic text = layer.CreateArtisticTextWide(left,
                 piece.Bottom + 4, caption, 0, -1, "Arial", 20);
             text.Name = "VT_CAPTION_" + part.Replace(' ', '_');
             if (white) text.Fill.UniformColor.RGBAssign(255, 255, 255);
             else text.Fill.UniformColor.RGBAssign(0, 0, 0);
             text.Outline.SetNoOutline();
             double width = Convert.ToDouble(text.SizeWidth);
-            double allowed = piece.Width - 16;
             if (width > allowed)
                 text.SetSize(allowed, Convert.ToDouble(text.SizeHeight) * allowed / width);
-            text.Move(piece.Left + 8 - Convert.ToDouble(text.LeftX),
+            text.Move(left - Convert.ToDouble(text.LeftX),
                 piece.Bottom + 4 - Convert.ToDouble(text.BottomY));
             return text;
         }
 
+        private static string ShortPartName(string part)
+        {
+            switch (part)
+            {
+                case "ПЕРЕД": return "п.";
+                case "СПИНА": return "с.";
+                case "ЛЕВЫЙ РУКАВ": return "л.рук.";
+                case "ПРАВЫЙ РУКАВ": return "п.рук.";
+                case "ГОРЛОВИНА": return "горл.";
+                default: return part;
+            }
+        }
+
+        private static void GetBottomSpan(Piece piece, out double left, out double right)
+        {
+            left = piece.Left;
+            right = piece.Right;
+            try
+            {
+                var xs = new List<double>();
+                double band = Math.Min(10, piece.Height * 0.08);
+                foreach (dynamic node in piece.Shape.Curve.Nodes)
+                    if (Convert.ToDouble(node.PositionY) <= piece.Bottom + band)
+                        xs.Add(Convert.ToDouble(node.PositionX));
+                if (xs.Count >= 2 && xs.Max() - xs.Min() > 20)
+                {
+                    left = xs.Min();
+                    right = xs.Max();
+                }
+            }
+            catch { /* Non-curve parts retain their bounding box span. */ }
+        }
+
+        private static string FormatFrontName(string value, SportLayoutOptions options)
+        {
+            string text = (value ?? "").Trim();
+            var culture = CultureInfo.GetCultureInfo("ru-RU");
+            switch (options.FrontNameCase)
+            {
+                case NamesGridLetterCase.Lower: text = text.ToLower(culture); break;
+                case NamesGridLetterCase.Title:
+                    text = culture.TextInfo.ToTitleCase(text.ToLower(culture)); break;
+                case NamesGridLetterCase.Upper: text = text.ToUpper(culture); break;
+            }
+            if (!options.FrontNameTwoLines) return text.Replace('|', ' ');
+            int manual = text.IndexOf('|');
+            if (manual >= 0)
+                return text.Substring(0, manual).Trim() + "\r" +
+                    text.Substring(manual + 1).Replace('|', ' ').Trim();
+            string[] words = text.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            return words.Length < 2 ? text : words[0] + "\r" +
+                String.Join(" ", words.Skip(1));
+        }
+
         private static dynamic AddCenteredText(dynamic layer, Piece zone, string value,
-            SportTextStyle style, string shapeName)
+            SportTextStyle style, string shapeName, double lineSpacingPercent = 0)
         {
             if (String.IsNullOrWhiteSpace(value)) return null;
             dynamic text = layer.CreateArtisticTextWide(zone.Left, zone.Bottom,
                 value.Trim(), 0, -1, style.FontName, style.MaxPoints,
                 style.Bold ? -1 : 0, style.Italic ? -1 : 0);
             text.Name = shapeName;
+            if (value.Contains("\r") || value.Contains("\n"))
+            {
+                text.Text.Story.Alignment = 3;
+                if (lineSpacingPercent > 0)
+                    text.Text.Story.SetLineSpacing(2, (float)lineSpacingPercent);
+            }
             ApplyHex(text.Fill.UniformColor, style.FillHex);
             if (style.OutlineWidthMm > 0)
             {
@@ -1376,8 +1465,10 @@ namespace VanyaTools.Native
             double width = Convert.ToDouble(text.SizeWidth);
             double height = Convert.ToDouble(text.SizeHeight);
             if (width <= 0 || height <= 0) throw new InvalidOperationException("CorelDRAW не измерил надпись.");
-            double scale = Math.Min(1, Math.Min(maxWidth / width, maxHeight / height));
-            if (scale < 1) text.SetSize(width * scale, height * scale);
+            // Fill the box height first; reduce only when that would exceed its width.
+            double scale = Math.Min(maxHeight / height, maxWidth / width);
+            if (Math.Abs(scale - 1) > 0.0001)
+                text.SetSize(width * scale, height * scale);
         }
 
         private static void FinishGuide(Piece zone, string name, bool keepGuide)

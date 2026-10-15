@@ -35,6 +35,9 @@ namespace VanyaTools.Native
             public string Gap { get; set; }
             public string FontName { get; set; }
             public bool FrontNameOnRight { get; set; }
+            public int FrontNameCase { get; set; }
+            public bool FrontNameTwoLines { get; set; }
+            public string FrontLineSpacing { get; set; }
             public bool WhiteText { get; set; }
             public SportTextStyle NameStyle { get; set; }
             public SportTextStyle NumberStyle { get; set; }
@@ -60,8 +63,8 @@ namespace VanyaTools.Native
                 fontRow.Children.Add(Label("Шрифт"));
                 Font.Width = 168;
                 fontRow.Children.Add(Font);
-                fontRow.Children.Add(Button("Выбрать…", (_, __) => ChooseFont()));
-                fontRow.Children.Add(Label("Макс. пт"));
+                fontRow.Children.Add(Button("Шрифт…", (_, __) => ChooseFont()));
+                fontRow.Children.Add(Label("Нач. пт"));
                 Points.Width = 56;
                 fontRow.Children.Add(Points);
                 parent.Children.Add(fontRow);
@@ -95,7 +98,7 @@ namespace VanyaTools.Native
 
             private void ChooseFont()
             {
-                using (var dialog = new Forms.FontDialog { ShowColor = false, ShowEffects = true })
+                using (var dialog = new Forms.FontDialog { ShowColor = true, ShowEffects = true })
                 {
                     try
                     {
@@ -105,11 +108,14 @@ namespace VanyaTools.Native
                             (Italic.IsChecked == true ? Drawing.FontStyle.Italic : 0));
                     }
                     catch { }
+                    try { dialog.Color = Drawing.ColorTranslator.FromHtml(Fill.Text); }
+                    catch { }
                     if (dialog.ShowDialog() != Forms.DialogResult.OK) return;
                     Font.Text = dialog.Font.FontFamily.Name;
                     Points.Text = dialog.Font.SizeInPoints.ToString("0.#", CultureInfo.InvariantCulture);
                     Bold.IsChecked = dialog.Font.Bold;
                     Italic.IsChecked = dialog.Font.Italic;
+                    Fill.Text = $"#{dialog.Color.R:X2}{dialog.Color.G:X2}{dialog.Color.B:X2}";
                 }
             }
 
@@ -177,7 +183,9 @@ namespace VanyaTools.Native
         private readonly TextBox _frontArt, _backArt, _leftSleeveArt, _rightSleeveArt,
             _neckArt, _modelPath;
         private readonly TextBox _sheetWidth, _gap;
-        private readonly ComboBox _nameSide;
+        private readonly ComboBox _nameSide, _frontCase;
+        private readonly CheckBox _frontTwoLines;
+        private readonly TextBox _frontLineSpacing;
         private readonly TextStyleEditor _nameStyle, _numberStyle;
         private readonly CheckBox _keepGuides, _rotateSleeves;
         private readonly TextBlock _count, _progress;
@@ -247,9 +255,9 @@ namespace VanyaTools.Native
                 "выделить его и назначить боксом нужной надписи. Старый бокс этой надписи заменится."));
             var zoneButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
             zoneButtons.Children.Add(Button("Бокс груди слева", (_, __) => AssignTextBox(
-                "VT_SPORT_ZONE_FRONT_RIGHT", "имени на груди слева")));
+                "VT_SPORT_ZONE_FRONT_LEFT", "имени на груди слева")));
             zoneButtons.Children.Add(Button("Бокс груди справа", (_, __) => AssignTextBox(
-                "VT_SPORT_ZONE_FRONT_LEFT", "имени на груди справа")));
+                "VT_SPORT_ZONE_FRONT_RIGHT", "имени на груди справа")));
             zoneButtons.Children.Add(Button("Бокс имени на спине", (_, __) => AssignTextBox(
                 "VT_SPORT_ZONE_BACK", "имени на спине")));
             zoneButtons.Children.Add(Button("Бокс номера на спине", (_, __) => AssignTextBox(
@@ -316,9 +324,9 @@ namespace VanyaTools.Native
                 "рисунка подготовьте макет заново."));
             _nameStyle = new TextStyleEditor(panel, "Имя спереди и на спине", "72", SaveDraft);
             _numberStyle = new TextStyleEditor(panel, "Номер на спине", "150", SaveDraft);
-            panel.Children.Add(Note("Максимальный размер текста ограничен указанным кеглем и нарисованным " +
-                "боксом. Текст пропорционально уменьшается по ширине или высоте — по той границе, " +
-                "которая достигнута первой. Боксы можно двигать и менять на странице каждого размера."));
+            panel.Children.Add(Note("Высота бокса задаёт высоту текста. Если надпись получается " +
+                "шире бокса, она пропорционально уменьшается. Кегль в диалоге шрифта — " +
+                "начальное значение для измерения текста."));
 
             var settings = new WrapPanel { Margin = new Thickness(0, 7, 0, 6) };
             settings.Children.Add(Label("Имя спереди (сторона футболки)"));
@@ -329,6 +337,28 @@ namespace VanyaTools.Native
             _nameSide.SelectedIndex = 0;
             settings.Children.Add(_nameSide);
             panel.Children.Add(settings);
+            panel.Children.Add(Label("Регистр имени на груди"));
+            _frontCase = new ComboBox { Height = 27, FontSize = 12,
+                Margin = new Thickness(0, 0, 0, 4) };
+            _frontCase.Items.Add("Как в таблице");
+            _frontCase.Items.Add("все строчные");
+            _frontCase.Items.Add("Каждое слово с заглавной");
+            _frontCase.Items.Add("ВСЕ ПРОПИСНЫЕ");
+            _frontCase.SelectedIndex = 0;
+            panel.Children.Add(_frontCase);
+            var chestLines = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
+            _frontTwoLines = new CheckBox { Content = "Имя на груди в две строки",
+                FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 10, 0) };
+            chestLines.Children.Add(_frontTwoLines);
+            chestLines.Children.Add(Label("Межстрочный интервал, %"));
+            _frontLineSpacing = Field("100");
+            _frontLineSpacing.Width = 56;
+            _frontLineSpacing.IsEnabled = false;
+            chestLines.Children.Add(_frontLineSpacing);
+            panel.Children.Add(chestLines);
+            panel.Children.Add(Note("Две строки выравниваются по центру. Разделение — после " +
+                "первого слова; символ | в имени задаёт перенос вручную."));
             _keepGuides = new CheckBox { Content = "Оставить красные рамки в готовом CDR",
                 FontSize = 11, Margin = new Thickness(0, 0, 0, 8), IsChecked = false };
             panel.Children.Add(_keepGuides);
@@ -354,6 +384,12 @@ namespace VanyaTools.Native
             _sheetWidth.TextChanged += (_, __) => SaveDraft();
             _gap.TextChanged += (_, __) => SaveDraft();
             _nameSide.SelectionChanged += (_, __) => SaveDraft();
+            _frontCase.SelectionChanged += (_, __) => SaveDraft();
+            _frontTwoLines.Checked += (_, __) => {
+                _frontLineSpacing.IsEnabled = true; SaveDraft(); };
+            _frontTwoLines.Unchecked += (_, __) => {
+                _frontLineSpacing.IsEnabled = false; SaveDraft(); };
+            _frontLineSpacing.TextChanged += (_, __) => SaveDraft();
             _keepGuides.Checked += (_, __) => SaveDraft();
             _keepGuides.Unchecked += (_, __) => SaveDraft();
             _rotateSleeves.Checked += (_, __) => SaveDraft();
@@ -687,6 +723,11 @@ namespace VanyaTools.Native
                 NameStyle = _nameStyle.Read("Имя"),
                 NumberStyle = _numberStyle.Read("Номер"),
                 FrontNameOnRight = _nameSide.SelectedIndex == 1,
+                FrontNameCase = (NamesGridLetterCase)_frontCase.SelectedIndex,
+                FrontNameTwoLines = _frontTwoLines.IsChecked == true,
+                FrontLineSpacingPercent = _frontTwoLines.IsChecked == true
+                    ? ParseRange(_frontLineSpacing.Text, 10, 300,
+                        "Межстрочный интервал на груди, %") : 100,
                 WhiteText = _nameStyle.Fill.Text.Trim().Equals("#FFFFFF",
                     StringComparison.OrdinalIgnoreCase),
                 KeepGuides = _keepGuides.IsChecked == true
@@ -711,7 +752,9 @@ namespace VanyaTools.Native
                 _leftSleeveArt == null || _rightSleeveArt == null ||
                 _neckArt == null || _modelPath == null || _rotateSleeves == null ||
                 _sheetWidth == null || _gap == null || _nameStyle == null ||
-                _numberStyle == null || _nameSide == null || _keepGuides == null ||
+                _numberStyle == null || _nameSide == null || _frontCase == null ||
+                _frontTwoLines == null || _frontLineSpacing == null ||
+                _keepGuides == null ||
                 _templateGrid == null || _playerGrid == null) return;
             try
             {
@@ -727,6 +770,9 @@ namespace VanyaTools.Native
                     NameStyle = _nameStyle.Read("Имя"),
                     NumberStyle = _numberStyle.Read("Номер"),
                     FrontNameOnRight = _nameSide.SelectedIndex == 1,
+                    FrontNameCase = _frontCase.SelectedIndex,
+                    FrontNameTwoLines = _frontTwoLines.IsChecked == true,
+                    FrontLineSpacing = _frontLineSpacing.Text,
                     WhiteText = _nameStyle.Fill.Text.Trim().Equals("#FFFFFF",
                         StringComparison.OrdinalIgnoreCase),
                     KeepGuides = _keepGuides.IsChecked == true
@@ -770,6 +816,10 @@ namespace VanyaTools.Native
                             MaxPoints = 150, FillHex = draft.WhiteText ? "#FFFFFF" : "#000000",
                             OutlineHex = "#000000" });
                         _nameSide.SelectedIndex = draft.FrontNameOnRight ? 1 : 0;
+                        _frontCase.SelectedIndex = draft.FrontNameCase >= 0 &&
+                            draft.FrontNameCase <= 3 ? draft.FrontNameCase : 0;
+                        _frontTwoLines.IsChecked = draft.FrontNameTwoLines;
+                        _frontLineSpacing.Text = draft.FrontLineSpacing ?? "100";
                         _keepGuides.IsChecked = draft.KeepGuides;
                     }
                 }
