@@ -100,6 +100,58 @@ namespace VanyaTools.Native
         private const string SizeLayerPrefix = "VT_SPORT_SIZE_";
         private const string ZonesLayerName = "VT_ZONES";
 
+        public int ClearPreparedArtwork(SportLayoutPart part)
+        {
+            dynamic app = CorelApp.Get();
+            dynamic document = app.ActiveDocument;
+            if (document == null) return 0;
+            dynamic overview = null;
+            foreach (dynamic page in document.Pages)
+                if (String.Equals(Convert.ToString(page.Name), OverviewName,
+                    StringComparison.OrdinalIgnoreCase)) overview = page;
+            if (overview == null) return 0;
+            string key = part == SportLayoutPart.Front ? "FRONT" :
+                part == SportLayoutPart.Back ? "BACK" :
+                part == SportLayoutPart.LeftSleeve ? "LEFT_SLEEVE" :
+                part == SportLayoutPart.RightSleeve ? "RIGHT_SLEEVE" : "NECK";
+            dynamic previousPage = document.ActivePage;
+            int previousUnit = Convert.ToInt32(document.Unit);
+            int changed = 0;
+            bool commandStarted = false;
+            try
+            {
+                document.Unit = CorelConstants.CdrMillimeter;
+                document.BeginCommandGroup("Vanya Tools - убрать рисунок " + key);
+                commandStarted = true;
+                overview.Activate();
+                foreach (dynamic layer in overview.Layers)
+                {
+                    if (!Convert.ToString(layer.Name).StartsWith(SizeLayerPrefix,
+                        StringComparison.OrdinalIgnoreCase)) continue;
+                    dynamic contour = null, artwork = null;
+                    foreach (dynamic shape in layer.Shapes)
+                    {
+                        string name = Convert.ToString(shape.Name);
+                        if (String.Equals(name, "VT_SPORT_CONTOUR_" + key,
+                            StringComparison.OrdinalIgnoreCase)) contour = shape;
+                        else if (String.Equals(name, "VT_SPORT_ART_" + key,
+                            StringComparison.OrdinalIgnoreCase)) artwork = shape;
+                    }
+                    if (contour == null) continue;
+                    if (artwork != null) artwork.Delete();
+                    AddMasterArtwork(app, layer, null, Describe(contour), key);
+                    changed++;
+                }
+            }
+            finally
+            {
+                try { if (commandStarted) document.EndCommandGroup(); } catch { }
+                try { document.Unit = previousUnit; } catch { }
+                try { previousPage.Activate(); } catch { }
+            }
+            return changed;
+        }
+
         private sealed class TemplateSession
         {
             public dynamic Document;
@@ -240,9 +292,7 @@ namespace VanyaTools.Native
                 master.LeftSleeveArtwork = AddMasterArtwork(app, layer,
                     options.LeftSleeveArtworkPath, master.LeftSleeve, "LEFT_SLEEVE");
                 master.RightSleeveArtwork = AddMasterArtwork(app, layer,
-                    String.IsNullOrWhiteSpace(options.RightSleeveArtworkPath)
-                        ? options.LeftSleeveArtworkPath : options.RightSleeveArtworkPath,
-                    master.RightSleeve, "RIGHT_SLEEVE");
+                    options.RightSleeveArtworkPath, master.RightSleeve, "RIGHT_SLEEVE");
                 if (Math.Abs(scale - 1) > 0.0001)
                     StretchMaster(app, master, scale);
                 foreach (dynamic page in target.Pages)
@@ -403,9 +453,7 @@ namespace VanyaTools.Native
                     garment.LeftSleeveArtwork = AddMasterArtwork(app, layer,
                         options.LeftSleeveArtworkPath, garment.LeftSleeve, "LEFT_SLEEVE");
                     garment.RightSleeveArtwork = AddMasterArtwork(app, layer,
-                        String.IsNullOrWhiteSpace(options.RightSleeveArtworkPath)
-                            ? options.LeftSleeveArtworkPath : options.RightSleeveArtworkPath,
-                        garment.RightSleeve, "RIGHT_SLEEVE");
+                        options.RightSleeveArtworkPath, garment.RightSleeve, "RIGHT_SLEEVE");
                     if (garment.Neck != null)
                         garment.NeckArtwork = AddMasterArtwork(app, layer,
                             options.NeckArtworkPath, garment.Neck, "NECK");
@@ -693,28 +741,67 @@ namespace VanyaTools.Native
             if (top == null)
                 throw new InvalidOperationException("На слое «" + sourceLayerName +
                     "» не найдена группа VT_TOP.");
-            dynamic copiedTop = TransferShape(app, top, sourcePage, target,
-                outputPage, outputLayer, sameDocument);
-            dynamic parts = copiedTop.UngroupEx();
-            if (Convert.ToInt32(parts.Count) != 5)
-                throw new InvalidOperationException("Группа VT_TOP на слое «" +
-                    sourceLayerName + "» должна содержать ровно пять деталей.");
-            var named = new Dictionary<string, Piece>(StringComparer.OrdinalIgnoreCase);
-            foreach (dynamic shape in parts)
-            {
-                string name = Convert.ToString(shape.Name);
-                if (!String.IsNullOrWhiteSpace(name)) named[name] = Describe(shape);
-            }
+            var sources = new List<dynamic> { top };
+            var zoneNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (dynamic shape in zonesLayer.Shapes)
             {
                 string name = Convert.ToString(shape.Name);
                 if (String.IsNullOrWhiteSpace(name) ||
                     !name.StartsWith("VT_SPORT_ZONE_", StringComparison.OrdinalIgnoreCase))
                     continue;
-                if (named.ContainsKey(name))
+                if (!zoneNames.Add(name))
                     throw new InvalidOperationException("Бокс «" + name + "» на VT_ZONES повторяется.");
-                named[name] = Describe(TransferShape(app, shape, sourcePage, target,
-                    outputPage, outputLayer, sameDocument));
+                sources.Add(shape);
+            }
+            // One clipboard round trip per size is much less fragile than
+            // copying the top group and each shared zone independently.
+            var copied = new List<dynamic>();
+            if (sameDocument)
+            {
+                foreach (dynamic shape in sources)
+                    copied.Add(shape.CopyToLayer(outputLayer));
+            }
+            else
+            {
+                Log.Info("Sport model transfer: copying " + sources.Count +
+                    " shapes from layer " + sourceLayerName);
+                sourcePage.Activate();
+                dynamic range = app.CreateShapeRange();
+                foreach (dynamic shape in sources) range.Add(shape);
+                Log.Info("Sport model transfer: clipboard copy start, layer " + sourceLayerName);
+                range.Copy();
+                Log.Info("Sport model transfer: clipboard copy complete, layer " + sourceLayerName);
+                target.Activate();
+                outputPage.Activate();
+                Log.Info("Sport model transfer: paste start, layer " + sourceLayerName);
+                dynamic pasted = outputLayer.PasteEx(app.CreateStructPasteOptions());
+                foreach (dynamic shape in pasted) copied.Add(shape);
+                Log.Info("Sport model transfer: pasted " + copied.Count + " shapes");
+            }
+            if (copied.Count != sources.Count)
+                throw new InvalidOperationException("CorelDRAW перенёс " + copied.Count +
+                    " из " + sources.Count + " объектов модели «" + sourceLayerName + "».");
+            dynamic copiedTop = null;
+            var named = new Dictionary<string, Piece>(StringComparer.OrdinalIgnoreCase);
+            foreach (dynamic shape in copied)
+            {
+                string name = Convert.ToString(shape.Name);
+                if (String.Equals(name, "VT_TOP", StringComparison.OrdinalIgnoreCase))
+                    copiedTop = shape;
+                else if (name != null && name.StartsWith("VT_SPORT_ZONE_",
+                    StringComparison.OrdinalIgnoreCase)) named[name] = Describe(shape);
+            }
+            if (copiedTop == null)
+                throw new InvalidOperationException("CorelDRAW не перенёс группу VT_TOP из слоя «" +
+                    sourceLayerName + "».");
+            dynamic parts = copiedTop.UngroupEx();
+            if (Convert.ToInt32(parts.Count) != 5)
+                throw new InvalidOperationException("Группа VT_TOP на слое «" +
+                    sourceLayerName + "» должна содержать ровно пять деталей.");
+            foreach (dynamic shape in parts)
+            {
+                string name = Convert.ToString(shape.Name);
+                if (!String.IsNullOrWhiteSpace(name)) named[name] = Describe(shape);
             }
             Piece Required(string key)
             {
@@ -735,24 +822,6 @@ namespace VanyaTools.Native
                 RightSleeveFrame = Required("VT_SPORT_ZONE_RIGHT_SLEEVE"),
                 NeckFrame = Optional("VT_SPORT_ZONE_NECK")
             };
-        }
-
-        private static dynamic TransferShape(dynamic app, dynamic source,
-            dynamic sourcePage, dynamic target, dynamic outputPage,
-            dynamic outputLayer, bool sameDocument)
-        {
-            if (sameDocument) return source.CopyToLayer(outputLayer);
-            sourcePage.Activate();
-            dynamic range = app.CreateShapeRange();
-            range.Add(source);
-            range.Copy();
-            target.Activate();
-            outputPage.Activate();
-            dynamic pasted = outputLayer.PasteEx(app.CreateStructPasteOptions());
-            if (Convert.ToInt32(pasted.Count) != 1)
-                throw new InvalidOperationException("Не удалось перенести объект из файла модели.");
-            foreach (dynamic shape in pasted) return shape;
-            throw new InvalidOperationException("CorelDRAW не вставил объект из файла модели.");
         }
 
         private static Garment CopyGarment(Garment source, dynamic layer,

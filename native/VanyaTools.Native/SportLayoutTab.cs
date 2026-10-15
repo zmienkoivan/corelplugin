@@ -240,12 +240,17 @@ namespace VanyaTools.Native
                 "«Взять выделение» для нужной детали. На странице-макете рисунок " +
                 "лежит под контуром; выступающие края обрежутся при генерации. " +
                 "Выделение снимается в PNG 300 DPI; исходные объекты не меняются."));
-            _frontArt = ArtworkField(panel, "Перед", "переда");
-            _backArt = ArtworkField(panel, "Спина", "спины");
-            _leftSleeveArt = ArtworkField(panel, "Левый рукав (верхний на шаблоне)", "левого рукава");
-            _rightSleeveArt = ArtworkField(panel, "Правый рукав (нижний, необязательно)", "правого рукава");
-            _neckArt = ArtworkField(panel, "Горловина (для модели с пятью деталями)", "горловины");
-            panel.Children.Add(Note("Если рисунок правого рукава не выбран, берётся рисунок левого."));
+            _frontArt = ArtworkField(panel, "Перед", "переда", SportLayoutPart.Front);
+            _backArt = ArtworkField(panel, "Спина", "спины", SportLayoutPart.Back);
+            _leftSleeveArt = ArtworkField(panel, "Левый рукав (верхний на шаблоне)",
+                "левого рукава", SportLayoutPart.LeftSleeve);
+            _rightSleeveArt = ArtworkField(panel, "Правый рукав (нижний, необязательно)",
+                "правого рукава", SportLayoutPart.RightSleeve);
+            _neckArt = ArtworkField(panel, "Горловина (для модели с пятью деталями)",
+                "горловины", SportLayoutPart.Neck);
+            panel.Children.Add(Note("Крестик убирает рисунок только у выбранной детали. " +
+                "Пустое поле оставляет деталь без печатного рисунка; на готовой обзорной " +
+                "странице рисунок убирается сразу."));
             _prepare = DockerTheme.Primary(Button("Этап 1 · Подготовить макет", Prepare));
             panel.Children.Add(_prepare);
             panel.Children.Add(Note("Этап 1 создаёт одну обзорную страницу со всеми размерами рядом. " +
@@ -521,14 +526,49 @@ namespace VanyaTools.Native
             catch (Exception error) { _status(error.Message, true); }
         }
 
-        private TextBox ArtworkField(Panel panel, string title, string partName)
+        private TextBox ArtworkField(Panel panel, string title, string partName,
+            SportLayoutPart part)
         {
             panel.Children.Add(Label(title));
             TextBox field = Field("");
-            panel.Children.Add(PathRow(field, "Выбрать файл", (_, __) => BrowseArtwork(field)));
+            var row = new Grid { Margin = new Thickness(0, 2, 0, 5) };
+            row.ColumnDefinitions.Add(new ColumnDefinition {
+                Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.Children.Add(field);
+            var browse = Button("Выбрать файл", (_, __) => BrowseArtwork(field));
+            Grid.SetColumn(browse, 1);
+            row.Children.Add(browse);
+            var clear = Button("×", (_, __) => ClearArtwork(field, partName, part));
+            clear.ToolTip = "Убрать рисунок " + partName;
+            clear.Width = 29;
+            clear.Padding = new Thickness(0);
+            Grid.SetColumn(clear, 2);
+            row.Children.Add(clear);
+            panel.Children.Add(row);
             panel.Children.Add(Button("Взять выделение из Corel", (_, __) =>
                 CaptureArtwork(field, partName)));
             return field;
+        }
+
+        private void ClearArtwork(TextBox field, string partName, SportLayoutPart part)
+        {
+            if (_busy) return;
+            field.Clear();
+            try
+            {
+                int changed = new SportLayoutService().ClearPreparedArtwork(part);
+                _status(changed > 0 ? "Рисунок " + partName + " убран на " + changed +
+                    " размерах обзорной страницы." : "Рисунок " + partName +
+                    " убран. Подготовьте макет на этапе 1.", false);
+            }
+            catch (Exception error)
+            {
+                Log.Error("Could not clear prepared sport artwork.", error);
+                _status("Путь к рисунку убран, но на странице-макете его убрать не удалось: " +
+                    error.Message, true);
+            }
         }
 
         private static void BrowseArtwork(TextBox field)
