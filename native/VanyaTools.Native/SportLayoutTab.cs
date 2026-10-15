@@ -652,9 +652,11 @@ namespace VanyaTools.Native
                     " размеров…";
                 await Dispatcher.Yield(DispatcherPriority.Background);
                 string prepared = service.PrepareOverview(templates, options);
+                Log.Info("Sport overview: returned to docker");
                 _progress.Text = "Готова обзорная страница: " + prepared +
                     ". Поправьте рисунки на слоях размеров, затем запустите этап 2.";
                 _status("Макеты всех размеров готовы на одной странице.", false);
+                Log.Info("Sport overview: docker status updated");
             }
             catch (Exception error)
             {

@@ -399,8 +399,6 @@ namespace VanyaTools.Native
             dynamic app = CorelApp.Get();
             dynamic target = app.ActiveDocument;
             if (target == null) throw new InvalidOperationException("Откройте рабочий CDR.");
-            bool previousOptimization = false;
-            try { previousOptimization = Convert.ToBoolean(app.Optimization); } catch { }
             dynamic previousPage = target.ActivePage;
             int previousUnit = Convert.ToInt32(target.Unit);
             string targetPath = null;
@@ -412,7 +410,6 @@ namespace VanyaTools.Native
             try
             {
                 Log.Info("Sport overview: start, sizes=" + templates.Count);
-                try { app.Optimization = true; } catch { }
                 target.Unit = CorelConstants.CdrMillimeter;
                 target.BeginCommandGroup("Vanya Tools - обзор спортформы");
                 commandStarted = true;
@@ -498,11 +495,20 @@ namespace VanyaTools.Native
             }
             finally
             {
+                Log.Info("Sport overview: cleanup start");
+                try { target.Activate(); Log.Info("Sport overview: target active"); }
+                catch (Exception error) { Log.Error("Sport overview: target activation failed.", error); }
+                try
+                {
+                    if (commandStarted) target.EndCommandGroup();
+                    Log.Info("Sport overview: command group ended");
+                }
+                catch (Exception error) { Log.Error("Sport overview: command group cleanup failed.", error); }
+                try { target.Unit = previousUnit; Log.Info("Sport overview: units restored"); }
+                catch (Exception error) { Log.Error("Sport overview: unit cleanup failed.", error); }
+                Log.Info("Sport overview: template cleanup start");
                 CloseTemplateSessions(sessions);
-                try { target.Activate(); } catch { }
-                try { target.Unit = previousUnit; } catch { }
-                try { if (commandStarted) target.EndCommandGroup(); } catch { }
-                try { app.Optimization = previousOptimization; } catch { }
+                Log.Info("Sport overview: cleanup complete");
             }
         }
 
