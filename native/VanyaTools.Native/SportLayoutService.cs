@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Windows.Media.Imaging;
 
 namespace VanyaTools.Native
 {
@@ -26,19 +25,28 @@ namespace VanyaTools.Native
 
     internal sealed class SportLayoutOptions
     {
-        public string PatternPath;
-        public string OutputFolder;
+        public string FrontArtworkPath;
+        public string BackArtworkPath;
+        public string LeftSleeveArtworkPath;
+        public string RightSleeveArtworkPath;
         public string FontName;
         public bool FrontNameOnRight;
         public bool WhiteText;
         public bool KeepGuides;
-        public bool RepeatPattern;
-        public double TileWidthMm;
+        public double SheetWidthMm;
+        public double GapMm;
     }
 
-    // Works on a copy of each CDR. The supplied M template has four large
-    // orange garment contours and five empty red rectangles; no shapes have
-    // names. Geometry is used to identify the parts on each untouched copy.
+    internal sealed class SportLayoutResult
+    {
+        public int GarmentCount;
+        public int PieceCount;
+        public double SheetHeightMm;
+    }
+
+    // The supplied M template has four large orange garment contours and five
+    // empty red rectangles; no shapes have names. Geometry identifies the
+    // parts before copying them into the current document.
     internal sealed class SportLayoutService
     {
         private sealed class Piece
@@ -64,7 +72,28 @@ namespace VanyaTools.Native
             public Piece FrontLeft, FrontRight, BackText, LeftSleeveFrame, RightSleeveFrame;
         }
 
-        public IList<string> Generate(IList<SportLayoutPlayer> rows,
+        private sealed class TemplateSession
+        {
+            public dynamic Document;
+            public bool OpenedHere;
+            public int OriginalUnit;
+        }
+
+        private sealed class NestedPiece
+        {
+            public dynamic Shape;
+            public double Width, Height, Left, Top;
+        }
+
+        private sealed class Shelf
+        {
+            public double Top, Height, Right;
+            public bool Empty = true;
+        }
+
+        // The source art stays on the existing page. A new roll-width page in
+        // the active document receives all generated, separately grouped parts.
+        public SportLayoutResult GenerateInCurrentDocument(IList<SportLayoutPlayer> rows,
             IList<SportLayoutTemplate> templates, SportLayoutOptions options,
             Action<int, int, string> progress)
         {
@@ -72,19 +101,21 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Добавьте игроков в таблицу.");
             if (templates == null || templates.Count == 0)
                 throw new InvalidOperationException("Добавьте CDR-шаблоны для размеров.");
-            if (options == null || String.IsNullOrWhiteSpace(options.OutputFolder))
-                throw new InvalidOperationException("Выберите папку для готовых CDR.");
-            if (!String.IsNullOrWhiteSpace(options.PatternPath) && !File.Exists(options.PatternPath))
-                throw new FileNotFoundException("Файл рисунка не найден.", options.PatternPath);
-            if (options.RepeatPattern && !String.IsNullOrWhiteSpace(options.PatternPath) &&
-                (options.TileWidthMm < 5 || options.TileWidthMm > 1000))
-                throw new InvalidOperationException("Ширина плитки паттерна: от 5 до 1000 мм.");
+            if (options == null || options.SheetWidthMm < 300 || options.SheetWidthMm > 2000)
+                throw new InvalidOperationException("Ширина полотна: от 300 до 2000 мм.");
+            if (options.GapMm < 0 || options.GapMm > 100)
+                throw new InvalidOperationException("Расстояние между деталями: от 0 до 100 мм.");
             if (String.IsNullOrWhiteSpace(options.FontName))
                 throw new InvalidOperationException("Выберите шрифт для имён и номеров.");
+            foreach (string path in new[] { options.FrontArtworkPath, options.BackArtworkPath,
+                options.LeftSleeveArtworkPath, options.RightSleeveArtworkPath })
+                if (!String.IsNullOrWhiteSpace(path) && !File.Exists(path))
+                    throw new FileNotFoundException("Рисунок для детали не найден.", path);
 
             var bySize = new Dictionary<string, SportLayoutTemplate>(StringComparer.CurrentCultureIgnoreCase);
             foreach (var template in templates)
             {
+                if (template == null) continue;
                 string size = NormalizeSize(template.Size);
                 if (size.Length == 0 || String.IsNullOrWhiteSpace(template.Path)) continue;
                 if (!File.Exists(template.Path))
@@ -96,94 +127,278 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Шаблон размера " + size + " добавлен дважды.");
                 double scale = template.ScalePercent <= 0 ? 100 : template.ScalePercent;
                 if (scale < 50 || scale > 200)
-                    throw new InvalidOperationException("Масштаб размера " + size +
-                        " должен быть от 50 до 200%.");
+                    throw new InvalidOperationException("Масштаб размера " + size + ": от 50 до 200%.");
                 bySize.Add(size, template);
             }
-
             int total = 0;
             foreach (var row in rows)
             {
                 if (row == null) continue;
                 string size = NormalizeSize(row.Size);
-                if (size.Length == 0) throw new InvalidOperationException("У одного из игроков не указан размер.");
                 if (!bySize.ContainsKey(size))
-                    throw new InvalidOperationException("Для размера " + size + " нет CDR-шаблона.");
+                    throw new InvalidOperationException("Нет шаблона для размера " + size + ".");
                 if (row.Quantity < 1 || row.Quantity > 100)
-                    throw new InvalidOperationException("Количество в строке должно быть от 1 до 100.");
+                    throw new InvalidOperationException("Количество в строке: от 1 до 100.");
                 if ((row.Name ?? "").Length > 100 || (row.Number ?? "").Length > 20)
                     throw new InvalidOperationException("Слишком длинное имя или номер в таблице.");
                 total += row.Quantity;
             }
-            if (total == 0 || total > 300)
+            if (total < 1 || total > 300)
                 throw new InvalidOperationException("За один запуск можно подготовить от 1 до 300 комплектов.");
 
-            string output = System.IO.Path.GetFullPath(options.OutputFolder);
-            Directory.CreateDirectory(output);
-            foreach (string templatePath in bySize.Values.Select(item =>
-                System.IO.Path.GetFullPath(item.Path)))
-                if (String.Equals(output, System.IO.Path.GetDirectoryName(templatePath),
-                    StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException("Выберите отдельную папку для готовых CDR, не папку шаблонов.");
-
             dynamic app = CorelApp.Get();
-            dynamic previousDocument = null;
-            try { previousDocument = app.ActiveDocument; } catch { }
-            var created = new List<string>();
+            dynamic target = app.ActiveDocument;
+            if (target == null)
+                throw new InvalidOperationException("Откройте CDR с рисунками для раскладки.");
+            dynamic previousPage = target.ActivePage;
+            int previousUnit = Convert.ToInt32(target.Unit);
+            string targetPath = null;
+            try { targetPath = System.IO.Path.GetFullPath(Convert.ToString(target.FullFileName)); }
+            catch { }
+            var sessions = new Dictionary<string, TemplateSession>(StringComparer.OrdinalIgnoreCase);
+            dynamic outputPage = null;
+            bool commandStarted = false;
+            var nested = new List<NestedPiece>();
+            int complete = 0;
             try
             {
+                target.Unit = CorelConstants.CdrMillimeter;
+                target.BeginCommandGroup("Vanya Tools - раскладка спортформы");
+                commandStarted = true;
+                outputPage = target.AddPages(1);
+                outputPage.Activate();
+                outputPage.SizeWidth = options.SheetWidthMm;
+                outputPage.SizeHeight = 1000.0;
+                dynamic outputLayer = target.ActiveLayer;
+
                 foreach (var row in rows)
                 {
                     if (row == null) continue;
                     string size = NormalizeSize(row.Size);
+                    var template = bySize[size];
+                    string templatePath = System.IO.Path.GetFullPath(template.Path);
+                    TemplateSession session = GetTemplateSession(app, templatePath, sessions);
+                    bool templateIsTarget = String.Equals(templatePath, targetPath,
+                        StringComparison.OrdinalIgnoreCase);
+                    if (Convert.ToInt32(session.Document.Pages.Count) !=
+                        (templateIsTarget ? 2 : 1))
+                        throw new InvalidOperationException("Шаблон " + size + " должен содержать одну страницу.");
+                    dynamic sourcePage = templateIsTarget ? previousPage :
+                        session.Document.ActivePage;
+                    Garment source = ReadGarment(sourcePage);
                     for (int copy = 1; copy <= row.Quantity; copy++)
                     {
-                        string label = size + " · " + (row.Name ?? "") + " · №" + (row.Number ?? "");
-                        progress?.Invoke(created.Count + 1, total, label);
-                        string path = UniquePath(output, size, row.Name, row.Number, copy);
-                        File.Copy(System.IO.Path.GetFullPath(bySize[size].Path), path);
-                        dynamic document = null;
-                        try
-                        {
-                            document = app.OpenDocument(path);
-                            document.Unit = CorelConstants.CdrMillimeter;
-                            if (Convert.ToInt32(document.Pages.Count) != 1)
-                                throw new InvalidOperationException("Шаблон должен содержать одну страницу.");
-                            Garment garment = ReadGarment(document.ActivePage);
-                            Fill(document, app, garment, row, size, options);
-                            double scale = bySize[size].ScalePercent <= 0 ? 1 :
-                                bySize[size].ScalePercent / 100.0;
-                            if (Math.Abs(scale - 1) > 0.0001)
-                                ScalePage(document, app, scale);
-                            CorelDocumentSaver.Save(document);
-                            created.Add(path);
-                        }
-                        catch
-                        {
-                            // Only the new copy is removed; never touch the source template.
-                            try { if (document != null) document.Dirty = false; } catch { }
-                            try { if (document != null) document.Close(); } catch { }
-                            document = null;
-                            try { File.Delete(path); } catch { }
-                            throw;
-                        }
-                        finally
-                        {
-                            try { if (document != null) document.Close(); } catch { }
-                        }
+                        target.Activate();
+                        outputPage.Activate();
+                        Garment garment = CopyGarment(source, outputLayer);
+                        double scale = template.ScalePercent <= 0 ? 1 : template.ScalePercent / 100.0;
+                        nested.AddRange(BuildNestedPieces(app, outputLayer, garment, row, size,
+                            complete + 1, options, scale));
+                        complete++;
+                        progress?.Invoke(complete, total, size + " · " + row.Name);
                     }
                 }
+
+                double sheetHeight = Nest(nested, options.SheetWidthMm, options.GapMm);
+                outputPage.SizeHeight = sheetHeight;
+                foreach (var item in nested)
+                    item.Shape.Move(item.Left - Convert.ToDouble(item.Shape.LeftX),
+                        sheetHeight - item.Top - item.Height - Convert.ToDouble(item.Shape.BottomY));
+                try { outputPage.Name = "Спортформа · " + complete + " комплектов"; } catch { }
+                return new SportLayoutResult { GarmentCount = complete,
+                    PieceCount = nested.Count, SheetHeightMm = sheetHeight };
             }
             catch (Exception error)
             {
-                throw new InvalidOperationException("Создано " + created.Count + " из " + total +
-                    ". Остальные не подготовлены: " + error.Message, error);
+                try
+                {
+                    target.Activate();
+                    if (outputPage != null) target.DeletePages(Convert.ToInt32(outputPage.Index));
+                    previousPage.Activate();
+                }
+                catch (Exception rollbackError)
+                {
+                    Log.Error("Could not remove failed sport layout page.", rollbackError);
+                }
+                throw new InvalidOperationException("Раскладка не завершена: " + error.Message, error);
             }
             finally
             {
-                try { if (previousDocument != null) previousDocument.Activate(); } catch { }
+                foreach (TemplateSession session in sessions.Values)
+                    try
+                    {
+                        if (session.OpenedHere)
+                        {
+                            try { session.Document.Dirty = false; } catch { }
+                            session.Document.Close();
+                        }
+                        else if (!Object.ReferenceEquals(session.Document, target))
+                            session.Document.Unit = session.OriginalUnit;
+                    }
+                    catch (Exception closeError) { Log.Error("Could not close sport template.", closeError); }
+                try { target.Activate(); } catch { }
+                try { target.Unit = previousUnit; } catch { }
+                try { if (commandStarted) target.EndCommandGroup(); } catch { }
             }
-            return created;
+        }
+
+        private static TemplateSession GetTemplateSession(dynamic app,
+            string path, IDictionary<string, TemplateSession> sessions)
+        {
+            if (sessions.TryGetValue(path, out TemplateSession cached)) return cached;
+            dynamic document = null;
+            bool openedHere = false;
+            foreach (dynamic candidate in app.Documents)
+            {
+                try
+                {
+                    if (String.Equals(System.IO.Path.GetFullPath(
+                        Convert.ToString(candidate.FullFileName)), path,
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        document = candidate;
+                        break;
+                    }
+                }
+                catch { }
+            }
+            if (document == null)
+            {
+                document = app.OpenDocument(path);
+                openedHere = true;
+            }
+            if (document == null)
+                throw new InvalidOperationException("Не удалось открыть шаблон " + path);
+            var session = new TemplateSession { Document = document, OpenedHere = openedHere,
+                OriginalUnit = Convert.ToInt32(document.Unit) };
+            document.Unit = CorelConstants.CdrMillimeter;
+            sessions.Add(path, session);
+            return session;
+        }
+
+        private static Garment CopyGarment(Garment source, dynamic layer)
+        {
+            return new Garment {
+                Front = Describe(source.Front.Shape.CopyToLayer(layer)),
+                Back = Describe(source.Back.Shape.CopyToLayer(layer)),
+                LeftSleeve = Describe(source.LeftSleeve.Shape.CopyToLayer(layer)),
+                RightSleeve = Describe(source.RightSleeve.Shape.CopyToLayer(layer)),
+                FrontLeft = Describe(source.FrontLeft.Shape.CopyToLayer(layer)),
+                FrontRight = Describe(source.FrontRight.Shape.CopyToLayer(layer)),
+                BackText = Describe(source.BackText.Shape.CopyToLayer(layer)),
+                LeftSleeveFrame = Describe(source.LeftSleeveFrame.Shape.CopyToLayer(layer)),
+                RightSleeveFrame = Describe(source.RightSleeveFrame.Shape.CopyToLayer(layer))
+            };
+        }
+
+        private static IList<NestedPiece> BuildNestedPieces(dynamic app, dynamic layer,
+            Garment garment, SportLayoutPlayer row, string size, int index,
+            SportLayoutOptions options, double scale)
+        {
+            var pieces = new List<NestedPiece>();
+            Piece frontName = options.FrontNameOnRight ? garment.FrontRight : garment.FrontLeft;
+            Piece extra = options.FrontNameOnRight ? garment.FrontLeft : garment.FrontRight;
+            pieces.Add(BuildNestedPart(app, layer, garment.Front,
+                new[] { frontName, extra }, options.FrontArtworkPath, "ПЕРЕД", row, size,
+                index, options, scale, frontName, null));
+            pieces.Add(BuildNestedPart(app, layer, garment.Back,
+                new[] { garment.BackText }, options.BackArtworkPath, "СПИНА", row, size,
+                index, options, scale, null, garment.BackText));
+            pieces.Add(BuildNestedPart(app, layer, garment.LeftSleeve,
+                new[] { garment.LeftSleeveFrame }, options.LeftSleeveArtworkPath,
+                "ЛЕВЫЙ РУКАВ", row, size, index, options, scale, null, null));
+            pieces.Add(BuildNestedPart(app, layer, garment.RightSleeve,
+                new[] { garment.RightSleeveFrame },
+                String.IsNullOrWhiteSpace(options.RightSleeveArtworkPath)
+                    ? options.LeftSleeveArtworkPath : options.RightSleeveArtworkPath,
+                "ПРАВЫЙ РУКАВ", row, size, index, options, scale, null, null));
+            return pieces;
+        }
+
+        private static NestedPiece BuildNestedPart(dynamic app, dynamic layer,
+            Piece part, IEnumerable<Piece> frames, string artworkPath, string partName,
+            SportLayoutPlayer row, string size, int index, SportLayoutOptions options,
+            double scale, Piece frontName, Piece backText)
+        {
+            part.Shape.Name = "VT_" + partName.Replace(' ', '_');
+            if (!String.IsNullOrWhiteSpace(artworkPath))
+            {
+                dynamic image = ImportPattern(app, layer, artworkPath);
+                FillPattern(image, part);
+            }
+            dynamic groupRange = app.CreateShapeRange();
+            groupRange.Add(part.Shape);
+            foreach (Piece frame in frames)
+            {
+                string key = partName + "_" + (frame == frontName ? "ИМЯ" : "ГРАФИКА");
+                FinishGuide(frame, "VT_FRAME_" + key.Replace(' ', '_'), options.KeepGuides);
+                groupRange.Add(frame.Shape);
+            }
+            groupRange.Add(AddCaption(layer, part, partName, row, size, options.WhiteText));
+            if (frontName != null)
+            {
+                dynamic text = AddCenteredText(layer, frontName, row.Name,
+                    options.FontName, 72, options.WhiteText);
+                if (text != null) groupRange.Add(text);
+            }
+            if (backText != null)
+                foreach (dynamic text in AddBackText(layer, backText, row.Name,
+                    row.Number, options.FontName, options.WhiteText)) groupRange.Add(text);
+            dynamic group = groupRange.Group();
+            group.Name = "VT_" + index.ToString("000", CultureInfo.InvariantCulture) +
+                "_" + Clean(size) + "_" + Clean(row.Name) + "_" + partName.Replace(' ', '_');
+            if (Math.Abs(scale - 1) > 0.0001)
+            {
+                dynamic scaled = app.CreateShapeRange();
+                scaled.Add(group);
+                scaled.Stretch(scale, scale, true);
+            }
+            return new NestedPiece { Shape = group,
+                Width = Convert.ToDouble(group.SizeWidth),
+                Height = Convert.ToDouble(group.SizeHeight) };
+        }
+
+        private static double Nest(IList<NestedPiece> pieces, double sheetWidth, double gap)
+        {
+            double margin = Math.Max(5, gap);
+            var shelves = new List<Shelf>();
+            foreach (NestedPiece piece in pieces.OrderByDescending(item => item.Height)
+                .ThenByDescending(item => item.Width))
+            {
+                if (piece.Width > sheetWidth - margin * 2 + 0.001)
+                    throw new InvalidOperationException("Деталь шириной " +
+                        piece.Width.ToString("0.#", CultureInfo.CurrentCulture) +
+                        " мм не помещается на полотно " +
+                        sheetWidth.ToString("0.#", CultureInfo.CurrentCulture) + " мм.");
+                Shelf chosen = null;
+                double chosenX = 0, bestWaste = Double.MaxValue;
+                foreach (Shelf shelf in shelves)
+                {
+                    if (piece.Height > shelf.Height + 0.001) continue;
+                    double x = shelf.Empty ? margin : shelf.Right + gap;
+                    double waste = sheetWidth - margin - (x + piece.Width);
+                    if (waste >= -0.001 && waste < bestWaste)
+                    {
+                        chosen = shelf;
+                        chosenX = x;
+                        bestWaste = waste;
+                    }
+                }
+                if (chosen == null)
+                {
+                    double top = shelves.Count == 0 ? margin :
+                        shelves[shelves.Count - 1].Top + shelves[shelves.Count - 1].Height + gap;
+                    chosen = new Shelf { Top = top, Height = piece.Height, Right = margin };
+                    shelves.Add(chosen);
+                    chosenX = margin;
+                }
+                piece.Left = chosenX;
+                piece.Top = chosen.Top;
+                chosen.Right = chosenX + piece.Width;
+                chosen.Empty = false;
+            }
+            return shelves.Count == 0 ? 1000 :
+                shelves[shelves.Count - 1].Top + shelves[shelves.Count - 1].Height + margin;
         }
 
         internal static string NormalizeSize(string value)
@@ -193,22 +408,6 @@ namespace VanyaTools.Native
             // letter for size S, not the Latin letter C.
             return size.Replace('М', 'M').Replace('С', 'S')
                 .Replace('Л', 'L').Replace('Х', 'X');
-        }
-
-        private static string UniquePath(string folder, string size, string name,
-            string number, int copy)
-        {
-            string stem = Clean(size) + "_" + Clean(name) + "_" + Clean(number);
-            if (stem.Length > 105) stem = stem.Substring(0, 105).TrimEnd('_');
-            if (stem.Trim('_').Length == 0) stem = "спортформа";
-            string suffix = copy > 1 ? "_" + copy.ToString("00", CultureInfo.InvariantCulture) : "";
-            for (int index = 0; index < 10000; index++)
-            {
-                string tail = index == 0 ? "" : "_" + index.ToString("00", CultureInfo.InvariantCulture);
-                string path = System.IO.Path.Combine(folder, stem + suffix + tail + ".cdr");
-                if (!File.Exists(path)) return path;
-            }
-            throw new IOException("Не удалось подобрать имя для выходного CDR.");
         }
 
         private static string Clean(string value)
@@ -268,49 +467,6 @@ namespace VanyaTools.Native
                 Name = Convert.ToString(shape.Name) };
         }
 
-        private static void Fill(dynamic document, dynamic app, Garment garment,
-            SportLayoutPlayer row, string size, SportLayoutOptions options)
-        {
-            var parts = new[] {
-                new { Piece = garment.Front, Key = "ПЕРЕД" },
-                new { Piece = garment.Back, Key = "СПИНА" },
-                new { Piece = garment.LeftSleeve, Key = "ЛЕВЫЙ РУКАВ" },
-                new { Piece = garment.RightSleeve, Key = "ПРАВЫЙ РУКАВ" }
-            };
-            dynamic[] patternCopies = null;
-            if (!String.IsNullOrWhiteSpace(options.PatternPath) && !options.RepeatPattern)
-            {
-                dynamic original = ImportPattern(app, garment.Front.Shape.Layer, options.PatternPath);
-                patternCopies = new dynamic[parts.Length];
-                patternCopies[0] = original;
-                for (int i = 1; i < patternCopies.Length; i++)
-                    patternCopies[i] = original.Duplicate(0.0, 0.0);
-            }
-            for (int i = 0; i < parts.Length; i++)
-            {
-                var part = parts[i];
-                part.Piece.Shape.Name = "VT_" + part.Key.Replace(' ', '_');
-                if (patternCopies != null)
-                    FillPattern(patternCopies[i], part.Piece);
-                else if (!String.IsNullOrWhiteSpace(options.PatternPath))
-                    RepeatPattern(part.Piece, options.PatternPath, options.TileWidthMm);
-                AddCaption(garment.Front.Shape.Layer, part.Piece, part.Key, row, size,
-                    options.WhiteText);
-            }
-
-            Piece nameZone = options.FrontNameOnRight ? garment.FrontRight : garment.FrontLeft;
-            Piece extraZone = options.FrontNameOnRight ? garment.FrontLeft : garment.FrontRight;
-            AddCenteredText(garment.Front.Shape.Layer, nameZone, row.Name, options.FontName,
-                72, options.WhiteText);
-            AddBackText(garment.Front.Shape.Layer, garment.BackText, row.Name, row.Number,
-                options.FontName, options.WhiteText);
-            FinishGuide(nameZone, "VT_FRONT_NAME", options.KeepGuides);
-            FinishGuide(garment.BackText, "VT_BACK_NAME_NUMBER", options.KeepGuides);
-            FinishGuide(extraZone, "VT_FRONT_EXTRA_FRAME", options.KeepGuides);
-            FinishGuide(garment.LeftSleeveFrame, "VT_LEFT_SLEEVE_FRAME", options.KeepGuides);
-            FinishGuide(garment.RightSleeveFrame, "VT_RIGHT_SLEEVE_FRAME", options.KeepGuides);
-        }
-
         private static dynamic ImportPattern(dynamic app, dynamic layer, string path)
         {
             object targetLayer = layer;
@@ -337,20 +493,7 @@ namespace VanyaTools.Native
             image.AddToPowerClip(piece.Shape, 0);
         }
 
-        private static void RepeatPattern(Piece piece, string path, double tileWidth)
-        {
-            var frame = BitmapFrame.Create(new Uri(System.IO.Path.GetFullPath(path)),
-                BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
-            if (frame.PixelWidth <= 0 || frame.PixelHeight <= 0)
-                throw new InvalidOperationException("Не удалось узнать размер рисунка паттерна.");
-            dynamic fill = piece.Shape.Fill.ApplyPatternFill(2,
-                System.IO.Path.GetFullPath(path));
-            fill.TileWidth = tileWidth;
-            fill.TileHeight = tileWidth * frame.PixelHeight / frame.PixelWidth;
-            fill.TransformWithShape = true;
-        }
-
-        private static void AddCaption(dynamic layer, Piece piece, string part,
+        private static dynamic AddCaption(dynamic layer, Piece piece, string part,
             SportLayoutPlayer row, string size, bool white)
         {
             string caption = String.Join(" · ", new[] { row.Name,
@@ -369,12 +512,13 @@ namespace VanyaTools.Native
                 text.SetSize(allowed, Convert.ToDouble(text.SizeHeight) * allowed / width);
             text.Move(piece.Left + 8 - Convert.ToDouble(text.LeftX),
                 piece.Bottom + 4 - Convert.ToDouble(text.BottomY));
+            return text;
         }
 
-        private static void AddCenteredText(dynamic layer, Piece zone, string value,
+        private static dynamic AddCenteredText(dynamic layer, Piece zone, string value,
             string font, float points, bool white)
         {
-            if (String.IsNullOrWhiteSpace(value)) return;
+            if (String.IsNullOrWhiteSpace(value)) return null;
             dynamic text = layer.CreateArtisticTextWide(zone.Left, zone.Bottom,
                 value.Trim(), 0, -1, font, points, -1, 0);
             text.Name = "VT_PLAYER_NAME";
@@ -384,24 +528,27 @@ namespace VanyaTools.Native
             Fit(text, zone.Width * 0.88, zone.Height * 0.8);
             text.Move(zone.CenterX - Convert.ToDouble(text.CenterX),
                 zone.CenterY - Convert.ToDouble(text.CenterY));
+            return text;
         }
 
-        private static void AddBackText(dynamic layer, Piece zone, string name,
+        private static IList<dynamic> AddBackText(dynamic layer, Piece zone, string name,
             string number, string font, bool white)
         {
+            var created = new List<dynamic>();
             bool hasName = !String.IsNullOrWhiteSpace(name);
             bool hasNumber = !String.IsNullOrWhiteSpace(number);
-            if (!hasName && !hasNumber) return;
+            if (!hasName && !hasNumber) return created;
             if (hasName && hasNumber)
             {
                 var upper = new Piece { Left = zone.Left, Bottom = zone.Bottom + zone.Height * 0.48,
                     Width = zone.Width, Height = zone.Height * 0.52 };
                 var lower = new Piece { Left = zone.Left, Bottom = zone.Bottom,
                     Width = zone.Width, Height = zone.Height * 0.48 };
-                AddCenteredText(layer, upper, name, font, 95, white);
-                AddCenteredText(layer, lower, number, font, 150, white);
+                created.Add(AddCenteredText(layer, upper, name, font, 95, white));
+                created.Add(AddCenteredText(layer, lower, number, font, 150, white));
             }
-            else AddCenteredText(layer, zone, hasName ? name : number, font, 120, white);
+            else created.Add(AddCenteredText(layer, zone, hasName ? name : number, font, 120, white));
+            return created;
         }
 
         private static void Fit(dynamic text, double maxWidth, double maxHeight)
@@ -419,24 +566,5 @@ namespace VanyaTools.Native
             if (!keepGuide) zone.Shape.Outline.SetNoOutline();
         }
 
-        private static void ScalePage(dynamic document, dynamic app, double factor)
-        {
-            dynamic page = document.ActivePage;
-            dynamic all = app.CreateShapeRange();
-            foreach (dynamic layer in page.Layers)
-            foreach (dynamic shape in layer.Shapes)
-                all.Add(shape);
-            if (Convert.ToInt32(all.Count) == 0)
-                throw new InvalidOperationException("В шаблоне нет объектов для масштабирования.");
-            double left = Convert.ToDouble(all.LeftX);
-            double bottom = Convert.ToDouble(all.BottomY);
-            double pageWidth = Convert.ToDouble(page.SizeWidth);
-            double pageHeight = Convert.ToDouble(page.SizeHeight);
-            page.SizeWidth = pageWidth * factor;
-            page.SizeHeight = pageHeight * factor;
-            all.Stretch(factor, factor, true);
-            all.Move(left * factor - Convert.ToDouble(all.LeftX),
-                bottom * factor - Convert.ToDouble(all.BottomY));
-        }
     }
 }

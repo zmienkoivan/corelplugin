@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -22,13 +21,16 @@ namespace VanyaTools.Native
             public List<SportLayoutTemplate> Templates { get; set; }
             public List<SportLayoutPlayer> Players { get; set; }
             public string PatternPath { get; set; }
-            public string OutputFolder { get; set; }
+            public string FrontArtworkPath { get; set; }
+            public string BackArtworkPath { get; set; }
+            public string LeftSleeveArtworkPath { get; set; }
+            public string RightSleeveArtworkPath { get; set; }
+            public string SheetWidth { get; set; }
+            public string Gap { get; set; }
             public string FontName { get; set; }
             public bool FrontNameOnRight { get; set; }
             public bool WhiteText { get; set; }
             public bool KeepGuides { get; set; }
-            public bool RepeatPattern { get; set; }
-            public string TileWidth { get; set; }
         }
 
         private static readonly string DraftPath = Path.Combine(
@@ -41,10 +43,9 @@ namespace VanyaTools.Native
         private readonly ObservableCollection<SportLayoutPlayer> _players =
             new ObservableCollection<SportLayoutPlayer>();
         private readonly DataGrid _templateGrid, _playerGrid;
-        private readonly TextBox _pattern, _output, _font;
+        private readonly TextBox _frontArt, _backArt, _leftSleeveArt, _rightSleeveArt;
+        private readonly TextBox _sheetWidth, _gap, _font;
         private readonly ComboBox _nameSide, _textColor;
-        private readonly ComboBox _patternMode;
-        private readonly TextBox _tileWidth;
         private readonly CheckBox _keepGuides;
         private readonly TextBlock _count, _progress;
         private readonly Button _generate;
@@ -57,8 +58,8 @@ namespace VanyaTools.Native
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Content = panel };
             panel.Children.Add(Title("Раскладка спортформы"));
-            panel.Children.Add(Note("Каждая строка создаёт отдельный CDR для каждого экземпляра. " +
-                "Исходные лекала остаются без изменений."));
+            panel.Children.Add(Note("Готовые детали появятся на новой странице текущего CDR. " +
+                "Рисунки и исходные лекала останутся на своих страницах без изменений."));
 
             panel.Children.Add(Title("1. Лекала по размерам"));
             _templateGrid = new DataGrid { Height = 132, AutoGenerateColumns = false,
@@ -108,30 +109,30 @@ namespace VanyaTools.Native
             _count = Note("");
             panel.Children.Add(_count);
 
-            panel.Children.Add(Title("3. Рисунок и надписи"));
-            panel.Children.Add(Label("Рисунок для заливки деталей (необязательно)"));
-            _pattern = Field("");
-            panel.Children.Add(PathRow(_pattern, "Выбрать рисунок", BrowsePattern));
-            panel.Children.Add(Button("Взять выделенный рисунок из Corel", CapturePattern));
-            var patternOptions = new WrapPanel { Margin = new Thickness(0, 2, 0, 5) };
-            patternOptions.Children.Add(Label("Способ заливки"));
-            _patternMode = new ComboBox { Width = 167, Height = 27, FontSize = 11,
-                Margin = new Thickness(5, 0, 10, 0) };
-            _patternMode.Items.Add("Повторять паттерн");
-            _patternMode.Items.Add("Покрыть деталь");
-            _patternMode.SelectedIndex = 0;
-            patternOptions.Children.Add(_patternMode);
-            patternOptions.Children.Add(Label("Ширина плитки, мм"));
-            _tileWidth = Field("100");
-            _tileWidth.Width = 58;
-            _tileWidth.Margin = new Thickness(5, 0, 0, 0);
-            patternOptions.Children.Add(_tileWidth);
-            panel.Children.Add(patternOptions);
-            panel.Children.Add(Note("«Повторять» создаёт редактируемую заливку Corel. " +
-                "«Покрыть» сохраняет пропорции рисунка и обрезает его по лекалу."));
-            panel.Children.Add(Label("Папка готовых CDR"));
-            _output = Field("");
-            panel.Children.Add(PathRow(_output, "Выбрать папку", BrowseOutput));
+            panel.Children.Add(Title("3. Рисунки для деталей"));
+            panel.Children.Add(Note("Выберите файл или выделите готовый рисунок в Corel и нажмите " +
+                "«Взять выделение» для нужной детали. Рисунок подгоняется под лекало " +
+                "с сохранением пропорций и обрезкой выступающих краёв. " +
+                "Выделение снимается в PNG 300 DPI; исходные объекты не меняются."));
+            _frontArt = ArtworkField(panel, "Перед", "переда");
+            _backArt = ArtworkField(panel, "Спина", "спины");
+            _leftSleeveArt = ArtworkField(panel, "Левый рукав (верхний на шаблоне)", "левого рукава");
+            _rightSleeveArt = ArtworkField(panel, "Правый рукав (нижний, необязательно)", "правого рукава");
+            panel.Children.Add(Note("Если рисунок правого рукава не выбран, берётся рисунок левого."));
+
+            panel.Children.Add(Title("4. Полотно и надписи"));
+            var roll = new WrapPanel { Margin = new Thickness(0, 3, 0, 6) };
+            roll.Children.Add(Label("Ширина, мм"));
+            _sheetWidth = Field("1500");
+            _sheetWidth.Width = 72;
+            roll.Children.Add(_sheetWidth);
+            roll.Children.Add(Label("Между деталями, мм"));
+            _gap = Field("10");
+            _gap.Width = 60;
+            roll.Children.Add(_gap);
+            panel.Children.Add(roll);
+            panel.Children.Add(Note("Автораскладка уплотняет габариты деталей без поворота рисунка; " +
+                "длина страницы определяется автоматически."));
             panel.Children.Add(Label("Шрифт имени и номера"));
             _font = Field("Arial");
             panel.Children.Add(_font);
@@ -158,22 +159,23 @@ namespace VanyaTools.Native
             panel.Children.Add(Note("Свободная зона переда и зоны рукавов сохраняются как именованные " +
                 "фреймы для дополнительной графики. Подписи каждой детали находятся в нижнем припуске."));
 
-            _generate = DockerTheme.Primary(Button("Создать CDR для всех строк", Generate));
+            _generate = DockerTheme.Primary(Button("Разложить в текущем CDR", Generate));
             _generate.Margin = new Thickness(0, 7, 0, 4);
             panel.Children.Add(_generate);
             _progress = Note("");
             panel.Children.Add(_progress);
-            panel.Children.Add(Button("Открыть папку готовых CDR", OpenOutput));
 
             _templates.CollectionChanged += (_, __) => SaveDraft();
             _players.CollectionChanged += (_, __) => { UpdateCount(); SaveDraft(); };
             _templateGrid.CellEditEnding += (_, __) => SaveSoon();
             _playerGrid.CellEditEnding += (_, __) => SaveSoon();
-            _pattern.TextChanged += (_, __) => SaveDraft();
-            _output.TextChanged += (_, __) => SaveDraft();
+            _frontArt.TextChanged += (_, __) => SaveDraft();
+            _backArt.TextChanged += (_, __) => SaveDraft();
+            _leftSleeveArt.TextChanged += (_, __) => SaveDraft();
+            _rightSleeveArt.TextChanged += (_, __) => SaveDraft();
+            _sheetWidth.TextChanged += (_, __) => SaveDraft();
+            _gap.TextChanged += (_, __) => SaveDraft();
             _font.TextChanged += (_, __) => SaveDraft();
-            _tileWidth.TextChanged += (_, __) => SaveDraft();
-            _patternMode.SelectionChanged += (_, __) => SaveDraft();
             _nameSide.SelectionChanged += (_, __) => SaveDraft();
             _textColor.SelectionChanged += (_, __) => SaveDraft();
             _keepGuides.Checked += (_, __) => SaveDraft();
@@ -262,51 +264,50 @@ namespace VanyaTools.Native
             catch (Exception error) { _status(error.Message, true); }
         }
 
-        private void BrowsePattern(object sender, RoutedEventArgs e)
+        private TextBox ArtworkField(Panel panel, string title, string partName)
+        {
+            panel.Children.Add(Label(title));
+            TextBox field = Field("");
+            panel.Children.Add(PathRow(field, "Выбрать файл", (_, __) => BrowseArtwork(field)));
+            panel.Children.Add(Button("Взять выделение из Corel", (_, __) =>
+                CaptureArtwork(field, partName)));
+            return field;
+        }
+
+        private static void BrowseArtwork(TextBox field)
         {
             var dialog = new OpenFileDialog { Filter =
                 "Изображения (*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp)|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp|Все файлы (*.*)|*.*",
                 CheckFileExists = true };
-            if (dialog.ShowDialog() == true) _pattern.Text = dialog.FileName;
+            if (dialog.ShowDialog() == true) field.Text = dialog.FileName;
         }
 
-        private void CapturePattern(object sender, RoutedEventArgs e)
+        private void CaptureArtwork(TextBox field, string partName)
         {
             string temporary = null;
             try
             {
-                temporary = AiSelectionCapture.Capture(4096, 16000000);
+                temporary = AiSelectionCapture.CaptureForPublish(300);
                 string folder = Path.Combine(Environment.GetFolderPath(
                     Environment.SpecialFolder.LocalApplicationData), "VanyaTools", "sport-patterns");
                 Directory.CreateDirectory(folder);
-                string destination = Path.Combine(folder, "pattern-" +
+                string destination = Path.Combine(folder, "artwork-" +
                     DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" +
                     Guid.NewGuid().ToString("N").Substring(0, 6) + ".png");
                 File.Move(temporary, destination);
                 temporary = null;
-                _pattern.Text = destination;
-                _status("Выделенный рисунок сохранён для раскладки.", false);
+                field.Text = destination;
+                _status("Рисунок " + partName + " взят из выделения (300 DPI).", false);
             }
             catch (Exception error)
             {
-                Log.Error("Could not capture selected sport pattern.", error);
+                Log.Error("Could not capture selected sport artwork.", error);
                 _status(error.Message, true);
             }
             finally
             {
                 try { if (temporary != null) File.Delete(temporary); } catch { }
             }
-        }
-
-        private void BrowseOutput(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                string path = WindowsFolderPicker.Pick(IntPtr.Zero, _output.Text,
-                    "Папка для готовых лекал");
-                if (!String.IsNullOrWhiteSpace(path)) _output.Text = path;
-            }
-            catch (Exception error) { _status(error.Message, true); }
         }
 
         private async void Generate(object sender, RoutedEventArgs e)
@@ -321,7 +322,6 @@ namespace VanyaTools.Native
             }
             SaveDraft();
             _generate.IsEnabled = false;
-            var created = new List<string>();
             try
             {
                 var players = _players.ToList();
@@ -333,50 +333,35 @@ namespace VanyaTools.Native
                 long totalLong = players.Sum(row => (long)row.Quantity);
                 if (totalLong > 300)
                     throw new InvalidOperationException("За один запуск можно подготовить не более 300 комплектов.");
-                int total = (int)totalLong;
                 var options = new SportLayoutOptions {
-                    PatternPath = _pattern.Text.Trim(), OutputFolder = _output.Text.Trim(),
+                    FrontArtworkPath = _frontArt.Text.Trim(),
+                    BackArtworkPath = _backArt.Text.Trim(),
+                    LeftSleeveArtworkPath = _leftSleeveArt.Text.Trim(),
+                    RightSleeveArtworkPath = _rightSleeveArt.Text.Trim(),
+                    SheetWidthMm = ParseMillimeters(_sheetWidth.Text, 300, 2000, "Ширина полотна"),
+                    GapMm = ParseMillimeters(_gap.Text, 0, 100, "Расстояние между деталями"),
                     FontName = _font.Text.Trim(), FrontNameOnRight = _nameSide.SelectedIndex == 1,
                     WhiteText = _textColor.SelectedIndex == 1,
-                    KeepGuides = _keepGuides.IsChecked == true,
-                    RepeatPattern = _patternMode.SelectedIndex == 0,
-                    TileWidthMm = _patternMode.SelectedIndex == 0 &&
-                        !String.IsNullOrWhiteSpace(_pattern.Text)
-                        ? ParseTileWidth(_tileWidth.Text) : 100
+                    KeepGuides = _keepGuides.IsChecked == true
                 };
-                foreach (var row in players)
-                for (int copy = 0; copy < row.Quantity; copy++)
-                {
-                    _progress.Text = "Готовлю " + (created.Count + 1) + " из " + total +
-                        ": " + row.Size + " · " + row.Name;
-                    await Dispatcher.Yield(DispatcherPriority.Background);
-                    var single = new SportLayoutPlayer { Size = row.Size, Name = row.Name,
-                        Number = row.Number, Quantity = 1 };
-                    var files = new SportLayoutService().Generate(new[] { single },
-                        templates, options, null);
-                    created.AddRange(files);
-                }
-                _progress.Text = "Готово: " + created.Count + " CDR в " + options.OutputFolder;
-                _status("Подготовлено комплектов: " + created.Count + ".", false);
+                _progress.Text = "Готовлю новую страницу текущего CDR…";
+                await Dispatcher.Yield(DispatcherPriority.Background);
+                SportLayoutResult result = new SportLayoutService().GenerateInCurrentDocument(
+                    players, templates, options, (done, total, label) =>
+                        _progress.Text = "Подготовлено " + done + " из " + total + ": " + label);
+                _progress.Text = "Готово: " + result.GarmentCount + " комплектов, " +
+                    result.PieceCount + " деталей на странице " +
+                    result.SheetHeightMm.ToString("0.#") + " × " +
+                    options.SheetWidthMm.ToString("0.#") + " мм. Сохраните CDR.";
+                _status("Раскладка добавлена в текущий CDR. Сохраните документ.", false);
             }
             catch (Exception error)
             {
                 Log.Error("Sport layout generation failed.", error);
-                _progress.Text = "Создано " + created.Count + " CDR до ошибки.";
+                _progress.Text = "Раскладка не завершена.";
                 _status(error.Message, true);
             }
             finally { _generate.IsEnabled = true; }
-        }
-
-        private void OpenOutput(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                if (!Directory.Exists(_output.Text.Trim()))
-                    throw new DirectoryNotFoundException("Папка готовых CDR не найдена.");
-                Process.Start(new ProcessStartInfo { FileName = _output.Text.Trim(), UseShellExecute = true });
-            }
-            catch (Exception error) { _status(error.Message, true); }
         }
 
         private void UpdateCount()
@@ -393,20 +378,23 @@ namespace VanyaTools.Native
 
         private void SaveDraft()
         {
-            if (_loading || _pattern == null || _output == null || _font == null ||
+            if (_loading || _frontArt == null || _backArt == null ||
+                _leftSleeveArt == null || _rightSleeveArt == null ||
+                _sheetWidth == null || _gap == null || _font == null ||
                 _nameSide == null || _textColor == null || _keepGuides == null ||
-                _patternMode == null || _tileWidth == null) return;
+                _templateGrid == null || _playerGrid == null) return;
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(DraftPath));
                 var draft = new Draft {
                     Templates = _templates.ToList(), Players = _players.ToList(),
-                    PatternPath = _pattern.Text, OutputFolder = _output.Text,
+                    FrontArtworkPath = _frontArt.Text, BackArtworkPath = _backArt.Text,
+                    LeftSleeveArtworkPath = _leftSleeveArt.Text,
+                    RightSleeveArtworkPath = _rightSleeveArt.Text,
+                    SheetWidth = _sheetWidth.Text, Gap = _gap.Text,
                     FontName = _font.Text, FrontNameOnRight = _nameSide.SelectedIndex == 1,
                     WhiteText = _textColor.SelectedIndex == 1,
-                    KeepGuides = _keepGuides.IsChecked == true,
-                    RepeatPattern = _patternMode.SelectedIndex == 0,
-                    TileWidth = _tileWidth.Text
+                    KeepGuides = _keepGuides.IsChecked == true
                 };
                 File.WriteAllText(DraftPath, new JavaScriptSerializer().Serialize(draft),
                     new UTF8Encoding(false));
@@ -429,14 +417,16 @@ namespace VanyaTools.Native
                             _templates.Add(row);
                         foreach (var row in draft.Players ?? new List<SportLayoutPlayer>())
                             _players.Add(row);
-                        _pattern.Text = draft.PatternPath ?? "";
-                        _output.Text = draft.OutputFolder ?? "";
+                        _frontArt.Text = draft.FrontArtworkPath ?? draft.PatternPath ?? "";
+                        _backArt.Text = draft.BackArtworkPath ?? draft.PatternPath ?? "";
+                        _leftSleeveArt.Text = draft.LeftSleeveArtworkPath ?? draft.PatternPath ?? "";
+                        _rightSleeveArt.Text = draft.RightSleeveArtworkPath ?? "";
+                        _sheetWidth.Text = draft.SheetWidth ?? "1500";
+                        _gap.Text = draft.Gap ?? "10";
                         _font.Text = draft.FontName ?? "Arial";
                         _nameSide.SelectedIndex = draft.FrontNameOnRight ? 1 : 0;
                         _textColor.SelectedIndex = draft.WhiteText ? 1 : 0;
                         _keepGuides.IsChecked = draft.KeepGuides;
-                        _patternMode.SelectedIndex = draft.RepeatPattern ? 0 : 1;
-                        _tileWidth.Text = draft.TileWidth ?? "100";
                     }
                 }
                 if (_templates.Count == 0)
@@ -468,13 +458,16 @@ namespace VanyaTools.Native
                 Width = new DataGridLength(width) };
         }
 
-        private static double ParseTileWidth(string text)
+        private static double ParseMillimeters(string text, double minimum,
+            double maximum, string label)
         {
             if (Double.TryParse((text ?? "").Replace(',', '.'),
                 System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture, out double width) &&
-                width >= 5 && width <= 1000) return width;
-            throw new InvalidOperationException("Ширина плитки паттерна: от 5 до 1000 мм.");
+                !Double.IsNaN(width) && !Double.IsInfinity(width) &&
+                width >= minimum && width <= maximum) return width;
+            throw new InvalidOperationException(label + ": от " + minimum +
+                " до " + maximum + " мм.");
         }
 
         private static UIElement PathRow(TextBox field, string label, RoutedEventHandler click)
