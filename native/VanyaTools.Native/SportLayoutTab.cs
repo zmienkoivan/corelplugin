@@ -28,6 +28,9 @@ namespace VanyaTools.Native
             public string BackArtworkPath { get; set; }
             public string LeftSleeveArtworkPath { get; set; }
             public string RightSleeveArtworkPath { get; set; }
+            public string NeckArtworkPath { get; set; }
+            public string ModelPath { get; set; }
+            public bool? RotateSleeves { get; set; }
             public string SheetWidth { get; set; }
             public string Gap { get; set; }
             public string FontName { get; set; }
@@ -166,14 +169,17 @@ namespace VanyaTools.Native
         private readonly Action<string, bool> _status;
         private readonly ObservableCollection<SportLayoutTemplate> _templates =
             new ObservableCollection<SportLayoutTemplate>();
+        private readonly ObservableCollection<string> _sizeOptions =
+            new ObservableCollection<string>();
         private readonly ObservableCollection<SportLayoutPlayer> _players =
             new ObservableCollection<SportLayoutPlayer>();
         private readonly DataGrid _templateGrid, _playerGrid;
-        private readonly TextBox _frontArt, _backArt, _leftSleeveArt, _rightSleeveArt;
+        private readonly TextBox _frontArt, _backArt, _leftSleeveArt, _rightSleeveArt,
+            _neckArt, _modelPath;
         private readonly TextBox _sheetWidth, _gap;
         private readonly ComboBox _nameSide;
         private readonly TextStyleEditor _nameStyle, _numberStyle;
-        private readonly CheckBox _keepGuides;
+        private readonly CheckBox _keepGuides, _rotateSleeves;
         private readonly TextBlock _count, _progress;
         private readonly Button _prepare, _generate;
         private bool _loading, _busy;
@@ -189,10 +195,22 @@ namespace VanyaTools.Native
                 "под видимыми контурами. Затем создайте комплекты и раскладку."));
 
             panel.Children.Add(Title("1. Лекала по размерам"));
+            _modelPath = Field("");
+            _modelPath.IsReadOnly = true;
+            panel.Children.Add(PathRow(_modelPath, "Выбрать модель CDR", ChooseLayeredModel));
+            panel.Children.Add(Note("Новая модель: одна страница, общий верхний слой VT_ZONES; " +
+                "в каждом слое размера — группа VT_TOP с пятью именованными деталями. " +
+                "Названия слоёв размеров станут вариантами в таблице игроков."));
+            panel.Children.Add(Note("В группе VT_TOP: VT_FRONT, VT_BACK, VT_SLEEVE_LEFT, " +
+                "VT_SLEEVE_RIGHT, VT_NECK. На VT_ZONES: VT_SPORT_ZONE_FRONT_LEFT, " +
+                "VT_SPORT_ZONE_FRONT_RIGHT, VT_SPORT_ZONE_BACK, " +
+                "VT_SPORT_ZONE_BACK_NUMBER, VT_SPORT_ZONE_LEFT_SLEEVE, " +
+                "VT_SPORT_ZONE_RIGHT_SLEEVE; VT_SPORT_ZONE_NECK — по желанию."));
             _templateGrid = new DataGrid { Height = 132, AutoGenerateColumns = false,
                 CanUserAddRows = false, CanUserDeleteRows = false, FontSize = 12,
                 Margin = new Thickness(0, 3, 0, 4), ItemsSource = _templates };
             _templateGrid.Columns.Add(Column("Размер", "Size", 80));
+            _templateGrid.Columns.Add(Column("Слой", "LayerName", 110));
             _templateGrid.Columns.Add(Column("Масштаб %", "ScalePercent", 85));
             _templateGrid.Columns.Add(Column("Файл CDR", "Path", 290));
             panel.Children.Add(_templateGrid);
@@ -218,13 +236,13 @@ namespace VanyaTools.Native
             _backArt = ArtworkField(panel, "Спина", "спины");
             _leftSleeveArt = ArtworkField(panel, "Левый рукав (верхний на шаблоне)", "левого рукава");
             _rightSleeveArt = ArtworkField(panel, "Правый рукав (нижний, необязательно)", "правого рукава");
+            _neckArt = ArtworkField(panel, "Горловина (для модели с пятью деталями)", "горловины");
             panel.Children.Add(Note("Если рисунок правого рукава не выбран, берётся рисунок левого."));
             _prepare = DockerTheme.Primary(Button("Этап 1 · Подготовить макет", Prepare));
             panel.Children.Add(_prepare);
-            panel.Children.Add(Note("Кнопка создаёт отдельные страницы-макеты для всех размеров таблицы. " +
-                "На каждой странице можно двигать и масштабировать рисунки, контуры и красные зоны " +
-                "имени и номера. Повторное нажатие создаст новые макеты, а прежние сохранит отдельно. " +
-                "Не переименовывайте страницу-макет и именованные объекты."));
+            panel.Children.Add(Note("Этап 1 создаёт одну обзорную страницу со всеми размерами рядом. " +
+                "Каждый размер остаётся на отдельном слое для ручной правки рисунков, " +
+                "контуров и красных зон. Повторный запуск сохранит прежнюю страницу отдельно."));
             panel.Children.Add(Note("Можно нарисовать новый прямоугольник на странице-макете, " +
                 "выделить его и назначить боксом нужной надписи. Старый бокс этой надписи заменится."));
             var zoneButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
@@ -244,7 +262,11 @@ namespace VanyaTools.Native
             _playerGrid = new DataGrid { Height = 224, AutoGenerateColumns = false,
                 CanUserAddRows = false, CanUserDeleteRows = false, FontSize = 12,
                 Margin = new Thickness(0, 3, 0, 4), ItemsSource = _players };
-            _playerGrid.Columns.Add(Column("Размер", "Size", 70));
+            _playerGrid.Columns.Add(new DataGridComboBoxColumn { Header = "Размер",
+                ItemsSource = _sizeOptions, SelectedItemBinding = new Binding("Size") {
+                    Mode = BindingMode.TwoWay,
+                    UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged },
+                Width = new DataGridLength(85) });
             _playerGrid.Columns.Add(Column("Имя", "Name", 185));
             _playerGrid.Columns.Add(Column("№", "Number", 60));
             _playerGrid.Columns.Add(Column("Шт.", "Quantity", 55));
@@ -252,11 +274,13 @@ namespace VanyaTools.Native
             _playerGrid.Columns.Add(PartColumn("Спина", SportLayoutPart.Back));
             _playerGrid.Columns.Add(PartColumn("Лев. рук.", SportLayoutPart.LeftSleeve));
             _playerGrid.Columns.Add(PartColumn("Прав. рук.", SportLayoutPart.RightSleeve));
+            _playerGrid.Columns.Add(PartColumn("Горловина", SportLayoutPart.Neck));
             panel.Children.Add(_playerGrid);
             var playerButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 3) };
             playerButtons.Children.Add(Button("Добавить строку", (_, __) =>
             {
-                _players.Add(new SportLayoutPlayer { Size = "М", Quantity = 1 });
+                _players.Add(new SportLayoutPlayer { Size = _sizeOptions.FirstOrDefault() ?? "М",
+                    Quantity = 1 });
                 _playerGrid.SelectedIndex = _players.Count - 1;
                 SaveDraft();
             }));
@@ -281,8 +305,11 @@ namespace VanyaTools.Native
             _gap.Width = 60;
             roll.Children.Add(_gap);
             panel.Children.Add(roll);
+            _rotateSleeves = new CheckBox { Content = "Поворачивать рукава и горловину на 90° для плотной раскладки",
+                FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
+            panel.Children.Add(_rotateSleeves);
             panel.Children.Add(Note("Автораскладка заполняет свободные участки рядом с крупными " +
-                "деталями без поворота рисунка; " +
+                "деталями; при разрешённом повороте весь рисунок детали поворачивается вместе с ней. " +
                 "длина страницы определяется автоматически. Отступа от края полотна нет; " +
                 "расстояние применяется только между деталями. Для этапа 2 берутся текущие " +
                 "положения рисунков и зон со страницы-макета; после замены исходного файла " +
@@ -314,7 +341,7 @@ namespace VanyaTools.Native
             _progress = Note("");
             panel.Children.Add(_progress);
 
-            _templates.CollectionChanged += (_, __) => SaveDraft();
+            _templates.CollectionChanged += (_, __) => { RefreshSizes(); SaveDraft(); };
             _players.CollectionChanged += (_, __) => { UpdateCount(); SaveDraft(); };
             _templateGrid.CellEditEnding += (_, __) => SaveSoon();
             _playerGrid.CellEditEnding += (_, __) => SaveSoon();
@@ -322,12 +349,17 @@ namespace VanyaTools.Native
             _backArt.TextChanged += (_, __) => SaveDraft();
             _leftSleeveArt.TextChanged += (_, __) => SaveDraft();
             _rightSleeveArt.TextChanged += (_, __) => SaveDraft();
+            _neckArt.TextChanged += (_, __) => SaveDraft();
+            _modelPath.TextChanged += (_, __) => SaveDraft();
             _sheetWidth.TextChanged += (_, __) => SaveDraft();
             _gap.TextChanged += (_, __) => SaveDraft();
             _nameSide.SelectionChanged += (_, __) => SaveDraft();
             _keepGuides.Checked += (_, __) => SaveDraft();
             _keepGuides.Unchecked += (_, __) => SaveDraft();
+            _rotateSleeves.Checked += (_, __) => SaveDraft();
+            _rotateSleeves.Unchecked += (_, __) => SaveDraft();
             LoadDraft();
+            RefreshSizes();
             UpdateCount();
         }
 
@@ -360,6 +392,43 @@ namespace VanyaTools.Native
             SaveDraft();
         }
 
+        private void ChooseLayeredModel(object sender, RoutedEventArgs e)
+        {
+            var dialog = new OpenFileDialog { Filter = "CorelDRAW (*.cdr)|*.cdr",
+                CheckFileExists = true };
+            if (dialog.ShowDialog() != true) return;
+            try
+            {
+                IList<string> layers = new SportLayoutService().ScanLayeredModel(dialog.FileName);
+                _loading = true;
+                _templates.Clear();
+                foreach (string layer in layers)
+                    _templates.Add(new SportLayoutTemplate { Size = layer,
+                        LayerName = layer, Path = dialog.FileName, ScalePercent = 100 });
+                _modelPath.Text = dialog.FileName;
+                _loading = false;
+                RefreshSizes();
+                _status("Загружена модель: " + String.Join(", ", layers) + ".", false);
+                SaveDraft();
+            }
+            catch (Exception error)
+            {
+                _loading = false;
+                Log.Error("Could not load layered sport model.", error);
+                _status(error.Message, true);
+            }
+        }
+
+        private void RefreshSizes()
+        {
+            if (_sizeOptions == null) return;
+            string[] sizes = _templates.Select(x => x.Size?.Trim())
+                .Where(x => !String.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            _sizeOptions.Clear();
+            foreach (string size in sizes) _sizeOptions.Add(size);
+        }
+
         private void AddApproximateSizes(object sender, RoutedEventArgs e)
         {
             var medium = _templates.FirstOrDefault(item =>
@@ -367,6 +436,11 @@ namespace VanyaTools.Native
             if (medium == null || String.IsNullOrWhiteSpace(medium.Path))
             {
                 _status("Сначала добавьте шаблон размера М.", true);
+                return;
+            }
+            if (!String.IsNullOrWhiteSpace(medium.LayerName))
+            {
+                _status("Для слоистой модели добавьте реальные слои размеров в CDR и выберите модель заново.", true);
                 return;
             }
             if (!_templates.Any(item => SportLayoutService.NormalizeSize(item.Size) == "S"))
@@ -497,20 +571,14 @@ namespace VanyaTools.Native
                         throw new InvalidOperationException("Не найден шаблон размера " + size + ".");
                 }
                 SaveDraft();
-                dynamic originalPage = CorelApp.Get().ActiveDocument.ActivePage;
-                var prepared = new List<string>();
                 var service = new SportLayoutService();
-                foreach (var template in templates)
-                {
-                    originalPage.Activate();
-                    _progress.Text = "Подготавливаю " + (prepared.Count + 1) + " из " +
-                        templates.Count + ": " + template.Size + "…";
-                    await Dispatcher.Yield(DispatcherPriority.Background);
-                    prepared.Add(service.PrepareDesign(template, options));
-                }
-                _progress.Text = "Готовы макеты " + String.Join(", ", prepared) +
-                    ". Поправьте каждый размер на его странице, затем запустите этап 2.";
-                _status("Страницы-макеты всех размеров готовы для ручной правки.", false);
+                _progress.Text = "Подготавливаю одну страницу для " + templates.Count +
+                    " размеров…";
+                await Dispatcher.Yield(DispatcherPriority.Background);
+                string prepared = service.PrepareOverview(templates, options);
+                _progress.Text = "Готова обзорная страница: " + prepared +
+                    ". Поправьте рисунки на слоях размеров, затем запустите этап 2.";
+                _status("Макеты всех размеров готовы на одной странице.", false);
             }
             catch (Exception error)
             {
@@ -612,8 +680,10 @@ namespace VanyaTools.Native
                 BackArtworkPath = _backArt.Text.Trim(),
                 LeftSleeveArtworkPath = _leftSleeveArt.Text.Trim(),
                 RightSleeveArtworkPath = _rightSleeveArt.Text.Trim(),
+                NeckArtworkPath = _neckArt.Text.Trim(),
                 SheetWidthMm = ParseMillimeters(_sheetWidth.Text, 300, 2000, "Ширина полотна"),
                 GapMm = ParseMillimeters(_gap.Text, 0, 100, "Расстояние между деталями"),
+                RotateSleeves = _rotateSleeves.IsChecked == true,
                 NameStyle = _nameStyle.Read("Имя"),
                 NumberStyle = _numberStyle.Read("Номер"),
                 FrontNameOnRight = _nameSide.SelectedIndex == 1,
@@ -639,6 +709,7 @@ namespace VanyaTools.Native
         {
             if (_loading || _frontArt == null || _backArt == null ||
                 _leftSleeveArt == null || _rightSleeveArt == null ||
+                _neckArt == null || _modelPath == null || _rotateSleeves == null ||
                 _sheetWidth == null || _gap == null || _nameStyle == null ||
                 _numberStyle == null || _nameSide == null || _keepGuides == null ||
                 _templateGrid == null || _playerGrid == null) return;
@@ -650,6 +721,8 @@ namespace VanyaTools.Native
                     FrontArtworkPath = _frontArt.Text, BackArtworkPath = _backArt.Text,
                     LeftSleeveArtworkPath = _leftSleeveArt.Text,
                     RightSleeveArtworkPath = _rightSleeveArt.Text,
+                    NeckArtworkPath = _neckArt.Text, ModelPath = _modelPath.Text,
+                    RotateSleeves = _rotateSleeves.IsChecked == true,
                     SheetWidth = _sheetWidth.Text, Gap = _gap.Text,
                     NameStyle = _nameStyle.Read("Имя"),
                     NumberStyle = _numberStyle.Read("Номер"),
@@ -683,6 +756,9 @@ namespace VanyaTools.Native
                         _backArt.Text = draft.BackArtworkPath ?? draft.PatternPath ?? "";
                         _leftSleeveArt.Text = draft.LeftSleeveArtworkPath ?? draft.PatternPath ?? "";
                         _rightSleeveArt.Text = draft.RightSleeveArtworkPath ?? "";
+                        _neckArt.Text = draft.NeckArtworkPath ?? "";
+                        _modelPath.Text = draft.ModelPath ?? "";
+                        _rotateSleeves.IsChecked = draft.RotateSleeves ?? true;
                         _sheetWidth.Text = draft.SheetWidth ?? "1500";
                         _gap.Text = draft.Gap ?? "10";
                         if (draft.NameStyle != null) _nameStyle.Load(draft.NameStyle);
