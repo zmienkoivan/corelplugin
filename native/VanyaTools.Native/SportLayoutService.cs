@@ -190,7 +190,9 @@ namespace VanyaTools.Native
                     {
                         target.Activate();
                         outputPage.Activate();
-                        Garment garment = CopyGarment(source, outputLayer);
+                        Garment garment = templateIsTarget
+                            ? CopyGarment(source, outputLayer)
+                            : PasteGarment(app, source, sourcePage, target, outputPage, outputLayer);
                         double scale = template.ScalePercent <= 0 ? 1 : template.ScalePercent / 100.0;
                         nested.AddRange(BuildNestedPieces(app, outputLayer, garment, row, size,
                             complete + 1, options, scale));
@@ -289,6 +291,36 @@ namespace VanyaTools.Native
                 LeftSleeveFrame = Describe(source.LeftSleeveFrame.Shape.CopyToLayer(layer)),
                 RightSleeveFrame = Describe(source.RightSleeveFrame.Shape.CopyToLayer(layer))
             };
+        }
+
+        // CopyToLayer only works inside one CDR. Use Corel's clipboard transfer
+        // for a template opened as a different document, then identify only the
+        // shapes returned by PasteEx (the output page may already have garments).
+        private static Garment PasteGarment(dynamic app, Garment source,
+            dynamic sourcePage, dynamic target, dynamic outputPage, dynamic outputLayer)
+        {
+            sourcePage.Activate();
+            dynamic range = app.CreateShapeRange();
+            range.Add(source.Front.Shape);
+            range.Add(source.Back.Shape);
+            range.Add(source.LeftSleeve.Shape);
+            range.Add(source.RightSleeve.Shape);
+            range.Add(source.FrontLeft.Shape);
+            range.Add(source.FrontRight.Shape);
+            range.Add(source.BackText.Shape);
+            range.Add(source.LeftSleeveFrame.Shape);
+            range.Add(source.RightSleeveFrame.Shape);
+            range.Copy();
+
+            target.Activate();
+            outputPage.Activate();
+            dynamic pasted = outputLayer.PasteEx();
+            var shapes = new List<dynamic>();
+            foreach (dynamic shape in pasted) shapes.Add(shape);
+            if (shapes.Count != 9)
+                throw new InvalidOperationException("CorelDRAW вставил " + shapes.Count +
+                    " объектов лекала вместо 9.");
+            return ReadGarmentShapes(shapes);
         }
 
         private static IList<NestedPiece> BuildNestedPieces(dynamic app, dynamic layer,
@@ -420,10 +452,18 @@ namespace VanyaTools.Native
 
         private static Garment ReadGarment(dynamic page)
         {
-            var outlines = new List<Piece>();
-            var frames = new List<Piece>();
+            var shapes = new List<dynamic>();
             foreach (dynamic layer in page.Layers)
             foreach (dynamic shape in layer.Shapes)
+                shapes.Add(shape);
+            return ReadGarmentShapes(shapes);
+        }
+
+        private static Garment ReadGarmentShapes(IEnumerable<dynamic> shapes)
+        {
+            var outlines = new List<Piece>();
+            var frames = new List<Piece>();
+            foreach (dynamic shape in shapes)
             {
                 Piece part = Describe(shape);
                 int type = Convert.ToInt32(shape.Type);
