@@ -14,7 +14,8 @@ namespace VanyaTools.Native
         private const uint FileSystemPath = 0x80058000;
         private const int Cancelled = unchecked((int)0x800704C7);
 
-        public static string Pick(IntPtr owner, string currentPath)
+        public static string Pick(IntPtr owner, string currentPath,
+            string title = "Папка года для макетов")
         {
             IFileOpenDialog dialog = (IFileOpenDialog)new FileOpenDialogCom();
             IShellItem initial = null, result = null;
@@ -22,7 +23,7 @@ namespace VanyaTools.Native
             {
                 dialog.GetOptions(out uint options);
                 dialog.SetOptions(options | PickFolders | ForceFileSystem | PathMustExist);
-                dialog.SetTitle("Папка года для макетов");
+                dialog.SetTitle(title);
                 if (!String.IsNullOrWhiteSpace(currentPath) && Directory.Exists(currentPath))
                 {
                     Guid shellItemId = typeof(IShellItem).GUID;
