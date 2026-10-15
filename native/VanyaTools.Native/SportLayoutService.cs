@@ -103,10 +103,9 @@ namespace VanyaTools.Native
             public double Width, Height, Left, Top;
         }
 
-        private sealed class Shelf
+        private sealed class SkylineSegment
         {
-            public double Top, Height, Right;
-            public bool Empty = true;
+            public double Left, Right, Top;
         }
 
         public string AssignSelectedTextBox(string zoneName)
@@ -706,45 +705,112 @@ namespace VanyaTools.Native
 
         private static double Nest(IList<NestedPiece> pieces, double sheetWidth, double gap)
         {
-            double margin = Math.Max(5, gap);
-            var shelves = new List<Shelf>();
+            // A single-height shelf leaves an entire side strip empty when a
+            // sleeve is shorter than the bodies in that row. The skyline tracks
+            // occupied height separately across the roll width, so sleeves can
+            // use that strip without rotating the artwork. The roll has no edge
+            // margin; only neighboring pieces receive the configured gap.
+            var skyline = new List<SkylineSegment> {
+                new SkylineSegment { Left = 0, Right = sheetWidth, Top = 0 }
+            };
+            double usedHeight = 0;
             foreach (NestedPiece piece in pieces.OrderByDescending(item => item.Height)
                 .ThenByDescending(item => item.Width))
             {
-                if (piece.Width > sheetWidth - margin * 2 + 0.001)
+                if (piece.Width > sheetWidth + 0.001)
                     throw new InvalidOperationException("Деталь шириной " +
                         piece.Width.ToString("0.#", CultureInfo.CurrentCulture) +
                         " мм не помещается на полотно " +
                         sheetWidth.ToString("0.#", CultureInfo.CurrentCulture) + " мм.");
-                Shelf chosen = null;
-                double chosenX = 0, bestWaste = Double.MaxValue;
-                foreach (Shelf shelf in shelves)
+                var candidates = new SortedSet<double> { 0, sheetWidth - piece.Width };
+                foreach (SkylineSegment segment in skyline)
                 {
-                    if (piece.Height > shelf.Height + 0.001) continue;
-                    double x = shelf.Empty ? margin : shelf.Right + gap;
-                    double waste = sheetWidth - margin - (x + piece.Width);
-                    if (waste >= -0.001 && waste < bestWaste)
+                    if (segment.Left <= sheetWidth - piece.Width + 0.001)
+                        candidates.Add(segment.Left);
+                    double rightAligned = segment.Right - piece.Width;
+                    if (rightAligned >= -0.001 &&
+                        rightAligned <= sheetWidth - piece.Width + 0.001)
+                        candidates.Add(Math.Max(0, rightAligned));
+                }
+                double bestX = 0, bestTop = Double.MaxValue, bestWaste = Double.MaxValue;
+                foreach (double x in candidates)
+                {
+                    double right = Math.Min(sheetWidth, x + piece.Width + gap);
+                    double top = SkylineTop(skyline, x, right, out double waste);
+                    if (top < bestTop - 0.001 ||
+                        (Math.Abs(top - bestTop) <= 0.001 &&
+                        (waste < bestWaste - 0.001 ||
+                        (Math.Abs(waste - bestWaste) <= 0.001 && x < bestX))))
                     {
-                        chosen = shelf;
-                        chosenX = x;
+                        bestX = x;
+                        bestTop = top;
                         bestWaste = waste;
                     }
                 }
-                if (chosen == null)
-                {
-                    double top = shelves.Count == 0 ? margin :
-                        shelves[shelves.Count - 1].Top + shelves[shelves.Count - 1].Height + gap;
-                    chosen = new Shelf { Top = top, Height = piece.Height, Right = margin };
-                    shelves.Add(chosen);
-                    chosenX = margin;
-                }
-                piece.Left = chosenX;
-                piece.Top = chosen.Top;
-                chosen.Right = chosenX + piece.Width;
-                chosen.Empty = false;
+                piece.Left = bestX;
+                piece.Top = bestTop;
+                usedHeight = Math.Max(usedHeight, bestTop + piece.Height);
+                RaiseSkyline(skyline, bestX,
+                    Math.Min(sheetWidth, bestX + piece.Width + gap),
+                    bestTop + piece.Height + gap);
             }
-            return shelves.Count == 0 ? 1000 :
-                shelves[shelves.Count - 1].Top + shelves[shelves.Count - 1].Height + margin;
+            return pieces.Count == 0 ? 1000 : usedHeight;
+        }
+
+        private static double SkylineTop(IList<SkylineSegment> skyline,
+            double left, double right, out double wastedArea)
+        {
+            int low = 0, high = skyline.Count;
+            while (low < high)
+            {
+                int middle = low + (high - low) / 2;
+                if (skyline[middle].Right <= left + 0.000001) low = middle + 1;
+                else high = middle;
+            }
+            double top = 0;
+            for (int i = low; i < skyline.Count &&
+                skyline[i].Left < right - 0.000001; i++)
+                top = Math.Max(top, skyline[i].Top);
+            wastedArea = 0;
+            for (int i = low; i < skyline.Count &&
+                skyline[i].Left < right - 0.000001; i++)
+            {
+                SkylineSegment segment = skyline[i];
+                double overlap = Math.Min(right, segment.Right) - Math.Max(left, segment.Left);
+                if (overlap > 0) wastedArea += overlap * (top - segment.Top);
+            }
+            return top;
+        }
+
+        private static void RaiseSkyline(List<SkylineSegment> skyline,
+            double left, double right, double top)
+        {
+            var updated = new List<SkylineSegment>();
+            foreach (SkylineSegment segment in skyline)
+            {
+                if (segment.Right <= left || segment.Left >= right)
+                {
+                    updated.Add(segment);
+                    continue;
+                }
+                if (segment.Left < left)
+                    updated.Add(new SkylineSegment { Left = segment.Left,
+                        Right = left, Top = segment.Top });
+                updated.Add(new SkylineSegment { Left = Math.Max(left, segment.Left),
+                    Right = Math.Min(right, segment.Right), Top = Math.Max(top, segment.Top) });
+                if (segment.Right > right)
+                    updated.Add(new SkylineSegment { Left = right,
+                        Right = segment.Right, Top = segment.Top });
+            }
+            skyline.Clear();
+            foreach (SkylineSegment segment in updated)
+            {
+                if (segment.Right - segment.Left < 0.000001) continue;
+                SkylineSegment previous = skyline.Count == 0 ? null : skyline[skyline.Count - 1];
+                if (previous != null && Math.Abs(previous.Top - segment.Top) < 0.000001)
+                    previous.Right = segment.Right;
+                else skyline.Add(segment);
+            }
         }
 
         internal static string NormalizeSize(string value)
