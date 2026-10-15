@@ -48,8 +48,8 @@ namespace VanyaTools.Native
         private readonly ComboBox _nameSide, _textColor;
         private readonly CheckBox _keepGuides;
         private readonly TextBlock _count, _progress;
-        private readonly Button _generate;
-        private bool _loading;
+        private readonly Button _prepare, _generate;
+        private bool _loading, _busy;
 
         public SportLayoutTab(Action<string, bool> status)
         {
@@ -58,8 +58,8 @@ namespace VanyaTools.Native
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Content = panel };
             panel.Children.Add(Title("Раскладка спортформы"));
-            panel.Children.Add(Note("Готовые детали появятся на новой странице текущего CDR. " +
-                "Рисунки и исходные лекала останутся на своих страницах без изменений."));
+            panel.Children.Add(Note("Сначала подготовьте страницу-макет и поправьте рисунки " +
+                "под видимыми контурами. Затем создайте комплекты и раскладку."));
 
             panel.Children.Add(Title("1. Лекала по размерам"));
             _templateGrid = new DataGrid { Height = 132, AutoGenerateColumns = false,
@@ -82,8 +82,26 @@ namespace VanyaTools.Native
                 "Временные S и XL масштабируются целиком; 95% и 110% можно изменить. " +
                 "Позже укажите отдельные файлы CDR и масштаб 100%."));
 
-            panel.Children.Add(Title("2. Игроки"));
-            panel.Children.Add(Note("Столбцы: размер, имя, номер, количество. Можно вставить строки из Excel."));
+            panel.Children.Add(Title("2. Рисунки для деталей"));
+            panel.Children.Add(Note("Выберите файл или выделите готовый рисунок в Corel и нажмите " +
+                "«Взять выделение» для нужной детали. На странице-макете рисунок " +
+                "лежит под контуром; выступающие края обрежутся при генерации. " +
+                "Выделение снимается в PNG 300 DPI; исходные объекты не меняются."));
+            _frontArt = ArtworkField(panel, "Перед", "переда");
+            _backArt = ArtworkField(panel, "Спина", "спины");
+            _leftSleeveArt = ArtworkField(panel, "Левый рукав (верхний на шаблоне)", "левого рукава");
+            _rightSleeveArt = ArtworkField(panel, "Правый рукав (нижний, необязательно)", "правого рукава");
+            panel.Children.Add(Note("Если рисунок правого рукава не выбран, берётся рисунок левого."));
+            _prepare = DockerTheme.Primary(Button("Этап 1 · Подготовить макет", Prepare));
+            panel.Children.Add(_prepare);
+            panel.Children.Add(Note("Выберите строку размера в таблице лекал и нажмите кнопку. " +
+                "На новой странице можно двигать и масштабировать рисунки и красные зоны. " +
+                "Повторное нажатие создаст новый макет, а прежний сохранит отдельно. " +
+                "Не переименовывайте страницу-макет и именованные объекты."));
+
+            panel.Children.Add(Title("3. Игроки и допечатка"));
+            panel.Children.Add(Note("Столбцы: размер, имя, номер, количество. Можно вставить строки из Excel. " +
+                "Кнопка ↗ в строке создаёт одну выбранную деталь для допечатки."));
             _playerGrid = new DataGrid { Height = 224, AutoGenerateColumns = false,
                 CanUserAddRows = false, CanUserDeleteRows = false, FontSize = 12,
                 Margin = new Thickness(0, 3, 0, 4), ItemsSource = _players };
@@ -91,6 +109,10 @@ namespace VanyaTools.Native
             _playerGrid.Columns.Add(Column("Имя", "Name", 185));
             _playerGrid.Columns.Add(Column("№", "Number", 60));
             _playerGrid.Columns.Add(Column("Шт.", "Quantity", 55));
+            _playerGrid.Columns.Add(PartColumn("Перед", SportLayoutPart.Front));
+            _playerGrid.Columns.Add(PartColumn("Спина", SportLayoutPart.Back));
+            _playerGrid.Columns.Add(PartColumn("Лев. рук.", SportLayoutPart.LeftSleeve));
+            _playerGrid.Columns.Add(PartColumn("Прав. рук.", SportLayoutPart.RightSleeve));
             panel.Children.Add(_playerGrid);
             var playerButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 3) };
             playerButtons.Children.Add(Button("Добавить строку", (_, __) =>
@@ -109,17 +131,6 @@ namespace VanyaTools.Native
             _count = Note("");
             panel.Children.Add(_count);
 
-            panel.Children.Add(Title("3. Рисунки для деталей"));
-            panel.Children.Add(Note("Выберите файл или выделите готовый рисунок в Corel и нажмите " +
-                "«Взять выделение» для нужной детали. Рисунок подгоняется под лекало " +
-                "с сохранением пропорций и обрезкой выступающих краёв. " +
-                "Выделение снимается в PNG 300 DPI; исходные объекты не меняются."));
-            _frontArt = ArtworkField(panel, "Перед", "переда");
-            _backArt = ArtworkField(panel, "Спина", "спины");
-            _leftSleeveArt = ArtworkField(panel, "Левый рукав (верхний на шаблоне)", "левого рукава");
-            _rightSleeveArt = ArtworkField(panel, "Правый рукав (нижний, необязательно)", "правого рукава");
-            panel.Children.Add(Note("Если рисунок правого рукава не выбран, берётся рисунок левого."));
-
             panel.Children.Add(Title("4. Полотно и надписи"));
             var roll = new WrapPanel { Margin = new Thickness(0, 3, 0, 6) };
             roll.Children.Add(Label("Ширина, мм"));
@@ -132,7 +143,9 @@ namespace VanyaTools.Native
             roll.Children.Add(_gap);
             panel.Children.Add(roll);
             panel.Children.Add(Note("Автораскладка уплотняет габариты деталей без поворота рисунка; " +
-                "длина страницы определяется автоматически."));
+                "длина страницы определяется автоматически. Для этапа 2 берутся текущие " +
+                "положения рисунков и зон со страницы-макета; после замены исходного файла " +
+                "рисунка подготовьте макет заново."));
             panel.Children.Add(Label("Шрифт имени и номера"));
             _font = Field("Arial");
             panel.Children.Add(_font);
@@ -159,7 +172,7 @@ namespace VanyaTools.Native
             panel.Children.Add(Note("Свободная зона переда и зоны рукавов сохраняются как именованные " +
                 "фреймы для дополнительной графики. Подписи каждой детали находятся в нижнем припуске."));
 
-            _generate = DockerTheme.Primary(Button("Разложить в текущем CDR", Generate));
+            _generate = DockerTheme.Primary(Button("Этап 2 · Создать комплекты и раскладку", Generate));
             _generate.Margin = new Thickness(0, 7, 0, 4);
             panel.Children.Add(_generate);
             _progress = Note("");
@@ -310,8 +323,82 @@ namespace VanyaTools.Native
             }
         }
 
+        private async void Prepare(object sender, RoutedEventArgs e)
+        {
+            if (_busy) return;
+            if (!_templateGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
+                !_templateGrid.CommitEdit(DataGridEditingUnit.Row, true))
+            {
+                _status("Закончите редактирование шаблона.", true);
+                return;
+            }
+            var template = _templateGrid.SelectedItem as SportLayoutTemplate ??
+                _templates.FirstOrDefault(item => SportLayoutService.NormalizeSize(item.Size) == "M") ??
+                _templates.FirstOrDefault();
+            if (template == null) { _status("Добавьте шаблон лекала.", true); return; }
+            _busy = true;
+            _prepare.IsEnabled = _generate.IsEnabled = false;
+            try
+            {
+                SportLayoutOptions options = ReadOptions();
+                SaveDraft();
+                _progress.Text = "Подготавливаю страницу-макет размера " + template.Size + "…";
+                await Dispatcher.Yield(DispatcherPriority.Background);
+                string size = new SportLayoutService().PrepareDesign(template, options);
+                _progress.Text = "Макет " + size + " готов. Поправьте рисунки и зоны " +
+                    "на новой странице, затем запустите этап 2.";
+                _status("Страница-макет " + size + " готова для ручной правки.", false);
+            }
+            catch (Exception error)
+            {
+                Log.Error("Sport layout master preparation failed.", error);
+                _progress.Text = "Макет не подготовлен.";
+                _status(error.Message, true);
+            }
+            finally { _busy = false; _prepare.IsEnabled = _generate.IsEnabled = true; }
+        }
+
+        private async void GenerateReplacement(object sender, RoutedEventArgs e,
+            SportLayoutPart part)
+        {
+            if (_busy) return;
+            if (!_playerGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
+                !_playerGrid.CommitEdit(DataGridEditingUnit.Row, true) ||
+                !_templateGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
+                !_templateGrid.CommitEdit(DataGridEditingUnit.Row, true))
+            {
+                _status("Закончите редактирование таблицы.", true);
+                return;
+            }
+            var row = (sender as FrameworkElement)?.DataContext as SportLayoutPlayer;
+            if (row == null) { _status("Не выбрана строка игрока.", true); return; }
+            _busy = true;
+            _prepare.IsEnabled = _generate.IsEnabled = false;
+            try
+            {
+                SportLayoutOptions options = ReadOptions();
+                SaveDraft();
+                _progress.Text = "Готовлю деталь для допечатки: " + row.Name + "…";
+                await Dispatcher.Yield(DispatcherPriority.Background);
+                SportLayoutResult result = new SportLayoutService().GenerateReplacementPiece(
+                    row, _templates.ToList(), options, part);
+                _progress.Text = "Деталь для допечатки на новой странице " +
+                    result.SheetHeightMm.ToString("0.#") + " × " +
+                    options.SheetWidthMm.ToString("0.#") + " мм. Сохраните CDR.";
+                _status("Деталь " + row.Name + " подготовлена для допечатки.", false);
+            }
+            catch (Exception error)
+            {
+                Log.Error("Sport replacement piece generation failed.", error);
+                _progress.Text = "Деталь не подготовлена.";
+                _status(error.Message, true);
+            }
+            finally { _busy = false; _prepare.IsEnabled = _generate.IsEnabled = true; }
+        }
+
         private async void Generate(object sender, RoutedEventArgs e)
         {
+            if (_busy) return;
             if (!_playerGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
                 !_playerGrid.CommitEdit(DataGridEditingUnit.Row, true) ||
                 !_templateGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
@@ -321,7 +408,8 @@ namespace VanyaTools.Native
                 return;
             }
             SaveDraft();
-            _generate.IsEnabled = false;
+            _busy = true;
+            _prepare.IsEnabled = _generate.IsEnabled = false;
             try
             {
                 var players = _players.ToList();
@@ -333,17 +421,7 @@ namespace VanyaTools.Native
                 long totalLong = players.Sum(row => (long)row.Quantity);
                 if (totalLong > 300)
                     throw new InvalidOperationException("За один запуск можно подготовить не более 300 комплектов.");
-                var options = new SportLayoutOptions {
-                    FrontArtworkPath = _frontArt.Text.Trim(),
-                    BackArtworkPath = _backArt.Text.Trim(),
-                    LeftSleeveArtworkPath = _leftSleeveArt.Text.Trim(),
-                    RightSleeveArtworkPath = _rightSleeveArt.Text.Trim(),
-                    SheetWidthMm = ParseMillimeters(_sheetWidth.Text, 300, 2000, "Ширина полотна"),
-                    GapMm = ParseMillimeters(_gap.Text, 0, 100, "Расстояние между деталями"),
-                    FontName = _font.Text.Trim(), FrontNameOnRight = _nameSide.SelectedIndex == 1,
-                    WhiteText = _textColor.SelectedIndex == 1,
-                    KeepGuides = _keepGuides.IsChecked == true
-                };
+                var options = ReadOptions();
                 _progress.Text = "Готовлю новую страницу текущего CDR…";
                 await Dispatcher.Yield(DispatcherPriority.Background);
                 SportLayoutResult result = new SportLayoutService().GenerateInCurrentDocument(
@@ -361,7 +439,22 @@ namespace VanyaTools.Native
                 _progress.Text = "Раскладка не завершена.";
                 _status(error.Message, true);
             }
-            finally { _generate.IsEnabled = true; }
+            finally { _busy = false; _prepare.IsEnabled = _generate.IsEnabled = true; }
+        }
+
+        private SportLayoutOptions ReadOptions()
+        {
+            return new SportLayoutOptions {
+                FrontArtworkPath = _frontArt.Text.Trim(),
+                BackArtworkPath = _backArt.Text.Trim(),
+                LeftSleeveArtworkPath = _leftSleeveArt.Text.Trim(),
+                RightSleeveArtworkPath = _rightSleeveArt.Text.Trim(),
+                SheetWidthMm = ParseMillimeters(_sheetWidth.Text, 300, 2000, "Ширина полотна"),
+                GapMm = ParseMillimeters(_gap.Text, 0, 100, "Расстояние между деталями"),
+                FontName = _font.Text.Trim(), FrontNameOnRight = _nameSide.SelectedIndex == 1,
+                WhiteText = _textColor.SelectedIndex == 1,
+                KeepGuides = _keepGuides.IsChecked == true
+            };
         }
 
         private void UpdateCount()
@@ -456,6 +549,22 @@ namespace VanyaTools.Native
                 Binding = new Binding(path) { Mode = BindingMode.TwoWay,
                     UpdateSourceTrigger = UpdateSourceTrigger.LostFocus },
                 Width = new DataGridLength(width) };
+        }
+
+        private DataGridTemplateColumn PartColumn(string header, SportLayoutPart part)
+        {
+            var button = new FrameworkElementFactory(typeof(System.Windows.Controls.Button));
+            button.SetValue(System.Windows.Controls.Button.ContentProperty, "↗");
+            button.SetValue(System.Windows.Controls.Button.ToolTipProperty,
+                "Создать одну деталь: " + header);
+            button.SetValue(System.Windows.Controls.Button.MinHeightProperty, 23.0);
+            button.SetValue(System.Windows.Controls.Button.PaddingProperty,
+                new Thickness(4, 0, 4, 0));
+            button.AddHandler(System.Windows.Controls.Button.ClickEvent,
+                new RoutedEventHandler((sender, e) => GenerateReplacement(sender, e, part)));
+            return new DataGridTemplateColumn { Header = header,
+                CellTemplate = new DataTemplate { VisualTree = button },
+                Width = new DataGridLength(80) };
         }
 
         private static double ParseMillimeters(string text, double minimum,

@@ -44,6 +44,8 @@ namespace VanyaTools.Native
         public double SheetHeightMm;
     }
 
+    internal enum SportLayoutPart { Front, Back, LeftSleeve, RightSleeve }
+
     // The supplied M template has four large orange garment contours and five
     // empty red rectangles; no shapes have names. Geometry identifies the
     // parts before copying them into the current document.
@@ -70,7 +72,10 @@ namespace VanyaTools.Native
         {
             public Piece Front, Back, LeftSleeve, RightSleeve;
             public Piece FrontLeft, FrontRight, BackText, LeftSleeveFrame, RightSleeveFrame;
+            public Piece FrontArtwork, BackArtwork, LeftSleeveArtwork, RightSleeveArtwork;
         }
+
+        private const string MasterPrefix = "Спорт · макет · ";
 
         private sealed class TemplateSession
         {
@@ -91,11 +96,138 @@ namespace VanyaTools.Native
             public bool Empty = true;
         }
 
-        // The source art stays on the existing page. A new roll-width page in
-        // the active document receives all generated, separately grouped parts.
+        // The master remains editable in the current CDR. Artwork is placed
+        // behind the outlines and red zones; generation reads these edited
+        // shapes instead of reopening the original template or PNG files.
+        public string PrepareDesign(SportLayoutTemplate template, SportLayoutOptions options)
+        {
+            if (template == null || String.IsNullOrWhiteSpace(template.Path) ||
+                !File.Exists(template.Path) ||
+                !String.Equals(System.IO.Path.GetExtension(template.Path), ".cdr",
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Выберите существующий CDR-шаблон лекала.");
+            string size = NormalizeSize(template.Size);
+            if (size.Length == 0) throw new InvalidOperationException("Укажите размер лекала.");
+            double scale = template.ScalePercent <= 0 ? 1 : template.ScalePercent / 100.0;
+            if (scale < 0.5 || scale > 2)
+                throw new InvalidOperationException("Масштаб лекала: от 50 до 200%.");
+            if (options == null) throw new InvalidOperationException("Укажите рисунки для деталей.");
+            foreach (string path in new[] { options.FrontArtworkPath, options.BackArtworkPath,
+                options.LeftSleeveArtworkPath, options.RightSleeveArtworkPath })
+                if (!String.IsNullOrWhiteSpace(path) && !File.Exists(path))
+                    throw new FileNotFoundException("Рисунок для детали не найден.", path);
+
+            dynamic app = CorelApp.Get();
+            dynamic target = app.ActiveDocument;
+            if (target == null) throw new InvalidOperationException("Откройте рабочий CDR.");
+            dynamic previousPage = target.ActivePage;
+            int previousUnit = Convert.ToInt32(target.Unit);
+            string targetPath = null;
+            try { targetPath = System.IO.Path.GetFullPath(Convert.ToString(target.FullFileName)); }
+            catch { }
+            string templatePath = System.IO.Path.GetFullPath(template.Path);
+            bool sameDocument = String.Equals(templatePath, targetPath,
+                StringComparison.OrdinalIgnoreCase);
+            var sessions = new Dictionary<string, TemplateSession>(StringComparer.OrdinalIgnoreCase);
+            dynamic masterPage = null;
+            bool commandStarted = false;
+            try
+            {
+                target.Unit = CorelConstants.CdrMillimeter;
+                target.BeginCommandGroup("Vanya Tools - макет спортформы " + size);
+                commandStarted = true;
+                masterPage = target.AddPages(1);
+                TemplateSession session = sameDocument ? null :
+                    GetTemplateSession(app, templatePath, sessions);
+                if (!sameDocument && Convert.ToInt32(session.Document.Pages.Count) != 1)
+                    throw new InvalidOperationException("CDR-шаблон должен содержать одну страницу.");
+                dynamic sourcePage = sameDocument ? previousPage : session.Document.ActivePage;
+                if (sameDocument && Convert.ToString(sourcePage.Name).StartsWith(MasterPrefix,
+                    StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Откройте страницу исходного лекала, а не готовый макет.");
+                Garment source = ReadGarment(sourcePage);
+                target.Activate();
+                masterPage.Activate();
+                masterPage.SizeWidth = Convert.ToDouble(sourcePage.SizeWidth) * scale;
+                masterPage.SizeHeight = Convert.ToDouble(sourcePage.SizeHeight) * scale;
+                dynamic layer = target.ActiveLayer;
+                Garment master = sameDocument ? CopyGarment(source, layer) :
+                    PasteGarment(app, source, sourcePage, target, masterPage, layer);
+                NameMasterGarment(master);
+                master.FrontArtwork = AddMasterArtwork(app, layer, options.FrontArtworkPath,
+                    master.Front, "FRONT");
+                master.BackArtwork = AddMasterArtwork(app, layer, options.BackArtworkPath,
+                    master.Back, "BACK");
+                master.LeftSleeveArtwork = AddMasterArtwork(app, layer,
+                    options.LeftSleeveArtworkPath, master.LeftSleeve, "LEFT_SLEEVE");
+                master.RightSleeveArtwork = AddMasterArtwork(app, layer,
+                    String.IsNullOrWhiteSpace(options.RightSleeveArtworkPath)
+                        ? options.LeftSleeveArtworkPath : options.RightSleeveArtworkPath,
+                    master.RightSleeve, "RIGHT_SLEEVE");
+                if (Math.Abs(scale - 1) > 0.0001)
+                    StretchMaster(app, master, scale);
+                foreach (dynamic page in target.Pages)
+                    if (!Object.ReferenceEquals(page, masterPage) &&
+                        String.Equals(Convert.ToString(page.Name), MasterPrefix + size,
+                            StringComparison.OrdinalIgnoreCase))
+                        page.Name = "Спорт · прежний макет · " + size + " · " +
+                            Convert.ToInt32(page.Index);
+                masterPage.Name = MasterPrefix + size;
+                return size;
+            }
+            catch (Exception error)
+            {
+                try
+                {
+                    target.Activate();
+                    if (masterPage != null) target.DeletePages(Convert.ToInt32(masterPage.Index));
+                    previousPage.Activate();
+                }
+                catch (Exception rollbackError)
+                {
+                    Log.Error("Could not remove failed sport master page.", rollbackError);
+                }
+                throw new InvalidOperationException("Макет не подготовлен: " + error.Message, error);
+            }
+            finally
+            {
+                foreach (TemplateSession session in sessions.Values)
+                    try
+                    {
+                        if (session.OpenedHere)
+                        {
+                            try { session.Document.Dirty = false; } catch { }
+                            session.Document.Close();
+                        }
+                        else session.Document.Unit = session.OriginalUnit;
+                    }
+                    catch (Exception closeError) { Log.Error("Could not close sport template.", closeError); }
+                try { target.Activate(); } catch { }
+                try { target.Unit = previousUnit; } catch { }
+                try { if (commandStarted) target.EndCommandGroup(); } catch { }
+            }
+        }
+
         public SportLayoutResult GenerateInCurrentDocument(IList<SportLayoutPlayer> rows,
             IList<SportLayoutTemplate> templates, SportLayoutOptions options,
             Action<int, int, string> progress)
+        {
+            return Generate(rows, templates, options, progress, null);
+        }
+
+        public SportLayoutResult GenerateReplacementPiece(SportLayoutPlayer row,
+            IList<SportLayoutTemplate> templates, SportLayoutOptions options,
+            SportLayoutPart part)
+        {
+            if (row == null) throw new InvalidOperationException("Выберите игрока.");
+            return Generate(new[] { new SportLayoutPlayer { Size = row.Size,
+                Name = row.Name, Number = row.Number, Quantity = 1 } },
+                templates, options, null, part);
+        }
+
+        private SportLayoutResult Generate(IList<SportLayoutPlayer> rows,
+            IList<SportLayoutTemplate> templates, SportLayoutOptions options,
+            Action<int, int, string> progress, SportLayoutPart? selectedPart)
         {
             if (rows == null || rows.Count == 0)
                 throw new InvalidOperationException("Добавьте игроков в таблицу.");
@@ -107,19 +239,12 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Расстояние между деталями: от 0 до 100 мм.");
             if (String.IsNullOrWhiteSpace(options.FontName))
                 throw new InvalidOperationException("Выберите шрифт для имён и номеров.");
-            foreach (string path in new[] { options.FrontArtworkPath, options.BackArtworkPath,
-                options.LeftSleeveArtworkPath, options.RightSleeveArtworkPath })
-                if (!String.IsNullOrWhiteSpace(path) && !File.Exists(path))
-                    throw new FileNotFoundException("Рисунок для детали не найден.", path);
-
             var bySize = new Dictionary<string, SportLayoutTemplate>(StringComparer.CurrentCultureIgnoreCase);
             foreach (var template in templates)
             {
                 if (template == null) continue;
                 string size = NormalizeSize(template.Size);
                 if (size.Length == 0 || String.IsNullOrWhiteSpace(template.Path)) continue;
-                if (!File.Exists(template.Path))
-                    throw new FileNotFoundException("Шаблон размера " + size + " не найден.", template.Path);
                 if (!String.Equals(System.IO.Path.GetExtension(template.Path), ".cdr",
                     StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Для размера " + size + " нужен файл CDR.");
@@ -152,10 +277,6 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Откройте CDR с рисунками для раскладки.");
             dynamic previousPage = target.ActivePage;
             int previousUnit = Convert.ToInt32(target.Unit);
-            string targetPath = null;
-            try { targetPath = System.IO.Path.GetFullPath(Convert.ToString(target.FullFileName)); }
-            catch { }
-            var sessions = new Dictionary<string, TemplateSession>(StringComparer.OrdinalIgnoreCase);
             dynamic outputPage = null;
             bool commandStarted = false;
             var nested = new List<NestedPiece>();
@@ -175,27 +296,16 @@ namespace VanyaTools.Native
                 {
                     if (row == null) continue;
                     string size = NormalizeSize(row.Size);
-                    var template = bySize[size];
-                    string templatePath = System.IO.Path.GetFullPath(template.Path);
-                    TemplateSession session = GetTemplateSession(app, templatePath, sessions);
-                    bool templateIsTarget = String.Equals(templatePath, targetPath,
-                        StringComparison.OrdinalIgnoreCase);
-                    if (Convert.ToInt32(session.Document.Pages.Count) !=
-                        (templateIsTarget ? 2 : 1))
-                        throw new InvalidOperationException("Шаблон " + size + " должен содержать одну страницу.");
-                    dynamic sourcePage = templateIsTarget ? previousPage :
-                        session.Document.ActivePage;
-                    Garment source = ReadGarment(sourcePage);
+                    double scale;
+                    dynamic sourcePage = FindMasterPage(target, size, bySize, out scale);
+                    Garment source = ReadPreparedGarment(sourcePage);
                     for (int copy = 1; copy <= row.Quantity; copy++)
                     {
                         target.Activate();
                         outputPage.Activate();
-                        Garment garment = templateIsTarget
-                            ? CopyGarment(source, outputLayer)
-                            : PasteGarment(app, source, sourcePage, target, outputPage, outputLayer);
-                        double scale = template.ScalePercent <= 0 ? 1 : template.ScalePercent / 100.0;
+                        Garment garment = CopyGarment(source, outputLayer, selectedPart);
                         nested.AddRange(BuildNestedPieces(app, outputLayer, garment, row, size,
-                            complete + 1, options, scale));
+                            complete + 1, options, scale, selectedPart));
                         complete++;
                         progress?.Invoke(complete, total, size + " · " + row.Name);
                     }
@@ -206,7 +316,9 @@ namespace VanyaTools.Native
                 foreach (var item in nested)
                     item.Shape.Move(item.Left - Convert.ToDouble(item.Shape.LeftX),
                         sheetHeight - item.Top - item.Height - Convert.ToDouble(item.Shape.BottomY));
-                try { outputPage.Name = "Спортформа · " + complete + " комплектов"; } catch { }
+                try { outputPage.Name = selectedPart.HasValue
+                    ? "Допечатка · " + rows[0].Name + " · " + selectedPart.Value
+                    : "Спортформа · " + complete + " комплектов"; } catch { }
                 return new SportLayoutResult { GarmentCount = complete,
                     PieceCount = nested.Count, SheetHeightMm = sheetHeight };
             }
@@ -226,18 +338,6 @@ namespace VanyaTools.Native
             }
             finally
             {
-                foreach (TemplateSession session in sessions.Values)
-                    try
-                    {
-                        if (session.OpenedHere)
-                        {
-                            try { session.Document.Dirty = false; } catch { }
-                            session.Document.Close();
-                        }
-                        else if (!Object.ReferenceEquals(session.Document, target))
-                            session.Document.Unit = session.OriginalUnit;
-                    }
-                    catch (Exception closeError) { Log.Error("Could not close sport template.", closeError); }
                 try { target.Activate(); } catch { }
                 try { target.Unit = previousUnit; } catch { }
                 try { if (commandStarted) target.EndCommandGroup(); } catch { }
@@ -278,18 +378,137 @@ namespace VanyaTools.Native
             return session;
         }
 
-        private static Garment CopyGarment(Garment source, dynamic layer)
+        private static Garment CopyGarment(Garment source, dynamic layer,
+            SportLayoutPart? selectedPart = null)
         {
+            bool front = !selectedPart.HasValue || selectedPart == SportLayoutPart.Front;
+            bool back = !selectedPart.HasValue || selectedPart == SportLayoutPart.Back;
+            bool left = !selectedPart.HasValue || selectedPart == SportLayoutPart.LeftSleeve;
+            bool right = !selectedPart.HasValue || selectedPart == SportLayoutPart.RightSleeve;
             return new Garment {
-                Front = Describe(source.Front.Shape.CopyToLayer(layer)),
-                Back = Describe(source.Back.Shape.CopyToLayer(layer)),
-                LeftSleeve = Describe(source.LeftSleeve.Shape.CopyToLayer(layer)),
-                RightSleeve = Describe(source.RightSleeve.Shape.CopyToLayer(layer)),
-                FrontLeft = Describe(source.FrontLeft.Shape.CopyToLayer(layer)),
-                FrontRight = Describe(source.FrontRight.Shape.CopyToLayer(layer)),
-                BackText = Describe(source.BackText.Shape.CopyToLayer(layer)),
-                LeftSleeveFrame = Describe(source.LeftSleeveFrame.Shape.CopyToLayer(layer)),
-                RightSleeveFrame = Describe(source.RightSleeveFrame.Shape.CopyToLayer(layer))
+                Front = CopyOptional(front ? source.Front : null, layer),
+                Back = CopyOptional(back ? source.Back : null, layer),
+                LeftSleeve = CopyOptional(left ? source.LeftSleeve : null, layer),
+                RightSleeve = CopyOptional(right ? source.RightSleeve : null, layer),
+                FrontLeft = CopyOptional(front ? source.FrontLeft : null, layer),
+                FrontRight = CopyOptional(front ? source.FrontRight : null, layer),
+                BackText = CopyOptional(back ? source.BackText : null, layer),
+                LeftSleeveFrame = CopyOptional(left ? source.LeftSleeveFrame : null, layer),
+                RightSleeveFrame = CopyOptional(right ? source.RightSleeveFrame : null, layer),
+                FrontArtwork = CopyOptional(front ? source.FrontArtwork : null, layer),
+                BackArtwork = CopyOptional(back ? source.BackArtwork : null, layer),
+                LeftSleeveArtwork = CopyOptional(left ? source.LeftSleeveArtwork : null, layer),
+                RightSleeveArtwork = CopyOptional(right ? source.RightSleeveArtwork : null, layer)
+            };
+        }
+
+        private static Piece CopyOptional(Piece source, dynamic layer)
+        {
+            return source == null ? null : Describe(source.Shape.CopyToLayer(layer));
+        }
+
+        private static void NameMasterGarment(Garment garment)
+        {
+            garment.Front.Shape.Name = "VT_SPORT_CONTOUR_FRONT";
+            garment.Back.Shape.Name = "VT_SPORT_CONTOUR_BACK";
+            garment.LeftSleeve.Shape.Name = "VT_SPORT_CONTOUR_LEFT_SLEEVE";
+            garment.RightSleeve.Shape.Name = "VT_SPORT_CONTOUR_RIGHT_SLEEVE";
+            garment.FrontLeft.Shape.Name = "VT_SPORT_ZONE_FRONT_LEFT";
+            garment.FrontRight.Shape.Name = "VT_SPORT_ZONE_FRONT_RIGHT";
+            garment.BackText.Shape.Name = "VT_SPORT_ZONE_BACK";
+            garment.LeftSleeveFrame.Shape.Name = "VT_SPORT_ZONE_LEFT_SLEEVE";
+            garment.RightSleeveFrame.Shape.Name = "VT_SPORT_ZONE_RIGHT_SLEEVE";
+        }
+
+        private static Piece AddMasterArtwork(dynamic app, dynamic layer,
+            string path, Piece part, string key)
+        {
+            if (String.IsNullOrWhiteSpace(path)) return null;
+            dynamic image = ImportPattern(app, layer, path);
+            PositionPattern(image, part);
+            image.Name = "VT_SPORT_ART_" + key;
+            image.OrderToBack();
+            return Describe(image);
+        }
+
+        private static void StretchMaster(dynamic app, Garment garment, double scale)
+        {
+            dynamic range = app.CreateShapeRange();
+            foreach (Piece piece in new[] { garment.Front, garment.Back,
+                garment.LeftSleeve, garment.RightSleeve, garment.FrontLeft,
+                garment.FrontRight, garment.BackText, garment.LeftSleeveFrame,
+                garment.RightSleeveFrame, garment.FrontArtwork,
+                garment.BackArtwork, garment.LeftSleeveArtwork,
+                garment.RightSleeveArtwork })
+                if (piece != null) range.Add(piece.Shape);
+            range.Stretch(scale, scale, true);
+        }
+
+        private static dynamic FindMasterPage(dynamic document, string size,
+            IDictionary<string, SportLayoutTemplate> templates, out double scale)
+        {
+            scale = 1;
+            dynamic exact = FindNamedMaster(document, size);
+            if (exact != null) return exact;
+            if (size != "M" && templates.TryGetValue("M", out SportLayoutTemplate medium) &&
+                String.Equals(System.IO.Path.GetFullPath(medium.Path),
+                    System.IO.Path.GetFullPath(templates[size].Path),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                dynamic fallback = FindNamedMaster(document, "M");
+                if (fallback != null)
+                {
+                    double requested = templates[size].ScalePercent <= 0 ? 100 :
+                        templates[size].ScalePercent;
+                    double baseScale = medium.ScalePercent <= 0 ? 100 : medium.ScalePercent;
+                    scale = requested / baseScale;
+                    return fallback;
+                }
+            }
+            throw new InvalidOperationException("Для размера " + size +
+                " нет страницы-макета. Выберите его шаблон и нажмите «Подготовить макет». ");
+        }
+
+        private static dynamic FindNamedMaster(dynamic document, string size)
+        {
+            dynamic latest = null;
+            foreach (dynamic page in document.Pages)
+                if (String.Equals(Convert.ToString(page.Name), MasterPrefix + size,
+                    StringComparison.OrdinalIgnoreCase)) latest = page;
+            return latest;
+        }
+
+        private static Garment ReadPreparedGarment(dynamic page)
+        {
+            var named = new Dictionary<string, Piece>(StringComparer.OrdinalIgnoreCase);
+            foreach (dynamic layer in page.Layers)
+            foreach (dynamic shape in layer.Shapes)
+            {
+                string name = Convert.ToString(shape.Name);
+                if (!String.IsNullOrWhiteSpace(name) && name.StartsWith("VT_SPORT_",
+                    StringComparison.OrdinalIgnoreCase)) named[name] = Describe(shape);
+            }
+            Piece Required(string name)
+            {
+                if (named.TryGetValue(name, out Piece found)) return found;
+                throw new InvalidOperationException("На странице «" + page.Name +
+                    "» не найден объект " + name + ". Верните его или подготовьте макет заново.");
+            }
+            Piece Optional(string name) => named.TryGetValue(name, out Piece found) ? found : null;
+            return new Garment {
+                Front = Required("VT_SPORT_CONTOUR_FRONT"),
+                Back = Required("VT_SPORT_CONTOUR_BACK"),
+                LeftSleeve = Required("VT_SPORT_CONTOUR_LEFT_SLEEVE"),
+                RightSleeve = Required("VT_SPORT_CONTOUR_RIGHT_SLEEVE"),
+                FrontLeft = Required("VT_SPORT_ZONE_FRONT_LEFT"),
+                FrontRight = Required("VT_SPORT_ZONE_FRONT_RIGHT"),
+                BackText = Required("VT_SPORT_ZONE_BACK"),
+                LeftSleeveFrame = Required("VT_SPORT_ZONE_LEFT_SLEEVE"),
+                RightSleeveFrame = Required("VT_SPORT_ZONE_RIGHT_SLEEVE"),
+                FrontArtwork = Optional("VT_SPORT_ART_FRONT"),
+                BackArtwork = Optional("VT_SPORT_ART_BACK"),
+                LeftSleeveArtwork = Optional("VT_SPORT_ART_LEFT_SLEEVE"),
+                RightSleeveArtwork = Optional("VT_SPORT_ART_RIGHT_SLEEVE")
             };
         }
 
@@ -325,39 +544,39 @@ namespace VanyaTools.Native
 
         private static IList<NestedPiece> BuildNestedPieces(dynamic app, dynamic layer,
             Garment garment, SportLayoutPlayer row, string size, int index,
-            SportLayoutOptions options, double scale)
+            SportLayoutOptions options, double scale, SportLayoutPart? selectedPart)
         {
             var pieces = new List<NestedPiece>();
-            Piece frontName = options.FrontNameOnRight ? garment.FrontRight : garment.FrontLeft;
-            Piece extra = options.FrontNameOnRight ? garment.FrontLeft : garment.FrontRight;
-            pieces.Add(BuildNestedPart(app, layer, garment.Front,
-                new[] { frontName, extra }, options.FrontArtworkPath, "ПЕРЕД", row, size,
-                index, options, scale, frontName, null));
-            pieces.Add(BuildNestedPart(app, layer, garment.Back,
-                new[] { garment.BackText }, options.BackArtworkPath, "СПИНА", row, size,
-                index, options, scale, null, garment.BackText));
-            pieces.Add(BuildNestedPart(app, layer, garment.LeftSleeve,
-                new[] { garment.LeftSleeveFrame }, options.LeftSleeveArtworkPath,
-                "ЛЕВЫЙ РУКАВ", row, size, index, options, scale, null, null));
-            pieces.Add(BuildNestedPart(app, layer, garment.RightSleeve,
-                new[] { garment.RightSleeveFrame },
-                String.IsNullOrWhiteSpace(options.RightSleeveArtworkPath)
-                    ? options.LeftSleeveArtworkPath : options.RightSleeveArtworkPath,
-                "ПРАВЫЙ РУКАВ", row, size, index, options, scale, null, null));
+            if (!selectedPart.HasValue || selectedPart == SportLayoutPart.Front)
+            {
+                Piece frontName = options.FrontNameOnRight ? garment.FrontRight : garment.FrontLeft;
+                Piece extra = options.FrontNameOnRight ? garment.FrontLeft : garment.FrontRight;
+                pieces.Add(BuildNestedPart(app, layer, garment.Front,
+                    new[] { frontName, extra }, garment.FrontArtwork, "ПЕРЕД", row, size,
+                    index, options, scale, frontName, null));
+            }
+            if (!selectedPart.HasValue || selectedPart == SportLayoutPart.Back)
+                pieces.Add(BuildNestedPart(app, layer, garment.Back,
+                    new[] { garment.BackText }, garment.BackArtwork, "СПИНА", row, size,
+                    index, options, scale, null, garment.BackText));
+            if (!selectedPart.HasValue || selectedPart == SportLayoutPart.LeftSleeve)
+                pieces.Add(BuildNestedPart(app, layer, garment.LeftSleeve,
+                    new[] { garment.LeftSleeveFrame }, garment.LeftSleeveArtwork,
+                    "ЛЕВЫЙ РУКАВ", row, size, index, options, scale, null, null));
+            if (!selectedPart.HasValue || selectedPart == SportLayoutPart.RightSleeve)
+                pieces.Add(BuildNestedPart(app, layer, garment.RightSleeve,
+                    new[] { garment.RightSleeveFrame }, garment.RightSleeveArtwork,
+                    "ПРАВЫЙ РУКАВ", row, size, index, options, scale, null, null));
             return pieces;
         }
 
         private static NestedPiece BuildNestedPart(dynamic app, dynamic layer,
-            Piece part, IEnumerable<Piece> frames, string artworkPath, string partName,
+            Piece part, IEnumerable<Piece> frames, Piece artwork, string partName,
             SportLayoutPlayer row, string size, int index, SportLayoutOptions options,
             double scale, Piece frontName, Piece backText)
         {
             part.Shape.Name = "VT_" + partName.Replace(' ', '_');
-            if (!String.IsNullOrWhiteSpace(artworkPath))
-            {
-                dynamic image = ImportPattern(app, layer, artworkPath);
-                FillPattern(image, part);
-            }
+            if (artwork != null) artwork.Shape.AddToPowerClip(part.Shape, 0);
             dynamic groupRange = app.CreateShapeRange();
             groupRange.Add(part.Shape);
             foreach (Piece frame in frames)
@@ -520,7 +739,7 @@ namespace VanyaTools.Native
             return image;
         }
 
-        private static void FillPattern(dynamic image, Piece piece)
+        private static void PositionPattern(dynamic image, Piece piece)
         {
             double width = Convert.ToDouble(image.SizeWidth);
             double height = Convert.ToDouble(image.SizeHeight);
@@ -529,8 +748,6 @@ namespace VanyaTools.Native
             image.SetSize(width * scale, height * scale);
             image.Move(piece.CenterX - Convert.ToDouble(image.CenterX),
                 piece.CenterY - Convert.ToDouble(image.CenterY));
-            image.Name = "VT_PATTERN_" + piece.Shape.Name;
-            image.AddToPowerClip(piece.Shape, 0);
         }
 
         private static dynamic AddCaption(dynamic layer, Piece piece, string part,
