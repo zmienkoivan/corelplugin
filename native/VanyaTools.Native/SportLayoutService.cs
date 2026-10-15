@@ -533,7 +533,9 @@ namespace VanyaTools.Native
 
             target.Activate();
             outputPage.Activate();
-            dynamic pasted = outputLayer.PasteEx();
+            // The COM dynamic binder marshals the omitted optional argument as
+            // 0xFFFFFFFF on some Corel versions. Pass a real options object.
+            dynamic pasted = outputLayer.PasteEx(app.CreateStructPasteOptions());
             var shapes = new List<dynamic>();
             foreach (dynamic shape in pasted) shapes.Add(shape);
             if (shapes.Count != 9)
