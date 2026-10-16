@@ -38,6 +38,7 @@ namespace VanyaTools.Native
         public bool WhiteText;
         public bool KeepGuides;
         public double SheetWidthMm;
+        public double MaxPageLengthMm = 4000;
         public double GapMm;
         public bool RotateSleeves;
         public bool CutAllow180;
@@ -62,6 +63,7 @@ namespace VanyaTools.Native
         public int GarmentCount;
         public int PieceCount;
         public double SheetHeightMm;
+        public int PageCount;
     }
 
     internal enum SportLayoutPart { Front, Back, LeftSleeve, RightSleeve, Neck }
@@ -177,16 +179,10 @@ namespace VanyaTools.Native
         private sealed class NestedPiece
         {
             public dynamic Shape;
-            public double Width, Height, Left, Top;
+            public double Width, Height;
             public bool CanRotate { get; set; }
-            public bool Rotated { get; set; }
-            public double RotationDegrees { get; set; }
+            public bool SmallPart { get; set; }
             public SportContourNesting.Item CuttingLayout;
-        }
-
-        private sealed class SkylineSegment
-        {
-            public double Left, Right, Top;
         }
 
         public string AssignSelectedTextBox(string zoneName)
@@ -656,6 +652,10 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Ширина полотна: от 300 до 2000 мм.");
             if (options.GapMm < 0 || options.GapMm > 100)
                 throw new InvalidOperationException("Расстояние между деталями: от 0 до 100 мм.");
+            if (options.MaxPageLengthMm < 500 || options.MaxPageLengthMm > 45000)
+                throw new InvalidOperationException("Максимальная длина страницы: от 0,5 до 45 м.");
+            if (Double.IsNaN(options.SheetWidthMm + options.GapMm + options.MaxPageLengthMm))
+                throw new InvalidOperationException("Введите числовые размеры полотна, длины страницы и зазора.");
             var bySize = new Dictionary<string, SportLayoutTemplate>(StringComparer.CurrentCultureIgnoreCase);
             foreach (var template in templates)
             {
@@ -700,6 +700,7 @@ namespace VanyaTools.Native
             dynamic previousPage = target.ActivePage;
             int previousUnit = Convert.ToInt32(target.Unit);
             dynamic outputPage = null;
+            var outputPages = new List<object>();
             bool commandStarted = false;
             var nested = new List<NestedPiece>();
             var cutGeometry = new Dictionary<string, IList<SportContourNesting.Band>>();
@@ -713,6 +714,7 @@ namespace VanyaTools.Native
                     (cutting ? "раскладка резки" : "раскладка спортформы"));
                 commandStarted = true;
                 outputPage = target.AddPages(1);
+                outputPages.Add((object)outputPage);
                 outputPage.Activate();
                 outputPage.SizeWidth = options.SheetWidthMm;
                 outputPage.SizeHeight = 1000.0;
@@ -753,31 +755,59 @@ namespace VanyaTools.Native
                 }
 
                 Log.Info("Sport layout: nesting " + nested.Count + " pieces");
-                double sheetHeight = cutting ? NestCutting(nested, options.SheetWidthMm, options.GapMm) :
-                    Nest(nested, options.SheetWidthMm, options.GapMm);
-                outputPage.SizeHeight = sheetHeight;
-                foreach (var item in nested)
+                var inputs = nested.Select(p => new SportSheetNesting.Item { Width = p.Width, Height = p.Height,
+                    SmallPart = p.SmallPart, Allow90 = !cutting && p.CanRotate,
+                    Allow180 = cutting && p.CuttingLayout.Allow180,
+                    Bands = cutting ? p.CuttingLayout.Bands : null }).ToList();
+                SportSheetNesting.Result layout = SportSheetNesting.Place(inputs, options.SheetWidthMm,
+                    options.MaxPageLengthMm, options.GapMm);
+                var outputLayers = new List<object> { (object)outputLayer };
+                for (int i = 1; i < layout.PageHeights.Count; i++)
                 {
-                    double rotation = item.RotationDegrees + (item.Rotated ? 90 : 0);
+                    dynamic page = target.AddPages(1);
+                    outputPages.Add((object)page);
+                    page.Activate();
+                    outputLayers.Add((object)page.CreateLayer(cutting ? "Лекала резки" : "Детали печати"));
+                }
+                string pageName = cutting ? CuttingPagePrefix + complete + " комплектов" : selectedPart.HasValue
+                    ? "Допечатка · " + rows[0].Name + " · " + selectedPart.Value
+                    : "Спортформа · " + complete + " комплектов";
+                for (int i = 0; i < outputPages.Count; i++)
+                {
+                    dynamic page = outputPages[i];
+                    page.SetSize(options.SheetWidthMm, layout.PageHeights[i]);
+                    if (Convert.ToDouble(page.SizeHeight) > options.MaxPageLengthMm + 0.01)
+                        throw new InvalidOperationException("Corel создал страницу длиннее заданного ограничения.");
+                    page.Name = pageName + (outputPages.Count > 1 ? " · " + (i + 1) + "/" + outputPages.Count : "");
+                }
+                foreach (SportSheetNesting.Placement placed in layout.Placements)
+                {
+                    NestedPiece item = nested[placed.Index];
+                    dynamic page = outputPages[placed.Page];
+                    page.Activate();
+                    if (placed.Page != 0) item.Shape.MoveToLayer(outputLayers[placed.Page]);
+                    double rotation = placed.Rotation;
                     if (rotation != 0)
                         item.Shape.RotateEx(rotation, Convert.ToDouble(item.Shape.CenterX),
                             Convert.ToDouble(item.Shape.CenterY));
-                    item.Shape.Move(item.Left - Convert.ToDouble(item.Shape.LeftX),
-                        sheetHeight - item.Top - item.Height - Convert.ToDouble(item.Shape.BottomY));
+                    item.Shape.Move(Convert.ToDouble(page.LeftX) + placed.Left - Convert.ToDouble(item.Shape.LeftX),
+                        Convert.ToDouble(page.TopY) - placed.Top - placed.Height - Convert.ToDouble(item.Shape.BottomY));
                 }
-                try { outputPage.Name = cutting ? CuttingPagePrefix + complete + " комплектов" : selectedPart.HasValue
-                    ? "Допечатка · " + rows[0].Name + " · " + selectedPart.Value
-                    : "Спортформа · " + complete + " комплектов"; } catch { }
-                Log.Info("Sport layout: complete");
+                outputPage.Activate();
+                Log.Info("Sport layout: complete, pages=" + outputPages.Count + ", max length=" + options.MaxPageLengthMm);
                 return new SportLayoutResult { GarmentCount = complete,
-                    PieceCount = nested.Count, SheetHeightMm = sheetHeight };
+                    PieceCount = nested.Count, PageCount = outputPages.Count, SheetHeightMm = layout.PageHeights.Sum() };
             }
             catch (Exception error)
             {
                 try
                 {
                     target.Activate();
-                    if (outputPage != null) target.DeletePages(Convert.ToInt32(outputPage.Index));
+                    for (int i = outputPages.Count - 1; i >= 0; i--)
+                    {
+                        dynamic page = outputPages[i];
+                        target.DeletePages(Convert.ToInt32(page.Index));
+                    }
                     previousPage.Activate();
                 }
                 catch (Exception rollbackError)
@@ -1498,7 +1528,7 @@ namespace VanyaTools.Native
                     geometryCache.Add(key, bands);
                 }
                 result.Add(new NestedPiece { Shape = copy, Width = width, Height = height,
-                    CanRotate = false, CuttingLayout = new SportContourNesting.Item {
+                    CanRotate = false, SmallPart = i >= 2, CuttingLayout = new SportContourNesting.Item {
                         Width = width, Height = height, Bands = bands, Allow180 = options.CutAllow180 } });
             }
             return result;
@@ -1564,28 +1594,6 @@ namespace VanyaTools.Native
                 point.Y >= -0.001 && point.Y <= height + 0.001;
         }
 
-        private static double NestCutting(IList<NestedPiece> pieces, double sheetWidth, double gap)
-        {
-            // Keep the existing valid placement as a baseline. The contour
-            // search can improve it, but never returns a longer sheet.
-            double baseline = Nest(pieces, sheetWidth, gap);
-            double dense = SportContourNesting.Place(pieces.Select(p => p.CuttingLayout).ToList(),
-                sheetWidth, gap);
-            if (dense >= baseline - 0.000001)
-            {
-                Log.Info("Sport cutting: kept bounds placement, height=" + baseline);
-                return baseline;
-            }
-            foreach (NestedPiece piece in pieces)
-            {
-                piece.Left = piece.CuttingLayout.Left;
-                piece.Top = piece.CuttingLayout.Top;
-                piece.RotationDegrees = piece.CuttingLayout.Rotation;
-            }
-            Log.Info("Sport cutting: contour nesting, height=" + dense + ", previous=" + baseline);
-            return dense;
-        }
-
         // CopyToLayer only works inside one CDR. Use Corel's clipboard transfer
         // for a template opened as a different document, then identify only the
         // shapes returned by PasteEx (the output page may already have garments).
@@ -1648,6 +1656,7 @@ namespace VanyaTools.Native
                     IsTextSample(garment.LeftSleeveFrame) ? garment.LeftSleeveFrame : null,
                     garment.LeftSleeveCaption, garment.CaptionReferences);
                 sleeve.CanRotate = options.RotateSleeves;
+                sleeve.SmallPart = true;
                 pieces.Add(sleeve);
             }
             if (!selectedPart.HasValue || selectedPart == SportLayoutPart.RightSleeve)
@@ -1658,6 +1667,7 @@ namespace VanyaTools.Native
                     IsTextSample(garment.RightSleeveFrame) ? garment.RightSleeveFrame : null,
                     garment.RightSleeveCaption, garment.CaptionReferences);
                 sleeve.CanRotate = options.RotateSleeves;
+                sleeve.SmallPart = true;
                 pieces.Add(sleeve);
             }
             if (garment.Neck != null &&
@@ -1669,6 +1679,7 @@ namespace VanyaTools.Native
                     scale, null, null, IsTextSample(garment.NeckFrame) ? garment.NeckFrame : null,
                     garment.NeckCaption, garment.CaptionReferences);
                 neck.CanRotate = options.RotateSleeves;
+                neck.SmallPart = true;
                 pieces.Add(neck);
             }
             return pieces;
@@ -1754,134 +1765,6 @@ namespace VanyaTools.Native
             return new NestedPiece { Shape = group,
                 Width = Convert.ToDouble(group.SizeWidth),
                 Height = Convert.ToDouble(group.SizeHeight) };
-        }
-
-        private static double Nest(IList<NestedPiece> pieces, double sheetWidth, double gap)
-        {
-            // Track occupied height across the roll width. A sleeve may turn
-            // 90 degrees as a complete grouped detail; its design rotates with
-            // the contour, keeping their alignment. No edge margin is added.
-            var skyline = new List<SkylineSegment> {
-                new SkylineSegment { Left = 0, Right = sheetWidth, Top = 0 }
-            };
-            double usedHeight = 0;
-            foreach (NestedPiece piece in pieces.OrderByDescending(item => item.Height)
-                .ThenByDescending(item => item.Width))
-            {
-                if (piece.Width > sheetWidth + 0.001 &&
-                    (!piece.CanRotate || piece.Height > sheetWidth + 0.001))
-                    throw new InvalidOperationException("Деталь шириной " +
-                        piece.Width.ToString("0.#", CultureInfo.CurrentCulture) +
-                        " мм не помещается на полотно " +
-                        sheetWidth.ToString("0.#", CultureInfo.CurrentCulture) + " мм.");
-                double originalWidth = piece.Width, originalHeight = piece.Height;
-                double bestX = 0, bestTop = 0, bestBottom = Double.MaxValue,
-                    bestWaste = Double.MaxValue;
-                bool bestRotated = false;
-                foreach (bool rotated in piece.CanRotate ? new[] { false, true } :
-                    new[] { false })
-                {
-                    double width = rotated ? originalHeight : originalWidth;
-                    double height = rotated ? originalWidth : originalHeight;
-                    if (width > sheetWidth + 0.001) continue;
-                    var candidates = new SortedSet<double> { 0,
-                        Math.Max(0, sheetWidth - width) };
-                    foreach (SkylineSegment segment in skyline)
-                    {
-                        if (segment.Left <= sheetWidth - width + 0.001)
-                            candidates.Add(segment.Left);
-                        double rightAligned = segment.Right - width;
-                        if (rightAligned >= -0.001 &&
-                            rightAligned <= sheetWidth - width + 0.001)
-                            candidates.Add(Math.Max(0, rightAligned));
-                    }
-                    foreach (double x in candidates)
-                    {
-                        double right = Math.Min(sheetWidth, x + width + gap);
-                        double top = SkylineTop(skyline, x, right, out double waste);
-                        double bottom = top + height;
-                        if (bottom < bestBottom - 0.001 ||
-                            (Math.Abs(bottom - bestBottom) <= 0.001 &&
-                            (waste < bestWaste - 0.001 ||
-                            (Math.Abs(waste - bestWaste) <= 0.001 &&
-                            ((!rotated && bestRotated) ||
-                            (rotated == bestRotated && x < bestX))))))
-                        {
-                            bestX = x;
-                            bestTop = top;
-                            bestBottom = bottom;
-                            bestWaste = waste;
-                            bestRotated = rotated;
-                        }
-                    }
-                }
-                piece.Left = bestX;
-                piece.Top = bestTop;
-                piece.Rotated = bestRotated;
-                piece.Width = bestRotated ? originalHeight : originalWidth;
-                piece.Height = bestRotated ? originalWidth : originalHeight;
-                usedHeight = Math.Max(usedHeight, bestTop + piece.Height);
-                RaiseSkyline(skyline, bestX,
-                    Math.Min(sheetWidth, bestX + piece.Width + gap),
-                    bestTop + piece.Height + gap);
-            }
-            return pieces.Count == 0 ? 1000 : usedHeight;
-        }
-
-        private static double SkylineTop(IList<SkylineSegment> skyline,
-            double left, double right, out double wastedArea)
-        {
-            int low = 0, high = skyline.Count;
-            while (low < high)
-            {
-                int middle = low + (high - low) / 2;
-                if (skyline[middle].Right <= left + 0.000001) low = middle + 1;
-                else high = middle;
-            }
-            double top = 0;
-            for (int i = low; i < skyline.Count &&
-                skyline[i].Left < right - 0.000001; i++)
-                top = Math.Max(top, skyline[i].Top);
-            wastedArea = 0;
-            for (int i = low; i < skyline.Count &&
-                skyline[i].Left < right - 0.000001; i++)
-            {
-                SkylineSegment segment = skyline[i];
-                double overlap = Math.Min(right, segment.Right) - Math.Max(left, segment.Left);
-                if (overlap > 0) wastedArea += overlap * (top - segment.Top);
-            }
-            return top;
-        }
-
-        private static void RaiseSkyline(List<SkylineSegment> skyline,
-            double left, double right, double top)
-        {
-            var updated = new List<SkylineSegment>();
-            foreach (SkylineSegment segment in skyline)
-            {
-                if (segment.Right <= left || segment.Left >= right)
-                {
-                    updated.Add(segment);
-                    continue;
-                }
-                if (segment.Left < left)
-                    updated.Add(new SkylineSegment { Left = segment.Left,
-                        Right = left, Top = segment.Top });
-                updated.Add(new SkylineSegment { Left = Math.Max(left, segment.Left),
-                    Right = Math.Min(right, segment.Right), Top = Math.Max(top, segment.Top) });
-                if (segment.Right > right)
-                    updated.Add(new SkylineSegment { Left = right,
-                        Right = segment.Right, Top = segment.Top });
-            }
-            skyline.Clear();
-            foreach (SkylineSegment segment in updated)
-            {
-                if (segment.Right - segment.Left < 0.000001) continue;
-                SkylineSegment previous = skyline.Count == 0 ? null : skyline[skyline.Count - 1];
-                if (previous != null && Math.Abs(previous.Top - segment.Top) < 0.000001)
-                    previous.Right = segment.Right;
-                else skyline.Add(segment);
-            }
         }
 
         internal static string NormalizeSize(string value)

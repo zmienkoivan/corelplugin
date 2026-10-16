@@ -33,6 +33,7 @@ namespace VanyaTools.Native
             public bool? RotateSleeves { get; set; }
             public bool? CutAllow180 { get; set; }
             public string SheetWidth { get; set; }
+            public string MaxPageLength { get; set; }
             public string Gap { get; set; }
             public string FontName { get; set; }
             public bool FrontNameOnRight { get; set; }
@@ -66,7 +67,7 @@ namespace VanyaTools.Native
         private readonly DataGrid _templateGrid, _playerGrid;
         private readonly TextBox _frontArt, _backArt, _leftSleeveArt, _rightSleeveArt,
             _neckArt, _modelPath;
-        private readonly TextBox _sheetWidth, _gap;
+        private readonly TextBox _sheetWidth, _maxPageLength, _gap;
         private readonly ComboBox _nameSide, _frontCase, _batchSize;
         // Kept only for older masters with rectangle zones; text samples use Corel attributes.
         private SportTextStyle _legacyNameStyle = LegacyStyle("Arial", 72, false);
@@ -225,12 +226,19 @@ namespace VanyaTools.Native
             _gap.Width = 60;
             roll.Children.Add(_gap);
             panel.Children.Add(roll);
+            var lengthRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
+            lengthRow.Children.Add(Label("Макс. длина страницы, м"));
+            _maxPageLength = Field("4"); _maxPageLength.Width = 72;
+            lengthRow.Children.Add(_maxPageLength);
+            panel.Children.Add(lengthRow);
             _rotateSleeves = new CheckBox { Content = "Поворачивать рукава и горловину на 90° для плотной раскладки",
                 FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
             panel.Children.Add(_rotateSleeves);
             panel.Children.Add(Note("Автораскладка заполняет свободные участки рядом с крупными " +
                 "деталями; при разрешённом повороте весь рисунок детали поворачивается вместе с ней. " +
-                "длина страницы определяется автоматически. Отступа от края полотна нет; " +
+                "Страницы создаются в пределах заданной длины для печати и резки. " +
+                "Сначала заполняются свободные места на предыдущих страницах; " +
+                "нижний ряд по возможности выравнивается. Отступа от края полотна нет; " +
                 "расстояние применяется только между деталями. Для этапа 2 берутся текущие " +
                 "положения рисунков и зон со страницы-макета; после замены исходного файла " +
                 "рисунка подготовьте макет заново."));
@@ -298,6 +306,7 @@ namespace VanyaTools.Native
             _neckArt.TextChanged += (_, __) => SaveDraft();
             _modelPath.TextChanged += (_, __) => SaveDraft();
             _sheetWidth.TextChanged += (_, __) => SaveDraft();
+            _maxPageLength.TextChanged += (_, __) => SaveDraft();
             _gap.TextChanged += (_, __) => SaveDraft();
             _nameSide.SelectionChanged += (_, __) => SaveDraft();
             _frontCase.SelectionChanged += (_, __) => SaveDraft();
@@ -837,10 +846,9 @@ namespace VanyaTools.Native
                     ? service.GenerateCuttingInCurrentDocument(players, templates, options, progress)
                     : service.GenerateInCurrentDocument(players, templates, options, progress);
                 _progress.Text = "Готово: " + result.GarmentCount + " комплектов, " +
-                    result.PieceCount + " деталей на странице " +
-                    result.SheetHeightMm.ToString("0.#") + " × " +
-                    options.SheetWidthMm.ToString("0.#") + " мм. " +
-                    (cutting ? "Нажмите «Сохранить страницу резки в отдельный CDR»." : "Сохраните CDR.");
+                    result.PieceCount + " деталей, страниц: " + result.PageCount +
+                    ", общая длина " + (result.SheetHeightMm / 1000).ToString("0.###") + " м. " +
+                    (cutting ? "Кнопка сохранения резки сохраняет активную страницу; переключайтесь между страницами раскладки." : "Сохраните CDR.");
                 _status(cutting ? "Раскладка резки создана. Сохраните отдельный CDR кнопкой ниже." :
                     "Раскладка добавлена в текущий CDR. Сохраните документ.", false);
             }
@@ -862,6 +870,7 @@ namespace VanyaTools.Native
                 RightSleeveArtworkPath = _rightSleeveArt.Text.Trim(),
                 NeckArtworkPath = _neckArt.Text.Trim(),
                 SheetWidthMm = ParseMillimeters(_sheetWidth.Text, 300, 2000, "Ширина полотна"),
+                MaxPageLengthMm = ParseMillimeters(_maxPageLength.Text, 0.5, 45, "Максимальная длина страницы, м") * 1000,
                 GapMm = ParseMillimeters(_gap.Text, 0, 100, "Расстояние между деталями"),
                 RotateSleeves = _rotateSleeves.IsChecked == true,
                 CutAllow180 = _cutAllow180.IsChecked == true,
@@ -893,7 +902,7 @@ namespace VanyaTools.Native
             if (_loading || _frontArt == null || _backArt == null ||
                 _leftSleeveArt == null || _rightSleeveArt == null ||
                 _neckArt == null || _modelPath == null || _rotateSleeves == null ||
-                _sheetWidth == null || _gap == null || _nameSide == null || _frontCase == null ||
+                _sheetWidth == null || _maxPageLength == null || _gap == null || _nameSide == null || _frontCase == null ||
                 _keepGuides == null || _cutAllow180 == null ||
                 _templateGrid == null || _playerGrid == null) return;
             try
@@ -908,6 +917,7 @@ namespace VanyaTools.Native
                     RotateSleeves = _rotateSleeves.IsChecked == true,
                     CutAllow180 = _cutAllow180.IsChecked == true,
                     SheetWidth = _sheetWidth.Text, Gap = _gap.Text,
+                    MaxPageLength = _maxPageLength.Text,
                     NameStyle = _legacyNameStyle,
                     NumberStyle = _legacyNumberStyle,
                     FrontNameOnRight = _nameSide.SelectedIndex == 1,
@@ -947,6 +957,7 @@ namespace VanyaTools.Native
                         _rotateSleeves.IsChecked = draft.RotateSleeves ?? true;
                         _cutAllow180.IsChecked = draft.CutAllow180 ?? true;
                         _sheetWidth.Text = draft.SheetWidth ?? "1500";
+                        _maxPageLength.Text = draft.MaxPageLength ?? "4";
                         _gap.Text = draft.Gap ?? "10";
                         _legacyNameStyle = draft.NameStyle ?? LegacyStyle(draft.FontName, 72, draft.WhiteText);
                         _legacyNumberStyle = draft.NumberStyle ?? LegacyStyle(draft.FontName, 150, draft.WhiteText);

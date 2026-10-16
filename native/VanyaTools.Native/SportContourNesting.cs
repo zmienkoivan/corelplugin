@@ -21,12 +21,12 @@ namespace VanyaTools.Native
 
         internal sealed class Item
         {
-            public double Width, Height, Left, Top, Rotation;
+            public double Width, Height;
             public bool Allow180;
             public IList<Band> Bands;
         }
 
-        private sealed class Profile
+        internal sealed class Profile
         {
             public double[] Top, Bottom;
         }
@@ -72,65 +72,7 @@ namespace VanyaTools.Native
                 Top = points.Min(p => p.Y), Bottom = points.Max(p => p.Y) });
         }
 
-        internal static double Place(IList<Item> items, double sheetWidth, double gap)
-        {
-            int columns = Math.Max(1, (int)Math.Ceiling(sheetWidth / 2));
-            double step = sheetWidth / columns;
-            int gapColumns = (int)Math.Ceiling(gap / step);
-            var skyline = new double[columns];
-            var profiles = new Dictionary<IList<Band>, Profile[]>();
-            double height = 0;
-            foreach (Item item in items.OrderByDescending(p => p.Height).ThenByDescending(p => p.Width))
-            {
-                if (item.Width > sheetWidth + 0.000001)
-                    throw new InvalidOperationException("Деталь не помещается на ширину полотна резки.");
-                if (!profiles.TryGetValue(item.Bands, out Profile[] pair))
-                {
-                    pair = new[] { MakeProfile(item, step, false), MakeProfile(item, step, true) };
-                    profiles.Add(item.Bands, pair);
-                }
-                int width = pair[0].Top.Length;
-                int bestColumn = 0, bestRotation = 0;
-                double bestTop = 0, bestBottom = Double.MaxValue, bestWaste = Double.MaxValue;
-                for (int rotation = 0; rotation < (item.Allow180 ? 2 : 1); rotation++)
-                {
-                    Profile profile = pair[rotation];
-                    for (int column = 0; column <= columns - width; column++)
-                    {
-                        double top = 0;
-                        for (int j = 0; j < width; j++)
-                            top = Math.Max(top, skyline[column + j] - profile.Top[j]);
-                        double bottom = top + item.Height;
-                        if (bottom > bestBottom + 0.000001) continue;
-                        double waste = 0;
-                        for (int j = 0; j < width; j++)
-                            waste += top + profile.Top[j] - skyline[column + j];
-                        if (bottom < bestBottom - 0.000001 || waste < bestWaste - 0.000001)
-                        {
-                            bestTop = top; bestBottom = bottom; bestWaste = waste;
-                            bestColumn = column; bestRotation = rotation;
-                        }
-                    }
-                }
-                item.Left = bestColumn * step;
-                item.Top = bestTop;
-                item.Rotation = bestRotation * 180;
-                height = Math.Max(height, bestBottom);
-                Profile chosen = pair[bestRotation];
-                for (int j = 0; j < width; j++)
-                {
-                    double bottom = bestTop + chosen.Bottom[j] + gap;
-                    // Expand only occupied geometry; no margin at the roll edge.
-                    // Square dilation conservatively enforces the requested gap.
-                    for (int k = Math.Max(0, bestColumn + j - gapColumns);
-                        k <= Math.Min(columns - 1, bestColumn + j + gapColumns); k++)
-                        skyline[k] = Math.Max(skyline[k], bottom);
-                }
-            }
-            return items.Count == 0 ? 1000 : height;
-        }
-
-        private static Profile MakeProfile(Item item, double step, bool rotated)
+        internal static Profile MakeProfile(Item item, double step, bool rotated)
         {
             int width = Math.Max(1, (int)Math.Ceiling(item.Width / step - 0.00000001));
             var result = new Profile { Top = Enumerable.Repeat(Double.PositiveInfinity, width).ToArray(),
