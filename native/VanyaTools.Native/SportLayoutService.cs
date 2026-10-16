@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace VanyaTools.Native
@@ -405,14 +406,13 @@ namespace VanyaTools.Native
             try { targetPath = System.IO.Path.GetFullPath(Convert.ToString(target.FullFileName)); }
             catch { }
             var sessions = new Dictionary<string, TemplateSession>(StringComparer.OrdinalIgnoreCase);
+            var artworkCache = new Dictionary<string, Piece>(StringComparer.OrdinalIgnoreCase);
             dynamic overview = null;
-            bool commandStarted = false;
             try
             {
                 Log.Info("Sport overview: start, sizes=" + templates.Count);
                 target.Unit = CorelConstants.CdrMillimeter;
-                target.BeginCommandGroup("Vanya Tools - обзор спортформы");
-                commandStarted = true;
+                // Keep source CDR switches outside a target undo group.
                 overview = target.AddPages(1);
                 overview.Activate();
                 double nextX = 0, maxHeight = 0;
@@ -443,18 +443,19 @@ namespace VanyaTools.Native
                     }
                     NameMasterGarment(garment);
                     Log.Info("Sport overview: contours and boxes copied, size " + size);
-                    garment.FrontArtwork = AddMasterArtwork(app, layer,
-                        options.FrontArtworkPath, garment.Front, "FRONT");
-                    garment.BackArtwork = AddMasterArtwork(app, layer,
-                        options.BackArtworkPath, garment.Back, "BACK");
-                    garment.LeftSleeveArtwork = AddMasterArtwork(app, layer,
-                        options.LeftSleeveArtworkPath, garment.LeftSleeve, "LEFT_SLEEVE");
-                    garment.RightSleeveArtwork = AddMasterArtwork(app, layer,
-                        options.RightSleeveArtworkPath, garment.RightSleeve, "RIGHT_SLEEVE");
+                    garment.FrontArtwork = AddOrCopyMasterArtwork(app, layer,
+                        options.FrontArtworkPath, garment.Front, "FRONT", artworkCache);
+                    garment.BackArtwork = AddOrCopyMasterArtwork(app, layer,
+                        options.BackArtworkPath, garment.Back, "BACK", artworkCache);
+                    garment.LeftSleeveArtwork = AddOrCopyMasterArtwork(app, layer,
+                        options.LeftSleeveArtworkPath, garment.LeftSleeve, "LEFT_SLEEVE", artworkCache);
+                    garment.RightSleeveArtwork = AddOrCopyMasterArtwork(app, layer,
+                        options.RightSleeveArtworkPath, garment.RightSleeve, "RIGHT_SLEEVE", artworkCache);
                     if (garment.Neck != null)
-                        garment.NeckArtwork = AddMasterArtwork(app, layer,
-                            options.NeckArtworkPath, garment.Neck, "NECK");
+                        garment.NeckArtwork = AddOrCopyMasterArtwork(app, layer,
+                            options.NeckArtworkPath, garment.Neck, "NECK", artworkCache);
                     Log.Info("Sport overview: artwork imported, size " + size);
+                    LogOverviewMemory(size);
                     double scale = template.ScalePercent <= 0 ? 1 : template.ScalePercent / 100.0;
                     if (Math.Abs(scale - 1) > 0.0001) StretchMaster(app, garment, scale);
                     dynamic tile = app.CreateShapeRange();
@@ -498,12 +499,6 @@ namespace VanyaTools.Native
                 Log.Info("Sport overview: cleanup start");
                 try { target.Activate(); Log.Info("Sport overview: target active"); }
                 catch (Exception error) { Log.Error("Sport overview: target activation failed.", error); }
-                try
-                {
-                    if (commandStarted) target.EndCommandGroup();
-                    Log.Info("Sport overview: command group ended");
-                }
-                catch (Exception error) { Log.Error("Sport overview: command group cleanup failed.", error); }
                 try { target.Unit = previousUnit; Log.Info("Sport overview: units restored"); }
                 catch (Exception error) { Log.Error("Sport overview: unit cleanup failed.", error); }
                 Log.Info("Sport overview: template cleanup start");
@@ -972,6 +967,35 @@ namespace VanyaTools.Native
             group.Name = "VT_SPORT_ART_" + key;
             group.OrderToBack();
             return Describe(group);
+        }
+
+        private static Piece AddOrCopyMasterArtwork(dynamic app, dynamic layer,
+            string path, Piece part, string key, IDictionary<string, Piece> cache)
+        {
+            // Import each large bitmap once per part. Subsequent sizes copy the
+            // prepared group within the same CDR instead of importing the PNG.
+            if (cache.TryGetValue(key, out Piece source))
+            {
+                dynamic copy = source.Shape.CopyToLayer(layer);
+                PositionPattern(copy, part);
+                copy.Name = "VT_SPORT_ART_" + key;
+                copy.OrderToBack();
+                Log.Info("Sport overview: copied existing artwork group " + key);
+                return Describe(copy);
+            }
+            Piece created = AddMasterArtwork(app, layer, path, part, key);
+            cache.Add(key, created);
+            return created;
+        }
+
+        private static void LogOverviewMemory(string size)
+        {
+            using (Process process = Process.GetCurrentProcess())
+            {
+                process.Refresh();
+                Log.Info("Sport overview: process memory after " + size + ": " +
+                    (process.PrivateMemorySize64 / (1024 * 1024)) + " MiB private");
+            }
         }
 
         private static void StretchMaster(dynamic app, Garment garment, double scale)
