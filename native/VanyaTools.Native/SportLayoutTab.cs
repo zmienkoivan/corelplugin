@@ -13,6 +13,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using System.Windows.Input;
 using System.Text.RegularExpressions;
+using System.ComponentModel;
 using Microsoft.Win32;
 
 namespace VanyaTools.Native
@@ -89,6 +90,9 @@ namespace VanyaTools.Native
         private readonly TextBlock _count, _progress;
         private readonly Button _prepare, _generate, _generateCut, _saveCut, _exportPrint, _choosePrintFolder;
         private readonly Button _tagSamples;
+        private readonly Button _expandPlayers;
+        private readonly Grid _playerEditor;
+        private Window _playerWindow;
         private bool _loading, _busy;
 
         public SportLayoutTab(Action<string, bool> status)
@@ -182,6 +186,11 @@ namespace VanyaTools.Native
                 "или через кнопку добавления — имена; размеры можно назначить после вставки. " +
                 "Заголовки распознаются автоматически. " +
                 "Кнопка ↗ создаёт выбранную деталь для допечатки."));
+            _playerEditor = new Grid();
+            _playerEditor.RowDefinitions.Add(new RowDefinition());
+            _playerEditor.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var playerControls = new StackPanel();
+            Grid.SetRow(playerControls, 1); _playerEditor.Children.Add(playerControls);
             _playerGrid = new DataGrid { Height = 224, AutoGenerateColumns = false,
                 CanUserAddRows = false, CanUserDeleteRows = false, FontSize = 12,
                 SelectionUnit = DataGridSelectionUnit.CellOrRowHeader,
@@ -197,12 +206,19 @@ namespace VanyaTools.Native
             _playerGrid.Columns.Add(Column("Имя", "Name", 185));
             _playerGrid.Columns.Add(Column("№", "Number", 60));
             _playerGrid.Columns.Add(Column("Шт.", "Quantity", 55));
+            var printCheck = new FrameworkElementFactory(typeof(CheckBox));
+            printCheck.SetValue(CheckBox.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            printCheck.SetValue(CheckBox.VerticalAlignmentProperty, VerticalAlignment.Center);
+            printCheck.SetBinding(CheckBox.IsCheckedProperty, new Binding(nameof(SportLayoutPlayer.PrintEnabled)) {
+                Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
+            _playerGrid.Columns.Add(new DataGridTemplateColumn { Header = "Печатать", Width = 75,
+                CellTemplate = new DataTemplate { VisualTree = printCheck } });
             _playerGrid.Columns.Add(PartColumn("Перед", SportLayoutPart.Front));
             _playerGrid.Columns.Add(PartColumn("Спина", SportLayoutPart.Back));
             _playerGrid.Columns.Add(PartColumn("Лев. рук.", SportLayoutPart.LeftSleeve));
             _playerGrid.Columns.Add(PartColumn("Прав. рук.", SportLayoutPart.RightSleeve));
             _playerGrid.Columns.Add(PartColumn("Горловина", SportLayoutPart.Neck));
-            panel.Children.Add(_playerGrid);
+            _playerEditor.Children.Add(_playerGrid);
             var playerButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 3) };
             playerButtons.Children.Add(Button("Добавить строку", (_, __) =>
             {
@@ -213,7 +229,12 @@ namespace VanyaTools.Native
             }));
             playerButtons.Children.Add(Button("Добавить из Excel / Google Таблиц", PastePlayers));
             playerButtons.Children.Add(Button("Убрать строки", RemovePlayers));
-            panel.Children.Add(playerButtons);
+            playerControls.Children.Add(playerButtons);
+            var printButtons = new WrapPanel();
+            printButtons.Children.Add(Button("Печатать всех", (_, __) => SetPlayersEnabled(true)));
+            printButtons.Children.Add(Button("Снять все", (_, __) => SetPlayersEnabled(false)));
+            _expandPlayers = Button("Открыть таблицу большим окном", OpenPlayersEditor);
+            printButtons.Children.Add(_expandPlayers); playerControls.Children.Add(printButtons);
             var batchSizeRow = new WrapPanel { Margin = new Thickness(0, 1, 0, 3) };
             batchSizeRow.Children.Add(Label("Размер выделенным"));
             _batchSize = new ComboBox { ItemsSource = _sizeOptions, Width = 110,
@@ -221,11 +242,14 @@ namespace VanyaTools.Native
                 ToolTip = "Выделите строки или ячейки игроков и выберите размер для них" };
             batchSizeRow.Children.Add(_batchSize);
             batchSizeRow.Children.Add(Button("Назначить", ApplySizeToSelection));
-            panel.Children.Add(batchSizeRow);
-            panel.Children.Add(Note("Для группы одного размера выделите диапазон ячеек с Shift " +
+            playerControls.Children.Add(batchSizeRow);
+            playerControls.Children.Add(Note("Для группы одного размера выделите диапазон ячеек с Shift " +
                 "или несколько строк с Ctrl, выберите размер выше и нажмите «Назначить»."));
+            playerControls.Children.Add(Note("Этап 2 и резка включают только строки с галочкой «Печатать». " +
+                "Кнопка ↗ в строке по-прежнему создаёт одну деталь для допечатки."));
             _count = Note("");
-            panel.Children.Add(_count);
+            playerControls.Children.Add(_count);
+            panel.Children.Add(_playerEditor);
 
             panel.Children.Add(Title("4. Полотно и надписи"));
             var roll = new WrapPanel { Margin = new Thickness(0, 3, 0, 6) };
@@ -334,7 +358,7 @@ namespace VanyaTools.Native
             panel.Children.Add(Note("П-образный язычок без ножек; два непрорезанных мостика на линии детали. " +
                 "Надпись — однолинейные чертёжные знаки с трафаретными разрывами. " +
                 "Для длинного размера ширина увеличивается, высота букв сохраняется."));
-            panel.Children.Add(Note("Левый угол крепления: 10, 30, 50 мм и далее от левого края silhouette " +
+            panel.Children.Add(Note("Левый угол крепления: 10, 30, 50 мм и далее от начала прямого нижнего края " +
                 "до поворота в раскладке. Порядок размеров — от меньшей площади силуэта переда к большей " +
                 "по всем подготовленным размерам. Отступ и шаг можно изменить. " +
                 "Если на заданном месте нет свободного прямого нижнего края, появится сообщение с размером и деталью."));
@@ -356,7 +380,10 @@ namespace VanyaTools.Native
             panel.Children.Add(_progress);
 
             _templates.CollectionChanged += (_, __) => { RefreshSizes(); SaveDraft(); };
-            _players.CollectionChanged += (_, __) => { UpdateCount(); SaveDraft(); };
+            _players.CollectionChanged += (_, e) => {
+                if (e.OldItems != null) foreach (SportLayoutPlayer row in e.OldItems) row.PropertyChanged -= PlayerChanged;
+                if (e.NewItems != null) foreach (SportLayoutPlayer row in e.NewItems) row.PropertyChanged += PlayerChanged;
+                UpdateCount(); SaveDraft(); };
             _templateGrid.CellEditEnding += (_, __) => SaveSoon();
             _playerGrid.CellEditEnding += (_, __) => SaveSoon();
             _frontArt.TextChanged += (_, __) => SaveDraft();
@@ -557,7 +584,7 @@ namespace VanyaTools.Native
                 var row = previous == null ? new SportLayoutPlayer {
                     Size = namesOnly ? "" : defaultSize, Quantity = 1 } :
                     new SportLayoutPlayer { Size = previous.Size, Name = previous.Name,
-                        Number = previous.Number, Quantity = previous.Quantity };
+                        Number = previous.Number, Quantity = previous.Quantity, PrintEnabled = previous.PrintEnabled };
                 try
                 {
                     if (cells.TryGetValue(0, out string size)) row.Size = ResolvePastedSize(size, defaultSize);
@@ -856,6 +883,7 @@ namespace VanyaTools.Native
             _prepare.IsEnabled = _generate.IsEnabled = _generateCut.IsEnabled = _saveCut.IsEnabled = enabled;
             _exportPrint.IsEnabled = _choosePrintFolder.IsEnabled = _printQuality.IsEnabled = enabled;
             _tagSamples.IsEnabled = enabled;
+            _expandPlayers.IsEnabled = enabled;
         }
 
         private async void CreateTagSamples(object sender, RoutedEventArgs e)
@@ -977,10 +1005,10 @@ namespace VanyaTools.Native
             SetActionButtons(false);
             try
             {
-                var players = _players.ToList();
+                var players = _players.Where(row => row.PrintEnabled).ToList();
                 var templates = _templates.ToList();
                 if (players.Count == 0)
-                    throw new InvalidOperationException("Добавьте строки с игроками.");
+                    throw new InvalidOperationException("Отметьте галочкой «Печатать» хотя бы одного игрока.");
                 if (players.Any(row => row.Quantity < 1 || row.Quantity > 100))
                     throw new InvalidOperationException("Количество в каждой строке: от 1 до 100.");
                 long totalLong = players.Sum(row => (long)row.Quantity);
@@ -1042,8 +1070,73 @@ namespace VanyaTools.Native
 
         private void UpdateCount()
         {
-            _count.Text = _players.Count + " строк · " + _players.Sum(row => Math.Max(0L, (long)row.Quantity)) +
-                " комплектов";
+            _count.Text = _players.Count + " строк · отмечено " + _players.Count(row => row.PrintEnabled) +
+                " · к печати " + _players.Where(row => row.PrintEnabled)
+                    .Sum(row => Math.Max(0L, (long)row.Quantity)) + " комплектов";
+        }
+
+        private void PlayerChanged(object sender, PropertyChangedEventArgs e)
+        {
+            if (_loading) return;
+            UpdateCount(); SaveDraft();
+        }
+
+        private void SetPlayersEnabled(bool enabled)
+        {
+            if (_busy || !_playerGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
+                !_playerGrid.CommitEdit(DataGridEditingUnit.Row, true)) return;
+            bool oldLoading = _loading; _loading = true;
+            try { foreach (var row in _players) row.PrintEnabled = enabled; }
+            finally { _loading = oldLoading; }
+            UpdateCount(); SaveDraft();
+        }
+
+        private void OpenPlayersEditor(object sender, RoutedEventArgs e)
+        {
+            if (_busy) return;
+            if (_playerWindow != null) { _playerWindow.Activate(); return; }
+            if (!_playerGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
+                !_playerGrid.CommitEdit(DataGridEditingUnit.Row, true)) return;
+            var parent = (Panel)_playerEditor.Parent;
+            int position = parent.Children.IndexOf(_playerEditor);
+            double oldHeight = _playerGrid.Height;
+            DataGridLength oldNameWidth = _playerGrid.Columns[1].Width;
+            var root = new DockPanel { Margin = new Thickness(10) };
+            var close = Button("Вернуться в докер", (_, __) => _playerWindow.Close());
+            DockPanel.SetDock(close, Dock.Bottom); root.Children.Add(close);
+            var window = new Window { Title = "Vanya Tools — таблица игроков", Content = root,
+                Width = Math.Min(1450, SystemParameters.WorkArea.Width - 40),
+                Height = Math.Min(900, SystemParameters.WorkArea.Height - 40),
+                MinWidth = 720, MinHeight = 420, WindowStartupLocation = WindowStartupLocation.CenterScreen };
+            DockerTheme.Apply(root);
+            Window owner = Window.GetWindow(this);
+            if (owner != null) { window.Owner = owner; window.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
+            window.Closing += (_, args) => {
+                if (!_playerGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
+                    !_playerGrid.CommitEdit(DataGridEditingUnit.Row, true)) args.Cancel = true;
+            };
+            _playerWindow = window;
+            parent.Children.Remove(_playerEditor);
+            try
+            {
+                _playerGrid.Height = Double.NaN;
+                _playerGrid.Columns[1].Width = new DataGridLength(1, DataGridLengthUnitType.Star);
+                root.Children.Add(_playerEditor);
+                window.ShowDialog();
+            }
+            catch (Exception error)
+            {
+                Log.Error("Could not open large player table.", error);
+                _status("Таблица не открыта: " + error.Message, true);
+            }
+            finally
+            {
+                root.Children.Remove(_playerEditor);
+                _playerGrid.Height = oldHeight; _playerGrid.Columns[1].Width = oldNameWidth;
+                parent.Children.Insert(position, _playerEditor);
+                _playerWindow = null;
+                UpdateCount(); SaveDraft();
+            }
         }
 
         private void SaveSoon()

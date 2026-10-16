@@ -51,6 +51,29 @@ namespace VanyaTools.Native
             public Point World(double x, double depth) => Origin + Along * x + Outward * depth;
         }
 
+        private sealed class Obstacle
+        {
+            public Point A, D;
+            public Rect? ConservativeBounds;
+
+            public bool Intersects(Rect zone)
+            {
+                zone.Inflate(.06, .06);
+                if (ConservativeBounds.HasValue) return ConservativeBounds.Value.IntersectsWith(zone);
+                double from = 0, to = 1;
+                return Clip(A.X, D.X - A.X, zone.Left, zone.Right, ref from, ref to) &&
+                    Clip(A.Y, D.Y - A.Y, zone.Top, zone.Bottom, ref from, ref to);
+            }
+
+            private static bool Clip(double start, double delta, double min, double max, ref double from, ref double to)
+            {
+                if (Math.Abs(delta) < 1e-12) return start >= min && start <= max;
+                double first = (min - start) / delta, last = (max - start) / delta;
+                from = Math.Max(from, Math.Min(first, last)); to = Math.Min(to, Math.Max(first, last));
+                return from <= to;
+            }
+        }
+
         public static void Add(object application, object silhouetteObject, IList<object> cutShapes,
             string size, string part, SportCutTagSettings settings, double leftOffsetMm)
         {
@@ -59,7 +82,6 @@ namespace VanyaTools.Native
             string label = Label(size);
             double textWidth = TextWidth(label, settings.LetterHeightMm);
             double width = WidthFor(size, settings);
-            double targetX = Convert.ToDouble(silhouette.LeftX) + leftOffsetMm;
             if (Convert.ToInt32(silhouette.Type) != CorelConstants.CdrCurveShape) silhouette.ConvertToCurves();
             long silhouetteId = Convert.ToInt64(silhouette.StaticID);
             object sourceCurve = silhouette.DisplayCurve;
@@ -70,9 +92,8 @@ namespace VanyaTools.Native
                     other.AddRange(ReadPaths((object)((dynamic)shape).DisplayCurve).SelectMany(p => p.Segments));
 
             var runs = StraightRuns(paths);
-            Location location = null;
-            foreach (Run run in runs.Where(r => r.Length >= width + 4)
-                .OrderBy(r => (r.A.Y + r.D.Y) / 2).ThenByDescending(r => r.Length))
+            var frames = new List<Location>();
+            foreach (Run run in runs.Where(r => r.Length > .001))
             {
                 Vector along = run.Direction, outward = new Vector(along.Y, -along.X);
                 Point midpoint = PointOnRun(run, run.A, along, run.Length / 2);
@@ -83,19 +104,46 @@ namespace VanyaTools.Native
                 if (plusInside == minusInside) continue;
                 Point origin = run.A;
                 if (plusInside) { along = -along; outward = -outward; origin = run.D; }
-                // Position is measured in the source template orientation, before
-                // nesting. Only lower edges with an outward downward normal qualify.
-                if (along.X < .2 || outward.Y > -.2) continue;
+                if (along.X < .5 || outward.Y > -.5) continue;
+                frames.Add(new Location { Run = run, Origin = origin, Along = along, Outward = outward });
+            }
+            frames = frames.OrderBy(f => (f.Run.A.Y + f.Run.D.Y) / 2)
+                .ThenByDescending(f => f.Run.Length).ToList();
+            // On a tapered sleeve the bounding-box left corner is above and
+            // outside the lower hem. Measure from the actual attachment edge.
+            // Collinear pieces separated by notches share one left origin.
+            Location primary = frames.FirstOrDefault(f => f.Run.Length >= width + 1);
+            double edgeLeft = primary == null ? 0 : frames.Where(f =>
+                Vector.Multiply(f.Along, primary.Along) >= .99999 &&
+                Math.Abs(Vector.CrossProduct(f.Origin - primary.Origin, primary.Along)) <= StraightTolerance)
+                .Min(f => f.Origin.X);
+            double targetX = edgeLeft + leftOffsetMm;
+            Location location = null;
+            foreach (Location frame in frames.Where(f => f.Run.Length >= width + 1))
+            {
+                Run run = frame.Run;
+                Vector along = frame.Along, outward = frame.Outward;
+                Point origin = frame.Origin;
                 double offset = (targetX - origin.X) / along.X;
-                if (offset < .5 || offset + width > run.Length - .5) continue;
+                if (offset < .5 || offset + width > run.Length - .5)
+                {
+                    Log.Info("Sport cutting: tab edge rejected by position, size=" + size + ", part=" + part +
+                        ", run=" + run.Length + ", offset=" + offset + ", edge left=" + edgeLeft);
+                    continue;
+                }
 
                 var selected = new HashSet<Segment>(run.Segments);
-                var obstacles = new List<Rect>();
+                var obstacles = new List<Obstacle>();
                 foreach (Segment segment in paths.SelectMany(p => p.Segments)
                     .Where(s => !selected.Contains(s)).Concat(other))
                     AddObstacles(segment, origin, along, outward, obstacles, 0);
                 var zone = new Rect(offset - .3, -.3, width + .6, settings.HeightMm + .6);
-                if (obstacles.Any(o => o.IntersectsWith(zone))) continue;
+                if (obstacles.Any(o => o.Intersects(zone)))
+                {
+                    Log.Info("Sport cutting: tab edge rejected by notch/contour, size=" + size + ", part=" + part +
+                        ", run=" + run.Length + ", offset=" + offset);
+                    continue;
+                }
                 location = new Location { Run = run, Origin = origin, Along = along,
                     Outward = outward, Offset = offset };
                 if (location != null) break;
@@ -109,7 +157,7 @@ namespace VanyaTools.Native
                     ": язычок шириной " + width.ToString("0.#", CultureInfo.InvariantCulture) +
                     " мм не помещается на прямом нижнем крае с отступом " +
                     leftOffsetMm.ToString("0.#", CultureInfo.InvariantCulture) +
-                    " мм от левого края детали. Проверьте надсечки, измените отступ/шаг или отключите язычки.");
+                    " мм от начала нижнего края. Проверьте надсечки, измените отступ/шаг или отключите язычки.");
             }
 
             dynamic curve = app.ActiveDocument.CreateCurve();
@@ -171,7 +219,7 @@ namespace VanyaTools.Native
                     .ToString("0.###", CultureInfo.InvariantCulture) +
                 ", tab=" + width.ToString("0.###", CultureInfo.InvariantCulture) + "x" + settings.HeightMm +
                 ", letter=" + settings.LetterHeightMm + ", bridges=" + settings.BridgeMm +
-                ", left offset=" + leftOffsetMm + " mm.");
+                ", left offset=" + leftOffsetMm + ", attachment edge left=" + edgeLeft + " mm.");
         }
 
         private static List<Run> StraightRuns(IList<Path> paths)
@@ -311,7 +359,7 @@ namespace VanyaTools.Native
         }
 
         private static void AddObstacles(Segment segment, Point origin, Vector along, Vector outward,
-            ICollection<Rect> result, int depth)
+            ICollection<Obstacle> result, int depth)
         {
             bool flat = segment.Line || Straight(segment) ||
                 (segment.B - segment.A).Length <= StraightTolerance &&
@@ -326,6 +374,13 @@ namespace VanyaTools.Native
             }
             double ax = Project(segment.A, origin, along), ay = Project(segment.A, origin, outward);
             double dx = Project(segment.D, origin, along), dy = Project(segment.D, origin, outward);
+            if (flat)
+            {
+                // A sloped side may have a large bounding box which covers the
+                // tab even though the actual line is far away. Clip the line.
+                result.Add(new Obstacle { A = new Point(ax, ay), D = new Point(dx, dy) });
+                return;
+            }
             double minX = Math.Min(ax, dx), maxX = Math.Max(ax, dx);
             double minY = Math.Min(ay, dy), maxY = Math.Max(ay, dy);
             if (!flat)
@@ -337,7 +392,7 @@ namespace VanyaTools.Native
             }
             // Covers the flattening tolerance and avoids rejecting a candidate
             // just because a distant Bezier has a large control-point box.
-            result.Add(new Rect(minX - .06, minY - .06, maxX - minX + .12, maxY - minY + .12));
+            result.Add(new Obstacle { ConservativeBounds = new Rect(minX, minY, maxX - minX, maxY - minY) });
         }
 
         private static List<Path> ReadPaths(object curveObject)

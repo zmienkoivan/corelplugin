@@ -80,7 +80,7 @@ namespace VanyaTools.Native
             Enumerable.Range(-cells / 2, cells).Select(offset => center + offset * step)
                 .Where(value => value >= 0 && value <= limit).Distinct().ToArray();
 
-        public int Create(ColorProofReference reference, ColorProofOptions options)
+        public int Create(ColorProofReference reference, ColorProofOptions options, ColorProofSheetOptions sheet = null)
         {
             Check(reference, options.Cells, options.SquareMm);
             int[] center = Components(reference, options.Cmyk);
@@ -124,10 +124,11 @@ namespace VanyaTools.Native
                 }
             }
             return Render(reference, options.Cmyk, rows, options.SquareMm,
-                "Каналы относительно эталона · шаг " + options.Step + (options.Cmyk ? "%" : ""));
+                "Каналы относительно эталона · шаг " + options.Step + (options.Cmyk ? "%" : ""), sheet);
         }
 
-        public int CreateCombinations(ColorProofReference reference, bool cmyk, int[][] levels, double squareMm)
+        public int CreateCombinations(ColorProofReference reference, bool cmyk, int[][] levels, double squareMm,
+            ColorProofSheetOptions sheet = null)
         {
             Check(reference, 3, squareMm);
             int[] center = Components(reference, cmyk);
@@ -143,12 +144,9 @@ namespace VanyaTools.Native
             }
             int total = levels.Aggregate(1, (count, values) => count * values.Distinct().Count());
             if (total > 500) throw new InvalidOperationException("Максимум 500 плашек. Сократите отклонения каналов.");
-            const double gap = 3;
-            int columns = Math.Min(total, (int)Math.Ceiling(Math.Sqrt(total * (squareMm + 18) / (squareMm + gap))));
-            var rows = new List<SampleRow>();
+            var row = new SampleRow();
             for (int index = 0; index < total; index++)
             {
-                if (index % columns == 0) rows.Add(new SampleRow());
                 int remainder = index;
                 var values = new int[center.Length];
                 for (int channel = 0; channel < values.Length; channel++)
@@ -156,13 +154,13 @@ namespace VanyaTools.Native
                     int[] distinct = levels[channel].Distinct().ToArray();
                     values[channel] = distinct[remainder % distinct.Length]; remainder /= distinct.Length;
                 }
-                rows[rows.Count - 1].Samples.Add(new Variant { Values = values });
+                row.Samples.Add(new Variant { Values = values });
             }
-            return Render(reference, cmyk, rows, squareMm, "Все сочетания отклонений от эталона");
+            return Render(reference, cmyk, new[] { row }, squareMm, "Все сочетания отклонений от эталона", sheet);
         }
 
         public int CreateVisual(ColorProofReference reference, bool cmyk, int cells, double squareMm,
-            double hueStep, double lightStep, double saturationStep)
+            double hueStep, double lightStep, double saturationStep, ColorProofSheetOptions sheet = null)
         {
             Check(reference, cells, squareMm);
             if (!ValidStep(hueStep, 30) || !ValidStep(lightStep, 20) || !ValidStep(saturationStep, 30))
@@ -201,7 +199,7 @@ namespace VanyaTools.Native
                 rows.Add(new SampleRow { Title = titles[axis], Samples = variants.Values.ToList() });
             }
             return Render(reference, cmyk, rows, squareMm,
-                "Наглядный поиск HSL · каждый ряд меняет одно свойство");
+                "Наглядный поиск HSL · каждый ряд меняет одно свойство", sheet);
         }
 
         private static bool ValidStep(double value, double max) =>
@@ -235,8 +233,11 @@ namespace VanyaTools.Native
         }
 
         private int Render(ColorProofReference reference, bool cmyk, IList<SampleRow> rows,
-            double squareMm, string title)
+            double squareMm, string title, ColorProofSheetOptions sheet)
         {
+            sheet = sheet ?? new ColorProofSheetOptions();
+            if (Double.IsNaN(sheet.WidthMm) || Double.IsInfinity(sheet.WidthMm) || sheet.WidthMm < 100 || sheet.WidthMm > 4000)
+                throw new InvalidOperationException("Ширина листа цветопробы: от 100 до 4000 мм.");
             dynamic app = CorelApp.Get(), doc = app.ActiveDocument;
             if (doc == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
             int count = rows.Sum(row => row.Samples.Count), oldUnit = (int)doc.Unit;
@@ -246,44 +247,82 @@ namespace VanyaTools.Native
             try
             {
                 doc.Unit = CorelConstants.CdrMillimeter;
+                ColorProofArtwork.Bounds artworkBounds = sheet.Artwork?.Measure((object)doc);
+                double sampleWidth = artworkBounds == null ? squareMm : Math.Max(25, artworkBounds.Width);
+                double sampleHeight = artworkBounds == null ? squareMm : artworkBounds.Height;
+                const double margin = 8;
+                double gap = artworkBounds == null ? 3 : 8;
+                double usableWidth = sheet.WidthMm - 2 * margin;
+                int columns = (int)Math.Floor((usableWidth + gap) / (sampleWidth + gap));
+                if (columns < 1)
+                    throw new InvalidOperationException("Логотип шириной " + sampleWidth.ToString("0.##") +
+                        " мм не помещается на лист " + sheet.WidthMm.ToString("0.##") +
+                        " мм с полями по 8 мм. Увеличьте ширину листа или измените исходный логотип.");
+                var wrapped = new List<SampleRow>();
+                foreach (SampleRow row in rows)
+                    for (int start = 0; start < row.Samples.Count; start += columns)
+                        wrapped.Add(new SampleRow { Title = row.Title +
+                            (start > 0 && !String.IsNullOrEmpty(row.Title) ? " · продолжение" : ""),
+                            Samples = row.Samples.Skip(start).Take(columns).ToList() });
+                double referenceWidth = artworkBounds == null ? 18 : artworkBounds.Width;
+                double referenceHeight = artworkBounds == null ? 18 : artworkBounds.Height;
+                bool headerBeside = usableWidth - referenceWidth - 8 >= 120;
+                double headerHeight = Math.Max(18, referenceHeight) + (headerBeside ? 22 : 40);
+                double rowPitch = sampleHeight + 18;
+                double height = margin * 2 + headerHeight + wrapped.Count * rowPitch;
+                if (height > 45000)
+                    throw new InvalidOperationException("Лист цветопробы длиннее 45 м. Уменьшите число вариантов или размер логотипа.");
                 app.Optimization = true;
                 doc.BeginCommandGroup("Vanya Tools — цветопроба относительно эталона"); started = true;
-                double width = Math.Max(180, 16 + rows.Max(row => row.Samples.Count) * (squareMm + 3) - 3);
-                double height = 53 + rows.Count * (squareMm + 18);
-                page = doc.AddPages(1); page.Activate(); page.SetSize(width, height);
+                page = doc.AddPages(1); page.Activate(); page.SetSize(sheet.WidthMm, height);
                 page.Name = "Цветопроба " + (cmyk ? "CMYK" : "RGB") + " · " + count;
                 dynamic layer = doc.ActiveLayer, range = app.CreateShapeRange();
                 double left = Convert.ToDouble(page.LeftX) + 8, top = Convert.ToDouble(page.TopY) - 8;
                 int[] center = Components(reference, cmyk);
-                AddSwatch(layer, range, left, top, 18, reference.Color);
-                AddText(layer, range, left + 23, top - 4, "ЭТАЛОН · " + reference.Name +
-                    (reference.IsSpot ? " · плашечный" : ""), 9f, false);
-                AddText(layer, range, left + 23, top - 11,
-                    FormatValues(center, cmyk).Replace("\r", "  "), 7f, false);
-                AddText(layer, range, left, top - 26, title, 7f, false);
-                AddText(layer, range, left, top - 32,
-                    (cmyk ? "CMYK" : "RGB") + " · " + count + " плашек · эталон выделен тёмной рамкой", 7f, false);
-                for (int row = 0; row < rows.Count; row++)
+                if (sheet.Artwork == null) AddSwatch(layer, range, left, top, 18, reference.Color);
+                else range.Add(sheet.Artwork.Copy((object)doc, (object)layer, (object)reference.Color, left, top));
+                double headerX = headerBeside ? left + referenceWidth + 8 : left;
+                double headerTop = headerBeside ? top : top - referenceHeight - 5;
+                AddText(layer, range, headerX, headerTop - 4, "ЭТАЛОН · " + reference.Name +
+                    (reference.IsSpot ? " · плашечный" : ""), 9f, false, usableWidth - (headerX - left));
+                AddText(layer, range, headerX, headerTop - 11,
+                    FormatValues(center, cmyk).Replace("\r", "  "), 7f, false, usableWidth - (headerX - left));
+                AddText(layer, range, left, top - headerHeight + 13, title, 7f, false, usableWidth);
+                AddText(layer, range, left, top - headerHeight + 7,
+                    (cmyk ? "CMYK" : "RGB") + " · образцов: " + count + " · ширина листа " + sheet.WidthMm +
+                    " мм · " + (sheet.Artwork == null ? "эталон выделен рамкой" : "логотип 1:1, эталон подписан"), 7f, false, usableWidth);
+                for (int row = 0; row < wrapped.Count; row++)
                 {
-                    double rowTop = top - 40 - row * (squareMm + 18);
-                    if (!String.IsNullOrEmpty(rows[row].Title))
-                        AddText(layer, range, left, rowTop, rows[row].Title, 7f, false);
-                    for (int column = 0; column < rows[row].Samples.Count; column++)
+                    double rowTop = top - headerHeight - row * rowPitch;
+                    if (!String.IsNullOrEmpty(wrapped[row].Title))
+                        AddText(layer, range, left, rowTop, wrapped[row].Title, 7f, false, usableWidth);
+                    for (int column = 0; column < wrapped[row].Samples.Count; column++)
                     {
-                        Variant variant = rows[row].Samples[column]; int[] v = variant.Values;
+                        Variant variant = wrapped[row].Samples[column]; int[] v = variant.Values;
                         dynamic color = cmyk ? app.CreateCMYKColor(v[0], v[1], v[2], v[3]) : app.CreateRGBColor(v[0], v[1], v[2]);
-                        double x = left + column * (squareMm + 3), y = rowTop - 4;
-                        AddSwatch(layer, range, x, y, squareMm, color, v.SequenceEqual(center));
-                        string caption = FormatValues(v, cmyk) + (String.IsNullOrEmpty(variant.Caption) ? "" : "\r" + variant.Caption);
+                        double x = left + column * (sampleWidth + gap), y = rowTop - 4;
+                        bool isReference = v.SequenceEqual(center);
+                        if (sheet.Artwork == null) AddSwatch(layer, range, x, y, squareMm, color, isReference);
+                        else
+                        {
+                            dynamic logo = sheet.Artwork.Copy((object)doc, (object)layer, (object)color,
+                                x + (sampleWidth - artworkBounds.Width) / 2, y);
+                            logo.Name = "VT_COLOR_PROOF_" + row + "_" + column;
+                            range.Add(logo);
+                        }
+                        string caption = FormatValues(v, cmyk) +
+                            (sheet.Artwork != null && isReference ? "\rЭТАЛОН" :
+                                String.IsNullOrEmpty(variant.Caption) ? "" : "\r" + variant.Caption);
                         dynamic text = AddText(layer, range, 0, 0, caption, 6.5f, true);
-                        if ((double)text.SizeWidth > squareMm)
-                            text.SetSize(squareMm, (double)text.SizeHeight * squareMm / (double)text.SizeWidth);
-                        text.Move(x + (squareMm - (double)text.SizeWidth) / 2 - (double)text.LeftX,
-                            y - squareMm - 10 - (double)text.BottomY);
+                        if ((double)text.SizeWidth > sampleWidth)
+                            text.SetSize(sampleWidth, (double)text.SizeHeight * sampleWidth / (double)text.SizeWidth);
+                        text.Move(x + (sampleWidth - (double)text.SizeWidth) / 2 - (double)text.LeftX,
+                            y - sampleHeight - 10 - (double)text.BottomY);
                     }
                 }
                 range.CreateSelection();
-                Log.Info("Color proof: " + title + ", model=" + (cmyk ? "CMYK" : "RGB") + ", samples=" + count);
+                Log.Info("Color proof: " + title + ", model=" + (cmyk ? "CMYK" : "RGB") + ", samples=" + count +
+                    ", artwork=" + (sheet.Artwork != null) + ", width=" + sheet.WidthMm + ", rows=" + wrapped.Count);
                 return count;
             }
             catch
@@ -325,11 +364,15 @@ namespace VanyaTools.Native
             swatch.Fill.ApplyUniformFill(color); swatch.Outline.SetNoOutline(); return swatch;
         }
 
-        private static dynamic AddText(dynamic layer, dynamic range, double left, double bottom, string value, float points, bool center)
+        private static dynamic AddText(dynamic layer, dynamic range, double left, double bottom, string value, float points, bool center,
+            double maxWidth = Double.PositiveInfinity)
         {
             dynamic text = layer.CreateArtisticTextWide(left, bottom, value, 0, -1, "Arial", points); range.Add(text);
             text.Fill.UniformColor.RGBAssign(0, 0, 0); text.Outline.SetNoOutline();
-            if (center) text.Text.Story.Alignment = 3; return text;
+            if (center) text.Text.Story.Alignment = 3;
+            if ((double)text.SizeWidth > maxWidth)
+                text.SetSize(maxWidth, (double)text.SizeHeight * maxWidth / (double)text.SizeWidth);
+            return text;
         }
 
         private static string Delta(double value) => value == 0 ? "0" : value.ToString("+0.##;-0.##", CultureInfo.InvariantCulture);

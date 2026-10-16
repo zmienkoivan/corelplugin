@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -12,16 +13,20 @@ namespace VanyaTools.Native
     {
         private readonly Action<string, bool> _status;
         private readonly ColorProofService _service = new ColorProofService();
-        private readonly TextBlock _referenceLabel, _sampleCount, _layoutNote;
+        private readonly TextBlock _referenceLabel, _sampleCount, _layoutNote, _artworkLabel;
         private readonly Border _preview;
-        private readonly ComboBox _model, _mode, _layout, _horizontal, _vertical, _cells;
-        private readonly Grid _layoutRow, _horizontalRow, _verticalRow, _stepRow, _cellsRow;
+        private readonly ComboBox _model, _mode, _layout, _horizontal, _vertical, _cells, _sampleShape;
+        private readonly Grid _layoutRow, _horizontalRow, _verticalRow, _stepRow, _cellsRow, _squareRow;
+        private readonly StackPanel _artworkPanel;
         private readonly StackPanel _combinationPanel, _visualPanel;
         private readonly Grid[] _rangeRows = new Grid[4];
         private readonly TextBlock[] _rangeLabels = new TextBlock[4];
         private readonly TextBox[] _ranges = new TextBox[4];
-        private readonly TextBox _step, _square, _hueStep, _lightStep, _saturationStep;
+        private readonly TextBox _step, _square, _hueStep, _lightStep, _saturationStep, _sheetWidth;
         private ColorProofReference _reference;
+        private ColorProofArtwork _artwork;
+        private static readonly string WidthPath = Path.Combine(Environment.GetFolderPath(
+            Environment.SpecialFolder.LocalApplicationData), "VanyaTools", "color-proof-width.txt");
 
         public ColorProofTab(Action<string, bool> status)
         {
@@ -41,9 +46,25 @@ namespace VanyaTools.Native
             _referenceLabel = Note("Цвет не выбран"); Grid.SetColumn(_referenceLabel, 1);
             source.Children.Add(_preview); source.Children.Add(_referenceLabel); panel.Children.Add(source);
 
+            _sampleShape = Combo("Квадраты", "Покрасить логотип");
+            panel.Children.Add(Row("Образец", _sampleShape));
+            _artworkPanel = new StackPanel();
+            _artworkPanel.Children.Add(Button("Взять логотип из выделения", (_, __) => CaptureArtwork()));
+            _artworkLabel = Note("Логотип не выбран."); _artworkPanel.Children.Add(_artworkLabel);
+            _artworkPanel.Children.Add(Note("Выделите одноцветный векторный логотип, текст или группу. " +
+                "Каждая копия сохраняет размер 1:1; окрашиваются все её заливки и обводки. " +
+                "Параметры цвета печатаются под копией."));
+            panel.Children.Add(_artworkPanel);
+            _sheetWidth = Field("570");
+            try { if (File.Exists(WidthPath)) _sheetWidth.Text = File.ReadAllText(WidthPath).Trim(); }
+            catch (Exception ex) { Log.Error("Could not read color proof sheet width.", ex); }
+            panel.Children.Add(Row("Ширина листа, мм", _sheetWidth));
+            panel.Children.Add(Note("Поля по 8 мм. Образцы переносятся на следующий ряд целиком; " +
+                "логотип автоматически не уменьшается. Длина листа рассчитывается по числу рядов."));
+
             _mode = Combo("Наглядный", "Каналы CMYK/RGB");
             panel.Children.Add(Row("Поиск", _mode));
-            _model = Combo("CMYK", "RGB"); panel.Children.Add(Row("Модель плашек", _model));
+            _model = Combo("CMYK", "RGB"); panel.Children.Add(Row("Цветовая модель", _model));
             _visualPanel = new StackPanel();
             _lightStep = Field("5"); _hueStep = Field("5"); _saturationStep = Field("10");
             _visualPanel.Children.Add(Row("Шаг светлоты, %", _lightStep));
@@ -76,14 +97,30 @@ namespace VanyaTools.Native
             _sampleCount = Note(""); _combinationPanel.Children.Add(_sampleCount); panel.Children.Add(_combinationPanel);
             _step = Field("5"); _stepRow = Row("Шаг канала, % / 0–255", _step); panel.Children.Add(_stepRow);
             _cells = Combo(); _cellsRow = Row("Вариантов", _cells); panel.Children.Add(_cellsRow);
-            _square = Field("16"); panel.Children.Add(Row("Плашка, мм", _square));
+            _square = Field("16"); _squareRow = Row("Плашка, мм", _square); panel.Children.Add(_squareRow);
             var create = DockerTheme.Primary(Button("Создать отдельный лист цветопробы", (_, __) => Create()));
             create.Margin = new Thickness(0, 7, 0, 5); panel.Children.Add(create);
             _layoutNote = Note(""); panel.Children.Add(_layoutNote);
             _model.SelectionChanged += (_, __) => { UpdateChannels(); DefaultOffsets(); };
             _mode.SelectionChanged += (_, __) => UpdateForm();
             _layout.SelectionChanged += (_, __) => UpdateForm();
+            _sampleShape.SelectionChanged += (_, __) => UpdateForm();
             UpdateChannels(); DefaultOffsets(); UpdateForm();
+        }
+
+        private void CaptureArtwork()
+        {
+            try
+            {
+                ColorProofArtwork artwork = ColorProofArtwork.Capture();
+                _artwork = artwork;
+                SetReference(artwork.Reference);
+                _artworkLabel.Text = "Образец: " + artwork.WidthMm.ToString("0.##") + " × " +
+                    artwork.HeightMm.ToString("0.##") + " мм · 1:1";
+                _sampleShape.SelectedIndex = 1;
+                _status("Логотип выбран. Будут созданы окрашенные копии в исходном размере.", false);
+            }
+            catch (Exception ex) { Fail("Could not capture color proof artwork.", ex); }
         }
 
         private void ReadSelection()
@@ -145,6 +182,9 @@ namespace VanyaTools.Native
 
         private void UpdateForm()
         {
+            bool artwork = _sampleShape.SelectedIndex == 1;
+            _artworkPanel.Visibility = artwork ? Visibility.Visible : Visibility.Collapsed;
+            _squareRow.Visibility = artwork ? Visibility.Collapsed : Visibility.Visible;
             bool visual = _mode.SelectedIndex == 0, combinations = !visual && _layout.SelectedIndex == 0;
             bool two = !visual && _layout.SelectedIndex == 2;
             _visualPanel.Visibility = visual ? Visibility.Visible : Visibility.Collapsed;
@@ -158,7 +198,7 @@ namespace VanyaTools.Native
             foreach (int count in new[] { 3, 5, 7 }) _cells.Items.Add(two ? count + " × " + count : "До " + count + " в ряду");
             _cells.SelectedIndex = selected >= 0 ? selected : 1;
             _layoutNote.Text = "Эталон сохраняется отдельно и отмечается в таблице. " +
-                "На плашках — реальные значения CMYK/RGB. " +
+                "Под образцами — реальные значения CMYK/RGB. " +
                 "На границах диапазона вариантов может быть меньше; копии граничного цвета не добавляются. " +
                 "По выбранной плашке можно назначить новый эталон и повторить поиск меньшим шагом.";
         }
@@ -196,7 +236,7 @@ namespace VanyaTools.Native
             {
                 int swatches = ReadLevels().Aggregate(1, (count, values) => count * values.Length);
                 _sampleCount.Text = swatches + " уникальных сочетаний · " +
-                    (swatches > 500 ? "максимум 500; сократите отклонения." : "1 лист, эталон включён.");
+                    (swatches > 500 ? "максимум 500; сократите отклонения." : "эталон включён.");
             }
             catch (Exception ex) { _sampleCount.Text = ex.Message; }
         }
@@ -205,25 +245,36 @@ namespace VanyaTools.Native
         {
             try
             {
+                if (_sampleShape.SelectedIndex == 1 && _artwork == null)
+                {
+                    CaptureArtwork();
+                    if (_artwork == null) return;
+                }
                 if (_reference == null) SetReference(_service.FromSelection());
                 bool cmyk = _model.SelectedIndex == 0; int cells = (_cells.SelectedIndex + 1) * 2 + 1;
-                double square = Number(_square, 12, 40, "Размер плашки, мм");
+                var sheet = new ColorProofSheetOptions { WidthMm = Number(_sheetWidth, 100, 4000, "Ширина листа, мм"),
+                    Artwork = _sampleShape.SelectedIndex == 1 ? _artwork : null };
+                double square = sheet.Artwork == null ? Number(_square, 12, 40, "Размер плашки, мм") : 16;
+                try { Directory.CreateDirectory(Path.GetDirectoryName(WidthPath));
+                    File.WriteAllText(WidthPath, sheet.WidthMm.ToString(CultureInfo.InvariantCulture)); }
+                catch (Exception ex) { Log.Error("Could not save color proof sheet width.", ex); }
                 int count;
                 if (_mode.SelectedIndex == 0)
                     count = _service.CreateVisual(_reference, cmyk, cells, square,
                         Number(_hueStep, 1, 30, "Шаг оттенка, °"), Number(_lightStep, 1, 20, "Шаг светлоты, %"),
-                        Number(_saturationStep, 1, 30, "Шаг насыщенности, %"));
+                        Number(_saturationStep, 1, 30, "Шаг насыщенности, %"), sheet);
                 else if (_layout.SelectedIndex == 0)
-                    count = _service.CreateCombinations(_reference, cmyk, ReadLevels(), square);
+                    count = _service.CreateCombinations(_reference, cmyk, ReadLevels(), square, sheet);
                 else
                 {
                     if (!Int32.TryParse(_step.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int step))
                         throw new InvalidOperationException("Введите целый шаг изменения канала.");
                     count = _service.Create(_reference, new ColorProofOptions { Cmyk = cmyk,
                         AllChannels = _layout.SelectedIndex == 1, HorizontalChannel = _horizontal.SelectedIndex,
-                        VerticalChannel = _vertical.SelectedIndex, Step = step, Cells = cells, SquareMm = square });
+                        VerticalChannel = _vertical.SelectedIndex, Step = step, Cells = cells, SquareMm = square }, sheet);
                 }
-                _status("Создан отдельный лист: " + count + " плашек относительно выбранного эталона.", false);
+                _status("Создан лист шириной " + sheet.WidthMm + " мм: образцов " + count +
+                    (sheet.Artwork == null ? "." : ", логотипы 1:1."), false);
             }
             catch (Exception ex) { Fail("Color proof creation failed.", ex); }
         }

@@ -6,11 +6,20 @@ using System.Linq;
 using System.Reflection;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.ComponentModel;
 
 namespace VanyaTools.Native
 {
-    internal sealed class SportLayoutPlayer
+    internal sealed class SportLayoutPlayer : INotifyPropertyChanged
     {
+        private bool _printEnabled = true;
+        public bool PrintEnabled
+        {
+            get => _printEnabled;
+            set { if (_printEnabled == value) return; _printEnabled = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PrintEnabled))); }
+        }
+        public event PropertyChangedEventHandler PropertyChanged;
         public string Size { get; set; }
         public string Name { get; set; }
         public string Number { get; set; }
