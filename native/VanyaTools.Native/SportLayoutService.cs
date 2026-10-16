@@ -973,26 +973,49 @@ namespace VanyaTools.Native
             // Force the managed collection call to bind statically. A dynamic
             // COM argument makes the binder search IList<object> for Add,
             // which is inherited from ICollection<object> and can be missed.
-            else if (type == CorelConstants.CdrCurveShape) curves.Add((object)shape);
+            else if (IsCutGeometry(type)) curves.Add((object)shape);
             else throw new InvalidOperationException("В группе детали «" +
-                Convert.ToString(shape.Name) + "» нужны только кривые лекала и надсечек.");
+                Convert.ToString(shape.Name) + "» найден объект типа " + type +
+                ". Для резки нужны кривые или векторные фигуры лекала и надсечек.");
+        }
+
+        private static bool IsCutGeometry(int type)
+        {
+            // Corel primitives retain exact cutting geometry without conversion.
+            // The supplied VT_NECK/silhouette is a rectangle in all five sizes.
+            return type == CorelConstants.CdrCurveShape || type == 1 || type == 2 ||
+                type == 4 || type == 26; // rectangle, ellipse, polygon, Perfect Shape
+        }
+
+        private static void CollectNamedSilhouettes(dynamic shape, ICollection<object> matches,
+            int depth = 0)
+        {
+            if (depth > 12)
+                throw new InvalidOperationException("Слишком глубокая вложенность группы детали.");
+            if (String.Equals(Convert.ToString(shape.Name), "silhouette",
+                StringComparison.OrdinalIgnoreCase)) matches.Add((object)shape);
+            if (Convert.ToInt32(shape.Type) == CorelConstants.CdrGroupShape)
+                foreach (dynamic child in shape.Shapes)
+                    CollectNamedSilhouettes((object)child, matches, depth + 1);
         }
 
         private static dynamic FindSilhouette(Piece original)
         {
-            var curves = new List<dynamic>();
-            CollectCutCurves((object)original.Shape, curves);
-            var silhouettes = curves.Where(shape => String.Equals(Convert.ToString(shape.Name),
-                "silhouette", StringComparison.OrdinalIgnoreCase)).ToList();
-            // Previous models used a single named curve instead of a detail group.
-            if (silhouettes.Count == 0 &&
-                Convert.ToInt32(original.Shape.Type) == CorelConstants.CdrCurveShape)
-                silhouettes.Add(original.Shape);
+            // Printing only needs the named silhouette. Other members of the
+            // original detail group are collected separately when making cuts.
+            var silhouettes = new List<object>();
+            CollectNamedSilhouettes((object)original.Shape, silhouettes);
+            if (silhouettes.Count == 0 && IsCutGeometry(Convert.ToInt32(original.Shape.Type)))
+                silhouettes.Add((object)original.Shape); // legacy single-shape template
             if (silhouettes.Count != 1)
                 throw new InvalidOperationException("В детали «" + Convert.ToString(original.Shape.Name) +
-                    "» нужна ровно одна кривая silhouette.");
+                    "» нужен ровно один контур silhouette.");
             dynamic silhouette = silhouettes[0];
-            if (!Convert.ToBoolean(silhouette.Curve.Closed))
+            int type = Convert.ToInt32(silhouette.Type);
+            if (!IsCutGeometry(type))
+                throw new InvalidOperationException("Объект silhouette в детали «" +
+                    Convert.ToString(original.Shape.Name) + "» должен быть векторным контуром.");
+            if (type == CorelConstants.CdrCurveShape && !Convert.ToBoolean(silhouette.Curve.Closed))
                 throw new InvalidOperationException("Кривая silhouette в детали «" +
                     Convert.ToString(original.Shape.Name) + "» должна быть замкнута.");
             return silhouette;
@@ -1021,6 +1044,14 @@ namespace VanyaTools.Native
         {
             dynamic silhouette = FindSilhouette(original);
             dynamic control = silhouette.CopyToLayer(layer);
+            // Convert only the disposable print copy. The original rectangle,
+            // silhouette curve and all notches remain intact for cutting.
+            if (Convert.ToInt32(control.Type) != CorelConstants.CdrCurveShape)
+                control.ConvertToCurves();
+            if (Convert.ToInt32(control.Type) != CorelConstants.CdrCurveShape ||
+                !Convert.ToBoolean(control.Curve.Closed))
+                throw new InvalidOperationException("Для печати silhouette в детали «" +
+                    Convert.ToString(original.Shape.Name) + "» должна задавать замкнутый контур.");
             long controlId = Convert.ToInt64(control.StaticID);
             dynamic orange = app.CreateRGBColor(255, 128, 0);
             dynamic white = app.CreateRGBColor(255, 255, 255);
