@@ -31,6 +31,7 @@ namespace VanyaTools.Native
             public string NeckArtworkPath { get; set; }
             public string ModelPath { get; set; }
             public bool? RotateSleeves { get; set; }
+            public bool CutRotate180 { get; set; }
             public string SheetWidth { get; set; }
             public string Gap { get; set; }
             public string FontName { get; set; }
@@ -187,9 +188,9 @@ namespace VanyaTools.Native
         private readonly CheckBox _frontTwoLines;
         private readonly TextBox _frontLineSpacing;
         private readonly TextStyleEditor _nameStyle, _numberStyle;
-        private readonly CheckBox _keepGuides, _rotateSleeves;
+        private readonly CheckBox _keepGuides, _rotateSleeves, _cutRotate180;
         private readonly TextBlock _count, _progress;
-        private readonly Button _prepare, _generate;
+        private readonly Button _prepare, _generate, _generateCut, _saveCut;
         private bool _loading, _busy;
 
         public SportLayoutTab(Action<string, bool> status)
@@ -385,6 +386,21 @@ namespace VanyaTools.Native
             _generate = DockerTheme.Primary(Button("Этап 2 · Создать комплекты и раскладку", Generate));
             _generate.Margin = new Thickness(0, 7, 0, 4);
             panel.Children.Add(_generate);
+            panel.Children.Add(Title("5. Раскладка резки"));
+            panel.Children.Add(Note("В каждой группе детали нужна замкнутая кривая silhouette. " +
+                "Для печати она расширяется наружу на 6 мм; для резки берутся все исходные " +
+                "кривые группы, включая silhouette и надсечки. Рисунки и надписи не добавляются. " +
+                "Размеры и количество — из таблицы игроков, ширина и зазор — из настроек полотна."));
+            _cutRotate180 = new CheckBox { Content = "Развернуть все детали резки на 180°",
+                FontSize = 11, Margin = new Thickness(0, 0, 0, 5) };
+            panel.Children.Add(_cutRotate180);
+            _generateCut = Button("Создать раскладку резки", GenerateCutting);
+            panel.Children.Add(_generateCut);
+            _saveCut = Button("Сохранить страницу резки в отдельный CDR…", SaveCutting);
+            panel.Children.Add(_saveCut);
+            panel.Children.Add(Note("Раскладка резки создаётся на отдельной странице текущего CDR. " +
+                "Сохранение копирует только эту страницу; версия CDR берётся из настроек Vanya Tools. " +
+                "Поворота на 90° для резки нет."));
             _progress = Note("");
             panel.Children.Add(_progress);
 
@@ -411,6 +427,8 @@ namespace VanyaTools.Native
             _keepGuides.Unchecked += (_, __) => SaveDraft();
             _rotateSleeves.Checked += (_, __) => SaveDraft();
             _rotateSleeves.Unchecked += (_, __) => SaveDraft();
+            _cutRotate180.Checked += (_, __) => SaveDraft();
+            _cutRotate180.Unchecked += (_, __) => SaveDraft();
             LoadDraft();
             RefreshSizes();
             UpdateCount();
@@ -645,7 +663,7 @@ namespace VanyaTools.Native
             var templates = _templates.ToList();
             if (templates.Count == 0) { _status("Добавьте шаблоны лекал.", true); return; }
             _busy = true;
-            _prepare.IsEnabled = _generate.IsEnabled = false;
+            SetActionButtons(false);
             try
             {
                 SportLayoutOptions options = ReadOptions();
@@ -676,7 +694,7 @@ namespace VanyaTools.Native
                 _progress.Text = "Макет не подготовлен.";
                 _status(error.Message, true);
             }
-            finally { _busy = false; _prepare.IsEnabled = _generate.IsEnabled = true; }
+            finally { _busy = false; SetActionButtons(true); }
         }
 
         private async void GenerateReplacement(object sender, RoutedEventArgs e,
@@ -694,7 +712,7 @@ namespace VanyaTools.Native
             var row = (sender as FrameworkElement)?.DataContext as SportLayoutPlayer;
             if (row == null) { _status("Не выбрана строка игрока.", true); return; }
             _busy = true;
-            _prepare.IsEnabled = _generate.IsEnabled = false;
+            SetActionButtons(false);
             try
             {
                 SportLayoutOptions options = ReadOptions();
@@ -714,10 +732,41 @@ namespace VanyaTools.Native
                 _progress.Text = "Деталь не подготовлена.";
                 _status(error.Message, true);
             }
-            finally { _busy = false; _prepare.IsEnabled = _generate.IsEnabled = true; }
+            finally { _busy = false; SetActionButtons(true); }
         }
 
-        private async void Generate(object sender, RoutedEventArgs e)
+        private void Generate(object sender, RoutedEventArgs e) => GenerateLayout(false);
+
+        private void GenerateCutting(object sender, RoutedEventArgs e) => GenerateLayout(true);
+
+        private void SetActionButtons(bool enabled)
+        {
+            _prepare.IsEnabled = _generate.IsEnabled = _generateCut.IsEnabled = _saveCut.IsEnabled = enabled;
+        }
+
+        private void SaveCutting(object sender, RoutedEventArgs e)
+        {
+            if (_busy) return;
+            var dialog = new SaveFileDialog { Filter = "CorelDRAW (*.cdr)|*.cdr",
+                DefaultExt = ".cdr", AddExtension = true, OverwritePrompt = true,
+                FileName = "Спортформа - резка.cdr" };
+            if (dialog.ShowDialog() != true) return;
+            _busy = true;
+            SetActionButtons(false);
+            try
+            {
+                new SportLayoutService().SaveCurrentCuttingPage(dialog.FileName);
+                _status("CDR резки сохранён: " + dialog.FileName, false);
+            }
+            catch (Exception error)
+            {
+                Log.Error("Could not save sport cutting CDR.", error);
+                _status("CDR резки не сохранён: " + error.Message, true);
+            }
+            finally { _busy = false; SetActionButtons(true); }
+        }
+
+        private async void GenerateLayout(bool cutting)
         {
             if (_busy) return;
             if (!_playerGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
@@ -730,7 +779,7 @@ namespace VanyaTools.Native
             }
             SaveDraft();
             _busy = true;
-            _prepare.IsEnabled = _generate.IsEnabled = false;
+            SetActionButtons(false);
             try
             {
                 var players = _players.ToList();
@@ -742,17 +791,22 @@ namespace VanyaTools.Native
                 long totalLong = players.Sum(row => (long)row.Quantity);
                 if (totalLong > 300)
                     throw new InvalidOperationException("За один запуск можно подготовить не более 300 комплектов.");
-                var options = ReadOptions();
+                var options = ReadOptions(cutting);
                 _progress.Text = "Готовлю новую страницу текущего CDR…";
                 await Dispatcher.Yield(DispatcherPriority.Background);
-                SportLayoutResult result = new SportLayoutService().GenerateInCurrentDocument(
-                    players, templates, options, (done, total, label) =>
-                        _progress.Text = "Подготовлено " + done + " из " + total + ": " + label);
+                var service = new SportLayoutService();
+                Action<int, int, string> progress = (done, total, label) =>
+                    _progress.Text = "Подготовлено " + done + " из " + total + ": " + label;
+                SportLayoutResult result = cutting
+                    ? service.GenerateCuttingInCurrentDocument(players, templates, options, progress)
+                    : service.GenerateInCurrentDocument(players, templates, options, progress);
                 _progress.Text = "Готово: " + result.GarmentCount + " комплектов, " +
                     result.PieceCount + " деталей на странице " +
                     result.SheetHeightMm.ToString("0.#") + " × " +
-                    options.SheetWidthMm.ToString("0.#") + " мм. Сохраните CDR.";
-                _status("Раскладка добавлена в текущий CDR. Сохраните документ.", false);
+                    options.SheetWidthMm.ToString("0.#") + " мм. " +
+                    (cutting ? "Нажмите «Сохранить страницу резки в отдельный CDR»." : "Сохраните CDR.");
+                _status(cutting ? "Раскладка резки создана. Сохраните отдельный CDR кнопкой ниже." :
+                    "Раскладка добавлена в текущий CDR. Сохраните документ.", false);
             }
             catch (Exception error)
             {
@@ -760,10 +814,10 @@ namespace VanyaTools.Native
                 _progress.Text = "Раскладка не завершена.";
                 _status(error.Message, true);
             }
-            finally { _busy = false; _prepare.IsEnabled = _generate.IsEnabled = true; }
+            finally { _busy = false; SetActionButtons(true); }
         }
 
-        private SportLayoutOptions ReadOptions()
+        private SportLayoutOptions ReadOptions(bool cutting = false)
         {
             return new SportLayoutOptions {
                 FrontArtworkPath = _frontArt.Text.Trim(),
@@ -774,12 +828,13 @@ namespace VanyaTools.Native
                 SheetWidthMm = ParseMillimeters(_sheetWidth.Text, 300, 2000, "Ширина полотна"),
                 GapMm = ParseMillimeters(_gap.Text, 0, 100, "Расстояние между деталями"),
                 RotateSleeves = _rotateSleeves.IsChecked == true,
-                NameStyle = _nameStyle.Read("Имя"),
-                NumberStyle = _numberStyle.Read("Номер"),
+                CutRotate180 = _cutRotate180.IsChecked == true,
+                NameStyle = cutting ? null : _nameStyle.Read("Имя"),
+                NumberStyle = cutting ? null : _numberStyle.Read("Номер"),
                 FrontNameOnRight = _nameSide.SelectedIndex == 1,
                 FrontNameCase = (NamesGridLetterCase)_frontCase.SelectedIndex,
                 FrontNameTwoLines = _frontTwoLines.IsChecked == true,
-                FrontLineSpacingPercent = _frontTwoLines.IsChecked == true
+                FrontLineSpacingPercent = !cutting && _frontTwoLines.IsChecked == true
                     ? ParseRange(_frontLineSpacing.Text, 10, 300,
                         "Межстрочный интервал на груди, %") : 100,
                 WhiteText = _nameStyle.Fill.Text.Trim().Equals("#FFFFFF",
@@ -808,7 +863,7 @@ namespace VanyaTools.Native
                 _sheetWidth == null || _gap == null || _nameStyle == null ||
                 _numberStyle == null || _nameSide == null || _frontCase == null ||
                 _frontTwoLines == null || _frontLineSpacing == null ||
-                _keepGuides == null ||
+                _keepGuides == null || _cutRotate180 == null ||
                 _templateGrid == null || _playerGrid == null) return;
             try
             {
@@ -820,6 +875,7 @@ namespace VanyaTools.Native
                     RightSleeveArtworkPath = _rightSleeveArt.Text,
                     NeckArtworkPath = _neckArt.Text, ModelPath = _modelPath.Text,
                     RotateSleeves = _rotateSleeves.IsChecked == true,
+                    CutRotate180 = _cutRotate180.IsChecked == true,
                     SheetWidth = _sheetWidth.Text, Gap = _gap.Text,
                     NameStyle = _nameStyle.Read("Имя"),
                     NumberStyle = _numberStyle.Read("Номер"),
@@ -859,6 +915,7 @@ namespace VanyaTools.Native
                         _neckArt.Text = draft.NeckArtworkPath ?? "";
                         _modelPath.Text = draft.ModelPath ?? "";
                         _rotateSleeves.IsChecked = draft.RotateSleeves ?? true;
+                        _cutRotate180.IsChecked = draft.CutRotate180;
                         _sheetWidth.Text = draft.SheetWidth ?? "1500";
                         _gap.Text = draft.Gap ?? "10";
                         if (draft.NameStyle != null) _nameStyle.Load(draft.NameStyle);

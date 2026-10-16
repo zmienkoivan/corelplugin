@@ -40,6 +40,7 @@ namespace VanyaTools.Native
         public double SheetWidthMm;
         public double GapMm;
         public bool RotateSleeves;
+        public bool CutRotate180;
         public NamesGridLetterCase FrontNameCase;
         public bool FrontNameTwoLines;
         public double FrontLineSpacingPercent;
@@ -65,9 +66,8 @@ namespace VanyaTools.Native
 
     internal enum SportLayoutPart { Front, Back, LeftSleeve, RightSleeve, Neck }
 
-    // The supplied M template has four large orange garment contours and five
-    // empty red rectangles; no shapes have names. Geometry identifies the
-    // parts before copying them into the current document.
+    // Named models retain their original cutting groups. Print containers are
+    // separate curves built from silhouette, never from notches or other lines.
     internal sealed class SportLayoutService
     {
         private sealed class Piece
@@ -80,6 +80,7 @@ namespace VanyaTools.Native
             public double CenterY => Bottom + Height / 2;
             public double Area => Width * Height;
             public string Name;
+            public double? CaptionLeft, CaptionRight, CaptionBottom;
             public bool Contains(Piece other)
             {
                 return other.CenterX >= Left && other.CenterX <= Right &&
@@ -94,12 +95,15 @@ namespace VanyaTools.Native
                 LeftSleeveFrame, RightSleeveFrame, NeckFrame;
             public Piece FrontArtwork, BackArtwork, LeftSleeveArtwork,
                 RightSleeveArtwork, NeckArtwork;
+            public Piece FrontCut, BackCut, LeftSleeveCut, RightSleeveCut, NeckCut;
         }
 
         private const string MasterPrefix = "Спорт · макет · ";
         private const string OverviewName = "Спорт · макеты · все размеры";
         private const string SizeLayerPrefix = "VT_SPORT_SIZE_";
         private const string ZonesLayerName = "VT_ZONES";
+        private const double PrintBleedMm = 6;
+        private const string CuttingPagePrefix = "Резка спортформы · ";
 
         public int ClearPreparedArtwork(SportLayoutPart part)
         {
@@ -167,6 +171,7 @@ namespace VanyaTools.Native
             public double Width, Height, Left, Top;
             public bool CanRotate { get; set; }
             public bool Rotated { get; set; }
+            public double FixedRotation { get; set; }
         }
 
         private sealed class SkylineSegment
@@ -293,6 +298,9 @@ namespace VanyaTools.Native
                 Garment master = sameDocument ? CopyGarment(source, layer) :
                     PasteGarment(app, source, sourcePage, target, masterPage, layer);
                 SplitBackTextZone(master);
+                if (Math.Abs(scale - 1) > 0.0001)
+                    StretchMaster(app, master, scale);
+                CreatePrintContainers(app, layer, master);
                 NameMasterGarment(master);
                 master.FrontArtwork = AddMasterArtwork(app, layer, options.FrontArtworkPath,
                     master.Front, "FRONT");
@@ -302,8 +310,6 @@ namespace VanyaTools.Native
                     options.LeftSleeveArtworkPath, master.LeftSleeve, "LEFT_SLEEVE");
                 master.RightSleeveArtwork = AddMasterArtwork(app, layer,
                     options.RightSleeveArtworkPath, master.RightSleeve, "RIGHT_SLEEVE");
-                if (Math.Abs(scale - 1) > 0.0001)
-                    StretchMaster(app, master, scale);
                 foreach (dynamic page in target.Pages)
                     if (!Object.ReferenceEquals(page, masterPage) &&
                         String.Equals(Convert.ToString(page.Name), MasterPrefix + size,
@@ -441,6 +447,9 @@ namespace VanyaTools.Native
                         SplitBackTextZone(garment);
                     }
                     clipboardUsed |= !same;
+                    double scale = template.ScalePercent <= 0 ? 1 : template.ScalePercent / 100.0;
+                    if (Math.Abs(scale - 1) > 0.0001) StretchMaster(app, garment, scale);
+                    CreatePrintContainers(app, layer, garment);
                     NameMasterGarment(garment);
                     Log.Info("Sport overview: contours and boxes copied, size " + size);
                     garment.FrontArtwork = AddOrCopyMasterArtwork(app, layer,
@@ -456,8 +465,6 @@ namespace VanyaTools.Native
                             options.NeckArtworkPath, garment.Neck, "NECK", artworkCache);
                     Log.Info("Sport overview: artwork imported, size " + size);
                     LogOverviewMemory(size);
-                    double scale = template.ScalePercent <= 0 ? 1 : template.ScalePercent / 100.0;
-                    if (Math.Abs(scale - 1) > 0.0001) StretchMaster(app, garment, scale);
                     dynamic tile = app.CreateShapeRange();
                     foreach (dynamic shape in layer.Shapes) tile.Add(shape);
                     if (Convert.ToInt32(tile.Count) == 0)
@@ -543,7 +550,33 @@ namespace VanyaTools.Native
             IList<SportLayoutTemplate> templates, SportLayoutOptions options,
             Action<int, int, string> progress)
         {
-            return Generate(rows, templates, options, progress, null);
+            return Generate(rows, templates, options, progress, null, false);
+        }
+
+        public SportLayoutResult GenerateCuttingInCurrentDocument(IList<SportLayoutPlayer> rows,
+            IList<SportLayoutTemplate> templates, SportLayoutOptions options,
+            Action<int, int, string> progress)
+        {
+            return Generate(rows, templates, options, progress, null, true);
+        }
+
+        public void SaveCurrentCuttingPage(string path)
+        {
+            dynamic document = CorelApp.Get().ActiveDocument;
+            if (document == null || !Convert.ToString(document.ActivePage.Name)
+                .StartsWith(CuttingPagePrefix, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Откройте страницу раскладки резки.");
+            int count = 0;
+            foreach (dynamic layer in document.ActivePage.Layers)
+                foreach (dynamic shape in layer.Shapes)
+                {
+                    // Also reject accidental bitmaps/text from master layers.
+                    var curves = new List<dynamic>();
+                    CollectCutCurves(shape, curves);
+                    count += curves.Count;
+                }
+            if (count == 0) throw new InvalidOperationException("Страница резки пуста.");
+            CorelDocumentSaver.SaveCurrentPageCopy(document, path);
         }
 
         public SportLayoutResult GenerateReplacementPiece(SportLayoutPlayer row,
@@ -553,12 +586,12 @@ namespace VanyaTools.Native
             if (row == null) throw new InvalidOperationException("Выберите игрока.");
             return Generate(new[] { new SportLayoutPlayer { Size = row.Size,
                 Name = row.Name, Number = row.Number, Quantity = 1 } },
-                templates, options, null, part);
+                templates, options, null, part, false);
         }
 
         private SportLayoutResult Generate(IList<SportLayoutPlayer> rows,
             IList<SportLayoutTemplate> templates, SportLayoutOptions options,
-            Action<int, int, string> progress, SportLayoutPart? selectedPart)
+            Action<int, int, string> progress, SportLayoutPart? selectedPart, bool cutting)
         {
             if (rows == null || rows.Count == 0)
                 throw new InvalidOperationException("Добавьте игроков в таблицу.");
@@ -568,9 +601,9 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Ширина полотна: от 300 до 2000 мм.");
             if (options.GapMm < 0 || options.GapMm > 100)
                 throw new InvalidOperationException("Расстояние между деталями: от 0 до 100 мм.");
-            if (options.NameStyle == null || options.NumberStyle == null ||
+            if (!cutting && (options.NameStyle == null || options.NumberStyle == null ||
                 String.IsNullOrWhiteSpace(options.NameStyle.FontName) ||
-                String.IsNullOrWhiteSpace(options.NumberStyle.FontName))
+                String.IsNullOrWhiteSpace(options.NumberStyle.FontName)))
                 throw new InvalidOperationException("Выберите шрифты для имён и номера.");
             var bySize = new Dictionary<string, SportLayoutTemplate>(StringComparer.CurrentCultureIgnoreCase);
             foreach (var template in templates)
@@ -618,10 +651,11 @@ namespace VanyaTools.Native
             int complete = 0;
             try
             {
-                Log.Info("Sport layout: start, garments=" + total);
+                Log.Info("Sport layout: start, cutting=" + cutting + ", garments=" + total);
                 try { app.Optimization = true; } catch { }
                 target.Unit = CorelConstants.CdrMillimeter;
-                target.BeginCommandGroup("Vanya Tools - раскладка спортформы");
+                target.BeginCommandGroup("Vanya Tools - " +
+                    (cutting ? "раскладка резки" : "раскладка спортформы"));
                 commandStarted = true;
                 outputPage = target.AddPages(1);
                 outputPage.Activate();
@@ -635,7 +669,10 @@ namespace VanyaTools.Native
                     string size = NormalizeSize(row.Size);
                     double scale;
                     dynamic sourcePage = FindMasterPage(target, size, bySize, out scale);
-                    Garment source = ReadPreparedGarment(sourcePage, size);
+                    Garment source = ReadPreparedGarment(sourcePage, size, cutting);
+                    if (!cutting && source.FrontCut != null && Math.Abs(scale - 1) > 0.0001)
+                        throw new InvalidOperationException("Подготовьте макет размера " + size +
+                            " на этапе 1, чтобы припуск печати оставался ровно 6 мм.");
                     Log.Info("Sport layout: source ready, size " + size);
                     if (selectedPart == SportLayoutPart.Neck && source.Neck == null)
                         throw new InvalidOperationException("Для размера " + size +
@@ -644,10 +681,16 @@ namespace VanyaTools.Native
                     {
                         target.Activate();
                         outputPage.Activate();
-                        Garment garment = CopyGarment(source, outputLayer, selectedPart);
-                        Log.Info("Sport layout: garment copied, item " + (complete + 1));
-                        nested.AddRange(BuildNestedPieces(app, outputLayer, garment, row, size,
-                            complete + 1, options, scale, selectedPart));
+                        if (cutting)
+                            nested.AddRange(BuildCuttingPieces(app, outputLayer, source, row, size,
+                                complete + 1, options, scale));
+                        else
+                        {
+                            Garment garment = CopyGarment(source, outputLayer, selectedPart);
+                            Log.Info("Sport layout: garment copied, item " + (complete + 1));
+                            nested.AddRange(BuildNestedPieces(app, outputLayer, garment, row, size,
+                                complete + 1, options, scale, selectedPart));
+                        }
                         Log.Info("Sport layout: pieces built, item " + (complete + 1));
                         complete++;
                         progress?.Invoke(complete, total, size + " · " + row.Name);
@@ -659,13 +702,14 @@ namespace VanyaTools.Native
                 outputPage.SizeHeight = sheetHeight;
                 foreach (var item in nested)
                 {
-                    if (item.Rotated)
-                        item.Shape.RotateEx(90.0, Convert.ToDouble(item.Shape.CenterX),
+                    double rotation = item.FixedRotation + (item.Rotated ? 90 : 0);
+                    if (rotation != 0)
+                        item.Shape.RotateEx(rotation, Convert.ToDouble(item.Shape.CenterX),
                             Convert.ToDouble(item.Shape.CenterY));
                     item.Shape.Move(item.Left - Convert.ToDouble(item.Shape.LeftX),
                         sheetHeight - item.Top - item.Height - Convert.ToDouble(item.Shape.BottomY));
                 }
-                try { outputPage.Name = selectedPart.HasValue
+                try { outputPage.Name = cutting ? CuttingPagePrefix + complete + " комплектов" : selectedPart.HasValue
                     ? "Допечатка · " + rows[0].Name + " · " + selectedPart.Value
                     : "Спортформа · " + complete + " комплектов"; } catch { }
                 Log.Info("Sport layout: complete");
@@ -908,7 +952,127 @@ namespace VanyaTools.Native
 
         private static Piece CopyOptional(Piece source, dynamic layer)
         {
-            return source == null ? null : Describe(source.Shape.CopyToLayer(layer));
+            if (source == null) return null;
+            Piece copy = Describe(source.Shape.CopyToLayer(layer));
+            double dx = copy.Left - source.Left, dy = copy.Bottom - source.Bottom;
+            copy.CaptionLeft = source.CaptionLeft + dx;
+            copy.CaptionRight = source.CaptionRight + dx;
+            copy.CaptionBottom = source.CaptionBottom + dy;
+            return copy;
+        }
+
+        private static void CollectCutCurves(dynamic shape, IList<dynamic> curves, int depth = 0)
+        {
+            if (depth > 12)
+                throw new InvalidOperationException("Слишком глубокая вложенность группы детали.");
+            int type = Convert.ToInt32(shape.Type);
+            if (type == CorelConstants.CdrGroupShape)
+            {
+                foreach (dynamic child in shape.Shapes) CollectCutCurves(child, curves, depth + 1);
+            }
+            else if (type == CorelConstants.CdrCurveShape) curves.Add(shape);
+            else throw new InvalidOperationException("В группе детали «" +
+                Convert.ToString(shape.Name) + "» нужны только кривые лекала и надсечек.");
+        }
+
+        private static dynamic FindSilhouette(Piece original)
+        {
+            var curves = new List<dynamic>();
+            CollectCutCurves(original.Shape, curves);
+            var silhouettes = curves.Where(shape => String.Equals(Convert.ToString(shape.Name),
+                "silhouette", StringComparison.OrdinalIgnoreCase)).ToList();
+            // Previous models used a single named curve instead of a detail group.
+            if (silhouettes.Count == 0 &&
+                Convert.ToInt32(original.Shape.Type) == CorelConstants.CdrCurveShape)
+                silhouettes.Add(original.Shape);
+            if (silhouettes.Count != 1)
+                throw new InvalidOperationException("В детали «" + Convert.ToString(original.Shape.Name) +
+                    "» нужна ровно одна кривая silhouette.");
+            dynamic silhouette = silhouettes[0];
+            if (!Convert.ToBoolean(silhouette.Curve.Closed))
+                throw new InvalidOperationException("Кривая silhouette в детали «" +
+                    Convert.ToString(original.Shape.Name) + "» должна быть замкнута.");
+            return silhouette;
+        }
+
+        private static void CreatePrintContainers(dynamic app, dynamic layer, Garment garment)
+        {
+            garment.FrontCut = garment.Front;
+            garment.BackCut = garment.Back;
+            garment.LeftSleeveCut = garment.LeftSleeve;
+            garment.RightSleeveCut = garment.RightSleeve;
+            garment.NeckCut = garment.Neck;
+            // Validate the whole model before applying any contour effects.
+            foreach (Piece part in new[] { garment.FrontCut, garment.BackCut,
+                garment.LeftSleeveCut, garment.RightSleeveCut, garment.NeckCut })
+                if (part != null) FindSilhouette(part);
+            garment.Front = CreateBleedContainer(app, layer, garment.FrontCut);
+            garment.Back = CreateBleedContainer(app, layer, garment.BackCut);
+            garment.LeftSleeve = CreateBleedContainer(app, layer, garment.LeftSleeveCut);
+            garment.RightSleeve = CreateBleedContainer(app, layer, garment.RightSleeveCut);
+            garment.Neck = garment.NeckCut == null ? null :
+                CreateBleedContainer(app, layer, garment.NeckCut);
+        }
+
+        private static Piece CreateBleedContainer(dynamic app, dynamic layer, Piece original)
+        {
+            dynamic silhouette = FindSilhouette(original);
+            dynamic control = silhouette.CopyToLayer(layer);
+            long controlId = Convert.ToInt64(control.StaticID);
+            dynamic orange = app.CreateRGBColor(255, 128, 0);
+            dynamic white = app.CreateRGBColor(255, 255, 255);
+            // Pass every optional COM argument explicitly (the dynamic binder
+            // can otherwise marshal an omitted argument as 0xFFFFFFFF).
+            dynamic effect = control.CreateContour(CorelConstants.CdrContourOutside,
+                PrintBleedMm, 1, 0, orange, white, white, 0, 0,
+                CorelConstants.CdrContourRoundCap, CorelConstants.CdrContourCornerRound, 15.0);
+            dynamic separated = effect.Separate();
+            var curves = new List<dynamic>();
+            foreach (dynamic shape in separated)
+                UnpackContour(shape, controlId, curves);
+            if (curves.Count == 0)
+                throw new InvalidOperationException("CorelDRAW не создал контур +6 мм для «" +
+                    Convert.ToString(original.Shape.Name) + "».");
+            dynamic container;
+            if (curves.Count == 1) container = curves[0];
+            else
+            {
+                dynamic range = app.CreateShapeRange();
+                foreach (dynamic curve in curves) range.Add(curve);
+                container = range.Combine();
+            }
+            control.Delete();
+            if (Convert.ToInt32(container.Type) != CorelConstants.CdrCurveShape ||
+                !Convert.ToBoolean(container.Curve.Closed))
+                throw new InvalidOperationException("Контур +6 мм получился незамкнутым.");
+            container.Fill.ApplyNoFill();
+            container.Outline.Width = 0.15;
+            container.Outline.Color.RGBAssign(255, 128, 0);
+            container.OrderToBack();
+            Piece result = Describe(container);
+            SetCaptionBoundary(result, Describe(silhouette));
+            Log.Info("Sport print container: +6 mm, source=" + Convert.ToString(original.Shape.Name));
+            return result;
+        }
+
+        private static void UnpackContour(dynamic shape, long controlId, IList<dynamic> curves)
+        {
+            if (Convert.ToInt64(shape.StaticID) == controlId) return;
+            if (Convert.ToInt32(shape.Type) == CorelConstants.CdrGroupShape)
+            {
+                dynamic children = shape.UngroupEx();
+                foreach (dynamic child in children) UnpackContour(child, controlId, curves);
+            }
+            else if (Convert.ToInt32(shape.Type) == CorelConstants.CdrCurveShape) curves.Add(shape);
+            else throw new InvalidOperationException("CorelDRAW вернул неподходящий объект контура.");
+        }
+
+        private static void SetCaptionBoundary(Piece printed, Piece original)
+        {
+            GetBottomSpan(original, out double left, out double right);
+            printed.CaptionLeft = left;
+            printed.CaptionRight = right;
+            printed.CaptionBottom = original.Bottom;
         }
 
         private static void SplitBackTextZone(Garment garment)
@@ -937,6 +1101,11 @@ namespace VanyaTools.Native
             garment.LeftSleeve.Shape.Name = "VT_SPORT_CONTOUR_LEFT_SLEEVE";
             garment.RightSleeve.Shape.Name = "VT_SPORT_CONTOUR_RIGHT_SLEEVE";
             if (garment.Neck != null) garment.Neck.Shape.Name = "VT_SPORT_CONTOUR_NECK";
+            if (garment.FrontCut != null) garment.FrontCut.Shape.Name = "VT_SPORT_CUT_FRONT";
+            if (garment.BackCut != null) garment.BackCut.Shape.Name = "VT_SPORT_CUT_BACK";
+            if (garment.LeftSleeveCut != null) garment.LeftSleeveCut.Shape.Name = "VT_SPORT_CUT_LEFT_SLEEVE";
+            if (garment.RightSleeveCut != null) garment.RightSleeveCut.Shape.Name = "VT_SPORT_CUT_RIGHT_SLEEVE";
+            if (garment.NeckCut != null) garment.NeckCut.Shape.Name = "VT_SPORT_CUT_NECK";
             garment.FrontLeft.Shape.Name = "VT_SPORT_ZONE_FRONT_LEFT";
             garment.FrontRight.Shape.Name = "VT_SPORT_ZONE_FRONT_RIGHT";
             garment.BackText.Shape.Name = "VT_SPORT_ZONE_BACK";
@@ -1065,7 +1234,7 @@ namespace VanyaTools.Native
             return latest;
         }
 
-        private static Garment ReadPreparedGarment(dynamic page, string size)
+        private static Garment ReadPreparedGarment(dynamic page, string size, bool cutting = false)
         {
             var named = new Dictionary<string, Piece>(StringComparer.OrdinalIgnoreCase);
             foreach (dynamic layer in page.Layers)
@@ -1088,7 +1257,20 @@ namespace VanyaTools.Native
                     "» не найден объект " + name + ". Верните его или подготовьте макет заново.");
             }
             Piece Optional(string name) => named.TryGetValue(name, out Piece found) ? found : null;
-            return new Garment {
+            if (cutting)
+            {
+                if (!named.ContainsKey("VT_SPORT_CUT_FRONT"))
+                    throw new InvalidOperationException("Подготовьте макеты заново на этапе 1: " +
+                        "на прежней странице ещё нет исходных групп резки.");
+                return new Garment {
+                    FrontCut = Required("VT_SPORT_CUT_FRONT"),
+                    BackCut = Required("VT_SPORT_CUT_BACK"),
+                    LeftSleeveCut = Required("VT_SPORT_CUT_LEFT_SLEEVE"),
+                    RightSleeveCut = Required("VT_SPORT_CUT_RIGHT_SLEEVE"),
+                    NeckCut = Optional("VT_SPORT_CUT_NECK")
+                };
+            }
+            var garment = new Garment {
                 Front = Required("VT_SPORT_CONTOUR_FRONT"),
                 Back = Required("VT_SPORT_CONTOUR_BACK"),
                 LeftSleeve = Required("VT_SPORT_CONTOUR_LEFT_SLEEVE"),
@@ -1105,8 +1287,54 @@ namespace VanyaTools.Native
                 BackArtwork = Optional("VT_SPORT_ART_BACK"),
                 LeftSleeveArtwork = Optional("VT_SPORT_ART_LEFT_SLEEVE"),
                 RightSleeveArtwork = Optional("VT_SPORT_ART_RIGHT_SLEEVE"),
-                NeckArtwork = Optional("VT_SPORT_ART_NECK")
+                NeckArtwork = Optional("VT_SPORT_ART_NECK"),
+                FrontCut = Optional("VT_SPORT_CUT_FRONT"),
+                BackCut = Optional("VT_SPORT_CUT_BACK"),
+                LeftSleeveCut = Optional("VT_SPORT_CUT_LEFT_SLEEVE"),
+                RightSleeveCut = Optional("VT_SPORT_CUT_RIGHT_SLEEVE"),
+                NeckCut = Optional("VT_SPORT_CUT_NECK")
             };
+            var printed = new[] { garment.Front, garment.Back, garment.LeftSleeve,
+                garment.RightSleeve, garment.Neck };
+            var originals = new[] { garment.FrontCut, garment.BackCut, garment.LeftSleeveCut,
+                garment.RightSleeveCut, garment.NeckCut };
+            for (int i = 0; i < printed.Length; i++)
+                if (printed[i] != null && originals[i] != null)
+                    SetCaptionBoundary(printed[i], Describe(FindSilhouette(originals[i])));
+            return garment;
+        }
+
+        private static IList<NestedPiece> BuildCuttingPieces(dynamic app, dynamic layer,
+            Garment source, SportLayoutPlayer row, string size, int index,
+            SportLayoutOptions options, double scale)
+        {
+            var result = new List<NestedPiece>();
+            var originals = new[] { source.FrontCut, source.BackCut, source.LeftSleeveCut,
+                source.RightSleeveCut, source.NeckCut };
+            var keys = new[] { "FRONT", "BACK", "LEFT_SLEEVE", "RIGHT_SLEEVE", "NECK" };
+            for (int i = 0; i < originals.Length; i++)
+            {
+                Piece original = originals[i];
+                if (original == null) continue;
+                var curves = new List<dynamic>();
+                CollectCutCurves(original.Shape, curves);
+                if (curves.Count == 0) throw new InvalidOperationException("Пустая группа резки.");
+                // Copy the intact group: silhouette and every notch retain their
+                // geometry and relative positions. No text/print/container added.
+                dynamic copy = original.Shape.CopyToLayer(layer);
+                if (Math.Abs(scale - 1) > 0.0001)
+                {
+                    dynamic range = app.CreateShapeRange();
+                    range.Add(copy);
+                    range.Stretch(scale, scale, true);
+                }
+                copy.Name = "VT_CUT_" + index.ToString("000", CultureInfo.InvariantCulture) +
+                    "_" + Clean(size) + "_" + Clean(row.Name) + "_" + keys[i];
+                result.Add(new NestedPiece { Shape = copy,
+                    Width = Convert.ToDouble(copy.SizeWidth), Height = Convert.ToDouble(copy.SizeHeight),
+                    CanRotate = false, FixedRotation = options.CutRotate180 ? 180 : 0 });
+            }
+            return result;
         }
 
         // CopyToLayer only works inside one CDR. Use Corel's clipboard transfer
@@ -1489,10 +1717,13 @@ namespace VanyaTools.Native
                 size, ShortPartName(part) }
                 .Where(value => !String.IsNullOrWhiteSpace(value)));
             GetBottomSpan(piece, out double bottomLeft, out double bottomRight);
+            bottomLeft = piece.CaptionLeft ?? bottomLeft;
+            bottomRight = piece.CaptionRight ?? bottomRight;
+            double hemBottom = piece.CaptionBottom ?? piece.Bottom;
             double left = bottomLeft + 10;
             double allowed = Math.Max(1, bottomRight - bottomLeft - 20);
             dynamic text = layer.CreateArtisticTextWide(left,
-                piece.Bottom + 4, caption, 0, -1, "Arial", 20);
+                hemBottom + 4, caption, 0, -1, "Arial", 20);
             text.Name = "VT_CAPTION_" + part.Replace(' ', '_');
             if (white) text.Fill.UniformColor.RGBAssign(255, 255, 255);
             else text.Fill.UniformColor.RGBAssign(0, 0, 0);
@@ -1501,7 +1732,7 @@ namespace VanyaTools.Native
             if (width > allowed)
                 text.SetSize(allowed, Convert.ToDouble(text.SizeHeight) * allowed / width);
             text.Move(left - Convert.ToDouble(text.LeftX),
-                piece.Bottom + 4 - Convert.ToDouble(text.BottomY));
+                hemBottom + 4 - Convert.ToDouble(text.BottomY));
             return text;
         }
 

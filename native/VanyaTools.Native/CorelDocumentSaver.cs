@@ -93,6 +93,32 @@ namespace VanyaTools.Native
             SaveAs(document, path, overwrite, SelectedVersion);
         }
 
+        internal static void SaveCurrentPageCopy(dynamic document, string path)
+        {
+            string fullPath = Path.GetFullPath(path);
+            if (!String.Equals(Path.GetExtension(fullPath), ".cdr", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Для резки выберите файл CDR.");
+            foreach (dynamic openDocument in CorelApp.Get().Documents)
+            {
+                string openPath = Convert.ToString(openDocument.FullFileName);
+                if (!String.IsNullOrWhiteSpace(openPath) && String.Equals(Path.GetFullPath(openPath),
+                    fullPath, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Выберите отдельный файл для резки: " +
+                        "этот CDR сейчас открыт в CorelDRAW.");
+            }
+            object options = CorelApp.Get().CreateStructSaveAsOptions();
+            int version = SelectedVersion;
+            if (version != 0)
+                options.GetType().InvokeMember("Version", BindingFlags.SetProperty,
+                    null, options, new object[] { version });
+            options.GetType().InvokeMember("Range", BindingFlags.SetProperty,
+                null, options, new object[] { 1 }); // cdrCurrentPage
+            options.GetType().InvokeMember("Overwrite", BindingFlags.SetProperty,
+                null, options, new object[] { true }); // SaveFileDialog confirmed replacement.
+            document.GetType().InvokeMember("SaveAsCopy", BindingFlags.InvokeMethod,
+                null, (object)document, new object[] { fullPath, options });
+        }
+
         private static void SaveAs(dynamic document, string path, bool overwrite, int version)
         {
             object options = CorelApp.Get().CreateStructSaveAsOptions();
