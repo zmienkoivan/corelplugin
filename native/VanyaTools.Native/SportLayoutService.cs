@@ -422,6 +422,23 @@ namespace VanyaTools.Native
             {
                 Log.Info("Sport overview: start, sizes=" + templates.Count);
                 target.Unit = CorelConstants.CdrMillimeter;
+                // Validate all requested layers before allocating the overview
+                // or importing large artwork for earlier, valid sizes.
+                foreach (SportLayoutTemplate template in templates)
+                {
+                    if (String.IsNullOrWhiteSpace(template.LayerName)) continue;
+                    string path = System.IO.Path.GetFullPath(template.Path);
+                    bool same = String.Equals(path, targetPath, StringComparison.OrdinalIgnoreCase);
+                    dynamic sourcePage = same ? previousPage :
+                        OnlyTemplatePage(GetTemplateSession(app, path, sessions).Document);
+                    try { ReadLayeredSources(sourcePage, template.LayerName); }
+                    catch (Exception error)
+                    {
+                        throw new InvalidOperationException("Размер «" + template.LayerName +
+                            "»: " + error.Message, error);
+                    }
+                }
+                target.Activate();
                 // Keep source CDR switches outside a target undo group.
                 overview = target.AddPages(1);
                 overview.Activate();
@@ -510,17 +527,8 @@ namespace VanyaTools.Native
             finally
             {
                 Log.Info("Sport overview: cleanup start");
-                if (clipboardUsed)
-                {
-                    try
-                    {
-                        // Release copied model data while its source CDR is
-                        // still alive. The operation replaced the clipboard.
-                        System.Windows.Clipboard.Clear();
-                        Log.Info("Sport overview: model clipboard cleared");
-                    }
-                    catch (Exception error) { Log.Error("Could not clear sport model clipboard.", error); }
-                }
+                // Release copied model data while its source CDR is still alive.
+                if (clipboardUsed) CorelClipboardTransfer.ClearModel();
                 try { target.Activate(); Log.Info("Sport overview: target active"); }
                 catch (Exception error) { Log.Error("Sport overview: target activation failed.", error); }
                 try { target.Unit = previousUnit; Log.Info("Sport overview: units restored"); }
@@ -781,9 +789,7 @@ namespace VanyaTools.Native
             return session;
         }
 
-        private static Garment CopyLayeredGarment(dynamic app, dynamic sourcePage,
-            string sourceLayerName, dynamic target, dynamic outputPage,
-            dynamic outputLayer, bool sameDocument)
+        private static List<dynamic> ReadLayeredSources(dynamic sourcePage, string sourceLayerName)
         {
             dynamic sizeLayer = null, zonesLayer = null;
             foreach (dynamic layer in sourcePage.Layers)
@@ -804,6 +810,7 @@ namespace VanyaTools.Native
             if (top == null)
                 throw new InvalidOperationException("На слое «" + sourceLayerName +
                     "» не найдена группа VT_TOP.");
+            ValidateLayeredParts(top, sourceLayerName);
             var sources = new List<dynamic> { top };
             var zoneNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (dynamic shape in zonesLayer.Shapes)
@@ -816,6 +823,35 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Бокс «" + name + "» на VT_ZONES повторяется.");
                 sources.Add(shape);
             }
+            return sources;
+        }
+
+        private static void ValidateLayeredParts(dynamic top, string size)
+        {
+            if (Convert.ToInt32(top.Type) != CorelConstants.CdrGroupShape)
+                throw new InvalidOperationException("VT_TOP на слое «" + size + "» должен быть группой.");
+            var required = new HashSet<string>(new[] { "VT_FRONT", "VT_BACK", "VT_SLEEVE_LEFT",
+                "VT_SLEEVE_RIGHT", "VT_NECK" }, StringComparer.OrdinalIgnoreCase);
+            var names = new List<string>();
+            foreach (dynamic shape in top.Shapes)
+                names.Add(Convert.ToString(shape.Name) ?? "");
+            var missing = required.Where(name => !names.Contains(name, StringComparer.OrdinalIgnoreCase)).ToArray();
+            if (names.Count != 5 || missing.Length > 0 ||
+                names.Distinct(StringComparer.OrdinalIgnoreCase).Count() != 5)
+                throw new InvalidOperationException("Проверьте группу VT_TOP на слое «" + size + "»: " +
+                    (missing.Length == 0 ? "нужны ровно пять разных деталей." :
+                        "не найдены " + String.Join(", ", missing) + ".") +
+                    " Сейчас внутри: " + String.Join(", ", names.Select(name => name.Length == 0 ?
+                        "без имени" : name)) + ".");
+            foreach (dynamic shape in top.Shapes)
+                FindSilhouette(Describe(shape));
+        }
+
+        private static Garment CopyLayeredGarment(dynamic app, dynamic sourcePage,
+            string sourceLayerName, dynamic target, dynamic outputPage,
+            dynamic outputLayer, bool sameDocument)
+        {
+            List<dynamic> sources = ReadLayeredSources(sourcePage, sourceLayerName);
             // One clipboard round trip per size is much less fragile than
             // copying the top group and each shared zone independently.
             var copied = new List<dynamic>();
@@ -832,11 +868,12 @@ namespace VanyaTools.Native
                 dynamic range = app.CreateShapeRange();
                 foreach (dynamic shape in sources) range.Add(shape);
                 Log.Info("Sport model transfer: clipboard copy start, layer " + sourceLayerName);
-                range.Copy();
+                CorelClipboardTransfer.Copy(range, sourceLayerName);
                 Log.Info("Sport model transfer: clipboard copy complete, layer " + sourceLayerName);
                 target.Activate();
                 outputPage.Activate();
                 Log.Info("Sport model transfer: paste start, layer " + sourceLayerName);
+                CorelClipboardTransfer.WaitAvailable(sourceLayerName);
                 dynamic pasted = outputLayer.PasteEx(app.CreateStructPasteOptions());
                 foreach (dynamic shape in pasted)
                 {
@@ -1525,12 +1562,13 @@ namespace VanyaTools.Native
             range.Add(source.BackText.Shape);
             range.Add(source.LeftSleeveFrame.Shape);
             range.Add(source.RightSleeveFrame.Shape);
-            range.Copy();
+            CorelClipboardTransfer.Copy(range, "лекало");
 
             target.Activate();
             outputPage.Activate();
             // The COM dynamic binder marshals the omitted optional argument as
             // 0xFFFFFFFF on some Corel versions. Pass a real options object.
+            CorelClipboardTransfer.WaitAvailable("лекало");
             dynamic pasted = outputLayer.PasteEx(app.CreateStructPasteOptions());
             var shapes = new List<dynamic>();
             foreach (dynamic shape in pasted) shapes.Add(shape);
