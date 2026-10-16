@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -37,6 +38,14 @@ namespace VanyaTools.Native
             return CaptureCore(dpi, 0, 70000000, true, true, true);
         }
 
+        internal static BitmapSource CaptureOrderFrame(bool restoreSelection)
+        {
+            // Match the final Telegram photo limits before rasterisation.
+            // Return opaque pixels directly, without a PNG disk round trip.
+            return CaptureBitmapCore(CaptureDpi, 9500, 24000000, false,
+                restoreSelection, false, 9990, true);
+        }
+
         public static long EstimatePublishPixels(int dpi, out double widthMm, out double heightMm)
         {
             dynamic app = CorelApp.Get();
@@ -62,6 +71,27 @@ namespace VanyaTools.Native
         private static string CaptureCore(int desiredDpi, int maxDimension, int maxPixels,
             bool exactDpi, bool restoreSelection, bool refreshWindow)
         {
+            string path = Path.Combine(Path.GetTempPath(), "Vanya-AI-Selection-" + Guid.NewGuid().ToString("N") + ".png");
+            try
+            {
+                BitmapSource image = CaptureBitmapCore(desiredDpi, maxDimension, maxPixels,
+                    exactDpi, restoreSelection, refreshWindow);
+                var encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(image));
+                using (var stream = File.Create(path)) encoder.Save(stream);
+                return path;
+            }
+            catch
+            {
+                try { if (File.Exists(path)) File.Delete(path); } catch { }
+                throw;
+            }
+        }
+
+        private static BitmapSource CaptureBitmapCore(int desiredDpi, int maxDimension, int maxPixels,
+            bool exactDpi, bool restoreSelection, bool refreshWindow, int maxDimensionSum = 0,
+            bool whiteBackground = false)
+        {
             dynamic app = CorelApp.Get();
             dynamic doc = app.ActiveDocument;
             if (doc == null) throw new InvalidOperationException("Сначала откройте документ CorelDRAW.");
@@ -77,9 +107,9 @@ namespace VanyaTools.Native
             dynamic workingShape = null;
             dynamic rasterShape = null;
             bool oldOptimization = false;
-            string path = Path.Combine(Path.GetTempPath(), "Vanya-AI-Selection-" + Guid.NewGuid().ToString("N") + ".png");
             bool commandGroupStarted = false;
             string step = "создание временной копии";
+            var timer = Stopwatch.StartNew();
 
             try
             {
@@ -107,8 +137,10 @@ namespace VanyaTools.Native
                 }
                 if (workingShape == null)
                     throw new InvalidOperationException("Не удалось получить временную копию объекта CorelDRAW.");
+                Log.Info("Selection capture: duplicate/group " + timer.ElapsedMilliseconds + " ms.");
                 step = "растрирование копии";
-                int captureDpi = ChooseDpi(doc, workingShape, desiredDpi, maxDimension, maxPixels);
+                int captureDpi = ChooseDpi(doc, workingShape, desiredDpi, maxDimension, maxPixels,
+                    maxDimensionSum);
                 if (exactDpi && captureDpi != desiredDpi)
                     throw new InvalidOperationException("Макет слишком велик для экспорта с заданным DPI (предел 70 Мп).");
                 rasterShape = workingShape.ConvertToBitmapEx(
@@ -120,18 +152,20 @@ namespace VanyaTools.Native
                     true);
                 if (rasterShape == null)
                     throw new InvalidOperationException("CorelDRAW не смог растрировать выделение.");
+                Log.Info("Selection capture: raster ready at " + timer.ElapsedMilliseconds +
+                    " ms, " + captureDpi + " DPI.");
 
                 // Read the bitmap tiles directly. Corel export filters can return E_FAIL
-                // even after rasterisation succeeds; WPF writes the PNG instead.
-                step = "чтение пикселей и сохранение PNG";
-                WritePng(rasterShape.Bitmap, path, captureDpi, maxPixels);
-                if (!File.Exists(path) || new FileInfo(path).Length == 0)
-                    throw new InvalidOperationException("CorelDRAW не создал PNG выделения.");
-                return path;
+                // even after rasterisation succeeds. The returned image owns
+                // managed pixels and survives deletion of the temporary shape.
+                step = "чтение пикселей";
+                BitmapSource image = ReadBitmap(rasterShape.Bitmap, captureDpi, maxPixels, whiteBackground);
+                Log.Info("Selection capture: pixels ready at " + timer.ElapsedMilliseconds +
+                    " ms, " + image.PixelWidth + "x" + image.PixelHeight + ".");
+                return image;
             }
             catch (Exception ex)
             {
-                try { if (File.Exists(path)) File.Delete(path); } catch { }
                 Log.Error("AI selection capture failed at: " + step, ex);
                 if (ex is InvalidOperationException) throw;
                 throw new InvalidOperationException("Не удалось подготовить выделение: " + step + ". " + ex.Message, ex);
@@ -153,10 +187,12 @@ namespace VanyaTools.Native
                 try { if (commandGroupStarted) doc.EndCommandGroup(); } catch { }
                 try { app.Optimization = oldOptimization; } catch { }
                 if (refreshWindow) try { app.ActiveWindow.Refresh(); } catch { }
+                Log.Info("Selection capture: cleanup complete at " + timer.ElapsedMilliseconds + " ms.");
             }
         }
 
-        private static int ChooseDpi(dynamic doc, dynamic shape, int desiredDpi, int maxDimension, int maxPixels)
+        private static int ChooseDpi(dynamic doc, dynamic shape, int desiredDpi, int maxDimension, int maxPixels,
+            int maxDimensionSum = 0)
         {
             int oldUnit = Convert.ToInt32(doc.Unit);
             try
@@ -170,6 +206,7 @@ namespace VanyaTools.Native
                 double heightPx = heightMm * desiredDpi / 25.4;
                 double scale = 1.0;
                 if (maxDimension > 0) scale = Math.Min(scale, maxDimension / Math.Max(widthPx, heightPx));
+                if (maxDimensionSum > 0) scale = Math.Min(scale, maxDimensionSum / (widthPx + heightPx));
                 if (maxPixels > 0) scale = Math.Min(scale, Math.Sqrt(maxPixels / (widthPx * heightPx)));
                 if (scale < 1.0) scale *= 0.97; // Room for Corel's edge rounding and anti-aliasing.
                 return Math.Max(1, Math.Min(desiredDpi, (int)Math.Floor(desiredDpi * scale)));
@@ -177,7 +214,8 @@ namespace VanyaTools.Native
             finally { doc.Unit = oldUnit; }
         }
 
-        private static void WritePng(dynamic bitmap, string path, int captureDpi, int maxPixels)
+        private static BitmapSource ReadBitmap(dynamic bitmap, int captureDpi, int maxPixels,
+            bool whiteBackground)
         {
             dynamic colorImage = bitmap.Image;
             if (colorImage == null)
@@ -200,12 +238,22 @@ namespace VanyaTools.Native
 
             CopyTiles(colorImage, pixels, width, height, false);
             if (alphaImage != null) CopyTiles(alphaImage, pixels, width, height, true);
+            if (whiteBackground && alphaImage != null)
+                for (int i = 0; i < pixels.Length; i += 4)
+                {
+                    int alpha = pixels[i + 3];
+                    if (alpha == 255) continue;
+                    int white = 255 * (255 - alpha);
+                    pixels[i] = (byte)((pixels[i] * alpha + white + 127) / 255);
+                    pixels[i + 1] = (byte)((pixels[i + 1] * alpha + white + 127) / 255);
+                    pixels[i + 2] = (byte)((pixels[i + 2] * alpha + white + 127) / 255);
+                    pixels[i + 3] = 255;
+                }
 
             var image = BitmapSource.Create(width, height, captureDpi, captureDpi,
                 PixelFormats.Bgra32, null, pixels, width * 4);
-            var encoder = new PngBitmapEncoder();
-            encoder.Frames.Add(BitmapFrame.Create(image));
-            using (var stream = File.Create(path)) encoder.Save(stream);
+            image.Freeze();
+            return image;
         }
 
         private static void CopyTiles(dynamic image, byte[] pixels, int width, int height, bool alpha)

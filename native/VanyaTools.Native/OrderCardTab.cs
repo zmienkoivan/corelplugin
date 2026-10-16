@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -916,9 +917,13 @@ namespace VanyaTools.Native
             for (int i = 0; i < _data.Frames.Count; i++)
             {
                 int index = i;
-                var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
-                var thumbnail = new Border { Width = 54, Height = 54,
-                    Margin = new Thickness(0, 0, 6, 0),
+                var row = new Grid { Margin = new Thickness(0, 2, 0, 2) };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                var thumbnail = new Border { Width = 46, Height = 46,
+                    Margin = new Thickness(0, 0, 5, 0),
                     Background = new SolidColorBrush(Color.FromRgb(240, 242, 244)),
                     BorderBrush = new SolidColorBrush(Color.FromRgb(213, 219, 224)),
                     BorderThickness = new Thickness(1), Cursor = Cursors.Hand,
@@ -932,23 +937,37 @@ namespace VanyaTools.Native
                 }
                 catch (Exception error) { Log.Error("Order frame thumbnail unavailable", error); }
                 thumbnail.MouseLeftButtonUp += (_, __) => Safe(() => PreviewFrame(index));
-                DockPanel.SetDock(thumbnail, Dock.Left);
+                Grid.SetRowSpan(thumbnail, 2);
                 row.Children.Add(thumbnail);
                 int count = _data.Frames[i].ObjectCount > 0 ? _data.Frames[i].ObjectCount
                     : _data.Frames[i].Shapes.Count;
-                row.Children.Add(new TextBlock { Text = (i + 1) + ". Кадр · " + count + " объект(ов)",
-                    VerticalAlignment = VerticalAlignment.Center, Width = 145 });
-                foreach (var action in new[] { ("Показать", (Action)(() => SelectFrame(index))),
-                    ("↻", (Action)(() => RecaptureFrame(index))),
-                    ("↑", (Action)(() => MoveFrame(index, -1))),
-                    ("↓", (Action)(() => MoveFrame(index, 1))),
-                    ("×", (Action)(() => RemoveFrame(index))) })
+                var label = new TextBlock { Text = (i + 1) + ". Кадр · " + count + " объект(ов)",
+                    FontSize = 11, Margin = new Thickness(1, 0, 1, 1),
+                    TextTrimming = TextTrimming.CharacterEllipsis };
+                Grid.SetColumn(label, 1);
+                row.Children.Add(label);
+                var actions = new UniformGrid { Columns = 5, Height = 28 };
+                Grid.SetColumn(actions, 1);
+                Grid.SetRow(actions, 1);
+                foreach (var action in new[] {
+                    ("⌖", "Показать объекты кадра на холсте", (Action)(() => SelectFrame(index))),
+                    ("↻", "Переснять кадр из текущего выделения", (Action)(() => RecaptureFrame(index))),
+                    ("↑", "Переместить кадр выше", (Action)(() => MoveFrame(index, -1))),
+                    ("↓", "Переместить кадр ниже", (Action)(() => MoveFrame(index, 1))),
+                    ("×", "Удалить кадр из карточки", (Action)(() => RemoveFrame(index))) })
                 {
-                    var button = Button(action.Item1, (_, __) => Safe(action.Item2));
-                    button.MinWidth = action.Item1 == "Показать" ? 67 : 27;
-                    if (action.Item1 == "↻") button.ToolTip = "Переснять кадр из текущего выделения";
-                    row.Children.Add(button);
+                    var button = Button(action.Item1, (_, __) => Safe(action.Item3));
+                    button.MinWidth = 0;
+                    button.MinHeight = button.Height = 26;
+                    button.Padding = new Thickness(0);
+                    button.Margin = new Thickness(1);
+                    button.ToolTip = action.Item2;
+                    System.Windows.Automation.AutomationProperties.SetName(button, action.Item2);
+                    if (action.Item1 == "↑") button.IsEnabled = i > 0;
+                    if (action.Item1 == "↓") button.IsEnabled = i + 1 < _data.Frames.Count;
+                    actions.Children.Add(button);
                 }
+                row.Children.Add(actions);
                 _frames.Children.Add(row);
             }
         }
@@ -1172,17 +1191,17 @@ namespace VanyaTools.Native
         {
             dynamic app = CorelApp.Get();
             var original = new List<dynamic>();
-            foreach (dynamic shape in app.ActiveSelectionRange.Shapes) original.Add(shape);
+            if (!useCurrentSelection)
+                foreach (dynamic shape in app.ActiveSelectionRange.Shapes) original.Add(shape);
             dynamic originalPage = doc.ActivePage;
-            string capturePath = null;
+            var timer = Stopwatch.StartNew();
             try
             {
                 if (!useCurrentSelection) SelectShapes(doc, frame);
                 Log.Info("Order card: rasterizing selected shapes in CorelDRAW.");
-                capturePath = AiSelectionCapture.Capture(9500, 24000000,
-                    restoreSelection: false, refreshWindow: false);
-                BitmapSource image = AiPrintTab.Bitmap(capturePath);
-                Log.Info("Order card: captured bitmap " + image.PixelWidth + "x" + image.PixelHeight + ".");
+                BitmapSource image = AiSelectionCapture.CaptureOrderFrame(useCurrentSelection);
+                Log.Info("Order card: captured bitmap " + image.PixelWidth + "x" + image.PixelHeight +
+                    " in " + timer.ElapsedMilliseconds + " ms.");
                 if (image.PixelWidth <= 0 || image.PixelHeight <= 0)
                     throw new InvalidOperationException("CorelDRAW вернул пустой кадр.");
                 EnsureVisiblePhoto(image);
@@ -1194,27 +1213,18 @@ namespace VanyaTools.Native
                 {
                     BitmapSource sized = scale < 1.0 ? new TransformedBitmap(image,
                         new ScaleTransform(scale, scale)) : image;
-                    var visual = new DrawingVisual();
-                    using (var context = visual.RenderOpen())
-                    {
-                        context.DrawRectangle(Brushes.White, null,
-                            new Rect(0, 0, sized.PixelWidth, sized.PixelHeight));
-                        context.DrawImage(sized, new Rect(0, 0, sized.PixelWidth, sized.PixelHeight));
-                    }
-                    var bitmap = new RenderTargetBitmap(sized.PixelWidth, sized.PixelHeight,
-                        96, 96, PixelFormats.Pbgra32);
-                    bitmap.Render(visual);
                     foreach (int quality in new[] { 92, 85, 75, 65 })
                     {
                         var encoder = new JpegBitmapEncoder { QualityLevel = quality };
-                        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                        encoder.Frames.Add(BitmapFrame.Create(sized));
                         using (var output = new MemoryStream())
                         {
                             encoder.Save(output);
                             if (output.Length <= 9500000)
                             {
                                 Log.Info("Order card: Telegram JPEG " + sized.PixelWidth + "x" +
-                                    sized.PixelHeight + ", " + output.Length + " bytes.");
+                                    sized.PixelHeight + ", " + output.Length + " bytes, total " +
+                                    timer.ElapsedMilliseconds + " ms.");
                                 return output.ToArray();
                             }
                         }
@@ -1225,7 +1235,6 @@ namespace VanyaTools.Native
             }
             finally
             {
-                try { if (capturePath != null) File.Delete(capturePath); } catch { }
                 try
                 {
                     if (Convert.ToInt32(doc.ActivePage.Index) != Convert.ToInt32(originalPage.Index))
