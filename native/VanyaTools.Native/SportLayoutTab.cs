@@ -256,16 +256,17 @@ namespace VanyaTools.Native
             panel.Children.Add(Note("Этап 1 создаёт одну обзорную страницу со всеми размерами рядом. " +
                 "Каждый размер остаётся на отдельном слое для ручной правки рисунков, " +
                 "контуров и красных зон. Повторный запуск сохранит прежнюю страницу отдельно."));
-            panel.Children.Add(Note("Можно нарисовать новый прямоугольник на странице-макете, " +
-                "выделить его и назначить боксом нужной надписи. Старый бокс этой надписи заменится."));
+            panel.Children.Add(Note("Создайте фигурный текст: XXXXXXXXX для имени, две строки X для " +
+                "имени в две строки, XX или XXX для номера. Настройте его в Corel, выделите и назначьте " +
+                "кнопкой ниже. Образец заменит прежний бокс на слое выбранного размера."));
             var zoneButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
-            zoneButtons.Children.Add(Button("Бокс груди слева", (_, __) => AssignTextBox(
+            zoneButtons.Children.Add(Button("Имя груди слева", (_, __) => AssignTextBox(
                 "VT_SPORT_ZONE_FRONT_LEFT", "имени на груди слева")));
-            zoneButtons.Children.Add(Button("Бокс груди справа", (_, __) => AssignTextBox(
+            zoneButtons.Children.Add(Button("Имя груди справа", (_, __) => AssignTextBox(
                 "VT_SPORT_ZONE_FRONT_RIGHT", "имени на груди справа")));
-            zoneButtons.Children.Add(Button("Бокс имени на спине", (_, __) => AssignTextBox(
+            zoneButtons.Children.Add(Button("Имя на спине", (_, __) => AssignTextBox(
                 "VT_SPORT_ZONE_BACK", "имени на спине")));
-            zoneButtons.Children.Add(Button("Бокс номера на спине", (_, __) => AssignTextBox(
+            zoneButtons.Children.Add(Button("Номер на спине", (_, __) => AssignTextBox(
                 "VT_SPORT_ZONE_BACK_NUMBER", "номера на спине")));
             panel.Children.Add(zoneButtons);
 
@@ -327,9 +328,13 @@ namespace VanyaTools.Native
                 "расстояние применяется только между деталями. Для этапа 2 берутся текущие " +
                 "положения рисунков и зон со страницы-макета; после замены исходного файла " +
                 "рисунка подготовьте макет заново."));
-            _nameStyle = new TextStyleEditor(panel, "Имя спереди и на спине", "72", SaveDraft);
-            _numberStyle = new TextStyleEditor(panel, "Номер на спине", "150", SaveDraft);
-            panel.Children.Add(Note("Высота бокса задаёт высоту текста. Если надпись получается " +
+            panel.Children.Add(Note("У текстового образца берутся шрифт, кегль, начертание, цвет, " +
+                "обводка, выравнивание и интервалы из Corel. Ширина образца ограничивает надпись: " +
+                "длинный текст уменьшается пропорционально, короткий сохраняет кегль образца."));
+            var legacyStyles = new StackPanel();
+            _nameStyle = new TextStyleEditor(legacyStyles, "Имя спереди и на спине", "72", SaveDraft);
+            _numberStyle = new TextStyleEditor(legacyStyles, "Номер на спине", "150", SaveDraft);
+            legacyStyles.Children.Add(Note("Для прямоугольника высота бокса задаёт высоту текста. Если надпись получается " +
                 "шире бокса, она пропорционально уменьшается. Кегль в диалоге шрифта — " +
                 "начальное значение для измерения текста."));
 
@@ -361,9 +366,14 @@ namespace VanyaTools.Native
             _frontLineSpacing.Width = 56;
             _frontLineSpacing.IsEnabled = false;
             chestLines.Children.Add(_frontLineSpacing);
-            panel.Children.Add(chestLines);
-            panel.Children.Add(Note("Две строки выравниваются по центру. Разделение — после " +
+            legacyStyles.Children.Add(chestLines);
+            legacyStyles.Children.Add(Note("Две строки выравниваются по центру. Разделение — после " +
                 "первого слова; символ | в имени задаёт перенос вручную."));
+            panel.Children.Add(new Expander { Header = "Настройки прямоугольных боксов",
+                Content = legacyStyles, IsExpanded = false, Margin = new Thickness(0, 5, 0, 7) });
+            panel.Children.Add(Note("В текстовом образце две строки X задают две строки имени. " +
+                "Перенос — после первого слова; символ | в таблице задаёт его вручную. " +
+                "Имя и номер на спине назначаются отдельными текстовыми объектами."));
             _keepGuides = new CheckBox { Content = "Оставить красные рамки в готовом CDR",
                 FontSize = 11, Margin = new Thickness(0, 0, 0, 8), IsChecked = false };
             panel.Children.Add(_keepGuides);
@@ -612,11 +622,11 @@ namespace VanyaTools.Native
             try
             {
                 string page = new SportLayoutService().AssignSelectedTextBox(key);
-                _status("Назначен бокс " + label + " на странице «" + page + "».", false);
+                _status("Назначен образец " + label + " на странице «" + page + "».", false);
             }
             catch (Exception error)
             {
-                Log.Error("Could not assign sport text box.", error);
+                Log.Error("Could not assign sport text sample.", error);
                 _status(error.Message, true);
             }
         }

@@ -184,20 +184,24 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Откройте страницу-макет с размерами.");
             dynamic selection = app.ActiveSelectionRange;
             if (selection == null || Convert.ToInt32(selection.Count) != 1)
-                throw new InvalidOperationException("Выделите один нарисованный прямоугольник.");
+                throw new InvalidOperationException("Выделите один текстовый образец или прямоугольник.");
             dynamic chosen = null;
             foreach (dynamic shape in selection.Shapes) { chosen = shape; break; }
-            if (Convert.ToInt32(chosen.Type) != 1)
-                throw new InvalidOperationException("Для бокса нарисуйте прямоугольник.");
+            bool textSample = Convert.ToInt32(chosen.Type) == CorelConstants.CdrTextShape;
+            if (!textSample && Convert.ToInt32(chosen.Type) != 1)
+                throw new InvalidOperationException("Создайте фигурный текст с образцом имени или номера.");
+            if (textSample && (Convert.ToInt32(chosen.Text.Type) != CorelConstants.CdrArtisticText ||
+                String.IsNullOrWhiteSpace(Convert.ToString(chosen.Text.Story.WideText))))
+                throw new InvalidOperationException("Нужен непустой фигурный текст, не переведённый в кривые.");
             string previousName = Convert.ToString(chosen.Name) ?? "";
             if (previousName.StartsWith("VT_SPORT_ZONE_", StringComparison.OrdinalIgnoreCase) &&
                 !String.Equals(previousName, zoneName, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Эта рамка уже назначена другой зоне.");
+                throw new InvalidOperationException("Этот объект уже назначен другой надписи.");
             dynamic currentLayer = chosen.Layer;
             if (String.Equals(pageName, OverviewName, StringComparison.OrdinalIgnoreCase) &&
                 !Convert.ToString(currentLayer.Name).StartsWith(SizeLayerPrefix,
                     StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Нарисуйте бокс на слое нужного размера.");
+                throw new InvalidOperationException("Разместите образец на слое нужного размера.");
             dynamic previous = null;
             foreach (dynamic layer in document.ActivePage.Layers)
             {
@@ -209,14 +213,17 @@ namespace VanyaTools.Native
                     if (String.Equals(Convert.ToString(shape.Name), zoneName,
                         StringComparison.OrdinalIgnoreCase)) previous = shape;
             }
-            document.BeginCommandGroup("Vanya Tools - бокс надписи спортформы");
+            document.BeginCommandGroup("Vanya Tools - образец надписи спортформы");
             try
             {
                 if (previous != null && !String.Equals(previousName, zoneName,
                     StringComparison.OrdinalIgnoreCase)) previous.Delete();
-                chosen.Fill.ApplyNoFill();
-                chosen.Outline.Width = 0.5;
-                chosen.Outline.Color.RGBAssign(255, 0, 0);
+                if (!textSample)
+                {
+                    chosen.Fill.ApplyNoFill();
+                    chosen.Outline.Width = 0.5;
+                    chosen.Outline.Color.RGBAssign(255, 0, 0);
+                }
                 chosen.Name = zoneName;
                 return Convert.ToString(document.ActivePage.Name);
             }
@@ -1189,6 +1196,14 @@ namespace VanyaTools.Native
             groupRange.Add(part.Shape);
             foreach (Piece frame in frames)
             {
+                if (IsTextSample(frame))
+                {
+                    // Named samples are replaced below. A sample on the unused
+                    // chest side must not appear as Xs in the printed garment.
+                    if (frame != frontName && frame != backText && frame != backNumber)
+                        frame.Shape.Delete();
+                    continue;
+                }
                 string key = partName + "_" + (frame == frontName || frame == backText
                     ? "ИМЯ" : frame == backNumber ? "НОМЕР" : "ГРАФИКА");
                 FinishGuide(frame, "VT_FRAME_" + key.Replace(' ', '_'), options.KeepGuides);
@@ -1197,7 +1212,8 @@ namespace VanyaTools.Native
             groupRange.Add(AddCaption(layer, part, partName, row, size, options.WhiteText));
             if (frontName != null)
             {
-                string chestName = FormatFrontName(row.Name, options);
+                string chestName = FormatFrontName(row.Name, options,
+                    IsTextSample(frontName) ? SampleHasTwoLines(frontName) : options.FrontNameTwoLines);
                 dynamic text = AddCenteredText(layer, frontName, chestName,
                     options.NameStyle, "VT_PLAYER_NAME_FRONT",
                     options.FrontNameTwoLines ? options.FrontLineSpacingPercent : 0);
@@ -1205,17 +1221,18 @@ namespace VanyaTools.Native
             }
             if (backText != null)
             {
-                if (backNumber == null)
+                if (backNumber == null && !IsTextSample(backText))
                     foreach (dynamic text in AddLegacyBackText(layer, backText,
                         (row.Name ?? "").Replace('|', ' '),
                         row.Number, options)) groupRange.Add(text);
                 else
                 {
                     dynamic name = AddCenteredText(layer, backText,
-                        (row.Name ?? "").Replace('|', ' '),
+                        FormatNameLines(row.Name, IsTextSample(backText) && SampleHasTwoLines(backText)),
                         options.NameStyle, "VT_PLAYER_NAME_BACK");
-                    dynamic number = AddCenteredText(layer, backNumber, row.Number,
-                        options.NumberStyle, "VT_PLAYER_NUMBER_BACK");
+                    dynamic number = backNumber == null ? null :
+                        AddCenteredText(layer, backNumber, row.Number,
+                            options.NumberStyle, "VT_PLAYER_NUMBER_BACK");
                     if (name != null) groupRange.Add(name);
                     if (number != null) groupRange.Add(number);
                 }
@@ -1517,7 +1534,7 @@ namespace VanyaTools.Native
             catch { /* Non-curve parts retain their bounding box span. */ }
         }
 
-        private static string FormatFrontName(string value, SportLayoutOptions options)
+        private static string FormatFrontName(string value, SportLayoutOptions options, bool twoLines)
         {
             string text = (value ?? "").Trim();
             var culture = CultureInfo.GetCultureInfo("ru-RU");
@@ -1528,7 +1545,14 @@ namespace VanyaTools.Native
                     text = culture.TextInfo.ToTitleCase(text.ToLower(culture)); break;
                 case NamesGridLetterCase.Upper: text = text.ToUpper(culture); break;
             }
-            if (!options.FrontNameTwoLines) return text.Replace('|', ' ');
+            return FormatNameLines(text, twoLines);
+        }
+
+        private static string FormatNameLines(string value, bool twoLines)
+        {
+            string text = (value ?? "").Trim().Replace("\r\n", "|")
+                .Replace('\r', '|').Replace('\n', '|').Replace('\v', '|');
+            if (!twoLines) return text.Replace('|', ' ');
             int manual = text.IndexOf('|');
             if (manual >= 0)
                 return text.Substring(0, manual).Trim() + "\r" +
@@ -1541,6 +1565,7 @@ namespace VanyaTools.Native
         private static dynamic AddCenteredText(dynamic layer, Piece zone, string value,
             SportTextStyle style, string shapeName, double lineSpacingPercent = 0)
         {
+            if (IsTextSample(zone)) return ReplaceTextSample(layer, zone, value, shapeName);
             if (String.IsNullOrWhiteSpace(value)) return null;
             dynamic text = layer.CreateArtisticTextWide(zone.Left, zone.Bottom,
                 value.Trim(), 0, -1, style.FontName, style.MaxPoints,
@@ -1564,6 +1589,61 @@ namespace VanyaTools.Native
             Fit(text, zone.Width, zone.Height);
             text.Move(zone.CenterX - Convert.ToDouble(text.CenterX),
                 zone.CenterY - Convert.ToDouble(text.CenterY));
+            return text;
+        }
+
+        private static bool IsTextSample(Piece zone)
+        {
+            return zone != null && zone.Shape != null &&
+                Convert.ToInt32(zone.Shape.Type) == CorelConstants.CdrTextShape;
+        }
+
+        private static bool SampleHasTwoLines(Piece zone)
+        {
+            return TextSampleHasTwoLines(Convert.ToString(zone.Shape.Text.Story.WideText));
+        }
+
+        private static bool TextSampleHasTwoLines(string value)
+        {
+            return (value ?? "").TrimEnd('\r', '\n').IndexOfAny(new[] { '\r', '\n', '\v' }) >= 0;
+        }
+
+        private static dynamic ReplaceTextSample(dynamic layer, Piece zone, string value, string shapeName)
+        {
+            if (Convert.ToInt32(zone.Shape.Text.Type) != CorelConstants.CdrArtisticText)
+                throw new InvalidOperationException("Для образца имени или номера используйте фигурный текст.");
+            if (String.IsNullOrWhiteSpace(value))
+            {
+                zone.Shape.Delete();
+                return null;
+            }
+            // Copy the Corel shape, including its fill and outline, and keep the
+            // source alive until each paragraph's text attributes are restored.
+            dynamic text = zone.Shape.CopyToLayer(layer);
+            text.Text.Story.WideText = value.Trim();
+            var sourceParagraphs = new List<dynamic>();
+            foreach (dynamic paragraph in zone.Shape.Text.Story.Paragraphs)
+                sourceParagraphs.Add(paragraph);
+            if (sourceParagraphs.Count == 0)
+                throw new InvalidOperationException("Текстовый образец имени или номера пуст.");
+            int index = 0;
+            foreach (dynamic paragraph in text.Text.Story.Paragraphs)
+            {
+                paragraph.CopyAttributes(sourceParagraphs[Math.Min(index, sourceParagraphs.Count - 1)]);
+                index++;
+            }
+            double width = Convert.ToDouble(text.SizeWidth);
+            double height = Convert.ToDouble(text.SizeHeight);
+            if (width <= 0 || height <= 0)
+                throw new InvalidOperationException("CorelDRAW не измерил надпись из образца.");
+            // The sample's point size is authoritative. Short names keep that
+            // size; long names shrink uniformly to the sample's maximum width.
+            if (width > zone.Width)
+                text.SetSize(zone.Width, height * zone.Width / width);
+            text.Move(zone.CenterX - Convert.ToDouble(text.CenterX),
+                zone.CenterY - Convert.ToDouble(text.CenterY));
+            text.Name = shapeName;
+            zone.Shape.Delete();
             return text;
         }
 

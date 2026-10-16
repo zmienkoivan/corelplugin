@@ -5,6 +5,8 @@ namespace VanyaTools.Native
         public const int CdrBitmapShape = 5;
         public const int CdrCurveShape = 3;
         public const int CdrGroupShape = 7;
+        public const int CdrTextShape = 6;
+        public const int CdrArtisticText = 0;
 
         public const int CdrMillimeter = 3;
         public const int CdrBottomLeft = 5;
