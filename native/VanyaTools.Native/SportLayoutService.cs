@@ -100,6 +100,12 @@ namespace VanyaTools.Native
             public bool CaptionReferences;
         }
 
+        private sealed class OverviewBlock
+        {
+            public object Layer;
+            public double Width, Height;
+        }
+
         private const string MasterPrefix = "Спорт · макет · ";
         private const string OverviewName = "Спорт · макеты · все размеры";
         private const string SizeLayerPrefix = "VT_SPORT_SIZE_";
@@ -442,7 +448,7 @@ namespace VanyaTools.Native
                 // Keep source CDR switches outside a target undo group.
                 overview = target.AddPages(1);
                 overview.Activate();
-                double nextX = 0, maxHeight = 0;
+                var overviewBlocks = new List<OverviewBlock>();
                 foreach (SportLayoutTemplate template in templates)
                 {
                     string size = NormalizeSize(template.Size);
@@ -492,18 +498,15 @@ namespace VanyaTools.Native
                     foreach (dynamic shape in layer.Shapes) tile.Add(shape);
                     if (Convert.ToInt32(tile.Count) == 0)
                         throw new InvalidOperationException("Пустой слой размера " + size + ".");
-                    double tileWidth = Convert.ToDouble(tile.SizeWidth);
-                    double tileHeight = Convert.ToDouble(tile.SizeHeight);
-                    tile.Move(nextX - Convert.ToDouble(tile.LeftX),
-                        35 - Convert.ToDouble(tile.BottomY));
-                    dynamic label = layer.CreateArtisticTextWide(nextX, 15,
+                    dynamic label = layer.CreateArtisticTextWide(Convert.ToDouble(tile.LeftX),
+                        Convert.ToDouble(tile.BottomY) - 20,
                         size, 0, 0, "Arial", 24);
                     label.Name = "VT_SPORT_LABEL_" + size;
-                    nextX += tileWidth + 40;
-                    maxHeight = Math.Max(maxHeight, tileHeight);
+                    tile.Add(label);
+                    overviewBlocks.Add(new OverviewBlock { Layer = (object)layer,
+                        Width = Convert.ToDouble(tile.SizeWidth), Height = Convert.ToDouble(tile.SizeHeight) });
                 }
-                overview.SizeWidth = Math.Max(100, nextX - 40);
-                overview.SizeHeight = maxHeight + 70;
+                PlaceOverviewBlocks((object)app, (object)overview, overviewBlocks);
                 foreach (dynamic page in target.Pages)
                     if (!Object.ReferenceEquals(page, overview) &&
                         String.Equals(Convert.ToString(page.Name), OverviewName,
@@ -537,6 +540,44 @@ namespace VanyaTools.Native
                 RestoreTemplateSessions(sessions);
                 Log.Info("Sport overview: cleanup complete");
             }
+        }
+
+        private static void PlaceOverviewBlocks(object appObject, object pageObject,
+            IList<OverviewBlock> blocks)
+        {
+            const double margin = 20, columnGap = 40, rowGap = 40;
+            int columns = Math.Min(2, blocks.Count), rows = (blocks.Count + 1) / 2;
+            var columnWidths = new double[columns];
+            var rowHeights = new double[rows];
+            for (int i = 0; i < blocks.Count; i++)
+            {
+                int column = i % 2, row = i / 2;
+                columnWidths[column] = Math.Max(columnWidths[column], blocks[i].Width);
+                rowHeights[row] = Math.Max(rowHeights[row], blocks[i].Height);
+            }
+            double width = Math.Max(100, margin * 2 + columnWidths.Sum() + (columns - 1) * columnGap);
+            double height = Math.Max(100, margin * 2 + rowHeights.Sum() + (rows - 1) * rowGap);
+            dynamic app = appObject, page = pageObject;
+            // Resizing a page can change its position in the document. Read
+            // the final page bounds before placing any complete size blocks.
+            page.SetSize(width, height);
+            if (Convert.ToDouble(page.SizeWidth) + 0.01 < width ||
+                Convert.ToDouble(page.SizeHeight) + 0.01 < height)
+                throw new InvalidOperationException("Corel ограничил размер обзорной страницы. Уменьшите число размеров в одном запуске этапа 1.");
+            double left = Convert.ToDouble(page.LeftX) + margin;
+            double top = Convert.ToDouble(page.TopY) - margin;
+            for (int i = 0; i < blocks.Count; i++)
+            {
+                dynamic layer = blocks[i].Layer;
+                dynamic tile = app.CreateShapeRange();
+                foreach (dynamic shape in layer.Shapes) tile.Add(shape);
+                double x = left + (i % 2 == 0 ? 0 : columnWidths[0] + columnGap);
+                tile.Move(x - Convert.ToDouble(tile.LeftX), top - Convert.ToDouble(tile.TopY));
+                if (i % 2 == 1 || i == blocks.Count - 1) top -= rowHeights[i / 2] + rowGap;
+            }
+            Log.Info("Sport overview layout: " + columns + " columns, " + rows + " rows, page=" +
+                width.ToString("0.##", CultureInfo.InvariantCulture) + "x" +
+                height.ToString("0.##", CultureInfo.InvariantCulture) + " mm");
         }
 
         private static dynamic OnlyTemplatePage(dynamic document)
