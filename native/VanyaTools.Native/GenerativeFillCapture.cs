@@ -14,6 +14,7 @@ namespace VanyaTools.Native
         {
             public string ImagePath, MaskPath;
             public double LeftMm, TopMm, WidthMm, HeightMm;
+            public string ExtensionDirections;
         }
 
         public static Prepared Capture()
@@ -33,7 +34,7 @@ namespace VanyaTools.Native
                 if (Convert.ToInt32(shape.Type) == CorelConstants.CdrBitmapShape) photo = shape;
                 else area = shape;
             }
-            if (photo == null || area == null)
+            if (photo == null || area == null || Convert.ToInt32(area.Type) != 1)
                 throw new InvalidOperationException("Нужны один растр и один прямоугольник. Сгруппированный макет сначала превратите в растр.");
 
             int oldUnit = Convert.ToInt32(doc.Unit);
@@ -85,24 +86,36 @@ namespace VanyaTools.Native
                 BitmapSource source = AiPrintTab.Bitmap(photoPath);
                 // Both image and mask share exactly the same dimensions. This avoids
                 // separate Corel exports drifting by a pixel at different resolutions.
-                double scale = Math.Min(1440.0 / Math.Max(widthMm, heightMm),
-                    Math.Sqrt(2000000.0 / (widthMm * heightMm)));
-                int width = Math.Max(64, (int)Math.Round(widthMm * scale));
-                int height = Math.Max(64, (int)Math.Round(heightMm * scale));
+                double scale = Math.Min(2048.0 / Math.Max(widthMm, heightMm),
+                    Math.Sqrt(4000000.0 / (widthMm * heightMm)));
+                int width = Math.Max(64, (int)Math.Floor(widthMm * scale));
+                int height = Math.Max(64, (int)Math.Floor(heightMm * scale));
                 var photoRect = RectFor(pLeft, pTop, pRight, pBottom, left, top, widthMm, heightMm, width, height);
                 var areaRect = RectFor(aLeft, aTop, aRight, aBottom, left, top, widthMm, heightMm, width, height);
                 Render(imagePath, width, height, visual =>
                 {
-                    visual.DrawRectangle(Brushes.White, null, new Rect(0, 0, width, height));
+                    // New canvas is transparent rather than a white graphic
+                    // panel. Its mask, below, explicitly requests continuation.
                     visual.DrawImage(source, photoRect);
                 });
                 Render(maskPath, width, height, visual =>
                 {
-                    visual.DrawRectangle(Brushes.Black, null, new Rect(0, 0, width, height));
+                    // Fill every new canvas pixel, including side strips when
+                    // the drawn extension is narrower than the source photo.
+                    visual.DrawRectangle(Brushes.White, null, new Rect(0, 0, width, height));
+                    visual.DrawRectangle(Brushes.Black, null, photoRect);
                     visual.DrawRectangle(Brushes.White, null, areaRect);
                 });
+                var directions = new List<string>();
+                if (aTop > pTop) directions.Add("top");
+                if (aBottom < pBottom) directions.Add("bottom");
+                if (aLeft < pLeft) directions.Add("left");
+                if (aRight > pRight) directions.Add("right");
+                Log.Info("Generative fill: " + width + "x" + height + ", " +
+                    (directions.Count == 0 ? "local photo edit" : "photo extension " + String.Join(", ", directions)));
                 return new Prepared { ImagePath = imagePath, MaskPath = maskPath,
-                    LeftMm = left, TopMm = top, WidthMm = widthMm, HeightMm = heightMm };
+                    LeftMm = left, TopMm = top, WidthMm = widthMm, HeightMm = heightMm,
+                    ExtensionDirections = String.Join(", ", directions) };
             }
             catch
             {
@@ -142,6 +155,9 @@ namespace VanyaTools.Native
                             after[index + channel] = before[index + channel];
                         continue;
                     }
+                    // Outside the source photograph there is nothing to blend
+                    // with. Feathering against empty canvas creates a border.
+                    if (before[index + 3] == 0) continue;
                     // A small feather hides the seam while leaving the rest of the
                     // source exactly intact, even if the model changes other details.
                     int edge = 5;

@@ -39,6 +39,9 @@ namespace VanyaTools.Native
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Content = panel };
             panel.Children.Add(Note("Выделите фотографию и нарисованный поверх неё прямоугольник. Прямоугольник задаёт область замены и может выходить за край фото."));
+            panel.Children.Add(Note("Для расширения фото выделите новую область и немного края исходника. " +
+                "Для восстановления руки захватите её видимую часть и место, где она должна продолжиться. " +
+                "Заливка продолжает исходное фото по вашему описанию."));
             panel.Children.Add(Note("Что нужно сделать в выделенной области:"));
             _prompt = new TextBox { MinHeight = 64, MaxHeight = 105, AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -113,12 +116,15 @@ namespace VanyaTools.Native
                 _resultPreview.Source = null;
                 _input = new Dictionary<string, object>
                 {
-                    ["prompt"] = prompt,
+                    ["prompt"] = BuildPhotoEditPrompt(prompt, _prepared.ExtensionDirections),
                     // DataUri creates upload copies. The network worker removes its
                     // upload files after success; keep the originals for compositing.
-                    ["image"] = AiPrintTab.DataUri(AiPrintTab.Bitmap(_prepared.ImagePath), 1440, 2000000),
-                    ["mask"] = AiPrintTab.DataUri(AiPrintTab.Bitmap(_prepared.MaskPath), 1440, 2000000),
+                    ["image"] = AiPrintTab.DataUri(AiPrintTab.Bitmap(_prepared.ImagePath), 2048, 4000000),
+                    ["mask"] = AiPrintTab.DataUri(AiPrintTab.Bitmap(_prepared.MaskPath), 2048, 4000000),
                     ["output_format"] = "png",
+                    ["outpaint"] = "None", // Keep the custom mask authoritative.
+                    ["steps"] = 50,
+                    ["guidance"] = 30,
                     ["prompt_upsampling"] = false
                 };
                 _rawOutput = Path.Combine(Path.GetTempPath(),
@@ -130,6 +136,20 @@ namespace VanyaTools.Native
             catch (Exception ex) { Log.Error("Generative fill failed.", ex);
                 Report(ex.GetBaseException().Message, true); }
             finally { SetBusy(false, null); }
+        }
+
+        private static string BuildPhotoEditPrompt(string request, string extensionDirections)
+        {
+            string operation = String.IsNullOrWhiteSpace(extensionDirections)
+                ? "A seamless local retouch of the same original photograph. Reconstruct or replace the masked content as requested, using the visible surroundings as reference."
+                : "A seamless continuation of the same original photograph beyond its " +
+                    extensionDirections + " edge(s). The new area continues the existing scene and any cropped subjects naturally.";
+            return "One continuous full-bleed photograph. The supplied photograph is the visual reference for all new content. " +
+                operation + " Match the existing camera viewpoint, perspective, scale, lighting, color, texture and depth of field. " +
+                "Preserve the identity, pose, clothing and proportions of visible people; reconstructed body parts connect naturally to them. " +
+                "Edit only the white mask. Preserve the unmasked photograph. " +
+                "Do not add text, borders, graphic panels, interface elements, logos or decorative layouts unless the requested edit explicitly calls for them. " +
+                "Requested edit or content (follow this description):\n" + request;
         }
 
         private async Task Execute(string key)
