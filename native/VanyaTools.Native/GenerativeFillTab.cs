@@ -14,11 +14,19 @@ namespace VanyaTools.Native
 {
     internal sealed class GenerativeFillTab : UserControl
     {
-        private const string Model = "black-forest-labs/flux-fill-pro";
+        private sealed class ModelChoice
+        {
+            internal readonly string Id, Label, Price;
+            internal ModelChoice(string id, string label, string price)
+            { Id = id; Label = label; Price = price; }
+            public override string ToString() { return Label; }
+        }
         private readonly Func<string> _token;
         private readonly Func<string, string, GenerativeFillCapture.Prepared, string> _import;
         private readonly Action<string, bool> _status;
         private readonly TextBox _prompt;
+        private readonly ComboBox _model;
+        private readonly TextBlock _modelNote;
         private readonly Image _imagePreview, _maskPreview, _resultPreview;
         private readonly TextBlock _progress;
         private readonly Button _generate, _retry, _cancel;
@@ -27,6 +35,7 @@ namespace VanyaTools.Native
         private GenerativeFillCapture.Prepared _prepared;
         private Dictionary<string, object> _input;
         private string _rawOutput, _readyOutput;
+        private string _requestModel;
         private string _importWarning;
         private bool _busy;
 
@@ -42,13 +51,22 @@ namespace VanyaTools.Native
             panel.Children.Add(Note("Для расширения фото выделите новую область и немного края исходника. " +
                 "Для восстановления руки захватите её видимую часть и место, где она должна продолжиться. " +
                 "Заливка продолжает исходное фото по вашему описанию."));
+            panel.Children.Add(Note("Достаточно короткой команды: «дорисуй сверху», «убери бутылку», «восстанови руку». " +
+                "Модель использует фотографию и выделенную область как ориентир."));
+            _model = new ComboBox { Margin = new Thickness(1, 3, 1, 3) };
+            _model.Items.Add(new ModelChoice("google/nano-banana-2", "Nano Banana 2 · 2K", "$0.101"));
+            _model.Items.Add(new ModelChoice("google/nano-banana-pro", "Nano Banana Pro · 2K", "$0.15"));
+            _model.SelectedIndex = LoadModelIndex();
+            panel.Children.Add(_model);
+            _modelNote = Note(""); panel.Children.Add(_modelNote);
+            _model.SelectionChanged += (_, __) => { UpdateModelNote(); SaveModel(); };
+            UpdateModelNote();
             panel.Children.Add(Note("Что нужно сделать в выделенной области:"));
             _prompt = new TextBox { MinHeight = 64, MaxHeight = 105, AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Text = LoadPrompt() };
             _prompt.LostFocus += (_, __) => SavePrompt();
             panel.Children.Add(_prompt);
-            panel.Children.Add(Note("Модель FLUX Fill Pro · ориентировочно $0.05 за результат. Исходное фото останется на холсте."));
             var previews = new UniformGrid { Columns = 3, Margin = new Thickness(0, 4, 0, 5) };
             previews.Children.Add(Preview("Фото", out _imagePreview));
             previews.Children.Add(Preview("Маска", out _maskPreview));
@@ -102,7 +120,8 @@ namespace VanyaTools.Native
             SavePrompt();
             string key = _token();
             if (key.Length < 8) { Report("Введите ключ Replicate в настройках.", true); return; }
-            if (MessageBox.Show("Платный запрос Replicate · ориентировочно $0.05. Продолжить?",
+            var model = (ModelChoice)_model.SelectedItem;
+            if (MessageBox.Show(model.Label + " · платный запрос Replicate · ориентировочно " + model.Price + ". Продолжить?",
                 "Генеративное заполнение", MessageBoxButton.YesNo,
                 MessageBoxImage.Information) != MessageBoxResult.Yes) return;
 
@@ -110,7 +129,9 @@ namespace VanyaTools.Native
             try
             {
                 _importWarning = null;
+                _input = null; _requestModel = null; _rawOutput = null; _prepared = null;
                 _prepared = GenerativeFillCapture.Capture();
+                _requestModel = model.Id;
                 _imagePreview.Source = LoadPreview(_prepared.ImagePath);
                 _maskPreview.Source = LoadPreview(_prepared.MaskPath);
                 _resultPreview.Source = null;
@@ -119,14 +140,20 @@ namespace VanyaTools.Native
                     ["prompt"] = BuildPhotoEditPrompt(prompt, _prepared.ExtensionDirections),
                     // DataUri creates upload copies. The network worker removes its
                     // upload files after success; keep the originals for compositing.
-                    ["image"] = AiPrintTab.DataUri(AiPrintTab.Bitmap(_prepared.ImagePath), 2048, 4000000),
-                    ["mask"] = AiPrintTab.DataUri(AiPrintTab.Bitmap(_prepared.MaskPath), 2048, 4000000),
+                    ["image_input"] = new[]
+                    {
+                        AiPrintTab.DataUri(AiPrintTab.Bitmap(_prepared.ModelImagePath), 4096, 16000000),
+                        AiPrintTab.DataUri(AiPrintTab.Bitmap(_prepared.ModelMaskPath), 4096, 16000000)
+                    },
                     ["output_format"] = "png",
-                    ["outpaint"] = "None", // Keep the custom mask authoritative.
-                    ["steps"] = 50,
-                    ["guidance"] = 30,
-                    ["prompt_upsampling"] = false
+                    ["aspect_ratio"] = _prepared.ModelAspectRatio,
+                    ["resolution"] = "2K"
                 };
+                // Keep an explicitly selected model throughout retries. Never
+                // silently switch provider or submit an automatic second job.
+                if (_requestModel == "google/nano-banana-pro") _input["allow_fallback_model"] = false;
+                Log.Info("Generative fill request: model=" + _requestModel + ", aspect=" +
+                    _prepared.ModelAspectRatio + ", resolution=2K");
                 _rawOutput = Path.Combine(Path.GetTempPath(),
                     "Vanya-Fill-Model-" + Guid.NewGuid().ToString("N") + ".png");
                 await Execute(key);
@@ -140,30 +167,32 @@ namespace VanyaTools.Native
 
         private static string BuildPhotoEditPrompt(string request, string extensionDirections)
         {
-            string operation = String.IsNullOrWhiteSpace(extensionDirections)
-                ? "A seamless local retouch of the same original photograph. Reconstruct or replace the masked content as requested, using the visible surroundings as reference."
-                : "A seamless continuation of the same original photograph beyond its " +
-                    extensionDirections + " edge(s). The new area continues the existing scene and any cropped subjects naturally.";
-            return "One continuous full-bleed photograph. The supplied photograph is the visual reference for all new content. " +
-                operation + " Match the existing camera viewpoint, perspective, scale, lighting, color, texture and depth of field. " +
-                "Preserve the identity, pose, clothing and proportions of visible people; reconstructed body parts connect naturally to them. " +
-                "Edit only the white mask. Preserve the unmasked photograph. " +
-                "Do not add text, borders, graphic panels, interface elements, logos or decorative layouts unless the requested edit explicitly calls for them. " +
-                "Requested edit or content (follow this description):\n" + request;
+            string extension = String.IsNullOrWhiteSpace(extensionDirections) ? "" :
+                " Extend the scene toward the " + extensionDirections + " edge(s), filling the entire editable area. " +
+                "Continue cropped people at their existing size, with body parts connected to the visible bodies.";
+            return "Edit image 1. User request: " + request + "\n" +
+                "Image 2 is only a spatial editing mask: WHITE marks the area to change, BLACK marks the area to keep. " +
+                "Neutral gray outside the photo is empty canvas. Replace editable empty canvas with the natural continuation of the scene." +
+                extension + " Match the original perspective, lighting, colors and photographic texture. " +
+                "Keep existing people, their identity, clothing, pose, scale and positions. " +
+                "Return one finished photograph on exactly the same canvas as image 1. " +
+                "Keep black-mask areas and framing unchanged. The mask is a guide, never part of the output. " +
+                "Add text or graphic design only if the user explicitly requests it.";
         }
 
         private async Task Execute(string key)
         {
             CancellationToken cancellation = _cancellation.Token;
             Progress("Отправляю фото и маску…");
-            await Task.Run(() => ReplicateWorkerClient.Run(Model, key, _input,
-                _rawOutput, OnProgress, cancellation), cancellation);
+            if (!File.Exists(_rawOutput) || new FileInfo(_rawOutput).Length == 0)
+                await Task.Run(() => ReplicateWorkerClient.Run(_requestModel, key, _input,
+                    _rawOutput, OnProgress, cancellation), cancellation);
             cancellation.ThrowIfCancellationRequested();
             Progress("Сохраняю исходник вне области правки…");
             string result = Path.Combine(Path.GetTempPath(),
                 "Vanya-Fill-Ready-" + Guid.NewGuid().ToString("N") + ".png");
             GenerativeFillCapture.PreserveOutsideMask(_prepared.ImagePath,
-                _prepared.MaskPath, _rawOutput, result);
+                _prepared.MaskPath, _rawOutput, result, _prepared.ModelWidth, _prepared.ModelHeight);
             _readyOutput = result;
             SavePending();
             _resultPreview.Source = LoadPreview(result);
@@ -180,7 +209,7 @@ namespace VanyaTools.Native
                 Progress("Вставляю результат в CorelDRAW…");
                 string warning = _import(_readyOutput, "Генеративное заполнение", _prepared);
                 _importWarning = warning;
-                _readyOutput = null; _input = null;
+                _readyOutput = null; _input = null; _requestModel = null;
                 try { if (File.Exists(PendingPath())) File.Delete(PendingPath()); } catch { }
             }
             catch (Exception ex)
@@ -194,7 +223,8 @@ namespace VanyaTools.Native
         {
             if (_busy) return;
             bool ready = !String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput);
-            if (!ready && (_input == null || _prepared == null || String.IsNullOrEmpty(_rawOutput))) return;
+            if (!ready && (_input == null || _prepared == null || String.IsNullOrEmpty(_rawOutput) ||
+                String.IsNullOrEmpty(_requestModel))) return;
             string key = ready ? "" : _token();
             if (!ready && key.Length < 8) { Report("Введите ключ Replicate в настройках.", true); return; }
             if (!ready && MessageBox.Show("Продолжить запрос? Если он не был отправлен, может начаться новый платный запуск.",
@@ -245,7 +275,7 @@ namespace VanyaTools.Native
             _busy = busy;
             if (busy) _cancellation = new CancellationTokenSource();
             else if (_cancellation != null) { _cancellation.Dispose(); _cancellation = null; }
-            _generate.IsEnabled = _prompt.IsEnabled = !busy;
+            _generate.IsEnabled = _prompt.IsEnabled = _model.IsEnabled = !busy;
             _cancel.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             _cancel.IsEnabled = busy;
             _retry.Visibility = !busy && ((!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput)) ||
@@ -274,6 +304,35 @@ namespace VanyaTools.Native
         {
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "VanyaTools", "generative-fill-prompt.txt");
+        }
+
+        private static string ModelPath()
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "VanyaTools", "generative-fill-model.txt");
+        }
+
+        private static int LoadModelIndex()
+        {
+            try { return File.Exists(ModelPath()) && File.ReadAllText(ModelPath()).Trim() == "google/nano-banana-pro" ? 1 : 0; }
+            catch (Exception ex) { Log.Error("Could not load generative fill model.", ex); return 0; }
+        }
+
+        private void UpdateModelNote()
+        {
+            var model = (ModelChoice)_model.SelectedItem;
+            _modelNote.Text = "Ориентировочно " + model.Price + " за результат 2K · Replicate. " +
+                "Пиксели вне области правки сохраняются из исходника.";
+        }
+
+        private void SaveModel()
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(ModelPath()));
+                File.WriteAllText(ModelPath(), ((ModelChoice)_model.SelectedItem).Id);
+            }
+            catch (Exception ex) { Log.Error("Could not save generative fill model.", ex); }
         }
 
         private static string LoadPrompt()

@@ -13,6 +13,8 @@ namespace VanyaTools.Native
         internal sealed class Prepared
         {
             public string ImagePath, MaskPath;
+            public string ModelImagePath, ModelMaskPath, ModelAspectRatio;
+            public int ModelWidth, ModelHeight;
             public double LeftMm, TopMm, WidthMm, HeightMm;
             public string ExtensionDirections;
         }
@@ -81,6 +83,8 @@ namespace VanyaTools.Native
 
             string imagePath = Path.Combine(Path.GetTempPath(), "Vanya-Fill-Input-" + Guid.NewGuid().ToString("N") + ".png");
             string maskPath = Path.Combine(Path.GetTempPath(), "Vanya-Fill-Mask-" + Guid.NewGuid().ToString("N") + ".png");
+            var prepared = new Prepared { ImagePath = imagePath, MaskPath = maskPath,
+                LeftMm = left, TopMm = top, WidthMm = widthMm, HeightMm = heightMm };
             try
             {
                 BitmapSource source = AiPrintTab.Bitmap(photoPath);
@@ -113,20 +117,21 @@ namespace VanyaTools.Native
                 if (aRight > pRight) directions.Add("right");
                 Log.Info("Generative fill: " + width + "x" + height + ", " +
                     (directions.Count == 0 ? "local photo edit" : "photo extension " + String.Join(", ", directions)));
-                return new Prepared { ImagePath = imagePath, MaskPath = maskPath,
-                    LeftMm = left, TopMm = top, WidthMm = widthMm, HeightMm = heightMm,
-                    ExtensionDirections = String.Join(", ", directions) };
+                prepared.ExtensionDirections = String.Join(", ", directions);
+                PrepareModelCanvas(prepared, width, height);
+                return prepared;
             }
             catch
             {
                 TryDelete(imagePath); TryDelete(maskPath);
+                TryDelete(prepared.ModelImagePath); TryDelete(prepared.ModelMaskPath);
                 throw;
             }
             finally { TryDelete(photoPath); }
         }
 
         public static void PreserveOutsideMask(string imagePath, string maskPath,
-            string generatedPath, string resultPath)
+            string generatedPath, string resultPath, int modelWidth, int modelHeight)
         {
             BitmapSource original = AiPrintTab.Bitmap(imagePath);
             BitmapSource mask = AiPrintTab.Bitmap(maskPath);
@@ -134,15 +139,23 @@ namespace VanyaTools.Native
             int width = original.PixelWidth, height = original.PixelHeight;
             if (mask.PixelWidth != width || mask.PixelHeight != height)
                 throw new InvalidDataException("Размер маски не совпадает с изображением.");
-            if (generated.PixelWidth != width || generated.PixelHeight != height)
+            if (modelWidth < width || modelHeight < height)
+                throw new InvalidDataException("Размер холста генерации меньше исходной области.");
+            // The model sees a supported aspect ratio with padding only at the
+            // right/bottom. Normalize to that canvas, then crop padding away.
+            // Stretching the padded output directly into the original union
+            // would move the generated content relative to the source photo.
+            if (generated.PixelWidth != modelWidth || generated.PixelHeight != modelHeight)
             {
                 var visual = new DrawingVisual();
                 using (DrawingContext dc = visual.RenderOpen())
-                    dc.DrawImage(generated, new Rect(0, 0, width, height));
-                var resized = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+                    dc.DrawImage(generated, new Rect(0, 0, modelWidth, modelHeight));
+                var resized = new RenderTargetBitmap(modelWidth, modelHeight, 96, 96, PixelFormats.Pbgra32);
                 resized.Render(visual);
                 generated = resized;
             }
+            if (modelWidth != width || modelHeight != height)
+                generated = new CroppedBitmap(generated, new Int32Rect(0, 0, width, height));
             byte[] before = Pixels(original), whiteMask = Pixels(mask), after = Pixels(generated);
             int stride = width * 4;
             for (int y = 0; y < height; y++)
@@ -188,6 +201,51 @@ namespace VanyaTools.Native
             return pixels;
         }
 
+        private static void PrepareModelCanvas(Prepared prepared, int width, int height)
+        {
+            // Nano Banana models expose a fixed set of aspect ratios. Pad to
+            // the least extra area instead of asking the model to crop or zoom
+            // the photograph to fit one. Both model variants support this set.
+            int[,] ratios = { { 1, 1 }, { 2, 3 }, { 3, 2 }, { 3, 4 }, { 4, 3 },
+                { 4, 5 }, { 5, 4 }, { 9, 16 }, { 16, 9 }, { 21, 9 } };
+            long bestArea = Int64.MaxValue;
+            for (int i = 0; i < ratios.GetLength(0); i++)
+            {
+                int numerator = ratios[i, 0], denominator = ratios[i, 1];
+                int units = (int)Math.Ceiling(Math.Max((double)width / numerator, (double)height / denominator));
+                int candidateWidth = units * numerator, candidateHeight = units * denominator;
+                long area = (long)candidateWidth * candidateHeight;
+                if (area >= bestArea) continue;
+                bestArea = area;
+                prepared.ModelWidth = candidateWidth; prepared.ModelHeight = candidateHeight;
+                prepared.ModelAspectRatio = numerator + ":" + denominator;
+            }
+            prepared.ModelImagePath = Path.Combine(Path.GetTempPath(), "Vanya-Fill-Canvas-" + Guid.NewGuid().ToString("N") + ".png");
+            prepared.ModelMaskPath = Path.Combine(Path.GetTempPath(), "Vanya-Fill-Guide-" + Guid.NewGuid().ToString("N") + ".png");
+            BitmapSource source = AiPrintTab.Bitmap(prepared.ImagePath);
+            BitmapSource mask = AiPrintTab.Bitmap(prepared.MaskPath);
+            var gray = new SolidColorBrush(Color.FromRgb(127, 127, 127));
+            Render(prepared.ModelImagePath, prepared.ModelWidth, prepared.ModelHeight, dc =>
+            {
+                dc.DrawRectangle(gray, null, new Rect(0, 0, prepared.ModelWidth, prepared.ModelHeight));
+                dc.DrawImage(source, new Rect(0, 0, width, height));
+            }, PixelFormats.Bgr24);
+
+            // A fully opaque, binary guide cannot accidentally introduce a
+            // second alpha mask. Extra padding is black (kept), then cropped.
+            var grayMask = new FormatConvertedBitmap(mask, PixelFormats.Gray8, null, 0);
+            byte[] sourcePixels = new byte[checked(width * height)];
+            grayMask.CopyPixels(sourcePixels, width, 0);
+            byte[] pixels = new byte[checked(prepared.ModelWidth * prepared.ModelHeight)];
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                    pixels[y * prepared.ModelWidth + x] = sourcePixels[y * width + x] >= 128 ? (byte)255 : (byte)0;
+            SavePng(BitmapSource.Create(prepared.ModelWidth, prepared.ModelHeight, 96, 96,
+                PixelFormats.Gray8, null, pixels, prepared.ModelWidth), prepared.ModelMaskPath);
+            Log.Info("Generative fill model canvas: " + prepared.ModelWidth + "x" + prepared.ModelHeight +
+                ", " + prepared.ModelAspectRatio + ", original=" + width + "x" + height);
+        }
+
         private static Rect RectFor(double l, double t, double r, double b,
             double unionLeft, double unionTop, double unionWidth, double unionHeight,
             int width, int height)
@@ -197,13 +255,15 @@ namespace VanyaTools.Native
                 (r - l) / unionWidth * width, (t - b) / unionHeight * height);
         }
 
-        private static void Render(string path, int width, int height, Action<DrawingContext> draw)
+        private static void Render(string path, int width, int height, Action<DrawingContext> draw,
+            PixelFormat? outputFormat = null)
         {
             var visual = new DrawingVisual();
             using (DrawingContext dc = visual.RenderOpen()) draw(dc);
             var image = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
             image.Render(visual);
-            SavePng(image, path);
+            SavePng(outputFormat.HasValue ? (BitmapSource)new FormatConvertedBitmap(image,
+                outputFormat.Value, null, 0) : image, path);
         }
 
         private static void SavePng(BitmapSource image, string path)
