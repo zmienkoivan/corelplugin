@@ -7,6 +7,28 @@ namespace VanyaTools.Native
 {
     internal static class CorelClipboardTransfer
     {
+        private const uint PmQsSendMessage = 0x00400000; // QS_SENDMESSAGE << 16, PM_NOREMOVE
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct NativeMessage
+        {
+            public IntPtr Window;
+            public uint Message;
+            public UIntPtr WParam;
+            public IntPtr LParam;
+            public uint Time;
+            public int PointX, PointY;
+            public uint Private;
+        }
+
+        [ThreadStatic]
+        private static bool _servicingMessages;
+
+        [DllImport("user32.dll", EntryPoint = "PeekMessageW", ExactSpelling = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool PeekMessage(out NativeMessage message, IntPtr window,
+            uint filterMin, uint filterMax, uint flags);
+
         [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool OpenClipboard(IntPtr window);
@@ -26,6 +48,10 @@ namespace VanyaTools.Native
             var timer = Stopwatch.StartNew();
             do
             {
+                // A clipboard reader (including Windows' clipboard service)
+                // can hold the lock while sending WM_RENDERFORMAT to Corel.
+                // Sleeping on this UI thread prevents Corel from answering.
+                ServiceSentMessages();
                 // Probe and immediately release the lock. Do not hold it while
                 // calling Corel, and do not change the clipboard contents here.
                 if (OpenClipboard(IntPtr.Zero))
@@ -69,9 +95,36 @@ namespace VanyaTools.Native
                         throw new InvalidOperationException("Не удалось скопировать лекало «" + context +
                             "» в буфер обмена (0x" + error.ErrorCode.ToString("X8") + "). " +
                             "Повторите этап 1 после освобождения буфера обмена.", error);
-                    Thread.Sleep(150 * (attempt + 1));
+                    WaitForCopyRetry(150 * (attempt + 1));
                 }
             }
+        }
+
+        private static void ServiceSentMessages()
+        {
+            if (_servicingMessages) return;
+            _servicingMessages = true;
+            try
+            {
+                // PeekMessage dispatches incoming sent messages itself. The
+                // PM_QS_SENDMESSAGE flag leaves posted input, timers, paint and
+                // dispatcher work queued; there is no general DoEvents loop.
+                // PM_NOREMOVE also leaves WM_QUIT for the host message loop.
+                PeekMessage(out NativeMessage ignored, IntPtr.Zero, 0, 0, PmQsSendMessage);
+            }
+            finally { _servicingMessages = false; }
+        }
+
+        private static void WaitForCopyRetry(int delayMs)
+        {
+            var timer = Stopwatch.StartNew();
+            do
+            {
+                ServiceSentMessages();
+                int remaining = delayMs - (int)timer.ElapsedMilliseconds;
+                if (remaining <= 0) return;
+                Thread.Sleep(Math.Min(25, remaining));
+            } while (true);
         }
 
         internal static void ClearModel()
