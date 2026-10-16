@@ -961,16 +961,19 @@ namespace VanyaTools.Native
             return copy;
         }
 
-        private static void CollectCutCurves(dynamic shape, IList<dynamic> curves, int depth = 0)
+        private static void CollectCutCurves(dynamic shape, ICollection<object> curves, int depth = 0)
         {
             if (depth > 12)
                 throw new InvalidOperationException("Слишком глубокая вложенность группы детали.");
             int type = Convert.ToInt32(shape.Type);
             if (type == CorelConstants.CdrGroupShape)
             {
-                foreach (dynamic child in shape.Shapes) CollectCutCurves(child, curves, depth + 1);
+                foreach (dynamic child in shape.Shapes) CollectCutCurves((object)child, curves, depth + 1);
             }
-            else if (type == CorelConstants.CdrCurveShape) curves.Add(shape);
+            // Force the managed collection call to bind statically. A dynamic
+            // COM argument makes the binder search IList<object> for Add,
+            // which is inherited from ICollection<object> and can be missed.
+            else if (type == CorelConstants.CdrCurveShape) curves.Add((object)shape);
             else throw new InvalidOperationException("В группе детали «" +
                 Convert.ToString(shape.Name) + "» нужны только кривые лекала и надсечек.");
         }
@@ -978,7 +981,7 @@ namespace VanyaTools.Native
         private static dynamic FindSilhouette(Piece original)
         {
             var curves = new List<dynamic>();
-            CollectCutCurves(original.Shape, curves);
+            CollectCutCurves((object)original.Shape, curves);
             var silhouettes = curves.Where(shape => String.Equals(Convert.ToString(shape.Name),
                 "silhouette", StringComparison.OrdinalIgnoreCase)).ToList();
             // Previous models used a single named curve instead of a detail group.
@@ -1029,7 +1032,7 @@ namespace VanyaTools.Native
             dynamic separated = effect.Separate();
             var curves = new List<dynamic>();
             foreach (dynamic shape in separated)
-                UnpackContour(shape, controlId, curves);
+                UnpackContour((object)shape, controlId, curves);
             if (curves.Count == 0)
                 throw new InvalidOperationException("CorelDRAW не создал контур +6 мм для «" +
                     Convert.ToString(original.Shape.Name) + "».");
@@ -1055,15 +1058,15 @@ namespace VanyaTools.Native
             return result;
         }
 
-        private static void UnpackContour(dynamic shape, long controlId, IList<dynamic> curves)
+        private static void UnpackContour(dynamic shape, long controlId, ICollection<object> curves)
         {
             if (Convert.ToInt64(shape.StaticID) == controlId) return;
             if (Convert.ToInt32(shape.Type) == CorelConstants.CdrGroupShape)
             {
                 dynamic children = shape.UngroupEx();
-                foreach (dynamic child in children) UnpackContour(child, controlId, curves);
+                foreach (dynamic child in children) UnpackContour((object)child, controlId, curves);
             }
-            else if (Convert.ToInt32(shape.Type) == CorelConstants.CdrCurveShape) curves.Add(shape);
+            else if (Convert.ToInt32(shape.Type) == CorelConstants.CdrCurveShape) curves.Add((object)shape);
             else throw new InvalidOperationException("CorelDRAW вернул неподходящий объект контура.");
         }
 
