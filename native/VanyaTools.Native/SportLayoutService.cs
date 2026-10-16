@@ -1504,6 +1504,7 @@ namespace VanyaTools.Native
             var originals = new[] { source.FrontCut, source.BackCut, source.LeftSleeveCut,
                 source.RightSleeveCut, source.NeckCut };
             var keys = new[] { "FRONT", "BACK", "LEFT_SLEEVE", "RIGHT_SLEEVE", "NECK" };
+            var titles = new[] { "перед", "спина", "левый рукав", "правый рукав", "горловина" };
             for (int i = 0; i < originals.Length; i++)
             {
                 Piece original = originals[i];
@@ -1537,7 +1538,7 @@ namespace VanyaTools.Native
                     {
                         var copiedCurves = new List<object>();
                         CollectCutCurves((object)copy, copiedCurves);
-                        SportCutSizeTag.Add((object)app, (object)FindSilhouette(Describe(copy)), copiedCurves, size);
+                        SportCutSizeTag.Add((object)app, (object)FindSilhouette(Describe(copy)), copiedCurves, size, titles[i]);
                         copiedCurves.Clear();
                         CollectCutCurves((object)copy, copiedCurves);
                         bands = ReadCutGeometry(Describe(copy), copiedCurves, 1);

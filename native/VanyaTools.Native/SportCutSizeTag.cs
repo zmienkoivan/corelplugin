@@ -7,13 +7,12 @@ using System.Windows;
 
 namespace VanyaTools.Native
 {
-    // Adds cut-only, detachable size tabs to a COPY of a cutting silhouette.
-    // No weld/trim is used: existing Bezier segments and separate notches retain
-    // their coordinates. Only two straight-edge intervals become uncut bridges.
+    // Works only on a cutting COPY. Straight runs can be sloped, split into
+    // multiple segments, or represented by geometrically straight Beziers.
     internal static class SportCutSizeTag
     {
         private const double Bridge = 2, Neck = 2, BodyHeight = 6, LetterHeight = 3;
-        private const double LetterWidth = 1.8, LetterStep = 2.5;
+        private const double LetterWidth = 1.8, LetterStep = 2.5, StraightTolerance = 0.05;
 
         private sealed class Segment
         {
@@ -24,16 +23,30 @@ namespace VanyaTools.Native
         private sealed class Path
         {
             public object Original;
+            public double Area;
+            public List<Segment> Segments = new List<Segment>();
+        }
+
+        private sealed class Run
+        {
+            public int Path;
+            public Point A, D;
+            public Vector Direction;
+            public double Length;
             public List<Segment> Segments = new List<Segment>();
         }
 
         private sealed class Location
         {
-            public int Path, Segment;
-            public double Left, Y;
+            public Run Run;
+            public Point Origin;
+            public Vector Along, Outward;
+            public double Offset;
+            public Point World(double x, double depth) => Origin + Along * x + Outward * depth;
         }
 
-        public static void Add(object application, object silhouetteObject, IList<object> cutShapes, string size)
+        public static void Add(object application, object silhouetteObject, IList<object> cutShapes,
+            string size, string part)
         {
             dynamic app = application, silhouette = silhouetteObject;
             string label = Label(size);
@@ -43,97 +56,285 @@ namespace VanyaTools.Native
             long silhouetteId = Convert.ToInt64(silhouette.StaticID);
             object sourceCurve = silhouette.DisplayCurve;
             var paths = ReadPaths(sourceCurve);
-            double bottom = Convert.ToDouble(silhouette.BottomY);
-            var obstacles = new List<Rect>();
+            var other = new List<Segment>();
             foreach (object shape in cutShapes)
                 if (Convert.ToInt64(((dynamic)shape).StaticID) != silhouetteId)
-                    foreach (var path in ReadPaths((object)((dynamic)shape).DisplayCurve))
-                        foreach (var segment in path.Segments)
-                        {
-                            double minX = Math.Min(segment.A.X, segment.D.X), maxX = Math.Max(segment.A.X, segment.D.X);
-                            double minY = Math.Min(segment.A.Y, segment.D.Y), maxY = Math.Max(segment.A.Y, segment.D.Y);
-                            if (!segment.Line)
-                            {
-                                minX = Math.Min(minX, Math.Min(segment.B.X, segment.C.X));
-                                maxX = Math.Max(maxX, Math.Max(segment.B.X, segment.C.X));
-                                minY = Math.Min(minY, Math.Min(segment.B.Y, segment.C.Y));
-                                maxY = Math.Max(maxY, Math.Max(segment.B.Y, segment.C.Y));
-                            }
-                            obstacles.Add(new Rect(minX - 0.3, minY - 0.3, maxX - minX + 0.6, maxY - minY + 0.6));
-                        }
+                    other.AddRange(ReadPaths((object)((dynamic)shape).DisplayCurve).SelectMany(p => p.Segments));
+
+            var runs = StraightRuns(paths);
             Location location = null;
-            for (int p = 0; p < paths.Count && location == null; p++)
-                for (int s = 0; s < paths[p].Segments.Count && location == null; s++)
+            foreach (Run run in runs.Where(r => r.Length >= width + 4)
+                .OrderBy(r => (r.A.Y + r.D.Y) / 2).ThenByDescending(r => r.Length))
+            {
+                Vector along = run.Direction, outward = new Vector(along.Y, -along.X);
+                Point midpoint = PointOnRun(run, run.A, along, run.Length / 2);
+                bool plusInside = ((dynamic)sourceCurve).IsPointInside(
+                    midpoint.X + outward.X * .5, midpoint.Y + outward.Y * .5);
+                bool minusInside = ((dynamic)sourceCurve).IsPointInside(
+                    midpoint.X - outward.X * .5, midpoint.Y - outward.Y * .5);
+                if (plusInside == minusInside) continue;
+                Point origin = run.A;
+                if (plusInside) { along = -along; outward = -outward; origin = run.D; }
+
+                var selected = new HashSet<Segment>(run.Segments);
+                var obstacles = new List<Rect>();
+                foreach (Segment segment in paths.SelectMany(p => p.Segments)
+                    .Where(s => !selected.Contains(s)).Concat(other))
+                    AddObstacles(segment, origin, along, outward, obstacles, 0);
+                foreach (double offset in Positions(2, run.Length - width - 2))
                 {
-                    var edge = paths[p].Segments[s];
-                    if (!edge.Line || Math.Abs(edge.A.Y - edge.D.Y) > 0.001 ||
-                        Math.Abs(edge.A.Y - bottom) > 0.1) continue;
-                    double left = Math.Min(edge.A.X, edge.D.X) + 2;
-                    double right = Math.Max(edge.A.X, edge.D.X) - width - 2;
-                    if (right < left) continue;
-                    // Prefer the middle of the hem, then try nearby positions
-                    // to avoid a separate notch or internal cutting line.
-                    foreach (double fraction in new[] { 0.5, 0.25, 0.75, 0.0, 1.0 })
-                    {
-                        double x = left + (right - left) * fraction;
-                        var zone = new Rect(x - 0.3, edge.A.Y - Neck - BodyHeight - 0.3,
-                            width + 0.6, Neck + BodyHeight + 0.8);
-                        if (obstacles.Any(o => o.IntersectsWith(zone))) continue;
-                        location = new Location { Path = p, Segment = s, Left = x, Y = edge.A.Y };
-                        break;
-                    }
+                    var zone = new Rect(offset - .3, -.3, width + .6, Neck + BodyHeight + .6);
+                    if (obstacles.Any(o => o.IntersectsWith(zone))) continue;
+                    location = new Location { Run = run, Origin = origin, Along = along,
+                        Outward = outward, Offset = offset };
+                    break;
                 }
+                if (location != null) break;
+            }
             if (location == null)
-                throw new InvalidOperationException("Размер «" + size + "»: для ушка нужен прямой нижний край длиной хотя бы " +
+            {
+                double longest = runs.Count == 0 ? 0 : runs.Max(r => r.Length);
+                Log.Info("Sport cutting: no size-tab location, size=" + size + ", part=" + part +
+                    ", runs=" + runs.Count + ", longest=" + longest.ToString("0.###", CultureInfo.InvariantCulture));
+                throw new InvalidOperationException("Размер «" + size + "», " + part +
+                    ": не найден свободный прямой участок длиной хотя бы " +
                     (width + 4).ToString("0.#", CultureInfo.InvariantCulture) +
-                    " мм без надсечек в месте крепления. Можно отключить ушки и создать обычную резку.");
+                    " мм для ушка. Проверяются наклонные края и надсечки; ушки можно отключить.");
+            }
 
             dynamic curve = app.ActiveDocument.CreateCurve();
-            double x0 = location.Left, y0 = location.Y;
+            double x0 = location.Offset;
             double l1 = x0 + 2, l2 = l1 + Bridge;
             double r2 = x0 + width - 2, r1 = r2 - Bridge;
+            var gaps = new[] { new[] { l1, l2 }, new[] { r1, r2 } };
+            var selectedSegments = new HashSet<Segment>(location.Run.Segments);
             for (int p = 0; p < paths.Count; p++)
             {
-                if (p != location.Path)
+                if (p != location.Run.Path)
                 { curve.AppendCurve(((dynamic)paths[p].Original).GetCopy()); continue; }
-                dynamic path = curve.CreateSubPath(paths[p].Segments[0].A.X, paths[p].Segments[0].A.Y);
-                for (int s = 0; s < paths[p].Segments.Count; s++)
+                object current = null;
+                foreach (Segment segment in paths[p].Segments)
                 {
-                    var segment = paths[p].Segments[s];
-                    if (s == location.Segment)
+                    var cuts = new List<double[]>();
+                    if (selectedSegments.Contains(segment))
                     {
-                        bool forward = segment.D.X > segment.A.X;
-                        path.AppendLineSegment(forward ? l1 : r2, y0);
-                        path = curve.CreateSubPath(forward ? l2 : r1, y0);
-                        path.AppendLineSegment(forward ? r1 : l2, y0);
-                        path = curve.CreateSubPath(forward ? r2 : l1, y0);
-                        path.AppendLineSegment(segment.D.X, segment.D.Y);
+                        double start = Project(segment.A, location.Origin, location.Along);
+                        double end = Project(segment.D, location.Origin, location.Along);
+                        foreach (double[] gap in gaps)
+                        {
+                            double lo = Math.Max(Math.Min(start, end), gap[0]);
+                            double hi = Math.Min(Math.Max(start, end), gap[1]);
+                            if (hi <= lo + 1e-8) continue;
+                            double a = Parameter(segment, location.Origin, location.Along, lo);
+                            double b = Parameter(segment, location.Origin, location.Along, hi);
+                            cuts.Add(new[] { Math.Min(a, b), Math.Max(a, b) });
+                        }
                     }
-                    else if (segment.Line) path.AppendLineSegment(segment.D.X, segment.D.Y);
-                    else path.AppendCurveSegment2(segment.D.X, segment.D.Y,
-                        segment.B.X, segment.B.Y, segment.C.X, segment.C.Y);
+                    double at = 0;
+                    foreach (double[] cut in cuts.OrderBy(c => c[0]))
+                    {
+                        if (cut[0] > at + 1e-9) AppendInterval((object)curve, ref current, segment, at, cut[0]);
+                        current = null;
+                        at = cut[1];
+                    }
+                    if (at < 1 - 1e-9) AppendInterval((object)curve, ref current, segment, at, 1);
                 }
             }
-            // The outer path and central U, together with the split original
-            // edge, leave exactly two 2x2 mm strips of fabric holding the tab.
+
+            // The four attachment endpoints are sampled on the original curve,
+            // including Beziers. Uncut intervals can span source segment joins.
+            Point a1 = PointOnRun(location.Run, location.Origin, location.Along, l1);
+            Point a2 = PointOnRun(location.Run, location.Origin, location.Along, l2);
+            Point b1 = PointOnRun(location.Run, location.Origin, location.Along, r1);
+            Point b2 = PointOnRun(location.Run, location.Origin, location.Along, r2);
             Polyline((object)curve, new[] {
-                new Point(l1, y0), new Point(l1, y0 - Neck), new Point(x0, y0 - Neck),
-                new Point(x0, y0 - Neck - BodyHeight), new Point(x0 + width, y0 - Neck - BodyHeight),
-                new Point(x0 + width, y0 - Neck), new Point(r2, y0 - Neck), new Point(r2, y0) });
-            Polyline((object)curve, new[] { new Point(l2, y0), new Point(l2, y0 - Neck),
-                new Point(r1, y0 - Neck), new Point(r1, y0) });
+                a1, location.World(l1, Neck), location.World(x0, Neck),
+                location.World(x0, Neck + BodyHeight), location.World(x0 + width, Neck + BodyHeight),
+                location.World(x0 + width, Neck), location.World(r2, Neck), b2 });
+            Polyline((object)curve, new[] { a2, location.World(l2, Neck), location.World(r1, Neck), b1 });
             double textLeft = x0 + (width - textWidth) / 2;
-            double textBottom = y0 - Neck - BodyHeight + (BodyHeight - LetterHeight) / 2;
+            double baseline = Neck + BodyHeight - (BodyHeight - LetterHeight) / 2;
             for (int i = 0; i < label.Length; i++)
                 foreach (Point[] stroke in Glyph(label[i]))
-                    Polyline((object)curve, stroke.Select(point => new Point(
+                    Polyline((object)curve, stroke.Select(point => location.World(
                         textLeft + i * LetterStep + point.X * LetterWidth,
-                        textBottom + point.Y * LetterHeight)).ToArray());
+                        baseline - point.Y * LetterHeight)).ToArray());
             silhouette.Curve.CopyAssign(curve);
             GC.KeepAlive(sourceCurve);
             silhouette.Fill.ApplyNoFill();
-            Log.Info("Sport cutting: size tab " + label + ", " + width + "x" + BodyHeight +
-                " mm, two " + Bridge + "x" + Neck + " mm bridges.");
+            Log.Info("Sport cutting: size tab " + label + ", part=" + part +
+                ", run=" + location.Run.Length.ToString("0.###", CultureInfo.InvariantCulture) +
+                " mm, angle=" + (Math.Atan2(location.Along.Y, location.Along.X) * 180 / Math.PI)
+                    .ToString("0.###", CultureInfo.InvariantCulture) + ", two 2x2 mm bridges.");
+        }
+
+        private static List<Run> StraightRuns(IList<Path> paths)
+        {
+            var result = new List<Run>();
+            double largest = paths.Max(p => p.Area);
+            for (int p = 0; p < paths.Count; p++)
+            {
+                // Tabs belong to the exterior silhouette, not an interior hole.
+                if (paths[p].Area < largest - .001) continue;
+                List<Segment> segments = paths[p].Segments;
+                for (int start = 0; start < segments.Count; start++)
+                {
+                    Segment first = segments[start];
+                    if (!Straight(first)) continue;
+                    Vector direction = first.D - first.A; direction.Normalize();
+                    Segment previous = segments[(start + segments.Count - 1) % segments.Count];
+                    if (Straight(previous) && Follows(previous, first.A, direction)) continue;
+                    var run = new Run { Path = p, A = first.A, Direction = direction };
+                    for (int count = 0; count < segments.Count; count++)
+                    {
+                        Segment next = segments[(start + count) % segments.Count];
+                        if (!Straight(next) || !Follows(next, first.A, direction)) break;
+                        run.Segments.Add(next);
+                        run.D = next.D;
+                    }
+                    if (run.Segments.Count == 0) continue;
+                    run.Length = Project(run.D, run.A, direction);
+                    result.Add(run);
+                }
+            }
+            return result;
+        }
+
+        private static bool Follows(Segment segment, Point origin, Vector direction)
+        {
+            Vector delta = segment.D - segment.A;
+            if (delta.Length < 1e-8) return false;
+            delta.Normalize();
+            return Vector.Multiply(delta, direction) >= .99999 &&
+                Math.Abs(Vector.CrossProduct(segment.A - origin, direction)) <= StraightTolerance &&
+                Math.Abs(Vector.CrossProduct(segment.D - origin, direction)) <= StraightTolerance &&
+                (segment.Line ||
+                    Math.Abs(Vector.CrossProduct(segment.B - origin, direction)) <= StraightTolerance &&
+                    Math.Abs(Vector.CrossProduct(segment.C - origin, direction)) <= StraightTolerance);
+        }
+
+        private static bool Straight(Segment segment)
+        {
+            Vector chord = segment.D - segment.A;
+            double length = chord.Length;
+            if (length < 1e-6) return false;
+            if (segment.Line) return true;
+            chord /= length;
+            return Math.Abs(Vector.CrossProduct(segment.B - segment.A, chord)) <= StraightTolerance &&
+                Math.Abs(Vector.CrossProduct(segment.C - segment.A, chord)) <= StraightTolerance &&
+                Project(segment.B, segment.A, chord) >= -1e-6 &&
+                Project(segment.B, segment.A, chord) <= length + 1e-6 &&
+                Project(segment.C, segment.A, chord) >= -1e-6 &&
+                Project(segment.C, segment.A, chord) <= length + 1e-6;
+        }
+
+        private static IEnumerable<double> Positions(double left, double right)
+        {
+            double middle = (left + right) / 2;
+            yield return middle;
+            for (double step = 2; step <= right - left; step += 2)
+            {
+                if (middle - step >= left) yield return middle - step;
+                if (middle + step <= right) yield return middle + step;
+            }
+            yield return left; yield return right;
+        }
+
+        private static double Project(Point point, Point origin, Vector direction) =>
+            Vector.Multiply(point - origin, direction);
+
+        private static Point Lerp(Point a, Point b, double t) => a + (b - a) * t;
+
+        private static Point At(Segment segment, double t)
+        {
+            if (segment.Line) return Lerp(segment.A, segment.D, t);
+            Point ab = Lerp(segment.A, segment.B, t), bc = Lerp(segment.B, segment.C, t),
+                cd = Lerp(segment.C, segment.D, t);
+            return Lerp(Lerp(ab, bc, t), Lerp(bc, cd, t), t);
+        }
+
+        private static void Split(Segment segment, double t, out Segment left, out Segment right)
+        {
+            Point ab = Lerp(segment.A, segment.B, t), bc = Lerp(segment.B, segment.C, t),
+                cd = Lerp(segment.C, segment.D, t);
+            Point abc = Lerp(ab, bc, t), bcd = Lerp(bc, cd, t), mid = Lerp(abc, bcd, t);
+            left = new Segment { A = segment.A, B = ab, C = abc, D = mid };
+            right = new Segment { A = mid, B = bcd, C = cd, D = segment.D };
+        }
+
+        private static double Parameter(Segment segment, Point origin, Vector direction, double distance)
+        {
+            double a = Project(segment.A, origin, direction), d = Project(segment.D, origin, direction);
+            if (Math.Abs(distance - a) < 1e-8) return 0;
+            if (Math.Abs(distance - d) < 1e-8) return 1;
+            if (segment.Line) return Math.Max(0, Math.Min(1, (distance - a) / (d - a)));
+            double lo = 0, hi = 1;
+            for (int iteration = 0; iteration < 44; iteration++)
+            {
+                double mid = (lo + hi) / 2;
+                double value = Project(At(segment, mid), origin, direction);
+                if ((value < distance) == (d > a)) lo = mid; else hi = mid;
+            }
+            return (lo + hi) / 2;
+        }
+
+        private static Point PointOnRun(Run run, Point origin, Vector direction, double distance)
+        {
+            foreach (Segment segment in run.Segments)
+            {
+                double a = Project(segment.A, origin, direction), d = Project(segment.D, origin, direction);
+                if (distance >= Math.Min(a, d) - 1e-6 && distance <= Math.Max(a, d) + 1e-6)
+                    return At(segment, Parameter(segment, origin, direction, distance));
+            }
+            throw new InvalidOperationException("Не удалось определить точку крепления ушка на прямом участке.");
+        }
+
+        private static void AppendInterval(object curveObject, ref object pathObject,
+            Segment segment, double from, double to)
+        {
+            Segment part = segment;
+            if (segment.Line)
+                part = new Segment { A = At(segment, from), D = At(segment, to), Line = true };
+            else
+            {
+                if (to < 1) { Split(part, to, out Segment prefix, out _); part = prefix; }
+                if (from > 0) { Split(part, from / to, out _, out Segment suffix); part = suffix; }
+            }
+            dynamic curve = curveObject;
+            if (pathObject == null) pathObject = curve.CreateSubPath(part.A.X, part.A.Y);
+            dynamic path = pathObject;
+            if (part.Line) path.AppendLineSegment(part.D.X, part.D.Y);
+            else path.AppendCurveSegment2(part.D.X, part.D.Y, part.B.X, part.B.Y, part.C.X, part.C.Y);
+        }
+
+        private static void AddObstacles(Segment segment, Point origin, Vector along, Vector outward,
+            ICollection<Rect> result, int depth)
+        {
+            bool flat = segment.Line || Straight(segment) ||
+                (segment.B - segment.A).Length <= StraightTolerance &&
+                (segment.C - segment.A).Length <= StraightTolerance &&
+                (segment.D - segment.A).Length <= StraightTolerance;
+            if (!flat && depth < 14)
+            {
+                Split(segment, .5, out Segment left, out Segment right);
+                AddObstacles(left, origin, along, outward, result, depth + 1);
+                AddObstacles(right, origin, along, outward, result, depth + 1);
+                return;
+            }
+            double ax = Project(segment.A, origin, along), ay = Project(segment.A, origin, outward);
+            double dx = Project(segment.D, origin, along), dy = Project(segment.D, origin, outward);
+            double minX = Math.Min(ax, dx), maxX = Math.Max(ax, dx);
+            double minY = Math.Min(ay, dy), maxY = Math.Max(ay, dy);
+            if (!flat)
+            {
+                minX = Math.Min(minX, Math.Min(Project(segment.B, origin, along), Project(segment.C, origin, along)));
+                maxX = Math.Max(maxX, Math.Max(Project(segment.B, origin, along), Project(segment.C, origin, along)));
+                minY = Math.Min(minY, Math.Min(Project(segment.B, origin, outward), Project(segment.C, origin, outward)));
+                maxY = Math.Max(maxY, Math.Max(Project(segment.B, origin, outward), Project(segment.C, origin, outward)));
+            }
+            // Covers the flattening tolerance and avoids rejecting a candidate
+            // just because a distant Bezier has a large control-point box.
+            result.Add(new Rect(minX - .06, minY - .06, maxX - minX + .12, maxY - minY + .12));
         }
 
         private static List<Path> ReadPaths(object curveObject)
@@ -143,6 +344,7 @@ namespace VanyaTools.Native
             foreach (dynamic subpath in curve.SubPaths)
             {
                 var path = new Path { Original = (object)subpath };
+                if (Convert.ToBoolean(subpath.Closed)) path.Area = Math.Abs(Convert.ToDouble(subpath.Area));
                 foreach (dynamic segment in subpath.Segments)
                 {
                     var item = new Segment {

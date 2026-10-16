@@ -318,8 +318,8 @@ namespace VanyaTools.Native
                 FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
             panel.Children.Add(_cutSizeTags);
             panel.Children.Add(Note("Ушко от 12 × 6 мм, две перемычки 2 × 2 мм. Размер высотой 3 мм " +
-                "прорезается одиночными линиями с трафаретными разрывами. Ушко крепится к прямому " +
-                "нижнему краю и учитывается в раскладке. Исходные лекала не меняются."));
+                "прорезается одиночными линиями с трафаретными разрывами. Ушко крепится снаружи " +
+                "на прямом участке, по возможности снизу, и учитывается в раскладке. Исходные лекала не меняются."));
             _generateCut = Button("Создать раскладку резки", GenerateCutting);
             panel.Children.Add(_generateCut);
             _saveCut = Button("Сохранить страницу резки в отдельный CDR…", SaveCutting);
@@ -869,7 +869,7 @@ namespace VanyaTools.Native
             {
                 Log.Error("Could not export sport print PDF.", error);
                 _progress.Text = "PDF печати не сохранён.";
-                _status("PDF печати не сохранён: " + error.GetBaseException().Message, true);
+                _status("PDF печати не сохранён: " + error.Message, true);
             }
             finally { _busy = false; SetActionButtons(true); }
         }

@@ -47,6 +47,7 @@ namespace VanyaTools.Native
             object settings = document.PDFSettings;
             var values = Settings(dpi);
             var previous = new List<KeyValuePair<string, object>>();
+            int applied = 0;
             string temporary = null, staging = null;
             var result = new Result();
             try
@@ -67,7 +68,11 @@ namespace VanyaTools.Native
                 // belong to the document and must not affect the next export.
                 foreach (var value in values)
                     previous.Add(new KeyValuePair<string, object>(value.Key, Get(settings, value.Key)));
-                foreach (var value in values) Set(settings, value.Key, value.Value);
+                foreach (var value in values)
+                {
+                    Set(settings, value.Key, value.Value);
+                    applied++;
+                }
 
                 string documentName = System.IO.Path.GetFileNameWithoutExtension(Convert.ToString(document.FileName));
                 string prefix = SafeName(documentName) + " - печать - лист " +
@@ -104,7 +109,7 @@ namespace VanyaTools.Native
                 bool restoreFailed = false;
                 // Restore compatibility first, since changing it can reset or
                 // constrain the remaining PDF options in Corel.
-                for (int i = 0; i < previous.Count; i++)
+                for (int i = 0; i < applied; i++)
                     try { Set(settings, previous[i].Key, previous[i].Value); }
                     catch (Exception error)
                     { restoreFailed = true; Log.Error("Could not restore PDF setting " + previous[i].Key + ".", error); }
@@ -138,7 +143,9 @@ namespace VanyaTools.Native
                 Pair("Encoding", 1), // pdfBinary
                 Pair("ComplexFillsAsBitmaps", false),
                 Pair("ColorMode", 3), // pdfNative: retain source RGB/CMYK colors
-                Pair("UseColorProfile", false), // no composite-printer conversion
+                // The legacy UseColorProfile setter is an E_NOTIMPL stub in
+                // CorelDRAW 2026 even though its getter/type-library exist.
+                // ColorMode=pdfNative is the supported color-mode control.
                 Pair("OutputSpotColorsAs", 0), // pdfSpotAsSpot
                 Pair("IncludeBleed", false), Pair("Bleed", 0),
                 Pair("CropMarks", false), Pair("RegistrationMarks", false),
@@ -153,11 +160,27 @@ namespace VanyaTools.Native
         private static KeyValuePair<string, object> Pair(string name, object value) =>
             new KeyValuePair<string, object>(name, value);
 
-        private static object Get(object settings, string name) => settings.GetType().InvokeMember(
-            name, BindingFlags.GetProperty, null, settings, null);
+        private static object Get(object settings, string name)
+        {
+            try { return settings.GetType().InvokeMember(name, BindingFlags.GetProperty, null, settings, null); }
+            catch (Exception error)
+            {
+                Log.Error("Could not read PDF setting " + name + ".", error);
+                throw new InvalidOperationException("Не удалось прочитать параметр PDF «" + name + "»: " +
+                    error.GetBaseException().Message, error);
+            }
+        }
 
-        private static void Set(object settings, string name, object value) => settings.GetType().InvokeMember(
-            name, BindingFlags.SetProperty, null, settings, new[] { value });
+        private static void Set(object settings, string name, object value)
+        {
+            try { settings.GetType().InvokeMember(name, BindingFlags.SetProperty, null, settings, new[] { value }); }
+            catch (Exception error)
+            {
+                Log.Error("Could not set PDF setting " + name + ".", error);
+                throw new InvalidOperationException("Не удалось установить параметр PDF «" + name + "»: " +
+                    error.GetBaseException().Message, error);
+            }
+        }
 
         private static string SafeName(string name)
         {
