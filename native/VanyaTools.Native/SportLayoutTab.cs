@@ -32,9 +32,13 @@ namespace VanyaTools.Native
             public string ModelPath { get; set; }
             public bool? RotateSleeves { get; set; }
             public bool? CutAllow180 { get; set; }
+            public bool? CutSizeTags { get; set; }
             public string SheetWidth { get; set; }
+            public string CutSheetWidth { get; set; }
             public string MaxPageLength { get; set; }
             public string Gap { get; set; }
+            public string PrintFolder { get; set; }
+            public int PrintDpi { get; set; }
             public string FontName { get; set; }
             public bool FrontNameOnRight { get; set; }
             public int FrontNameCase { get; set; }
@@ -67,16 +71,16 @@ namespace VanyaTools.Native
         private readonly DataGrid _templateGrid, _playerGrid;
         private readonly TextBox _frontArt, _backArt, _leftSleeveArt, _rightSleeveArt,
             _neckArt, _modelPath;
-        private readonly TextBox _sheetWidth, _maxPageLength, _gap;
-        private readonly ComboBox _nameSide, _frontCase, _batchSize;
+        private readonly TextBox _sheetWidth, _cutSheetWidth, _maxPageLength, _gap, _printFolder;
+        private readonly ComboBox _nameSide, _frontCase, _batchSize, _printQuality;
         // Kept only for older masters with rectangle zones; text samples use Corel attributes.
         private SportTextStyle _legacyNameStyle = LegacyStyle("Arial", 72, false);
         private SportTextStyle _legacyNumberStyle = LegacyStyle("Arial", 150, false);
         private bool _legacyTwoLines, _whiteCaptions;
         private double _legacyLineSpacing = 100;
-        private readonly CheckBox _keepGuides, _rotateSleeves, _cutAllow180;
+        private readonly CheckBox _keepGuides, _rotateSleeves, _cutAllow180, _cutSizeTags;
         private readonly TextBlock _count, _progress;
-        private readonly Button _prepare, _generate, _generateCut, _saveCut;
+        private readonly Button _prepare, _generate, _generateCut, _saveCut, _exportPrint, _choosePrintFolder;
         private bool _loading, _busy;
 
         public SportLayoutTab(Action<string, bool> status)
@@ -217,7 +221,7 @@ namespace VanyaTools.Native
 
             panel.Children.Add(Title("4. Полотно и надписи"));
             var roll = new WrapPanel { Margin = new Thickness(0, 3, 0, 6) };
-            roll.Children.Add(Label("Ширина, мм"));
+            roll.Children.Add(Label("Ширина печати, мм"));
             _sheetWidth = Field("1500");
             _sheetWidth.Width = 72;
             roll.Children.Add(_sheetWidth);
@@ -276,14 +280,46 @@ namespace VanyaTools.Native
             _generate = DockerTheme.Primary(Button("Этап 2 · Создать комплекты и раскладку", Generate));
             _generate.Margin = new Thickness(0, 7, 0, 4);
             panel.Children.Add(_generate);
-            panel.Children.Add(Title("5. Раскладка резки"));
+            panel.Children.Add(Title("5. Экспорт печати"));
+            _printFolder = Field(""); _printFolder.IsReadOnly = true;
+            var folderRow = new Grid { Margin = new Thickness(0, 2, 0, 5) };
+            folderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            folderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            folderRow.Children.Add(_printFolder);
+            _choosePrintFolder = Button("Папка печати…", ChoosePrintFolder);
+            Grid.SetColumn(_choosePrintFolder, 1); folderRow.Children.Add(_choosePrintFolder);
+            panel.Children.Add(folderRow);
+            _printQuality = new ComboBox { Margin = new Thickness(0, 0, 4, 5), MinHeight = 27 };
+            _printQuality.Items.Add("PDF · компактный · изображения до 150 DPI");
+            _printQuality.Items.Add("PDF · детальный · изображения до 300 DPI");
+            _printQuality.SelectedIndex = 0;
+            panel.Children.Add(_printQuality);
+            _exportPrint = Button("Экспортировать активный лист печати в PDF", ExportPrint);
+            panel.Children.Add(_exportPrint);
+            panel.Children.Add(Note("Сохраняется активная страница после этапа 2, целиком и в масштабе 1:1. " +
+                "Надписи остаются векторными; изображения сжимаются с высоким качеством. " +
+                "При нескольких листах откройте нужный и повторите экспорт. Папка и качество запоминаются; " +
+                "каждый экспорт создаёт новый файл."));
+            panel.Children.Add(Title("6. Раскладка резки"));
+            var cutWidthRow = new WrapPanel { Margin = new Thickness(0, 3, 0, 6) };
+            cutWidthRow.Children.Add(Label("Ширина ткани для резки, мм"));
+            _cutSheetWidth = Field("1500"); _cutSheetWidth.Width = 72;
+            cutWidthRow.Children.Add(_cutSheetWidth);
+            panel.Children.Add(cutWidthRow);
             panel.Children.Add(Note("В каждой группе детали нужен замкнутый контур silhouette. " +
                 "Для печати она расширяется наружу на 6 мм; для резки берутся все исходные " +
                 "кривые группы, включая silhouette и надсечки. Рисунки и надписи не добавляются. " +
-                "Размеры и количество — из таблицы игроков, ширина и зазор — из настроек полотна."));
+                "Размеры и количество — из таблицы игроков. Ширина ткани задаётся отдельно от ширины печати; " +
+                "зазор и максимальная длина страницы — из общих настроек полотна."));
             _cutAllow180 = new CheckBox { Content = "Разрешить поворот деталей резки на 180°",
                 FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
             panel.Children.Add(_cutAllow180);
+            _cutSizeTags = new CheckBox { Content = "Съёмное ушко с прорезным размером на каждой детали",
+                FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
+            panel.Children.Add(_cutSizeTags);
+            panel.Children.Add(Note("Ушко от 12 × 6 мм, две перемычки 2 × 2 мм. Размер высотой 3 мм " +
+                "прорезается одиночными линиями с трафаретными разрывами. Ушко крепится к прямому " +
+                "нижнему краю и учитывается в раскладке. Исходные лекала не меняются."));
             _generateCut = Button("Создать раскладку резки", GenerateCutting);
             panel.Children.Add(_generateCut);
             _saveCut = Button("Сохранить страницу резки в отдельный CDR…", SaveCutting);
@@ -306,7 +342,10 @@ namespace VanyaTools.Native
             _neckArt.TextChanged += (_, __) => SaveDraft();
             _modelPath.TextChanged += (_, __) => SaveDraft();
             _sheetWidth.TextChanged += (_, __) => SaveDraft();
+            _cutSheetWidth.TextChanged += (_, __) => SaveDraft();
             _maxPageLength.TextChanged += (_, __) => SaveDraft();
+            _printFolder.TextChanged += (_, __) => SaveDraft();
+            _printQuality.SelectionChanged += (_, __) => SaveDraft();
             _gap.TextChanged += (_, __) => SaveDraft();
             _nameSide.SelectionChanged += (_, __) => SaveDraft();
             _frontCase.SelectionChanged += (_, __) => SaveDraft();
@@ -316,6 +355,8 @@ namespace VanyaTools.Native
             _rotateSleeves.Unchecked += (_, __) => SaveDraft();
             _cutAllow180.Checked += (_, __) => SaveDraft();
             _cutAllow180.Unchecked += (_, __) => SaveDraft();
+            _cutSizeTags.Checked += (_, __) => SaveDraft();
+            _cutSizeTags.Unchecked += (_, __) => SaveDraft();
             LoadDraft();
             RefreshSizes();
             UpdateCount();
@@ -787,6 +828,50 @@ namespace VanyaTools.Native
         private void SetActionButtons(bool enabled)
         {
             _prepare.IsEnabled = _generate.IsEnabled = _generateCut.IsEnabled = _saveCut.IsEnabled = enabled;
+            _exportPrint.IsEnabled = _choosePrintFolder.IsEnabled = _printQuality.IsEnabled = enabled;
+        }
+
+        private void ChoosePrintFolder(object sender, RoutedEventArgs e)
+        {
+            if (_busy) return;
+            try
+            {
+                var source = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
+                string selected = WindowsFolderPicker.Pick(source == null ? IntPtr.Zero : source.Handle,
+                    _printFolder.Text.Trim(), "Папка для готовых листов печати");
+                if (!String.IsNullOrWhiteSpace(selected)) _printFolder.Text = selected;
+            }
+            catch (Exception error)
+            { Log.Error("Could not choose sport print folder.", error); _status(error.Message, true); }
+        }
+
+        private async void ExportPrint(object sender, RoutedEventArgs e)
+        {
+            if (_busy) return;
+            if (String.IsNullOrWhiteSpace(_printFolder.Text)) ChoosePrintFolder(sender, e);
+            if (String.IsNullOrWhiteSpace(_printFolder.Text)) return;
+            string folder = _printFolder.Text.Trim();
+            int dpi = _printQuality.SelectedIndex == 1 ? 300 : 150;
+            SaveDraft();
+            _busy = true; SetActionButtons(false);
+            try
+            {
+                _progress.Text = "Экспортирую активный лист печати в PDF…";
+                await Dispatcher.Yield(DispatcherPriority.Render);
+                SportPrintExporter.Result result = SportPrintExporter.ExportCurrentPage(folder, dpi);
+                _progress.Text = "PDF готов: " + result.WidthMm.ToString("0.#") + " × " +
+                    result.HeightMm.ToString("0.#") + " мм · 1:1 · " + dpi + " DPI · " +
+                    (result.Bytes / 1048576.0).ToString("0.#") + " МБ.\n" + result.Path;
+                _status(result.Warning ?? "Лист печати сохранён в PDF: " + result.Path,
+                    !String.IsNullOrEmpty(result.Warning));
+            }
+            catch (Exception error)
+            {
+                Log.Error("Could not export sport print PDF.", error);
+                _progress.Text = "PDF печати не сохранён.";
+                _status("PDF печати не сохранён: " + error.GetBaseException().Message, true);
+            }
+            finally { _busy = false; SetActionButtons(true); }
         }
 
         private void SaveCutting(object sender, RoutedEventArgs e)
@@ -848,7 +933,8 @@ namespace VanyaTools.Native
                 _progress.Text = "Готово: " + result.GarmentCount + " комплектов, " +
                     result.PieceCount + " деталей, страниц: " + result.PageCount +
                     ", общая длина " + (result.SheetHeightMm / 1000).ToString("0.###") + " м. " +
-                    (cutting ? "Кнопка сохранения резки сохраняет активную страницу; переключайтесь между страницами раскладки." : "Сохраните CDR.");
+                    (cutting ? "Кнопка сохранения резки сохраняет активную страницу; переключайтесь между страницами раскладки." :
+                        "Готовый лист можно экспортировать кнопкой PDF ниже. Сохраните CDR.");
                 _status(cutting ? "Раскладка резки создана. Сохраните отдельный CDR кнопкой ниже." :
                     "Раскладка добавлена в текущий CDR. Сохраните документ.", false);
             }
@@ -869,11 +955,14 @@ namespace VanyaTools.Native
                 LeftSleeveArtworkPath = _leftSleeveArt.Text.Trim(),
                 RightSleeveArtworkPath = _rightSleeveArt.Text.Trim(),
                 NeckArtworkPath = _neckArt.Text.Trim(),
-                SheetWidthMm = ParseMillimeters(_sheetWidth.Text, 300, 2000, "Ширина полотна"),
+                SheetWidthMm = cutting
+                    ? ParseMillimeters(_cutSheetWidth.Text, 300, 4000, "Ширина ткани для резки")
+                    : ParseMillimeters(_sheetWidth.Text, 300, 4000, "Ширина печати"),
                 MaxPageLengthMm = ParseMillimeters(_maxPageLength.Text, 0.5, 45, "Максимальная длина страницы, м") * 1000,
                 GapMm = ParseMillimeters(_gap.Text, 0, 100, "Расстояние между деталями"),
                 RotateSleeves = _rotateSleeves.IsChecked == true,
                 CutAllow180 = _cutAllow180.IsChecked == true,
+                CutSizeTags = cutting && _cutSizeTags.IsChecked == true,
                 NameStyle = cutting ? null : _legacyNameStyle,
                 NumberStyle = cutting ? null : _legacyNumberStyle,
                 FrontNameOnRight = _nameSide.SelectedIndex == 1,
@@ -902,8 +991,9 @@ namespace VanyaTools.Native
             if (_loading || _frontArt == null || _backArt == null ||
                 _leftSleeveArt == null || _rightSleeveArt == null ||
                 _neckArt == null || _modelPath == null || _rotateSleeves == null ||
-                _sheetWidth == null || _maxPageLength == null || _gap == null || _nameSide == null || _frontCase == null ||
-                _keepGuides == null || _cutAllow180 == null ||
+                _sheetWidth == null || _cutSheetWidth == null || _maxPageLength == null || _gap == null || _nameSide == null || _frontCase == null ||
+                _printFolder == null || _printQuality == null ||
+                _keepGuides == null || _cutAllow180 == null || _cutSizeTags == null ||
                 _templateGrid == null || _playerGrid == null) return;
             try
             {
@@ -916,8 +1006,12 @@ namespace VanyaTools.Native
                     NeckArtworkPath = _neckArt.Text, ModelPath = _modelPath.Text,
                     RotateSleeves = _rotateSleeves.IsChecked == true,
                     CutAllow180 = _cutAllow180.IsChecked == true,
+                    CutSizeTags = _cutSizeTags.IsChecked == true,
                     SheetWidth = _sheetWidth.Text, Gap = _gap.Text,
+                    CutSheetWidth = _cutSheetWidth.Text,
                     MaxPageLength = _maxPageLength.Text,
+                    PrintFolder = _printFolder.Text,
+                    PrintDpi = _printQuality.SelectedIndex == 1 ? 300 : 150,
                     NameStyle = _legacyNameStyle,
                     NumberStyle = _legacyNumberStyle,
                     FrontNameOnRight = _nameSide.SelectedIndex == 1,
@@ -956,9 +1050,13 @@ namespace VanyaTools.Native
                         _modelPath.Text = draft.ModelPath ?? "";
                         _rotateSleeves.IsChecked = draft.RotateSleeves ?? true;
                         _cutAllow180.IsChecked = draft.CutAllow180 ?? true;
+                        _cutSizeTags.IsChecked = draft.CutSizeTags ?? true;
                         _sheetWidth.Text = draft.SheetWidth ?? "1500";
+                        _cutSheetWidth.Text = draft.CutSheetWidth ?? draft.SheetWidth ?? "1500";
                         _maxPageLength.Text = draft.MaxPageLength ?? "4";
                         _gap.Text = draft.Gap ?? "10";
+                        _printFolder.Text = draft.PrintFolder ?? "";
+                        _printQuality.SelectedIndex = draft.PrintDpi == 300 ? 1 : 0;
                         _legacyNameStyle = draft.NameStyle ?? LegacyStyle(draft.FontName, 72, draft.WhiteText);
                         _legacyNumberStyle = draft.NumberStyle ?? LegacyStyle(draft.FontName, 150, draft.WhiteText);
                         _whiteCaptions = draft.WhiteText;

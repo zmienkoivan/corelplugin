@@ -42,6 +42,7 @@ namespace VanyaTools.Native
         public double GapMm;
         public bool RotateSleeves;
         public bool CutAllow180;
+        public bool CutSizeTags;
         public NamesGridLetterCase FrontNameCase;
         public bool FrontNameTwoLines;
         public double FrontLineSpacingPercent;
@@ -648,8 +649,9 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Добавьте игроков в таблицу.");
             if (templates == null || templates.Count == 0)
                 throw new InvalidOperationException("Добавьте CDR-шаблоны для размеров.");
-            if (options == null || options.SheetWidthMm < 300 || options.SheetWidthMm > 2000)
-                throw new InvalidOperationException("Ширина полотна: от 300 до 2000 мм.");
+            if (options == null || options.SheetWidthMm < 300 || options.SheetWidthMm > 4000)
+                throw new InvalidOperationException((cutting ? "Ширина ткани для резки" : "Ширина печати") +
+                    ": от 300 до 4000 мм.");
             if (options.GapMm < 0 || options.GapMm > 100)
                 throw new InvalidOperationException("Расстояние между деталями: от 0 до 100 мм.");
             if (options.MaxPageLengthMm < 500 || options.MaxPageLengthMm > 45000)
@@ -703,7 +705,7 @@ namespace VanyaTools.Native
             var outputPages = new List<object>();
             bool commandStarted = false;
             var nested = new List<NestedPiece>();
-            var cutGeometry = new Dictionary<string, IList<SportContourNesting.Band>>();
+            var cutPrepared = new Dictionary<string, NestedPiece>();
             int complete = 0;
             try
             {
@@ -740,7 +742,7 @@ namespace VanyaTools.Native
                         outputPage.Activate();
                         if (cutting)
                             nested.AddRange(BuildCuttingPieces(app, outputLayer, source, row, size,
-                                complete + 1, options, scale, cutGeometry));
+                                complete + 1, options, scale, cutPrepared));
                         else
                         {
                             Garment garment = CopyGarment(source, outputLayer, selectedPart);
@@ -1496,7 +1498,7 @@ namespace VanyaTools.Native
         private static IList<NestedPiece> BuildCuttingPieces(dynamic app, dynamic layer,
             Garment source, SportLayoutPlayer row, string size, int index,
             SportLayoutOptions options, double scale,
-            IDictionary<string, IList<SportContourNesting.Band>> geometryCache)
+            IDictionary<string, NestedPiece> preparedCache)
         {
             var result = new List<NestedPiece>();
             var originals = new[] { source.FrontCut, source.BackCut, source.LeftSleeveCut,
@@ -1506,30 +1508,50 @@ namespace VanyaTools.Native
             {
                 Piece original = originals[i];
                 if (original == null) continue;
-                var curves = new List<dynamic>();
-                CollectCutCurves(original.Shape, curves);
-                if (curves.Count == 0) throw new InvalidOperationException("Пустая группа резки.");
-                // Copy the intact group: silhouette and every notch retain their
-                // geometry and relative positions. No text/print/container added.
-                dynamic copy = original.Shape.CopyToLayer(layer);
-                if (Math.Abs(scale - 1) > 0.0001)
+                string key = size + "|" + keys[i] + "|" + scale.ToString("R", CultureInfo.InvariantCulture);
+                dynamic copy;
+                double width, height;
+                IList<SportContourNesting.Band> bands;
+                if (preparedCache.TryGetValue(key, out NestedPiece prepared))
                 {
-                    dynamic range = app.CreateShapeRange();
-                    range.Add(copy);
-                    range.Stretch(scale, scale, true);
+                    // Copies are all built before nesting moves any shapes.
+                    // Reuse the prepared size/part so native contour edits and
+                    // profile reading happen once, not once per player.
+                    copy = prepared.Shape.CopyToLayer(layer);
+                    width = prepared.Width; height = prepared.Height;
+                    bands = prepared.CuttingLayout.Bands;
+                }
+                else
+                {
+                    var curves = new List<dynamic>();
+                    CollectCutCurves(original.Shape, curves);
+                    if (curves.Count == 0) throw new InvalidOperationException("Пустая группа резки.");
+                    copy = original.Shape.CopyToLayer(layer);
+                    if (Math.Abs(scale - 1) > 0.0001)
+                    {
+                        dynamic range = app.CreateShapeRange();
+                        range.Add(copy);
+                        range.Stretch(scale, scale, true);
+                    }
+                    if (options.CutSizeTags)
+                    {
+                        var copiedCurves = new List<object>();
+                        CollectCutCurves((object)copy, copiedCurves);
+                        SportCutSizeTag.Add((object)app, (object)FindSilhouette(Describe(copy)), copiedCurves, size);
+                        copiedCurves.Clear();
+                        CollectCutCurves((object)copy, copiedCurves);
+                        bands = ReadCutGeometry(Describe(copy), copiedCurves, 1);
+                    }
+                    else bands = ReadCutGeometry(original, curves, scale);
+                    width = Convert.ToDouble(copy.SizeWidth); height = Convert.ToDouble(copy.SizeHeight);
                 }
                 copy.Name = "VT_CUT_" + index.ToString("000", CultureInfo.InvariantCulture) +
                     "_" + Clean(size) + "_" + Clean(row.Name) + "_" + keys[i];
-                double width = Convert.ToDouble(copy.SizeWidth), height = Convert.ToDouble(copy.SizeHeight);
-                string key = size + "|" + keys[i] + "|" + scale.ToString("R", CultureInfo.InvariantCulture);
-                if (!geometryCache.TryGetValue(key, out IList<SportContourNesting.Band> bands))
-                {
-                    bands = ReadCutGeometry(original, curves, scale);
-                    geometryCache.Add(key, bands);
-                }
-                result.Add(new NestedPiece { Shape = copy, Width = width, Height = height,
+                var item = new NestedPiece { Shape = copy, Width = width, Height = height,
                     CanRotate = false, SmallPart = i >= 2, CuttingLayout = new SportContourNesting.Item {
-                        Width = width, Height = height, Bands = bands, Allow180 = options.CutAllow180 } });
+                        Width = width, Height = height, Bands = bands, Allow180 = options.CutAllow180 } };
+                result.Add(item);
+                if (!preparedCache.ContainsKey(key)) preparedCache.Add(key, item);
             }
             return result;
         }
