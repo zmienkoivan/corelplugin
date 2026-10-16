@@ -13,8 +13,10 @@ namespace VanyaTools.Native
         internal sealed class Prepared
         {
             public string ImagePath, MaskPath;
-            public string ModelImagePath, ModelMaskPath, ModelAspectRatio;
+            public string ModelImagePath, ModelAspectRatio;
             public int ModelWidth, ModelHeight;
+            public int WidthPixels, HeightPixels;
+            public Rect PhotoBoundsPixels;
             public double LeftMm, TopMm, WidthMm, HeightMm;
             public string ExtensionDirections;
         }
@@ -52,6 +54,18 @@ namespace VanyaTools.Native
             finally { doc.Unit = oldUnit; }
             if (pRight <= pLeft || pTop <= pBottom || aRight <= aLeft || aTop <= aBottom)
                 throw new InvalidOperationException("У фотографии или области правки нет размера.");
+
+            // A frame drawn around the whole photo means a target canvas, not
+            // permission to regenerate the entire source. Ignore tiny drawing
+            // inaccuracies at the existing edges when detecting an extension.
+            double edgeTolerance = Math.Max(0.01, Math.Max(pRight - pLeft, pTop - pBottom) / 1024.0);
+            if (Math.Abs(aLeft - pLeft) <= edgeTolerance) aLeft = pLeft;
+            if (Math.Abs(aRight - pRight) <= edgeTolerance) aRight = pRight;
+            if (Math.Abs(aTop - pTop) <= edgeTolerance) aTop = pTop;
+            if (Math.Abs(aBottom - pBottom) <= edgeTolerance) aBottom = pBottom;
+            bool extendLeft = aLeft < pLeft, extendRight = aRight > pRight;
+            bool extendTop = aTop > pTop, extendBottom = aBottom < pBottom;
+            bool extension = extendLeft || extendRight || extendTop || extendBottom;
 
             string photoPath;
             try
@@ -96,6 +110,8 @@ namespace VanyaTools.Native
                 int height = Math.Max(64, (int)Math.Floor(heightMm * scale));
                 var photoRect = RectFor(pLeft, pTop, pRight, pBottom, left, top, widthMm, heightMm, width, height);
                 var areaRect = RectFor(aLeft, aTop, aRight, aBottom, left, top, widthMm, heightMm, width, height);
+                prepared.WidthPixels = width; prepared.HeightPixels = height;
+                prepared.PhotoBoundsPixels = photoRect;
                 Render(imagePath, width, height, visual =>
                 {
                     // New canvas is transparent rather than a white graphic
@@ -108,13 +124,28 @@ namespace VanyaTools.Native
                     // the drawn extension is narrower than the source photo.
                     visual.DrawRectangle(Brushes.White, null, new Rect(0, 0, width, height));
                     visual.DrawRectangle(Brushes.Black, null, photoRect);
-                    visual.DrawRectangle(Brushes.White, null, areaRect);
+                    if (extension)
+                    {
+                        // Only a narrow joining strip is editable inside the
+                        // photo. Even a frame covering all of it keeps the rest
+                        // anchored, so the model must continue the same shot.
+                        double seam = Math.Min(8, Math.Min(photoRect.Width, photoRect.Height) / 20.0);
+                        if (extendTop) visual.DrawRectangle(Brushes.White, null,
+                            new Rect(photoRect.Left, photoRect.Top, photoRect.Width, seam));
+                        if (extendBottom) visual.DrawRectangle(Brushes.White, null,
+                            new Rect(photoRect.Left, photoRect.Bottom - seam, photoRect.Width, seam));
+                        if (extendLeft) visual.DrawRectangle(Brushes.White, null,
+                            new Rect(photoRect.Left, photoRect.Top, seam, photoRect.Height));
+                        if (extendRight) visual.DrawRectangle(Brushes.White, null,
+                            new Rect(photoRect.Right - seam, photoRect.Top, seam, photoRect.Height));
+                    }
+                    else visual.DrawRectangle(Brushes.White, null, areaRect);
                 });
                 var directions = new List<string>();
-                if (aTop > pTop) directions.Add("top");
-                if (aBottom < pBottom) directions.Add("bottom");
-                if (aLeft < pLeft) directions.Add("left");
-                if (aRight > pRight) directions.Add("right");
+                if (extendTop) directions.Add("top");
+                if (extendBottom) directions.Add("bottom");
+                if (extendLeft) directions.Add("left");
+                if (extendRight) directions.Add("right");
                 Log.Info("Generative fill: " + width + "x" + height + ", " +
                     (directions.Count == 0 ? "local photo edit" : "photo extension " + String.Join(", ", directions)));
                 prepared.ExtensionDirections = String.Join(", ", directions);
@@ -124,7 +155,7 @@ namespace VanyaTools.Native
             catch
             {
                 TryDelete(imagePath); TryDelete(maskPath);
-                TryDelete(prepared.ModelImagePath); TryDelete(prepared.ModelMaskPath);
+                TryDelete(prepared.ModelImagePath);
                 throw;
             }
             finally { TryDelete(photoPath); }
@@ -141,6 +172,13 @@ namespace VanyaTools.Native
                 throw new InvalidDataException("Размер маски не совпадает с изображением.");
             if (modelWidth < width || modelHeight < height)
                 throw new InvalidDataException("Размер холста генерации меньше исходной области.");
+            double aspectError = Math.Abs((double)generated.PixelWidth * modelHeight /
+                ((double)generated.PixelHeight * modelWidth) - 1);
+            Log.Info("Generative fill output: " + generated.PixelWidth + "x" + generated.PixelHeight +
+                ", expected canvas=" + modelWidth + "x" + modelHeight);
+            if (aspectError > 0.02)
+                throw new InvalidDataException("Модель вернула другие пропорции кадра. Ответ сохранён; " +
+                    "его нельзя растянуть в область правки без искажения фотографии.");
             // The model sees a supported aspect ratio with padding only at the
             // right/bottom. Normalize to that canvas, then crop padding away.
             // Stretching the padded output directly into the original union
@@ -221,29 +259,37 @@ namespace VanyaTools.Native
                 prepared.ModelAspectRatio = numerator + ":" + denominator;
             }
             prepared.ModelImagePath = Path.Combine(Path.GetTempPath(), "Vanya-Fill-Canvas-" + Guid.NewGuid().ToString("N") + ".png");
-            prepared.ModelMaskPath = Path.Combine(Path.GetTempPath(), "Vanya-Fill-Guide-" + Guid.NewGuid().ToString("N") + ".png");
             BitmapSource source = AiPrintTab.Bitmap(prepared.ImagePath);
             BitmapSource mask = AiPrintTab.Bitmap(prepared.MaskPath);
-            var gray = new SolidColorBrush(Color.FromRgb(127, 127, 127));
-            Render(prepared.ModelImagePath, prepared.ModelWidth, prepared.ModelHeight, dc =>
-            {
-                dc.DrawRectangle(gray, null, new Rect(0, 0, prepared.ModelWidth, prepared.ModelHeight));
-                dc.DrawImage(source, new Rect(0, 0, width, height));
-            }, PixelFormats.Bgr24);
+            byte[] sourcePixels = Pixels(source), maskPixels = Pixels(mask);
+            int stride = prepared.ModelWidth * 4;
+            byte[] pixels = new byte[checked(stride * prepared.ModelHeight)];
+            for (int index = 0; index < pixels.Length; index += 4)
+            { pixels[index] = pixels[index + 1] = pixels[index + 2] = 127; pixels[index + 3] = 255; }
 
-            // A fully opaque, binary guide cannot accidentally introduce a
-            // second alpha mask. Extra padding is black (kept), then cropped.
-            var grayMask = new FormatConvertedBitmap(mask, PixelFormats.Gray8, null, 0);
-            byte[] sourcePixels = new byte[checked(width * height)];
-            grayMask.CopyPixels(sourcePixels, width, 0);
-            byte[] pixels = new byte[checked(prepared.ModelWidth * prepared.ModelHeight)];
+            // Nano Banana accepts reference images, not an inpainting-mask
+            // parameter. Send one spatially marked photograph instead of two
+            // separate images that can be interpreted as a photo composition.
+            // Opaque magenta marks missing canvas; a translucent tint marks
+            // edits over existing content without hiding the source context.
             for (int y = 0; y < height; y++)
                 for (int x = 0; x < width; x++)
-                    pixels[y * prepared.ModelWidth + x] = sourcePixels[y * width + x] >= 128 ? (byte)255 : (byte)0;
-            SavePng(BitmapSource.Create(prepared.ModelWidth, prepared.ModelHeight, 96, 96,
-                PixelFormats.Gray8, null, pixels, prepared.ModelWidth), prepared.ModelMaskPath);
+                {
+                    int src = (y * width + x) * 4, dest = y * stride + x * 4;
+                    double alpha = sourcePixels[src + 3] / 255.0;
+                    double tint = maskPixels[src] < 128 ? 0 : (alpha == 0 ? 1 : 0.28);
+                    for (int channel = 0; channel < 3; channel++)
+                    {
+                        double color = sourcePixels[src + channel] * alpha + 127 * (1 - alpha);
+                        int marker = channel == 1 ? 0 : 255;
+                        pixels[dest + channel] = (byte)Math.Round(color * (1 - tint) + marker * tint);
+                    }
+                }
+            var canvas = BitmapSource.Create(prepared.ModelWidth, prepared.ModelHeight, 96, 96,
+                PixelFormats.Bgra32, null, pixels, stride);
+            SavePng(new FormatConvertedBitmap(canvas, PixelFormats.Bgr24, null, 0), prepared.ModelImagePath);
             Log.Info("Generative fill model canvas: " + prepared.ModelWidth + "x" + prepared.ModelHeight +
-                ", " + prepared.ModelAspectRatio + ", original=" + width + "x" + height);
+                ", " + prepared.ModelAspectRatio + ", original=" + width + "x" + height + ", single annotated photo");
         }
 
         private static Rect RectFor(double l, double t, double r, double b,

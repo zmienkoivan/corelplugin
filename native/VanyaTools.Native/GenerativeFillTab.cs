@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -47,10 +48,9 @@ namespace VanyaTools.Native
             var panel = new StackPanel { Margin = new Thickness(6) };
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Content = panel };
-            panel.Children.Add(Note("Выделите фотографию и нарисованный поверх неё прямоугольник. Прямоугольник задаёт область замены и может выходить за край фото."));
-            panel.Children.Add(Note("Для расширения фото выделите новую область и немного края исходника. " +
-                "Для восстановления руки захватите её видимую часть и место, где она должна продолжиться. " +
-                "Заливка продолжает исходное фото по вашему описанию."));
+            panel.Children.Add(Note("Выделите фотографию и один прямоугольник. Для расширения нарисуйте рамку желаемого кадра за краями фото — она может охватывать весь исходник. Фото сохранится, дорисуются новые края."));
+            panel.Children.Add(Note("Прямоугольник целиком внутри фото задаёт область замены: например, для удаления предмета или исправления руки. " +
+                "В расширении сохраняется исходник с небольшой полосой совмещения по краю."));
             panel.Children.Add(Note("Достаточно короткой команды: «дорисуй сверху», «убери бутылку», «восстанови руку». " +
                 "Модель использует фотографию и выделенную область как ориентир."));
             _model = new ComboBox { Margin = new Thickness(1, 3, 1, 3) };
@@ -137,13 +137,12 @@ namespace VanyaTools.Native
                 _resultPreview.Source = null;
                 _input = new Dictionary<string, object>
                 {
-                    ["prompt"] = BuildPhotoEditPrompt(prompt, _prepared.ExtensionDirections),
+                    ["prompt"] = BuildPhotoEditPrompt(prompt, _prepared),
                     // DataUri creates upload copies. The network worker removes its
                     // upload files after success; keep the originals for compositing.
                     ["image_input"] = new[]
                     {
-                        AiPrintTab.DataUri(AiPrintTab.Bitmap(_prepared.ModelImagePath), 4096, 16000000),
-                        AiPrintTab.DataUri(AiPrintTab.Bitmap(_prepared.ModelMaskPath), 4096, 16000000)
+                        AiPrintTab.DataUri(AiPrintTab.Bitmap(_prepared.ModelImagePath), 4096, 16000000)
                     },
                     ["output_format"] = "png",
                     ["aspect_ratio"] = _prepared.ModelAspectRatio,
@@ -165,25 +164,36 @@ namespace VanyaTools.Native
             finally { SetBusy(false, null); }
         }
 
-        private static string BuildPhotoEditPrompt(string request, string extensionDirections)
+        private static string BuildPhotoEditPrompt(string request, GenerativeFillCapture.Prepared prepared)
         {
-            string extension = String.IsNullOrWhiteSpace(extensionDirections) ? "" :
-                " Extend the scene toward the " + extensionDirections + " edge(s), filling the entire editable area. " +
-                "Continue cropped people at their existing size, with body parts connected to the visible bodies.";
-            return "Edit image 1. User request: " + request + "\n" +
-                "Image 2 is only a spatial editing mask: WHITE marks the area to change, BLACK marks the area to keep. " +
-                "Neutral gray outside the photo is empty canvas. Replace editable empty canvas with the natural continuation of the scene." +
-                extension + " Match the original perspective, lighting, colors and photographic texture. " +
-                "Keep existing people, their identity, clothing, pose, scale and positions. " +
-                "Return one finished photograph on exactly the same canvas as image 1. " +
-                "Keep black-mask areas and framing unchanged. The mask is a guide, never part of the output. " +
+            Rect photo = prepared.PhotoBoundsPixels;
+            string bounds = String.Format(CultureInfo.InvariantCulture, "({0:0}, {1:0}) to ({2:0}, {3:0})",
+                photo.Left, photo.Top, photo.Right, photo.Bottom);
+            string extension = String.IsNullOrWhiteSpace(prepared.ExtensionDirections)
+                ? "Perform the requested local edit only in the tinted region. Use the visible details under the tint as context. "
+                : "This is OUTPAINTING of one existing photograph toward the " + prepared.ExtensionDirections +
+                    " edge(s). The existing photo occupies pixels " + bounds + " from the top-left of the canvas. " +
+                    "It is an anchored fragment of the final shot, already at the final scale and position. " +
+                    "Continue the visible scene directly across its edges into ALL missing areas. " +
+                    "Connect cropped objects and body parts to their visible portions at the boundary. " +
+                    "Existing heads stay in their original positions; extend only the missing parts of those same people. " +
+                    "Do not fit a new complete photo into the missing area, repeat the scene, zoom out, shrink or move the original. ";
+            return "Edit this ONE spatially marked photograph. User request: " + request + "\n" +
+                "Bright magenta is an editing annotation: solid magenta marks missing pixels, " +
+                "a translucent magenta tint marks the adjoining editable area over the original. " +
+                "Remove these annotations by replacing them with photographic content. " + extension +
+                "Keep all unmarked content fixed. Match perspective, lighting, colors and texture across every join. " +
+                "Preserve people's identity, clothing, pose, scale and positions. " +
+                "Return ONE seamless finished photograph on the same " + prepared.ModelWidth + "x" + prepared.ModelHeight +
+                " canvas. The working frame is the top-left " + prepared.WidthPixels + "x" + prepared.HeightPixels +
+                " pixels; any neutral-gray padding outside it is technical padding, not part of the scene. " +
                 "Add text or graphic design only if the user explicitly requests it.";
         }
 
         private async Task Execute(string key)
         {
             CancellationToken cancellation = _cancellation.Token;
-            Progress("Отправляю фото и маску…");
+            Progress("Отправляю кадр для правки…");
             if (!File.Exists(_rawOutput) || new FileInfo(_rawOutput).Length == 0)
                 await Task.Run(() => ReplicateWorkerClient.Run(_requestModel, key, _input,
                     _rawOutput, OnProgress, cancellation), cancellation);
@@ -253,7 +263,7 @@ namespace VanyaTools.Native
 
         private void OnProgress(string value)
         {
-            string message = value == "sending" ? "Отправляю фото и маску…" :
+            string message = value == "sending" ? "Отправляю кадр для правки…" :
                 value == "processing" ? "Нейросеть дорисовывает область…" :
                 value == "downloading" ? "Загружаю результат…" :
                 value == "cancelling" ? "Отменяю запрос…" : value;
