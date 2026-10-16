@@ -15,14 +15,14 @@ namespace VanyaTools.Native
         private readonly ColorProofService _service = new ColorProofService();
         private readonly TextBlock _referenceLabel, _sampleCount, _layoutNote, _artworkLabel;
         private readonly Border _preview;
-        private readonly ComboBox _model, _mode, _layout, _horizontal, _vertical, _cells, _sampleShape;
-        private readonly Grid _layoutRow, _horizontalRow, _verticalRow, _stepRow, _cellsRow, _squareRow;
+        private readonly ComboBox _model, _mode, _layout, _horizontal, _vertical, _sampleShape;
+        private readonly Grid _layoutRow, _horizontalRow, _verticalRow, _stepRow;
         private readonly StackPanel _artworkPanel;
         private readonly StackPanel _combinationPanel, _visualPanel;
         private readonly Grid[] _rangeRows = new Grid[4];
         private readonly TextBlock[] _rangeLabels = new TextBlock[4];
         private readonly TextBox[] _ranges = new TextBox[4];
-        private readonly TextBox _step, _square, _hueStep, _lightStep, _saturationStep, _sheetWidth;
+        private readonly TextBox _step, _hueStep, _lightStep, _saturationStep, _sheetWidth;
         private ColorProofReference _reference;
         private ColorProofArtwork _artwork;
         private static readonly string WidthPath = Path.Combine(Environment.GetFolderPath(
@@ -59,23 +59,26 @@ namespace VanyaTools.Native
             try { if (File.Exists(WidthPath)) _sheetWidth.Text = File.ReadAllText(WidthPath).Trim(); }
             catch (Exception ex) { Log.Error("Could not read color proof sheet width.", ex); }
             panel.Children.Add(Row("Ширина листа, мм", _sheetWidth));
-            panel.Children.Add(Note("Поля по 8 мм. Образцы переносятся на следующий ряд целиком; " +
-                "логотип автоматически не уменьшается. Длина листа рассчитывается по числу рядов."));
+            panel.Children.Add(Note("Квадраты: 21 ячейка на всю ширину между полями по 8 мм; эталон в 11-й. " +
+                "Логотип сохраняет размер 1:1: в ряду помещается максимально возможное нечётное число копий, " +
+                "по центру — эталон. Остальные варианты продолжаются ниже."));
 
             _mode = Combo("Наглядный", "Каналы CMYK/RGB");
             panel.Children.Add(Row("Поиск", _mode));
             _model = Combo("CMYK", "RGB"); panel.Children.Add(Row("Цветовая модель", _model));
             _visualPanel = new StackPanel();
-            _lightStep = Field("5"); _hueStep = Field("5"); _saturationStep = Field("10");
+            _lightStep = Field("1"); _hueStep = Field("1"); _saturationStep = Field("1");
             _visualPanel.Children.Add(Row("Шаг светлоты, %", _lightStep));
             _visualPanel.Children.Add(Row("Шаг оттенка, °", _hueStep));
             _visualPanel.Children.Add(Row("Шаг насыщенности, %", _saturationStep));
             _visualPanel.Children.Add(Note("Три ряда: темнее/светлее, сдвиг оттенка, менее/более насыщенный цвет. " +
                 "В каждом ряду меняется одно свойство эталона. Поиск идёт в HSL на основе RGB; " +
-                "для CMYK результат преобразует Corel. Для точной работы с красками выберите режим каналов."));
+                "для CMYK результат преобразует Corel. Можно задать дробный шаг от 0,1 — например 0,5. " +
+                "Для точной работы с красками выберите режим каналов."));
             panel.Children.Add(_visualPanel);
 
             _layout = Combo("Все сочетания отклонений", "По одному каналу", "Сетка по двум каналам");
+            _layout.SelectedIndex = 1;
             _layoutRow = Row("Варианты каналов", _layout); panel.Children.Add(_layoutRow);
             _horizontal = Combo(); _vertical = Combo();
             _horizontalRow = Row("По горизонтали ±", _horizontal); _verticalRow = Row("По вертикали ±", _vertical);
@@ -93,11 +96,10 @@ namespace VanyaTools.Native
             }
             _combinationPanel.Children.Add(Note("Введите отклонения от эталона через пробел: −5 0 +5. " +
                 "Например, при C=40 это даст C=35,40,45. Нулевое отклонение включается всегда. " +
-                "Выходящие за диапазон значения пропускаются, одинаковые плашки не повторяются."));
+                "В каждом ряду эталон по центру; сочетания распределяются по сторонам по первому " +
+                "отличающемуся каналу, ближайшие — рядом с эталоном."));
             _sampleCount = Note(""); _combinationPanel.Children.Add(_sampleCount); panel.Children.Add(_combinationPanel);
-            _step = Field("5"); _stepRow = Row("Шаг канала, % / 0–255", _step); panel.Children.Add(_stepRow);
-            _cells = Combo(); _cellsRow = Row("Вариантов", _cells); panel.Children.Add(_cellsRow);
-            _square = Field("16"); _squareRow = Row("Плашка, мм", _square); panel.Children.Add(_squareRow);
+            _step = Field("1"); _stepRow = Row("Шаг канала, % / 0–255", _step); panel.Children.Add(_stepRow);
             var create = DockerTheme.Primary(Button("Создать отдельный лист цветопробы", (_, __) => Create()));
             create.Margin = new Thickness(0, 7, 0, 5); panel.Children.Add(create);
             _layoutNote = Note(""); panel.Children.Add(_layoutNote);
@@ -174,9 +176,9 @@ namespace VanyaTools.Native
             {
                 _rangeRows[i].Visibility = i < names.Length ? Visibility.Visible : Visibility.Collapsed;
                 _rangeLabels[i].Text = i < names.Length ? names[i] + ", отклонения" : "";
-                _ranges[i].Text = i < names.Length ? (cmyk ? "-5 0 +5" : "-15 0 +15") : "";
+                _ranges[i].Text = i < names.Length ? "-1 0 +1" : "";
             }
-            _step.Text = cmyk ? "5" : "15";
+            _step.Text = "1";
             UpdateSampleCount();
         }
 
@@ -184,7 +186,6 @@ namespace VanyaTools.Native
         {
             bool artwork = _sampleShape.SelectedIndex == 1;
             _artworkPanel.Visibility = artwork ? Visibility.Visible : Visibility.Collapsed;
-            _squareRow.Visibility = artwork ? Visibility.Collapsed : Visibility.Visible;
             bool visual = _mode.SelectedIndex == 0, combinations = !visual && _layout.SelectedIndex == 0;
             bool two = !visual && _layout.SelectedIndex == 2;
             _visualPanel.Visibility = visual ? Visibility.Visible : Visibility.Collapsed;
@@ -192,15 +193,11 @@ namespace VanyaTools.Native
             _horizontalRow.Visibility = _verticalRow.Visibility = two ? Visibility.Visible : Visibility.Collapsed;
             _combinationPanel.Visibility = combinations ? Visibility.Visible : Visibility.Collapsed;
             _stepRow.Visibility = visual || combinations ? Visibility.Collapsed : Visibility.Visible;
-            _cellsRow.Visibility = combinations ? Visibility.Collapsed : Visibility.Visible;
-            int selected = _cells.SelectedIndex;
-            _cells.Items.Clear();
-            foreach (int count in new[] { 3, 5, 7 }) _cells.Items.Add(two ? count + " × " + count : "До " + count + " в ряду");
-            _cells.SelectedIndex = selected >= 0 ? selected : 1;
-            _layoutNote.Text = "Эталон сохраняется отдельно и отмечается в таблице. " +
-                "Под образцами — реальные значения CMYK/RGB. " +
-                "На границах диапазона вариантов может быть меньше; копии граничного цвета не добавляются. " +
-                "По выбранной плашке можно назначить новый эталон и повторить поиск меньшим шагом.";
+            _layoutNote.Text = "21 позиция: 10 шагов влево, эталон, 10 шагов вправо. " +
+                "На границах диапазона и при повторе округлённого цвета остаётся пустое место; эталон не сдвигается. " +
+                "CMYK/RGB меняются целыми значениями, минимальный шаг — 1. " +
+                "Под каждым образцом цвет указан одной строкой. В режиме двух каналов эталон находится " +
+                "в ряду с нулевым изменением второго канала.";
         }
 
         private int[][] ReadLevels()
@@ -251,27 +248,26 @@ namespace VanyaTools.Native
                     if (_artwork == null) return;
                 }
                 if (_reference == null) SetReference(_service.FromSelection());
-                bool cmyk = _model.SelectedIndex == 0; int cells = (_cells.SelectedIndex + 1) * 2 + 1;
+                bool cmyk = _model.SelectedIndex == 0;
                 var sheet = new ColorProofSheetOptions { WidthMm = Number(_sheetWidth, 100, 4000, "Ширина листа, мм"),
                     Artwork = _sampleShape.SelectedIndex == 1 ? _artwork : null };
-                double square = sheet.Artwork == null ? Number(_square, 12, 40, "Размер плашки, мм") : 16;
                 try { Directory.CreateDirectory(Path.GetDirectoryName(WidthPath));
                     File.WriteAllText(WidthPath, sheet.WidthMm.ToString(CultureInfo.InvariantCulture)); }
                 catch (Exception ex) { Log.Error("Could not save color proof sheet width.", ex); }
                 int count;
                 if (_mode.SelectedIndex == 0)
-                    count = _service.CreateVisual(_reference, cmyk, cells, square,
-                        Number(_hueStep, 1, 30, "Шаг оттенка, °"), Number(_lightStep, 1, 20, "Шаг светлоты, %"),
-                        Number(_saturationStep, 1, 30, "Шаг насыщенности, %"), sheet);
+                    count = _service.CreateVisual(_reference, cmyk,
+                        Number(_hueStep, .1, 30, "Шаг оттенка, °"), Number(_lightStep, .1, 20, "Шаг светлоты, %"),
+                        Number(_saturationStep, .1, 30, "Шаг насыщенности, %"), sheet);
                 else if (_layout.SelectedIndex == 0)
-                    count = _service.CreateCombinations(_reference, cmyk, ReadLevels(), square, sheet);
+                    count = _service.CreateCombinations(_reference, cmyk, ReadLevels(), sheet);
                 else
                 {
                     if (!Int32.TryParse(_step.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int step))
                         throw new InvalidOperationException("Введите целый шаг изменения канала.");
                     count = _service.Create(_reference, new ColorProofOptions { Cmyk = cmyk,
                         AllChannels = _layout.SelectedIndex == 1, HorizontalChannel = _horizontal.SelectedIndex,
-                        VerticalChannel = _vertical.SelectedIndex, Step = step, Cells = cells, SquareMm = square }, sheet);
+                        VerticalChannel = _vertical.SelectedIndex, Step = step }, sheet);
                 }
                 _status("Создан лист шириной " + sheet.WidthMm + " мм: образцов " + count +
                     (sheet.Artwork == null ? "." : ", логотипы 1:1."), false);
