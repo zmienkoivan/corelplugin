@@ -43,6 +43,7 @@ namespace VanyaTools.Native
         public bool RotateSleeves;
         public bool CutAllow180;
         public bool CutSizeTags;
+        public SportCutTagSettings CutTag = new SportCutTagSettings();
         public NamesGridLetterCase FrontNameCase;
         public bool FrontNameTwoLines;
         public double FrontLineSpacingPercent;
@@ -715,6 +716,9 @@ namespace VanyaTools.Native
                 target.BeginCommandGroup("Vanya Tools - " +
                     (cutting ? "раскладка резки" : "раскладка спортформы"));
                 commandStarted = true;
+                Dictionary<string, int> tagRanks = cutting && options.CutSizeTags
+                    ? CutTagSizeRanks((object)target, bySize) : null;
+                if (tagRanks != null) options.CutTag.Validate();
                 outputPage = target.AddPages(1);
                 outputPages.Add((object)outputPage);
                 outputPage.Activate();
@@ -742,7 +746,9 @@ namespace VanyaTools.Native
                         outputPage.Activate();
                         if (cutting)
                             nested.AddRange(BuildCuttingPieces(app, outputLayer, source, row, size,
-                                complete + 1, options, scale, cutPrepared));
+                                complete + 1, options, scale, tagRanks == null ? 0 :
+                                    options.CutTag.FirstOffsetMm + tagRanks[size] * options.CutTag.SizeStepMm,
+                                cutPrepared));
                         else
                         {
                             Garment garment = CopyGarment(source, outputLayer, selectedPart);
@@ -1495,9 +1501,35 @@ namespace VanyaTools.Native
             return garment;
         }
 
+        private static Dictionary<string, int> CutTagSizeRanks(object documentObject,
+            IDictionary<string, SportLayoutTemplate> templates)
+        {
+            dynamic document = documentObject;
+            var sizes = new List<KeyValuePair<string, double>>();
+            foreach (string size in templates.Keys)
+            {
+                double scale;
+                object page = FindMasterPage(document, size, templates, out scale);
+                Garment source = ReadPreparedGarment(page, size, true);
+                dynamic silhouette = FindSilhouette(source.FrontCut);
+                double area = Math.Abs(Convert.ToDouble(silhouette.DisplayCurve.Area)) * scale * scale;
+                if (area <= 0 || Double.IsNaN(area) || Double.IsInfinity(area))
+                    throw new InvalidOperationException("Не удалось определить порядок размера «" + size +
+                        "»: проверьте замкнутую silhouette переда.");
+                sizes.Add(new KeyValuePair<string, double>(size, area));
+            }
+            var result = new Dictionary<string, int>(StringComparer.CurrentCultureIgnoreCase);
+            foreach (var size in sizes.OrderBy(s => s.Value).ThenBy(s => s.Key, StringComparer.Ordinal))
+            {
+                result.Add(size.Key, result.Count);
+                Log.Info("Sport cutting: size-tab rank " + size.Key + " = " + (result.Count - 1));
+            }
+            return result;
+        }
+
         private static IList<NestedPiece> BuildCuttingPieces(dynamic app, dynamic layer,
             Garment source, SportLayoutPlayer row, string size, int index,
-            SportLayoutOptions options, double scale,
+            SportLayoutOptions options, double scale, double tagOffsetMm,
             IDictionary<string, NestedPiece> preparedCache)
         {
             var result = new List<NestedPiece>();
@@ -1538,7 +1570,8 @@ namespace VanyaTools.Native
                     {
                         var copiedCurves = new List<object>();
                         CollectCutCurves((object)copy, copiedCurves);
-                        SportCutSizeTag.Add((object)app, (object)FindSilhouette(Describe(copy)), copiedCurves, size, titles[i]);
+                        SportCutSizeTag.Add((object)app, (object)FindSilhouette(Describe(copy)), copiedCurves,
+                            size, titles[i], options.CutTag, tagOffsetMm);
                         copiedCurves.Clear();
                         CollectCutCurves((object)copy, copiedCurves);
                         bands = ReadCutGeometry(Describe(copy), copiedCurves, 1);

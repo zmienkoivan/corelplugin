@@ -11,8 +11,14 @@ namespace VanyaTools.Native
     // multiple segments, or represented by geometrically straight Beziers.
     internal static class SportCutSizeTag
     {
-        private const double Bridge = 2, Neck = 2, BodyHeight = 6, LetterHeight = 3;
-        private const double LetterWidth = 1.8, LetterStep = 2.5, StraightTolerance = 0.05;
+        private const double StraightTolerance = 0.05;
+
+        internal static double TextWidth(string text, double height) =>
+            height * (.6 + Math.Max(0, text.Length - 1) * (5.0 / 6));
+
+        internal static double WidthFor(string size, SportCutTagSettings settings) =>
+            Math.Max(settings.WidthMm, Math.Max(TextWidth(Label(size), settings.LetterHeightMm) + 4,
+                4 * settings.BridgeMm + 4));
 
         private sealed class Segment
         {
@@ -46,12 +52,14 @@ namespace VanyaTools.Native
         }
 
         public static void Add(object application, object silhouetteObject, IList<object> cutShapes,
-            string size, string part)
+            string size, string part, SportCutTagSettings settings, double leftOffsetMm)
         {
+            settings.Validate();
             dynamic app = application, silhouette = silhouetteObject;
             string label = Label(size);
-            double textWidth = LetterWidth + Math.Max(0, label.Length - 1) * LetterStep;
-            double width = Math.Max(12, textWidth + 3);
+            double textWidth = TextWidth(label, settings.LetterHeightMm);
+            double width = WidthFor(size, settings);
+            double targetX = Convert.ToDouble(silhouette.LeftX) + leftOffsetMm;
             if (Convert.ToInt32(silhouette.Type) != CorelConstants.CdrCurveShape) silhouette.ConvertToCurves();
             long silhouetteId = Convert.ToInt64(silhouette.StaticID);
             object sourceCurve = silhouette.DisplayCurve;
@@ -75,20 +83,21 @@ namespace VanyaTools.Native
                 if (plusInside == minusInside) continue;
                 Point origin = run.A;
                 if (plusInside) { along = -along; outward = -outward; origin = run.D; }
+                // Position is measured in the source template orientation, before
+                // nesting. Only lower edges with an outward downward normal qualify.
+                if (along.X < .2 || outward.Y > -.2) continue;
+                double offset = (targetX - origin.X) / along.X;
+                if (offset < .5 || offset + width > run.Length - .5) continue;
 
                 var selected = new HashSet<Segment>(run.Segments);
                 var obstacles = new List<Rect>();
                 foreach (Segment segment in paths.SelectMany(p => p.Segments)
                     .Where(s => !selected.Contains(s)).Concat(other))
                     AddObstacles(segment, origin, along, outward, obstacles, 0);
-                foreach (double offset in Positions(2, run.Length - width - 2))
-                {
-                    var zone = new Rect(offset - .3, -.3, width + .6, Neck + BodyHeight + .6);
-                    if (obstacles.Any(o => o.IntersectsWith(zone))) continue;
-                    location = new Location { Run = run, Origin = origin, Along = along,
-                        Outward = outward, Offset = offset };
-                    break;
-                }
+                var zone = new Rect(offset - .3, -.3, width + .6, settings.HeightMm + .6);
+                if (obstacles.Any(o => o.IntersectsWith(zone))) continue;
+                location = new Location { Run = run, Origin = origin, Along = along,
+                    Outward = outward, Offset = offset };
                 if (location != null) break;
             }
             if (location == null)
@@ -97,15 +106,17 @@ namespace VanyaTools.Native
                 Log.Info("Sport cutting: no size-tab location, size=" + size + ", part=" + part +
                     ", runs=" + runs.Count + ", longest=" + longest.ToString("0.###", CultureInfo.InvariantCulture));
                 throw new InvalidOperationException("Размер «" + size + "», " + part +
-                    ": не найден свободный прямой участок длиной хотя бы " +
-                    (width + 4).ToString("0.#", CultureInfo.InvariantCulture) +
-                    " мм для ушка. Проверяются наклонные края и надсечки; ушки можно отключить.");
+                    ": язычок шириной " + width.ToString("0.#", CultureInfo.InvariantCulture) +
+                    " мм не помещается на прямом нижнем крае с отступом " +
+                    leftOffsetMm.ToString("0.#", CultureInfo.InvariantCulture) +
+                    " мм от левого края детали. Проверьте надсечки, измените отступ/шаг или отключите язычки.");
             }
 
             dynamic curve = app.ActiveDocument.CreateCurve();
             double x0 = location.Offset;
-            double l1 = x0 + 2, l2 = l1 + Bridge;
-            double r2 = x0 + width - 2, r1 = r2 - Bridge;
+            double side = (width - 2 * settings.BridgeMm) / 4;
+            double l1 = x0 + side, l2 = l1 + settings.BridgeMm;
+            double r2 = x0 + width - side, r1 = r2 - settings.BridgeMm;
             var gaps = new[] { new[] { l1, l2 }, new[] { r1, r2 } };
             var selectedSegments = new HashSet<Segment>(location.Run.Segments);
             for (int p = 0; p < paths.Count; p++)
@@ -141,31 +152,26 @@ namespace VanyaTools.Native
                 }
             }
 
-            // The four attachment endpoints are sampled on the original curve,
-            // including Beziers. Uncut intervals can span source segment joins.
-            Point a1 = PointOnRun(location.Run, location.Origin, location.Along, l1);
-            Point a2 = PointOnRun(location.Run, location.Origin, location.Along, l2);
-            Point b1 = PointOnRun(location.Run, location.Origin, location.Along, r1);
-            Point b2 = PointOnRun(location.Run, location.Origin, location.Along, r2);
+            // U-shaped tab joins the source edge directly. The only bridges are
+            // the two uncut intervals on that edge; there are no extra stalks.
             Polyline((object)curve, new[] {
-                a1, location.World(l1, Neck), location.World(x0, Neck),
-                location.World(x0, Neck + BodyHeight), location.World(x0 + width, Neck + BodyHeight),
-                location.World(x0 + width, Neck), location.World(r2, Neck), b2 });
-            Polyline((object)curve, new[] { a2, location.World(l2, Neck), location.World(r1, Neck), b1 });
+                PointOnRun(location.Run, location.Origin, location.Along, x0),
+                location.World(x0, settings.HeightMm), location.World(x0 + width, settings.HeightMm),
+                PointOnRun(location.Run, location.Origin, location.Along, x0 + width) });
             double textLeft = x0 + (width - textWidth) / 2;
-            double baseline = Neck + BodyHeight - (BodyHeight - LetterHeight) / 2;
-            for (int i = 0; i < label.Length; i++)
-                foreach (Point[] stroke in Glyph(label[i]))
-                    Polyline((object)curve, stroke.Select(point => location.World(
-                        textLeft + i * LetterStep + point.X * LetterWidth,
-                        baseline - point.Y * LetterHeight)).ToArray());
+            double baseline = (settings.HeightMm + settings.LetterHeightMm) / 2;
+            AppendLabel((object)curve, label, settings.LetterHeightMm,
+                (x, y) => location.World(textLeft + x, baseline - y));
             silhouette.Curve.CopyAssign(curve);
             GC.KeepAlive(sourceCurve);
             silhouette.Fill.ApplyNoFill();
             Log.Info("Sport cutting: size tab " + label + ", part=" + part +
                 ", run=" + location.Run.Length.ToString("0.###", CultureInfo.InvariantCulture) +
                 " mm, angle=" + (Math.Atan2(location.Along.Y, location.Along.X) * 180 / Math.PI)
-                    .ToString("0.###", CultureInfo.InvariantCulture) + ", two 2x2 mm bridges.");
+                    .ToString("0.###", CultureInfo.InvariantCulture) +
+                ", tab=" + width.ToString("0.###", CultureInfo.InvariantCulture) + "x" + settings.HeightMm +
+                ", letter=" + settings.LetterHeightMm + ", bridges=" + settings.BridgeMm +
+                ", left offset=" + leftOffsetMm + " mm.");
         }
 
         private static List<Run> StraightRuns(IList<Path> paths)
@@ -228,16 +234,13 @@ namespace VanyaTools.Native
                 Project(segment.C, segment.A, chord) <= length + 1e-6;
         }
 
-        private static IEnumerable<double> Positions(double left, double right)
+        internal static void AppendLabel(object curve, string text, double height,
+            Func<double, double, Point> world)
         {
-            double middle = (left + right) / 2;
-            yield return middle;
-            for (double step = 2; step <= right - left; step += 2)
-            {
-                if (middle - step >= left) yield return middle - step;
-                if (middle + step <= right) yield return middle + step;
-            }
-            yield return left; yield return right;
+            for (int i = 0; i < text.Length; i++)
+                foreach (Point[] stroke in Glyph(text[i]))
+                    Polyline(curve, stroke.Select(p => world(
+                        i * height * (5.0 / 6) + p.X * height * .6, p.Y * height)).ToArray());
         }
 
         private static double Project(Point point, Point origin, Vector direction) =>
@@ -395,18 +398,18 @@ namespace VanyaTools.Native
         {
             // Single strokes, not outline-font contours. Gaps at closed bowls
             // and crossbars keep counters attached (stencil construction).
-            if (character >= '0' && character <= '9')
-            {
-                string[] digits = { "abcedf", "bc", "abged", "abgcd", "fgbc", "afgcd", "afgecd", "abc", "abcdefg", "abfgcd" };
-                var strokes = new Dictionary<char, Point[]> {
-                    ['a'] = Stroke(.1,1,.9,1), ['b'] = Stroke(1,.92,1,.58),
-                    ['c'] = Stroke(1,.42,1,.08), ['d'] = Stroke(.9,0,.1,0),
-                    ['e'] = Stroke(0,.08,0,.42), ['f'] = Stroke(0,.58,0,.92),
-                    ['g'] = Stroke(.1,.5,.9,.5) };
-                return digits[character - '0'].Select(segment => strokes[segment]).ToArray();
-            }
             switch (character)
             {
+                case '0': return new[] { Stroke(.35,1,.15,1,0,.85,0,.15,.15,0,.85,0,1,.15,1,.85,.85,1,.65,1) };
+                case '1': return new[] { Stroke(.15,.75,.5,1,.5,0), Stroke(.1,0,.9,0) };
+                case '2': return new[] { Stroke(0,.85,.15,1,.85,1,1,.85,1,.65,0,.15,0,0,1,0) };
+                case '3': return new[] { Stroke(0,1,.85,1,1,.85,1,.65,.75,.5,.25,.5), Stroke(.75,.5,1,.35,1,.15,.85,0,0,0) };
+                case '4': return new[] { Stroke(.8,0,.8,1,0,.35,.65,.35), Stroke(.95,.35,1,.35) };
+                case '5': return new[] { Stroke(1,1,0,1,0,.55,.85,.55,1,.4,1,.15,.85,0,0,0) };
+                case '6': return new[] { Stroke(.9,1,.25,1,0,.75,0,.15,.15,0,.85,0,1,.15,1,.4,.85,.55,.15,.55) };
+                case '7': return new[] { Stroke(0,1,1,1,.25,0) };
+                case '8': return new[] { Stroke(.35,.55,0,.75,0,.85,.15,1,.85,1,1,.85,1,.75,.65,.55), Stroke(.35,.45,0,.25,0,.15,.15,0,.85,0,1,.15,1,.25,.65,.45) };
+                case '9': return new[] { Stroke(.1,0,.75,0,1,.25,1,.85,.85,1,.15,1,0,.85,0,.6,.15,.45,.85,.45) };
                 case 'A': return new[] { Stroke(0,0,.5,1,1,0), Stroke(.3,.45,.7,.45) };
                 case 'B': return new[] { Stroke(0,0,0,1,.7,1,1,.8,.7,.55,.1,.55), Stroke(.1,.45,.7,.45,1,.2,.7,0,.1,0) };
                 case 'C': return new[] { Stroke(1,1,0,1,0,0,1,0) };
@@ -425,7 +428,7 @@ namespace VanyaTools.Native
                 case 'P': return new[] { Stroke(0,0,0,1,1,1,1,.5,.1,.5) };
                 case 'Q': return new[] { Stroke(.4,1,0,1,0,0,1,0,1,1,.6,1), Stroke(.6,.3,1,0) };
                 case 'R': return new[] { Stroke(0,0,0,1,1,1,1,.5,.1,.5), Stroke(.55,.4,1,0) };
-                case 'S': return new[] { Stroke(1,1,0,1,0,.5,1,.5,1,0,0,0) };
+                case 'S': return new[] { Stroke(1,1,.15,1,0,.85,0,.65,.15,.5,.85,.5,1,.35,1,.15,.85,0,0,0) };
                 case 'T': return new[] { Stroke(0,1,1,1), Stroke(.5,.9,.5,0) };
                 case 'U': return new[] { Stroke(0,1,0,0,1,0,1,1) };
                 case 'V': return new[] { Stroke(0,1,.5,0,1,1) };
@@ -436,6 +439,7 @@ namespace VanyaTools.Native
                 case '-': return new[] { Stroke(0,.5,1,.5) };
                 case '/': return new[] { Stroke(0,0,1,1) };
                 case '+': return new[] { Stroke(0,.5,1,.5), Stroke(.5,0,.5,1) };
+                case '.': return new[] { Stroke(.45,0,.55,0) };
                 default: throw new InvalidOperationException("Символ «" + character +
                     "» не поддерживается на прорезной бирке. Используйте латинский размер или рост цифрами.");
             }

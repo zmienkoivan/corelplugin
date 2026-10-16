@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 
 namespace VanyaTools.Native
 {
@@ -23,10 +25,21 @@ namespace VanyaTools.Native
 
     internal sealed class ColorProofService
     {
+        private sealed class Variant
+        {
+            public int[] Values;
+            public string Caption;
+        }
+
+        private sealed class SampleRow
+        {
+            public string Title;
+            public List<Variant> Samples = new List<Variant>();
+        }
+
         public ColorProofReference FromSelection()
         {
-            dynamic app = CorelApp.Get();
-            dynamic doc = app.ActiveDocument;
+            dynamic app = CorelApp.Get(), doc = app.ActiveDocument;
             if (doc == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
             dynamic selection = app.ActiveSelectionRange;
             if ((int)selection.Count != 1)
@@ -40,320 +53,289 @@ namespace VanyaTools.Native
         public ColorProofReference FromPalette()
         {
             dynamic app = CorelApp.Get();
-            if (app.ActiveDocument == null)
-                throw new InvalidOperationException("Откройте документ CorelDRAW.");
+            if (app.ActiveDocument == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
             dynamic color = app.CreateColor();
             if (!Convert.ToBoolean(color.UserAssignEx())) return null;
             return CopyReference(app, color, "Цвет палитры");
         }
 
-        public ColorProofReference BlueStartingColor()
-        {
-            dynamic app = CorelApp.Get();
-            if (app.ActiveDocument == null)
-                throw new InvalidOperationException("Откройте документ CorelDRAW.");
-            return CopyReference(app, app.CreateCMYKColor(100, 70, 0, 0),
-                "Синий · стартовый C100 M70 Y0 K0");
-        }
-
-        public ColorProofReference BlueRgbStartingColor()
-        {
-            dynamic app = CorelApp.Get();
-            if (app.ActiveDocument == null)
-                throw new InvalidOperationException("Откройте документ CorelDRAW.");
-            return CopyReference(app, app.CreateRGBColor(20, 60, 255),
-                "Синий · стартовый R20 G60 B255");
-        }
-
         public int[] Components(ColorProofReference reference, bool cmyk)
         {
-            dynamic app = CorelApp.Get();
-            dynamic converted = app.CreateColor();
+            if (reference == null) throw new InvalidOperationException("Сначала выберите эталонный цвет.");
+            dynamic app = CorelApp.Get(), converted = app.CreateColor();
             converted.CopyAssign(reference.Color);
-            if (cmyk)
-            {
-                converted.ConvertToCMYK();
-                return new[] { (int)converted.CMYKCyan, (int)converted.CMYKMagenta,
-                    (int)converted.CMYKYellow, (int)converted.CMYKBlack };
-            }
-            converted.ConvertToRGB();
-            return new[] { (int)converted.RGBRed, (int)converted.RGBGreen,
-                (int)converted.RGBBlue };
+            if (cmyk) converted.ConvertToCMYK(); else converted.ConvertToRGB();
+            return ReadComponents((object)converted, cmyk);
         }
 
-        public void Create(ColorProofReference reference, ColorProofOptions options)
+        private static int[] ReadComponents(object colorObject, bool cmyk)
         {
-            if (reference == null) throw new InvalidOperationException("Сначала выберите эталонный цвет.");
-            if (!options.AllChannels && options.HorizontalChannel == options.VerticalChannel)
-                throw new InvalidOperationException("Выберите разные каналы для горизонтали и вертикали.");
-            if (options.Cells != 3 && options.Cells != 5 && options.Cells != 7)
-                throw new InvalidOperationException("Размер сетки: 3, 5 или 7 клеток.");
-            if (options.SquareMm < 12 || options.SquareMm > 40)
-                throw new InvalidOperationException("Размер плашки: от 12 до 40 мм.");
-            if (options.Step < 1 || options.Step > (options.Cmyk ? 50 : 127))
-                throw new InvalidOperationException("Проверьте шаг изменения цвета.");
+            dynamic color = colorObject;
+            return cmyk ? new[] { (int)color.CMYKCyan, (int)color.CMYKMagenta,
+                (int)color.CMYKYellow, (int)color.CMYKBlack } :
+                new[] { (int)color.RGBRed, (int)color.RGBGreen, (int)color.RGBBlue };
+        }
 
-            dynamic app = CorelApp.Get();
-            dynamic doc = app.ActiveDocument;
-            if (doc == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
+        internal static int[] NearbyValues(int center, int step, int cells, int limit) =>
+            Enumerable.Range(-cells / 2, cells).Select(offset => center + offset * step)
+                .Where(value => value >= 0 && value <= limit).Distinct().ToArray();
+
+        public int Create(ColorProofReference reference, ColorProofOptions options)
+        {
+            Check(reference, options.Cells, options.SquareMm);
             int[] center = Components(reference, options.Cmyk);
             int limit = options.Cmyk ? 100 : 255;
-            double gapX = 5.0;
-            double rowHeight = options.SquareMm + (options.AllChannels ? 19.0 : 11.0);
-            int rows = options.AllChannels ? center.Length : options.Cells;
-            double totalWidth = options.Cells * options.SquareMm + (options.Cells - 1) * gapX;
-            double totalHeight = 35.0 + rows * rowHeight;
-            int oldUnit = (int)doc.Unit;
-            dynamic range = app.CreateShapeRange();
-            bool commandStarted = false;
+            if (options.Step < 1 || options.Step > limit)
+                throw new InvalidOperationException("Шаг канала: от 1 до " + limit + ".");
+            if (options.HorizontalChannel < 0 || options.HorizontalChannel >= center.Length ||
+                options.VerticalChannel < 0 || options.VerticalChannel >= center.Length ||
+                !options.AllChannels && options.HorizontalChannel == options.VerticalChannel)
+                throw new InvalidOperationException("Выберите разные каналы для горизонтали и вертикали.");
+            string[] names = ChannelNames(options.Cmyk);
+            var rows = new List<SampleRow>();
+            if (options.AllChannels)
+            {
+                for (int channel = 0; channel < center.Length; channel++)
+                {
+                    var row = new SampleRow { Title = names[channel] + " · остальные каналы эталона сохранены" };
+                    foreach (int value in NearbyValues(center[channel], options.Step, options.Cells, limit))
+                    {
+                        var values = (int[])center.Clone(); values[channel] = value;
+                        row.Samples.Add(new Variant { Values = values,
+                            Caption = names[channel] + " " + Delta(value - center[channel]) });
+                    }
+                    rows.Add(row);
+                }
+            }
+            else
+            {
+                int x = options.HorizontalChannel, y = options.VerticalChannel;
+                int[] horizontal = NearbyValues(center[x], options.Step, options.Cells, limit);
+                foreach (int valueY in NearbyValues(center[y], options.Step, options.Cells, limit).Reverse())
+                {
+                    var row = new SampleRow { Title = names[y] + " " + Delta(valueY - center[y]) +
+                        " · по горизонтали " + names[x] + " от − к +" };
+                    foreach (int valueX in horizontal)
+                    {
+                        var values = (int[])center.Clone(); values[x] = valueX; values[y] = valueY;
+                        row.Samples.Add(new Variant { Values = values });
+                    }
+                    rows.Add(row);
+                }
+            }
+            return Render(reference, options.Cmyk, rows, options.SquareMm,
+                "Каналы относительно эталона · шаг " + options.Step + (options.Cmyk ? "%" : ""));
+        }
+
+        public int CreateCombinations(ColorProofReference reference, bool cmyk, int[][] levels, double squareMm)
+        {
+            Check(reference, 3, squareMm);
+            int[] center = Components(reference, cmyk);
+            int limit = cmyk ? 100 : 255;
+            if (levels == null || levels.Length != center.Length)
+                throw new InvalidOperationException("Заполните отклонения всех каналов.");
+            for (int channel = 0; channel < levels.Length; channel++)
+            {
+                int[] values = levels[channel];
+                if (values == null || values.Length == 0 || values.Length > 9 ||
+                    values.Any(v => v < 0 || v > limit) || !values.Contains(center[channel]))
+                    throw new InvalidOperationException("Списки каналов должны включать эталон и допустимые значения.");
+            }
+            int total = levels.Aggregate(1, (count, values) => count * values.Distinct().Count());
+            if (total > 500) throw new InvalidOperationException("Максимум 500 плашек. Сократите отклонения каналов.");
+            const double gap = 3;
+            int columns = Math.Min(total, (int)Math.Ceiling(Math.Sqrt(total * (squareMm + 18) / (squareMm + gap))));
+            var rows = new List<SampleRow>();
+            for (int index = 0; index < total; index++)
+            {
+                if (index % columns == 0) rows.Add(new SampleRow());
+                int remainder = index;
+                var values = new int[center.Length];
+                for (int channel = 0; channel < values.Length; channel++)
+                {
+                    int[] distinct = levels[channel].Distinct().ToArray();
+                    values[channel] = distinct[remainder % distinct.Length]; remainder /= distinct.Length;
+                }
+                rows[rows.Count - 1].Samples.Add(new Variant { Values = values });
+            }
+            return Render(reference, cmyk, rows, squareMm, "Все сочетания отклонений от эталона");
+        }
+
+        public int CreateVisual(ColorProofReference reference, bool cmyk, int cells, double squareMm,
+            double hueStep, double lightStep, double saturationStep)
+        {
+            Check(reference, cells, squareMm);
+            if (!ValidStep(hueStep, 30) || !ValidStep(lightStep, 20) || !ValidStep(saturationStep, 30))
+                throw new InvalidOperationException("Шаг оттенка: 1–30°, светлоты: 1–20%, насыщенности: 1–30%.");
+            int[] rgb = Components(reference, false), center = Components(reference, cmyk);
+            ToHsl(rgb, out double hue, out double saturation, out double lightness);
+            double[] steps = { lightStep, hueStep, saturationStep };
+            string[] titles = { "Темнее ← ЭТАЛОН → светлее", "Оттенок − ← ЭТАЛОН → оттенок +",
+                "Менее насыщенный ← ЭТАЛОН → более насыщенный" };
+            var rows = new List<SampleRow>();
+            dynamic app = CorelApp.Get();
+            for (int axis = 0; axis < 3; axis++)
+            {
+                var unique = new HashSet<string> { String.Join(",", center) };
+                var variants = new SortedDictionary<int, Variant> {
+                    [0] = new Variant { Values = (int[])center.Clone(), Caption = "ЭТАЛОН · 0" } };
+                for (int offset = -cells / 2; offset <= cells / 2; offset++)
+                {
+                    if (offset == 0) continue;
+                    // Achromatic references have no hue. Do not invent an
+                    // arbitrary red starting hue when increasing saturation.
+                    if (axis != 0 && saturation < 1e-9) continue;
+                    double h = hue, s = saturation, l = lightness;
+                    if (axis == 0) l += offset * lightStep / 100;
+                    else if (axis == 1) h = (h + offset * hueStep + 360) % 360;
+                    else s += offset * saturationStep / 100;
+                    if (l < 0 || l > 1 || s < 0 || s > 1) continue;
+                    int[] candidate = FromHsl(h, s, l);
+                    dynamic color = app.CreateRGBColor(candidate[0], candidate[1], candidate[2]);
+                    if (cmyk) color.ConvertToCMYK();
+                    int[] values = ReadComponents((object)color, cmyk);
+                    if (!unique.Add(String.Join(",", values))) continue;
+                    variants.Add(offset, new Variant { Values = values,
+                        Caption = Delta(offset * steps[axis]) + (axis == 1 ? "°" : "%") });
+                }
+                rows.Add(new SampleRow { Title = titles[axis], Samples = variants.Values.ToList() });
+            }
+            return Render(reference, cmyk, rows, squareMm,
+                "Наглядный поиск HSL · каждый ряд меняет одно свойство");
+        }
+
+        private static bool ValidStep(double value, double max) =>
+            !Double.IsNaN(value) && !Double.IsInfinity(value) && value >= 1 && value <= max;
+
+        private static void ToHsl(int[] rgb, out double hue, out double saturation, out double lightness)
+        {
+            double r = rgb[0] / 255.0, g = rgb[1] / 255.0, b = rgb[2] / 255.0;
+            double max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b));
+            double difference = max - min;
+            lightness = (max + min) / 2; hue = 0; saturation = 0;
+            if (difference < 1e-12) return;
+            saturation = difference / (1 - Math.Abs(2 * lightness - 1));
+            hue = max == r ? (g - b) / difference : max == g ? (b - r) / difference + 2 : (r - g) / difference + 4;
+            hue = (hue * 60 + 360) % 360;
+        }
+
+        private static int[] FromHsl(double hue, double saturation, double lightness)
+        {
+            double c = (1 - Math.Abs(2 * lightness - 1)) * saturation;
+            double x = c * (1 - Math.Abs((hue / 60) % 2 - 1));
+            double m = lightness - c / 2;
+            double r = 0, g = 0, b = 0;
+            if (hue < 60) { r = c; g = x; }
+            else if (hue < 120) { r = x; g = c; }
+            else if (hue < 180) { g = c; b = x; }
+            else if (hue < 240) { g = x; b = c; }
+            else if (hue < 300) { r = x; b = c; }
+            else { r = c; b = x; }
+            return new[] { r, g, b }.Select(v => (int)Math.Round(Math.Max(0, Math.Min(1, v + m)) * 255)).ToArray();
+        }
+
+        private int Render(ColorProofReference reference, bool cmyk, IList<SampleRow> rows,
+            double squareMm, string title)
+        {
+            dynamic app = CorelApp.Get(), doc = app.ActiveDocument;
+            if (doc == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
+            int count = rows.Sum(row => row.Samples.Count), oldUnit = (int)doc.Unit;
+            object originalPage = doc.ActivePage;
+            bool started = false, oldOptimization = Convert.ToBoolean(app.Optimization);
+            dynamic page = null;
             try
             {
-                doc.BeginCommandGroup("Vanya Tools - color proof");
-                commandStarted = true;
                 doc.Unit = CorelConstants.CdrMillimeter;
-                dynamic page = doc.ActivePage;
-                if ((double)page.SizeWidth < totalWidth + 20 || (double)page.SizeHeight < totalHeight + 10)
-                    throw new InvalidOperationException("Сетка не помещается на странице. Уменьшите плашку или число клеток.");
-                dynamic layer = doc.ActiveLayer;
-                double left = 10.0;
-                double top = (double)page.SizeHeight - 10.0;
-
-                AddSwatch(layer, range, left, top, 20, reference.Color);
-                AddText(layer, range, left + 25, top - 5,
-                    "ЭТАЛОН" + (reference.IsSpot ? " · плашечный" : ""), 10f, false);
-                AddText(layer, range, left + 25, top - 12,
-                    reference.Name, 8f, false);
-                AddText(layer, range, left + 25, top - 19,
-                    FormatValues(center, options.Cmyk).Replace("\r", "   "), 7f, false);
-
-                string[] channels = options.Cmyk ? new[] { "C", "M", "Y", "K" } : new[] { "R", "G", "B" };
-                AddText(layer, range, left, top - 29,
-                    (options.AllChannels ? "Все каналы" :
-                    "Горизонталь: " + channels[options.HorizontalChannel] + " · вертикаль: " +
-                    channels[options.VerticalChannel]) + " · шаг: " + options.Step +
-                    (options.Cmyk ? "%" : ""), 7f, false);
-
-                int middle = options.Cells / 2;
-                for (int row = 0; row < rows; row++)
+                app.Optimization = true;
+                doc.BeginCommandGroup("Vanya Tools — цветопроба относительно эталона"); started = true;
+                double width = Math.Max(180, 16 + rows.Max(row => row.Samples.Count) * (squareMm + 3) - 3);
+                double height = 53 + rows.Count * (squareMm + 18);
+                page = doc.AddPages(1); page.Activate(); page.SetSize(width, height);
+                page.Name = "Цветопроба " + (cmyk ? "CMYK" : "RGB") + " · " + count;
+                dynamic layer = doc.ActiveLayer, range = app.CreateShapeRange();
+                double left = Convert.ToDouble(page.LeftX) + 8, top = Convert.ToDouble(page.TopY) - 8;
+                int[] center = Components(reference, cmyk);
+                AddSwatch(layer, range, left, top, 18, reference.Color);
+                AddText(layer, range, left + 23, top - 4, "ЭТАЛОН · " + reference.Name +
+                    (reference.IsSpot ? " · плашечный" : ""), 9f, false);
+                AddText(layer, range, left + 23, top - 11,
+                    FormatValues(center, cmyk).Replace("\r", "  "), 7f, false);
+                AddText(layer, range, left, top - 26, title, 7f, false);
+                AddText(layer, range, left, top - 32,
+                    (cmyk ? "CMYK" : "RGB") + " · " + count + " плашек · эталон выделен тёмной рамкой", 7f, false);
+                for (int row = 0; row < rows.Count; row++)
                 {
-                    double rowTop = top - 35.0 - row * rowHeight;
-                    if (options.AllChannels)
-                        AddText(layer, range, left, rowTop - 3.0,
-                            channels[row] + " · " + ChannelName(options.Cmyk, row), 8f, false);
-                    for (int column = 0; column < options.Cells; column++)
+                    double rowTop = top - 40 - row * (squareMm + 18);
+                    if (!String.IsNullOrEmpty(rows[row].Title))
+                        AddText(layer, range, left, rowTop, rows[row].Title, 7f, false);
+                    for (int column = 0; column < rows[row].Samples.Count; column++)
                     {
-                        int[] values = (int[])center.Clone();
-                        if (options.AllChannels)
-                            values[row] = Clamp(center[row] + (column - middle) * options.Step, limit);
-                        else
-                        {
-                            values[options.HorizontalChannel] = Clamp(center[options.HorizontalChannel] +
-                                (column - middle) * options.Step, limit);
-                            values[options.VerticalChannel] = Clamp(center[options.VerticalChannel] +
-                                (middle - row) * options.Step, limit);
-                        }
-                        dynamic color = options.Cmyk
-                            ? app.CreateCMYKColor(values[0], values[1], values[2], values[3])
-                            : app.CreateRGBColor(values[0], values[1], values[2]);
-                        double x = left + column * (options.SquareMm + gapX);
-                        double y = rowTop - (options.AllChannels ? 8.0 : 0.0);
-                        bool centerVariant = column == middle && (options.AllChannels || row == middle);
-                        AddSwatch(layer, range, x, y, options.SquareMm, color, centerVariant);
-                        string label = FormatValues(values, options.Cmyk);
-                        dynamic text = AddText(layer, range, 0, 0, label, 7f, true);
-                        if ((double)text.SizeWidth > options.SquareMm)
-                        {
-                            double scale = options.SquareMm / (double)text.SizeWidth;
-                            text.SetSize(options.SquareMm, (double)text.SizeHeight * scale);
-                        }
-                        text.Move(x + (options.SquareMm - (double)text.SizeWidth) / 2.0 -
-                            (double)text.LeftX, y - options.SquareMm - 8.0 - (double)text.BottomY);
+                        Variant variant = rows[row].Samples[column]; int[] v = variant.Values;
+                        dynamic color = cmyk ? app.CreateCMYKColor(v[0], v[1], v[2], v[3]) : app.CreateRGBColor(v[0], v[1], v[2]);
+                        double x = left + column * (squareMm + 3), y = rowTop - 4;
+                        AddSwatch(layer, range, x, y, squareMm, color, v.SequenceEqual(center));
+                        string caption = FormatValues(v, cmyk) + (String.IsNullOrEmpty(variant.Caption) ? "" : "\r" + variant.Caption);
+                        dynamic text = AddText(layer, range, 0, 0, caption, 6.5f, true);
+                        if ((double)text.SizeWidth > squareMm)
+                            text.SetSize(squareMm, (double)text.SizeHeight * squareMm / (double)text.SizeWidth);
+                        text.Move(x + (squareMm - (double)text.SizeWidth) / 2 - (double)text.LeftX,
+                            y - squareMm - 10 - (double)text.BottomY);
                     }
                 }
                 range.CreateSelection();
-                try { app.ActiveWindow.Refresh(); } catch { }
+                Log.Info("Color proof: " + title + ", model=" + (cmyk ? "CMYK" : "RGB") + ", samples=" + count);
+                return count;
             }
             catch
             {
-                try { range.Delete(); } catch (Exception ex) { Log.Error("Color proof rollback failed.", ex); }
+                if (page != null) try { page.Delete(); } catch (Exception ex) { Log.Error("Color proof rollback failed.", ex); }
+                try { ((dynamic)originalPage).Activate(); } catch { }
                 throw;
             }
             finally
             {
+                try { if (started) doc.EndCommandGroup(); } catch (Exception ex) { Log.Error("Color proof command group failed.", ex); }
                 try { doc.Unit = oldUnit; } catch { }
-                if (commandStarted)
-                    try { doc.EndCommandGroup(); } catch (Exception ex) { Log.Error("Color proof command group failed.", ex); }
+                try { app.Optimization = oldOptimization; } catch { }
             }
         }
 
-        public int CreateCombinations(ColorProofReference reference, bool cmyk,
-            int[][] levels, double squareMm)
+        private static void Check(ColorProofReference reference, int cells, double squareMm)
         {
             if (reference == null) throw new InvalidOperationException("Сначала выберите эталонный цвет.");
-            int channelCount = cmyk ? 4 : 3;
-            if (levels == null || levels.Length != channelCount)
-                throw new InvalidOperationException("Заполните значения всех каналов.");
-            int maxValue = cmyk ? 100 : 255;
-            foreach (int[] values in levels)
-                if (values == null || values.Length == 0 || values.Length > 9 ||
-                    Array.Exists(values, value => value < 0 || value > maxValue))
-                    throw new InvalidOperationException("Проверьте значения каналов цветопробы.");
-            if (squareMm < 12 || squareMm > 40)
+            if (cells != 3 && cells != 5 && cells != 7) throw new InvalidOperationException("Число вариантов: 3, 5 или 7.");
+            if (Double.IsNaN(squareMm) || Double.IsInfinity(squareMm) || squareMm < 12 || squareMm > 40)
                 throw new InvalidOperationException("Размер плашки: от 12 до 40 мм.");
-            int totalSwatches = 1;
-            foreach (int[] values in levels) totalSwatches *= values.Length;
-            if (totalSwatches > 500)
-                throw new InvalidOperationException("Слишком много комбинаций. Уменьшите списки до 500 плашек.");
-
-            dynamic app = CorelApp.Get();
-            dynamic doc = app.ActiveDocument;
-            if (doc == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
-            dynamic originalPage = doc.ActivePage;
-            int oldUnit = (int)doc.Unit;
-            bool commandStarted = false;
-            dynamic createdPage = null;
-            try
-            {
-                doc.BeginCommandGroup("Vanya Tools - color combinations");
-                commandStarted = true;
-                doc.Unit = CorelConstants.CdrMillimeter;
-                const double gapX = 2.0;
-                const double labelSpace = 7.0;
-                double columnPitch = squareMm + gapX;
-                double rowPitch = squareMm + labelSpace;
-                int columns = Math.Min(totalSwatches, Math.Max(1,
-                    (int)Math.Ceiling(Math.Sqrt(totalSwatches * rowPitch / columnPitch))));
-                int rows = (totalSwatches + columns - 1) / columns;
-                double tableWidth = columns * squareMm + (columns - 1) * gapX;
-                double pageWidth = Math.Max(140.0, tableWidth + 16.0);
-                double pageHeight = Math.Max(100.0, 47.0 + rows * rowPitch);
-                int[] referenceValues = Components(reference, cmyk);
-                createdPage = doc.AddPages(1);
-                createdPage.Activate();
-                createdPage.SetSize(pageWidth, pageHeight);
-                createdPage.Name = "Цветопроба " + (cmyk ? "CMYK" : "RGB") +
-                    " · " + totalSwatches;
-                dynamic layer = doc.ActiveLayer;
-                dynamic range = app.CreateShapeRange();
-                double left = 8.0;
-                double top = pageHeight - 8.0;
-                AddSwatch(layer, range, left, top, 16.0, reference.Color);
-                AddText(layer, range, left + 20.0, top - 4.0,
-                    "ЭТАЛОН" + (reference.IsSpot ? " · плашечный" : ""), 9f, false);
-                AddText(layer, range, left + 20.0, top - 10.0, reference.Name, 7f, false);
-                AddText(layer, range, left + 20.0, top - 16.0,
-                    FormatValues(referenceValues, cmyk).Replace("\r", "  "), 6.5f, false);
-                AddText(layer, range, left, top - 25.0,
-                    (cmyk ? "CMYK" : "RGB") + " · все сочетания · " + totalSwatches + " плашек", 7f, false);
-
-                for (int index = 0; index < totalSwatches; index++)
-                {
-                    int remainder = index;
-                    var values = new int[channelCount];
-                    for (int channel = 0; channel < channelCount; channel++)
-                    {
-                        values[channel] = levels[channel][remainder % levels[channel].Length];
-                        remainder /= levels[channel].Length;
-                    }
-                    dynamic color = cmyk
-                        ? app.CreateCMYKColor(values[0], values[1], values[2], values[3])
-                        : app.CreateRGBColor(values[0], values[1], values[2]);
-                    int row = index / columns;
-                    int column = index % columns;
-                    double x = left + column * columnPitch;
-                    double y = top - 31.0 - row * rowPitch;
-                    AddSwatch(layer, range, x, y, squareMm, color,
-                        SameValues(values, referenceValues));
-                    dynamic label = AddText(layer, range, 0, 0,
-                        FormatValues(values, cmyk), 6.5f, true);
-                    if ((double)label.SizeWidth > squareMm)
-                    {
-                        double scale = squareMm / (double)label.SizeWidth;
-                        label.SetSize(squareMm, (double)label.SizeHeight * scale);
-                    }
-                    label.Move(x + (squareMm - (double)label.SizeWidth) / 2.0 -
-                        (double)label.LeftX, y - squareMm - 5.5 - (double)label.BottomY);
-                }
-                range.CreateSelection();
-                try { app.ActiveWindow.Refresh(); } catch { }
-                return 1;
-            }
-            catch
-            {
-                if (createdPage != null)
-                    try { createdPage.Delete(); }
-                    catch (Exception ex) { Log.Error("Color combination page rollback failed.", ex); }
-                try { originalPage.Activate(); } catch { }
-                throw;
-            }
-            finally
-            {
-                try { doc.Unit = oldUnit; } catch { }
-                if (commandStarted)
-                    try { doc.EndCommandGroup(); } catch (Exception ex) { Log.Error("Color combination command group failed.", ex); }
-            }
         }
 
         private static ColorProofReference CopyReference(dynamic app, dynamic source, string fallbackName)
         {
-            dynamic color = app.CreateColor();
-            color.CopyAssign(source);
+            dynamic color = app.CreateColor(); color.CopyAssign(source);
             bool spot = Convert.ToBoolean(color.IsSpot);
             string name = spot ? Convert.ToString(color.SpotColorName) : fallbackName;
-            if (String.IsNullOrWhiteSpace(name)) name = spot ? "Плашечный цвет" : fallbackName;
-            return new ColorProofReference { Color = color, Name = name, IsSpot = spot };
+            return new ColorProofReference { Color = color, Name = String.IsNullOrWhiteSpace(name) ? fallbackName : name, IsSpot = spot };
         }
 
-        private static dynamic AddSwatch(dynamic layer, dynamic range, double left,
-            double top, double size, dynamic color, bool highlight = false)
+        private static dynamic AddSwatch(dynamic layer, dynamic range, double left, double top, double size, dynamic color, bool highlight = false)
         {
-            dynamic border = layer.CreateRectangle2(left, top - size, size, size);
-            range.Add(border);
-            border.Fill.UniformColor.RGBAssign(highlight ? 30 : 150,
-                highlight ? 30 : 150, highlight ? 30 : 150);
+            dynamic border = layer.CreateRectangle2(left, top - size, size, size); range.Add(border);
+            border.Fill.UniformColor.RGBAssign(highlight ? 30 : 150, highlight ? 30 : 150, highlight ? 30 : 150);
             border.Outline.SetNoOutline();
-            dynamic swatch = layer.CreateRectangle2(left + 0.3, top - size + 0.3,
-                size - 0.6, size - 0.6);
-            range.Add(swatch);
-            swatch.Fill.ApplyUniformFill(color);
-            swatch.Outline.SetNoOutline();
-            return swatch;
+            dynamic swatch = layer.CreateRectangle2(left + .3, top - size + .3, size - .6, size - .6); range.Add(swatch);
+            swatch.Fill.ApplyUniformFill(color); swatch.Outline.SetNoOutline(); return swatch;
         }
 
-        private static dynamic AddText(dynamic layer, dynamic range, double left,
-            double bottom, string value, float points, bool center)
+        private static dynamic AddText(dynamic layer, dynamic range, double left, double bottom, string value, float points, bool center)
         {
-            dynamic text = layer.CreateArtisticTextWide(left, bottom, value, 0, -1, "Arial", points);
-            range.Add(text);
-            text.Fill.UniformColor.RGBAssign(0, 0, 0);
-            text.Outline.SetNoOutline();
-            if (center) text.Text.Story.Alignment = 3;
-            return text;
+            dynamic text = layer.CreateArtisticTextWide(left, bottom, value, 0, -1, "Arial", points); range.Add(text);
+            text.Fill.UniformColor.RGBAssign(0, 0, 0); text.Outline.SetNoOutline();
+            if (center) text.Text.Story.Alignment = 3; return text;
         }
 
-        private static int Clamp(int value, int max) { return Math.Max(0, Math.Min(max, value)); }
-
-        private static bool SameValues(int[] left, int[] right)
-        {
-            if (left.Length != right.Length) return false;
-            for (int i = 0; i < left.Length; i++) if (left[i] != right[i]) return false;
-            return true;
-        }
-
-        private static string ChannelName(bool cmyk, int channel)
-        {
-            return (cmyk
-                ? new[] { "голубой", "пурпурный", "жёлтый", "чёрный" }
-                : new[] { "красный", "зелёный", "синий" })[channel];
-        }
-
-        private static string FormatValues(int[] values, bool cmyk)
-        {
-            if (cmyk)
-                return String.Format(CultureInfo.InvariantCulture,
-                    "C:{0} M:{1}\rY:{2} K:{3}", values[0], values[1], values[2], values[3]);
-            return String.Format(CultureInfo.InvariantCulture,
-                "R:{0} G:{1}\rB:{2}", values[0], values[1], values[2]);
-        }
+        private static string Delta(double value) => value == 0 ? "0" : value.ToString("+0.##;-0.##", CultureInfo.InvariantCulture);
+        private static string[] ChannelNames(bool cmyk) => cmyk ? new[] { "C", "M", "Y", "K" } : new[] { "R", "G", "B" };
+        private static string FormatValues(int[] values, bool cmyk) => cmyk
+            ? String.Format(CultureInfo.InvariantCulture, "C:{0} M:{1}\rY:{2} K:{3}", values[0], values[1], values[2], values[3])
+            : String.Format(CultureInfo.InvariantCulture, "R:{0} G:{1}\rB:{2}", values[0], values[1], values[2]);
     }
 }

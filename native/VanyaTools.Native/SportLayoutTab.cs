@@ -33,6 +33,12 @@ namespace VanyaTools.Native
             public bool? RotateSleeves { get; set; }
             public bool? CutAllow180 { get; set; }
             public bool? CutSizeTags { get; set; }
+            public string TagWidth { get; set; }
+            public string TagHeight { get; set; }
+            public string TagBridge { get; set; }
+            public string TagLetter { get; set; }
+            public string TagFirstOffset { get; set; }
+            public string TagSizeStep { get; set; }
             public string SheetWidth { get; set; }
             public string CutSheetWidth { get; set; }
             public string MaxPageLength { get; set; }
@@ -72,6 +78,7 @@ namespace VanyaTools.Native
         private readonly TextBox _frontArt, _backArt, _leftSleeveArt, _rightSleeveArt,
             _neckArt, _modelPath;
         private readonly TextBox _sheetWidth, _cutSheetWidth, _maxPageLength, _gap, _printFolder;
+        private readonly TextBox _tagWidth, _tagHeight, _tagBridge, _tagLetter, _tagFirstOffset, _tagSizeStep;
         private readonly ComboBox _nameSide, _frontCase, _batchSize, _printQuality;
         // Kept only for older masters with rectangle zones; text samples use Corel attributes.
         private SportTextStyle _legacyNameStyle = LegacyStyle("Arial", 72, false);
@@ -81,6 +88,7 @@ namespace VanyaTools.Native
         private readonly CheckBox _keepGuides, _rotateSleeves, _cutAllow180, _cutSizeTags;
         private readonly TextBlock _count, _progress;
         private readonly Button _prepare, _generate, _generateCut, _saveCut, _exportPrint, _choosePrintFolder;
+        private readonly Button _tagSamples;
         private bool _loading, _busy;
 
         public SportLayoutTab(Action<string, bool> status)
@@ -314,12 +322,28 @@ namespace VanyaTools.Native
             _cutAllow180 = new CheckBox { Content = "Разрешить поворот деталей резки на 180°",
                 FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
             panel.Children.Add(_cutAllow180);
-            _cutSizeTags = new CheckBox { Content = "Съёмное ушко с прорезным размером на каждой детали",
+            _cutSizeTags = new CheckBox { Content = "Съёмный язычок с прорезным размером на каждой детали",
                 FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
             panel.Children.Add(_cutSizeTags);
-            panel.Children.Add(Note("Ушко от 12 × 6 мм, две перемычки 2 × 2 мм. Размер высотой 3 мм " +
-                "прорезается одиночными линиями с трафаретными разрывами. Ушко крепится снаружи " +
-                "на прямом участке, по возможности снизу, и учитывается в раскладке. Исходные лекала не меняются."));
+            _tagWidth = TagField(panel, "Ширина язычка, мм", "24");
+            _tagHeight = TagField(panel, "Высота язычка, мм (не меньше 12)", "12");
+            _tagBridge = TagField(panel, "Длина каждого мостика, мм", "2");
+            _tagLetter = TagField(panel, "Высота буквы, мм", "8");
+            _tagFirstOffset = TagField(panel, "Отступ первого размера слева, мм", "10");
+            _tagSizeStep = TagField(panel, "Шаг следующих размеров, мм", "20");
+            panel.Children.Add(Note("П-образный язычок без ножек; два непрорезанных мостика на линии детали. " +
+                "Надпись — однолинейные чертёжные знаки с трафаретными разрывами. " +
+                "Для длинного размера ширина увеличивается, высота букв сохраняется."));
+            panel.Children.Add(Note("Левый угол крепления: 10, 30, 50 мм и далее от левого края silhouette " +
+                "до поворота в раскладке. Порядок размеров — от меньшей площади силуэта переда к большей " +
+                "по всем подготовленным размерам. Отступ и шаг можно изменить. " +
+                "Если на заданном месте нет свободного прямого нижнего края, появится сообщение с размером и деталью."));
+            _tagSamples = Button("Лист язычков для пробной резки", CreateTagSamples);
+            panel.Children.Add(_tagSamples);
+            panel.Children.Add(Note("Новый лист: три ширины (текущая и ±4 мм), мостики 1 / 1,5 / 2 / 2,5 / 3 мм " +
+                "и заданная длина; ниже — примеры размеров S, XS, XL, XXL, 116, 128, 152. " +
+                "Код 24X12/B2 означает язычок 24×12 мм, два мостика по 2 мм. " +
+                "Все линии, включая код, — сквозная резка. Сохраните лист кнопкой CDR ниже."));
             _generateCut = Button("Создать раскладку резки", GenerateCutting);
             panel.Children.Add(_generateCut);
             _saveCut = Button("Сохранить страницу резки в отдельный CDR…", SaveCutting);
@@ -357,6 +381,8 @@ namespace VanyaTools.Native
             _cutAllow180.Unchecked += (_, __) => SaveDraft();
             _cutSizeTags.Checked += (_, __) => SaveDraft();
             _cutSizeTags.Unchecked += (_, __) => SaveDraft();
+            foreach (var field in new[] { _tagWidth, _tagHeight, _tagBridge, _tagLetter, _tagFirstOffset, _tagSizeStep })
+                field.TextChanged += (_, __) => SaveDraft();
             LoadDraft();
             RefreshSizes();
             UpdateCount();
@@ -829,6 +855,45 @@ namespace VanyaTools.Native
         {
             _prepare.IsEnabled = _generate.IsEnabled = _generateCut.IsEnabled = _saveCut.IsEnabled = enabled;
             _exportPrint.IsEnabled = _choosePrintFolder.IsEnabled = _printQuality.IsEnabled = enabled;
+            _tagSamples.IsEnabled = enabled;
+        }
+
+        private async void CreateTagSamples(object sender, RoutedEventArgs e)
+        {
+            if (_busy) return;
+            _busy = true; SetActionButtons(false);
+            try
+            {
+                SportCutTagSettings settings = ReadTagSettings();
+                SaveDraft();
+                _progress.Text = "Создаю лист язычков для пробной резки…";
+                await Dispatcher.Yield(DispatcherPriority.Render);
+                int count = SportCutTagSamples.Create(settings);
+                _progress.Text = "Готово: " + count + " образца. Код на детали: ширина X высота / B длина мостика. " +
+                    "Буква " + settings.LetterHeightMm + " мм. Сохраните активную страницу в CDR кнопкой ниже.";
+                _status("Лист пробной резки язычков создан.", false);
+            }
+            catch (Exception error)
+            {
+                Log.Error("Could not create cutting tag samples.", error);
+                _progress.Text = "Лист образцов не создан.";
+                _status(error.Message, true);
+            }
+            finally { _busy = false; SetActionButtons(true); }
+        }
+
+        private SportCutTagSettings ReadTagSettings()
+        {
+            var settings = new SportCutTagSettings {
+                WidthMm = ParseMillimeters(_tagWidth.Text, 12, 150, "Ширина язычка"),
+                HeightMm = ParseMillimeters(_tagHeight.Text, 12, 50, "Высота язычка"),
+                BridgeMm = ParseMillimeters(_tagBridge.Text, .3, 5, "Длина каждого мостика"),
+                LetterHeightMm = ParseMillimeters(_tagLetter.Text, 3, 40, "Высота буквы"),
+                FirstOffsetMm = ParseMillimeters(_tagFirstOffset.Text, 0, 500, "Отступ первого размера"),
+                SizeStepMm = ParseMillimeters(_tagSizeStep.Text, 0, 100, "Шаг следующих размеров")
+            };
+            settings.Validate();
+            return settings;
         }
 
         private void ChoosePrintFolder(object sender, RoutedEventArgs e)
@@ -963,6 +1028,7 @@ namespace VanyaTools.Native
                 RotateSleeves = _rotateSleeves.IsChecked == true,
                 CutAllow180 = _cutAllow180.IsChecked == true,
                 CutSizeTags = cutting && _cutSizeTags.IsChecked == true,
+                CutTag = cutting && _cutSizeTags.IsChecked == true ? ReadTagSettings() : new SportCutTagSettings(),
                 NameStyle = cutting ? null : _legacyNameStyle,
                 NumberStyle = cutting ? null : _legacyNumberStyle,
                 FrontNameOnRight = _nameSide.SelectedIndex == 1,
@@ -994,6 +1060,8 @@ namespace VanyaTools.Native
                 _sheetWidth == null || _cutSheetWidth == null || _maxPageLength == null || _gap == null || _nameSide == null || _frontCase == null ||
                 _printFolder == null || _printQuality == null ||
                 _keepGuides == null || _cutAllow180 == null || _cutSizeTags == null ||
+                _tagWidth == null || _tagHeight == null || _tagBridge == null || _tagLetter == null ||
+                _tagFirstOffset == null || _tagSizeStep == null ||
                 _templateGrid == null || _playerGrid == null) return;
             try
             {
@@ -1007,6 +1075,9 @@ namespace VanyaTools.Native
                     RotateSleeves = _rotateSleeves.IsChecked == true,
                     CutAllow180 = _cutAllow180.IsChecked == true,
                     CutSizeTags = _cutSizeTags.IsChecked == true,
+                    TagWidth = _tagWidth.Text, TagHeight = _tagHeight.Text,
+                    TagBridge = _tagBridge.Text, TagLetter = _tagLetter.Text,
+                    TagFirstOffset = _tagFirstOffset.Text, TagSizeStep = _tagSizeStep.Text,
                     SheetWidth = _sheetWidth.Text, Gap = _gap.Text,
                     CutSheetWidth = _cutSheetWidth.Text,
                     MaxPageLength = _maxPageLength.Text,
@@ -1051,6 +1122,12 @@ namespace VanyaTools.Native
                         _rotateSleeves.IsChecked = draft.RotateSleeves ?? true;
                         _cutAllow180.IsChecked = draft.CutAllow180 ?? true;
                         _cutSizeTags.IsChecked = draft.CutSizeTags ?? true;
+                        _tagWidth.Text = draft.TagWidth ?? "24";
+                        _tagHeight.Text = draft.TagHeight ?? "12";
+                        _tagBridge.Text = draft.TagBridge ?? "2";
+                        _tagLetter.Text = draft.TagLetter ?? "8";
+                        _tagFirstOffset.Text = draft.TagFirstOffset ?? "10";
+                        _tagSizeStep.Text = draft.TagSizeStep ?? "20";
                         _sheetWidth.Text = draft.SheetWidth ?? "1500";
                         _cutSheetWidth.Text = draft.CutSheetWidth ?? draft.SheetWidth ?? "1500";
                         _maxPageLength.Text = draft.MaxPageLength ?? "4";
@@ -1151,6 +1228,15 @@ namespace VanyaTools.Native
                 Margin = new Thickness(0, 0, 4, 3), Padding = new Thickness(8, 3, 8, 3) };
             button.Click += click;
             return button;
+        }
+
+        private static TextBox TagField(Panel panel, string label, string value)
+        {
+            var row = new WrapPanel { Margin = new Thickness(0, 1, 0, 4) };
+            row.Children.Add(Label(label));
+            var field = Field(value); field.Width = 64;
+            row.Children.Add(field); panel.Children.Add(row);
+            return field;
         }
 
         private static TextBox Field(string value)
