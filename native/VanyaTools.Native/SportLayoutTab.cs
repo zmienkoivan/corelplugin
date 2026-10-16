@@ -11,9 +11,9 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Threading;
+using System.Windows.Input;
+using System.Text.RegularExpressions;
 using Microsoft.Win32;
-using Forms = System.Windows.Forms;
-using Drawing = System.Drawing;
 
 namespace VanyaTools.Native
 {
@@ -31,7 +31,7 @@ namespace VanyaTools.Native
             public string NeckArtworkPath { get; set; }
             public string ModelPath { get; set; }
             public bool? RotateSleeves { get; set; }
-            public bool CutRotate180 { get; set; }
+            public bool? CutAllow180 { get; set; }
             public string SheetWidth { get; set; }
             public string Gap { get; set; }
             public string FontName { get; set; }
@@ -45,128 +45,11 @@ namespace VanyaTools.Native
             public bool KeepGuides { get; set; }
         }
 
-        private sealed class TextStyleEditor
+        private static SportTextStyle LegacyStyle(string font, float points, bool white)
         {
-            public readonly TextBox Font = Field("Arial");
-            public readonly TextBox Points = Field("72");
-            public readonly CheckBox Bold = new CheckBox { Content = "Жирный", FontSize = 11 };
-            public readonly CheckBox Italic = new CheckBox { Content = "Курсив", FontSize = 11 };
-            public readonly TextBox Fill = Field("#000000");
-            public readonly TextBox Outline = Field("#000000");
-            public readonly TextBox OutlineWidth = Field("0");
-
-            public TextStyleEditor(Panel parent, string title, string defaultPoints,
-                Action changed)
-            {
-                Points.Text = defaultPoints;
-                parent.Children.Add(Title(title));
-                var fontRow = new WrapPanel();
-                fontRow.Children.Add(Label("Шрифт"));
-                Font.Width = 168;
-                fontRow.Children.Add(Font);
-                fontRow.Children.Add(Button("Шрифт…", (_, __) => ChooseFont()));
-                fontRow.Children.Add(Label("Нач. пт"));
-                Points.Width = 56;
-                fontRow.Children.Add(Points);
-                parent.Children.Add(fontRow);
-                var faceRow = new WrapPanel { Margin = new Thickness(0, 2, 0, 2) };
-                Bold.Margin = Italic.Margin = new Thickness(4, 4, 12, 4);
-                faceRow.Children.Add(Bold);
-                faceRow.Children.Add(Italic);
-                parent.Children.Add(faceRow);
-                var colorRow = new WrapPanel();
-                colorRow.Children.Add(Label("Цвет"));
-                Fill.Width = 88;
-                colorRow.Children.Add(Fill);
-                colorRow.Children.Add(Button("●", (_, __) => ChooseColor(Fill)));
-                colorRow.Children.Add(Label("Обводка"));
-                Outline.Width = 88;
-                colorRow.Children.Add(Outline);
-                colorRow.Children.Add(Button("●", (_, __) => ChooseColor(Outline)));
-                parent.Children.Add(colorRow);
-                var widthRow = new WrapPanel();
-                widthRow.Children.Add(Label("Ширина обводки, мм (0 — нет)"));
-                OutlineWidth.Width = 60;
-                widthRow.Children.Add(OutlineWidth);
-                parent.Children.Add(widthRow);
-                foreach (TextBox field in new[] { Font, Points, Fill, Outline, OutlineWidth })
-                    field.TextChanged += (_, __) => changed();
-                Bold.Checked += (_, __) => changed();
-                Bold.Unchecked += (_, __) => changed();
-                Italic.Checked += (_, __) => changed();
-                Italic.Unchecked += (_, __) => changed();
-            }
-
-            private void ChooseFont()
-            {
-                using (var dialog = new Forms.FontDialog { ShowColor = true, ShowEffects = true })
-                {
-                    try
-                    {
-                        dialog.Font = new Drawing.Font(Font.Text,
-                            float.Parse(Points.Text.Replace(',', '.'), CultureInfo.InvariantCulture),
-                            (Bold.IsChecked == true ? Drawing.FontStyle.Bold : 0) |
-                            (Italic.IsChecked == true ? Drawing.FontStyle.Italic : 0));
-                    }
-                    catch { }
-                    try { dialog.Color = Drawing.ColorTranslator.FromHtml(Fill.Text); }
-                    catch { }
-                    if (dialog.ShowDialog() != Forms.DialogResult.OK) return;
-                    Font.Text = dialog.Font.FontFamily.Name;
-                    Points.Text = dialog.Font.SizeInPoints.ToString("0.#", CultureInfo.InvariantCulture);
-                    Bold.IsChecked = dialog.Font.Bold;
-                    Italic.IsChecked = dialog.Font.Italic;
-                    Fill.Text = $"#{dialog.Color.R:X2}{dialog.Color.G:X2}{dialog.Color.B:X2}";
-                }
-            }
-
-            private static void ChooseColor(TextBox target)
-            {
-                using (var dialog = new Forms.ColorDialog { FullOpen = true })
-                {
-                    try { dialog.Color = Drawing.ColorTranslator.FromHtml(target.Text); }
-                    catch { }
-                    if (dialog.ShowDialog() == Forms.DialogResult.OK)
-                        target.Text = $"#{dialog.Color.R:X2}{dialog.Color.G:X2}{dialog.Color.B:X2}";
-                }
-            }
-
-            public SportTextStyle Read(string label)
-            {
-                string fill = NormalizeColor(Fill.Text, label + ": цвет");
-                string outline = NormalizeColor(Outline.Text, label + ": обводка");
-                if (String.IsNullOrWhiteSpace(Font.Text))
-                    throw new InvalidOperationException(label + ": выберите шрифт.");
-                return new SportTextStyle { FontName = Font.Text.Trim(),
-                    MaxPoints = (float)ParseRange(Points.Text, 1, 500, label + ": размер, пт"),
-                    Bold = Bold.IsChecked == true, Italic = Italic.IsChecked == true,
-                    FillHex = fill, OutlineHex = outline,
-                    OutlineWidthMm = ParseRange(OutlineWidth.Text, 0, 10,
-                        label + ": ширина обводки, мм") };
-            }
-
-            public void Load(SportTextStyle style)
-            {
-                if (style == null) return;
-                Font.Text = style.FontName ?? "Arial";
-                Points.Text = style.MaxPoints > 0
-                    ? style.MaxPoints.ToString("0.#", CultureInfo.InvariantCulture) : "72";
-                Bold.IsChecked = style.Bold;
-                Italic.IsChecked = style.Italic;
-                Fill.Text = style.FillHex ?? "#000000";
-                Outline.Text = style.OutlineHex ?? "#000000";
-                OutlineWidth.Text = style.OutlineWidthMm.ToString("0.##",
-                    CultureInfo.InvariantCulture);
-            }
-
-            private static string NormalizeColor(string value, string label)
-            {
-                string hex = (value ?? "").Trim().TrimStart('#');
-                if (hex.Length != 6 || !Int32.TryParse(hex, NumberStyles.HexNumber,
-                    CultureInfo.InvariantCulture, out _))
-                    throw new InvalidOperationException(label + " — укажите #RRGGBB.");
-                return "#" + hex.ToUpperInvariant();
-            }
+            return new SportTextStyle { FontName = String.IsNullOrWhiteSpace(font) ? "Arial" : font,
+                MaxPoints = points, FillHex = white ? "#FFFFFF" : "#000000", OutlineHex = "#000000",
+                Bold = false, Italic = false, OutlineWidthMm = 0 };
         }
 
         private static readonly string DraftPath = Path.Combine(
@@ -185,10 +68,12 @@ namespace VanyaTools.Native
             _neckArt, _modelPath;
         private readonly TextBox _sheetWidth, _gap;
         private readonly ComboBox _nameSide, _frontCase;
-        private readonly CheckBox _frontTwoLines;
-        private readonly TextBox _frontLineSpacing;
-        private readonly TextStyleEditor _nameStyle, _numberStyle;
-        private readonly CheckBox _keepGuides, _rotateSleeves, _cutRotate180;
+        // Kept only for older masters with rectangle zones; text samples use Corel attributes.
+        private SportTextStyle _legacyNameStyle = LegacyStyle("Arial", 72, false);
+        private SportTextStyle _legacyNumberStyle = LegacyStyle("Arial", 150, false);
+        private bool _legacyTwoLines, _whiteCaptions;
+        private double _legacyLineSpacing = 100;
+        private readonly CheckBox _keepGuides, _rotateSleeves, _cutAllow180;
         private readonly TextBlock _count, _progress;
         private readonly Button _prepare, _generate, _generateCut, _saveCut;
         private bool _loading, _busy;
@@ -256,12 +141,16 @@ namespace VanyaTools.Native
             panel.Children.Add(_prepare);
             panel.Children.Add(Note("Этап 1 создаёт одну обзорную страницу со всеми размерами рядом. " +
                 "Каждый размер остаётся на отдельном слое для ручной правки рисунков, " +
-                "контуров и красных зон. Повторный запуск сохранит прежнюю страницу отдельно."));
+                "контуров, текстовых образцов и подписей в подгибке. Оформление и положение " +
+                "подписей изменяйте в Corel. Повторный запуск сохранит прежнюю страницу отдельно."));
             panel.Children.Add(Note("Исходный CDR модели остаётся открытым в отдельной вкладке. " +
                 "Повторный запуск использует его; рабочий документ остаётся активным."));
             panel.Children.Add(Note("Создайте фигурный текст: XXXXXXXXX для имени, две строки X для " +
                 "имени в две строки, XX или XXX для номера. Настройте его в Corel, выделите и назначьте " +
                 "кнопкой ниже. Образец заменит прежний бокс на слое выбранного размера."));
+            panel.Children.Add(Note("Ненужное текстовое поле можно удалить на слое размера: " +
+                "например, номер правого рукава только для маленьких размеров. Этап 2 пропустит " +
+                "удалённое поле. Текст XX на рукаве заменяется номером игрока."));
             var zoneButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
             zoneButtons.Children.Add(Button("Имя груди слева", (_, __) => AssignTextBox(
                 "VT_SPORT_ZONE_FRONT_LEFT", "имени на груди слева")));
@@ -274,11 +163,17 @@ namespace VanyaTools.Native
             panel.Children.Add(zoneButtons);
 
             panel.Children.Add(Title("3. Игроки и допечатка"));
-            panel.Children.Add(Note("Столбцы: размер, имя, номер, количество. Можно вставить строки из Excel. " +
-                "Кнопка ↗ в строке создаёт одну выбранную деталь для допечатки."));
+            panel.Children.Add(Note("Скопируйте диапазон из Excel или Google Таблиц. Ctrl+V вставляет " +
+                "его с выбранной ячейки; кнопка ниже добавляет строки в конец. Столбцы без " +
+                "заголовка: размер, имя, номер, количество. Заголовки распознаются автоматически. " +
+                "Кнопка ↗ создаёт выбранную деталь для допечатки."));
             _playerGrid = new DataGrid { Height = 224, AutoGenerateColumns = false,
                 CanUserAddRows = false, CanUserDeleteRows = false, FontSize = 12,
+                SelectionUnit = DataGridSelectionUnit.CellOrRowHeader,
+                SelectionMode = DataGridSelectionMode.Extended,
                 Margin = new Thickness(0, 3, 0, 4), ItemsSource = _players };
+            _playerGrid.PreviewKeyDown += PlayerGridPasteKeyDown;
+            DataObject.AddPastingHandler(_playerGrid, PlayerGridPasting);
             _playerGrid.Columns.Add(new DataGridComboBoxColumn { Header = "Размер",
                 ItemsSource = _sizeOptions, SelectedItemBinding = new Binding("Size") {
                     Mode = BindingMode.TwoWay,
@@ -301,12 +196,8 @@ namespace VanyaTools.Native
                 _playerGrid.SelectedIndex = _players.Count - 1;
                 SaveDraft();
             }));
-            playerButtons.Children.Add(Button("Вставить из Excel", PastePlayers));
-            playerButtons.Children.Add(Button("Убрать строку", (_, __) =>
-            {
-                if (_playerGrid.SelectedItem is SportLayoutPlayer item) _players.Remove(item);
-                SaveDraft();
-            }));
+            playerButtons.Children.Add(Button("Добавить из Excel / Google Таблиц", PastePlayers));
+            playerButtons.Children.Add(Button("Убрать строки", RemovePlayers));
             panel.Children.Add(playerButtons);
             _count = Note("");
             panel.Children.Add(_count);
@@ -333,14 +224,8 @@ namespace VanyaTools.Native
                 "рисунка подготовьте макет заново."));
             panel.Children.Add(Note("У текстового образца берутся шрифт, кегль, начертание, цвет, " +
                 "обводка, выравнивание и интервалы из Corel. Ширина образца ограничивает надпись: " +
-                "длинный текст уменьшается пропорционально, короткий сохраняет кегль образца."));
-            var legacyStyles = new StackPanel();
-            _nameStyle = new TextStyleEditor(legacyStyles, "Имя спереди и на спине", "72", SaveDraft);
-            _numberStyle = new TextStyleEditor(legacyStyles, "Номер на спине", "150", SaveDraft);
-            legacyStyles.Children.Add(Note("Для прямоугольника высота бокса задаёт высоту текста. Если надпись получается " +
-                "шире бокса, она пропорционально уменьшается. Кегль в диалоге шрифта — " +
-                "начальное значение для измерения текста."));
-
+                "длинный текст уменьшается пропорционально, короткий сохраняет кегль образца. " +
+                "Оформление меняйте в самом текстовом образце на странице-макете."));
             var settings = new WrapPanel { Margin = new Thickness(0, 7, 0, 6) };
             settings.Children.Add(Label("Имя спереди (сторона футболки)"));
             _nameSide = new ComboBox { Width = 110, Height = 27, FontSize = 12,
@@ -359,21 +244,6 @@ namespace VanyaTools.Native
             _frontCase.Items.Add("ВСЕ ПРОПИСНЫЕ");
             _frontCase.SelectedIndex = 0;
             panel.Children.Add(_frontCase);
-            var chestLines = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
-            _frontTwoLines = new CheckBox { Content = "Имя на груди в две строки",
-                FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 10, 0) };
-            chestLines.Children.Add(_frontTwoLines);
-            chestLines.Children.Add(Label("Межстрочный интервал, %"));
-            _frontLineSpacing = Field("100");
-            _frontLineSpacing.Width = 56;
-            _frontLineSpacing.IsEnabled = false;
-            chestLines.Children.Add(_frontLineSpacing);
-            legacyStyles.Children.Add(chestLines);
-            legacyStyles.Children.Add(Note("Две строки выравниваются по центру. Разделение — после " +
-                "первого слова; символ | в имени задаёт перенос вручную."));
-            panel.Children.Add(new Expander { Header = "Настройки прямоугольных боксов",
-                Content = legacyStyles, IsExpanded = false, Margin = new Thickness(0, 5, 0, 7) });
             panel.Children.Add(Note("В текстовом образце две строки X задают две строки имени. " +
                 "Перенос — после первого слова; символ | в таблице задаёт его вручную. " +
                 "Имя и номер на спине назначаются отдельными текстовыми объектами."));
@@ -387,20 +257,21 @@ namespace VanyaTools.Native
             _generate.Margin = new Thickness(0, 7, 0, 4);
             panel.Children.Add(_generate);
             panel.Children.Add(Title("5. Раскладка резки"));
-            panel.Children.Add(Note("В каждой группе детали нужна замкнутая кривая silhouette. " +
+            panel.Children.Add(Note("В каждой группе детали нужен замкнутый контур silhouette. " +
                 "Для печати она расширяется наружу на 6 мм; для резки берутся все исходные " +
                 "кривые группы, включая silhouette и надсечки. Рисунки и надписи не добавляются. " +
                 "Размеры и количество — из таблицы игроков, ширина и зазор — из настроек полотна."));
-            _cutRotate180 = new CheckBox { Content = "Развернуть все детали резки на 180°",
-                FontSize = 11, Margin = new Thickness(0, 0, 0, 5) };
-            panel.Children.Add(_cutRotate180);
+            _cutAllow180 = new CheckBox { Content = "Разрешить поворот деталей резки на 180°",
+                FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
+            panel.Children.Add(_cutAllow180);
             _generateCut = Button("Создать раскладку резки", GenerateCutting);
             panel.Children.Add(_generateCut);
             _saveCut = Button("Сохранить страницу резки в отдельный CDR…", SaveCutting);
             panel.Children.Add(_saveCut);
             panel.Children.Add(Note("Раскладка резки создаётся на отдельной странице текущего CDR. " +
                 "Сохранение копирует только эту страницу; версия CDR берётся из настроек Vanya Tools. " +
-                "Поворота на 90° для резки нет."));
+                "Раскладка учитывает контуры деталей и заданный зазор. " +
+                "Повороты подбираются по контуру: 0° или 180°. Поворота на 90° для резки нет."));
             _progress = Note("");
             panel.Children.Add(_progress);
 
@@ -418,17 +289,12 @@ namespace VanyaTools.Native
             _gap.TextChanged += (_, __) => SaveDraft();
             _nameSide.SelectionChanged += (_, __) => SaveDraft();
             _frontCase.SelectionChanged += (_, __) => SaveDraft();
-            _frontTwoLines.Checked += (_, __) => {
-                _frontLineSpacing.IsEnabled = true; SaveDraft(); };
-            _frontTwoLines.Unchecked += (_, __) => {
-                _frontLineSpacing.IsEnabled = false; SaveDraft(); };
-            _frontLineSpacing.TextChanged += (_, __) => SaveDraft();
             _keepGuides.Checked += (_, __) => SaveDraft();
             _keepGuides.Unchecked += (_, __) => SaveDraft();
             _rotateSleeves.Checked += (_, __) => SaveDraft();
             _rotateSleeves.Unchecked += (_, __) => SaveDraft();
-            _cutRotate180.Checked += (_, __) => SaveDraft();
-            _cutRotate180.Unchecked += (_, __) => SaveDraft();
+            _cutAllow180.Checked += (_, __) => SaveDraft();
+            _cutAllow180.Unchecked += (_, __) => SaveDraft();
             LoadDraft();
             RefreshSizes();
             UpdateCount();
@@ -526,34 +392,150 @@ namespace VanyaTools.Native
 
         private void PastePlayers(object sender, RoutedEventArgs e)
         {
+            try { ImportPlayers(Clipboard.GetText(), true); }
+            catch (Exception error) { _status(error.Message, true); }
+        }
+
+        private static bool IsTableClipboard(string text) =>
+            !String.IsNullOrEmpty(text) && text.IndexOfAny(new[] { '\t', '\r', '\n', ';' }) >= 0;
+
+        private void PlayerGridPasteKeyDown(object sender, KeyEventArgs e)
+        {
+            if (!(e.Key == Key.V && (Keyboard.Modifiers & ModifierKeys.Control) != 0) &&
+                !(e.Key == Key.Insert && (Keyboard.Modifiers & ModifierKeys.Shift) != 0)) return;
             try
             {
                 string text = Clipboard.GetText();
-                if (String.IsNullOrWhiteSpace(text))
-                    throw new InvalidOperationException("В буфере обмена нет таблицы.");
-                var parsed = new List<SportLayoutPlayer>();
-                foreach (string line in text.Split(new[] { "\r\n", "\n" },
-                    StringSplitOptions.RemoveEmptyEntries))
-                {
-                    string[] cells = line.Trim().Split('\t');
-                    if (cells.Length < 2) cells = line.Trim().Split(';');
-                    if (cells.Length < 2)
-                        throw new InvalidOperationException("Нужны столбцы: размер, имя, номер, количество.");
-                    if (cells[0].Trim().Equals("Размер", StringComparison.CurrentCultureIgnoreCase))
-                        continue;
-                    int quantity = 1;
-                    if (cells.Length > 3 && !String.IsNullOrWhiteSpace(cells[3]) &&
-                        (!Int32.TryParse(cells[3].Trim(), out quantity) || quantity < 1 || quantity > 100))
-                        throw new InvalidOperationException("Неверное количество в строке: " + line);
-                    parsed.Add(new SportLayoutPlayer { Size = cells[0].Trim(),
-                        Name = cells[1].Trim(), Number = cells.Length > 2 ? cells[2].Trim() : "",
-                        Quantity = quantity });
-                }
-                foreach (var row in parsed) _players.Add(row);
-                _status("Добавлено игроков: " + parsed.Count + ".", false);
-                SaveDraft();
+                if (!IsTableClipboard(text) && Keyboard.FocusedElement is TextBox) return;
+                e.Handled = true;
+                ImportPlayers(text, false);
             }
+            catch (Exception error) { e.Handled = true; _status(error.Message, true); }
+        }
+
+        private void PlayerGridPasting(object sender, DataObjectPastingEventArgs e)
+        {
+            string text = e.DataObject.GetData(DataFormats.UnicodeText) as string ??
+                e.DataObject.GetData(DataFormats.Text) as string;
+            if (!IsTableClipboard(text)) return;
+            e.CancelCommand();
+            e.Handled = true;
+            try { ImportPlayers(text, false); }
             catch (Exception error) { _status(error.Message, true); }
+        }
+
+        private void ImportPlayers(string text, bool append)
+        {
+            if (_busy) throw new InvalidOperationException("Дождитесь завершения текущей операции.");
+            if (!_playerGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
+                !_playerGrid.CommitEdit(DataGridEditingUnit.Row, true))
+                throw new InvalidOperationException("Закончите редактирование ячейки перед вставкой.");
+            bool placeholder = _players.Count == 1 && String.IsNullOrWhiteSpace(_players[0].Name) &&
+                String.IsNullOrWhiteSpace(_players[0].Number) && _players[0].Quantity == 1;
+            var visibleRows = _playerGrid.Items.OfType<SportLayoutPlayer>().ToList();
+            int start = append ? _players.Count : visibleRows.IndexOf(_playerGrid.CurrentCell.Item as SportLayoutPlayer);
+            if (start < 0) start = _players.Count;
+            int column = append || _playerGrid.CurrentCell.Column == null ? 0 :
+                _playerGrid.Columns.IndexOf(_playerGrid.CurrentCell.Column);
+            if (column < 0 || column > 3) column = 0;
+            if (!append && _playerGrid.SelectedCells.Count > 1)
+            {
+                var selected = _playerGrid.SelectedCells.Where(cell => _playerGrid.Columns.IndexOf(cell.Column) < 4 &&
+                    cell.Item is SportLayoutPlayer).ToList();
+                if (selected.Count > 0)
+                {
+                    start = selected.Min(cell => visibleRows.IndexOf((SportLayoutPlayer)cell.Item));
+                    column = selected.Min(cell => _playerGrid.Columns.IndexOf(cell.Column));
+                }
+            }
+            if (placeholder) start = 0;
+            IList<SportPlayerClipboard.Row> input = SportPlayerClipboard.Parse(text, column);
+            string defaultSize = _sizeOptions.FirstOrDefault() ?? "М";
+            if (start < visibleRows.Count && _sizeOptions.Contains(visibleRows[start].Size))
+                defaultSize = visibleRows[start].Size;
+            var rows = new List<SportLayoutPlayer>();
+            var targetIndices = new List<int>();
+            var errors = new List<string>();
+            for (int i = 0; i < input.Count; i++)
+            {
+                var cells = input[i].Cells;
+                SportLayoutPlayer previous = !append && !placeholder && start + i < visibleRows.Count ?
+                    visibleRows[start + i] : null;
+                targetIndices.Add(placeholder && i == 0 ? 0 : previous == null ? -1 : _players.IndexOf(previous));
+                var row = previous == null ? new SportLayoutPlayer { Size = defaultSize, Quantity = 1 } :
+                    new SportLayoutPlayer { Size = previous.Size, Name = previous.Name,
+                        Number = previous.Number, Quantity = previous.Quantity };
+                try
+                {
+                    if (cells.TryGetValue(0, out string size)) row.Size = ResolvePastedSize(size, defaultSize);
+                    if (cells.TryGetValue(1, out string name)) row.Name = name;
+                    if (cells.TryGetValue(2, out string number)) row.Number = number;
+                    if (cells.TryGetValue(3, out string quantity))
+                    {
+                        if (String.IsNullOrWhiteSpace(quantity)) row.Quantity = 1;
+                        else if (!Decimal.TryParse(quantity.Replace(',', '.').Replace(" ", "").Replace("\u00a0", ""),
+                            NumberStyles.Float, CultureInfo.InvariantCulture, out decimal count) ||
+                            count != Decimal.Truncate(count) || count < 1 || count > 100)
+                            throw new InvalidOperationException("количество должно быть целым числом от 1 до 100.");
+                        else row.Quantity = (int)count;
+                    }
+                    if ((row.Name ?? "").Length > 100 || (row.Number ?? "").Length > 20)
+                        throw new InvalidOperationException("имя длиннее 100 символов или номер длиннее 20.");
+                    rows.Add(row);
+                }
+                catch (Exception error) { errors.Add("Строка вставки " + input[i].Line + ": " + error.Message); }
+            }
+            if (errors.Count > 0)
+                throw new InvalidOperationException("Диапазон не вставлен. " + String.Join(" ", errors.Take(5)) +
+                    (errors.Count > 5 ? " Ещё ошибок: " + (errors.Count - 5) + "." : ""));
+            int updated = placeholder ? 0 : targetIndices.Count(index => index >= 0);
+            bool wasLoading = _loading;
+            _loading = true;
+            try
+            {
+                for (int i = 0; i < rows.Count; i++)
+                    if (targetIndices[i] >= 0) _players[targetIndices[i]] = rows[i];
+                    else _players.Add(rows[i]);
+            }
+            finally { _loading = wasLoading; }
+            _playerGrid.Items.Refresh();
+            _playerGrid.CurrentCell = new DataGridCellInfo(rows[0], _playerGrid.Columns[column]);
+            _playerGrid.ScrollIntoView(rows[0]);
+            UpdateCount();
+            SaveDraft();
+            _status("Вставлено строк: " + rows.Count + ". Добавлено: " + (rows.Count - updated) +
+                ", обновлено: " + updated + ".", false);
+        }
+
+        private string ResolvePastedSize(string value, string fallback)
+        {
+            string size = String.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+            string normalized = SportLayoutService.NormalizeSize(size);
+            string match = _sizeOptions.FirstOrDefault(option =>
+                SportLayoutService.NormalizeSize(option) == normalized);
+            if (match != null) return match;
+            if (Regex.IsMatch(size, @"^\d+$"))
+            {
+                var matches = _sizeOptions.Where(option => Regex.Match(option, @"\d+$").Value == size).ToList();
+                if (matches.Count == 1) return matches[0];
+            }
+            if (_sizeOptions.Count == 0) return size;
+            throw new InvalidOperationException("размер «" + size + "» отсутствует в списке лекал. " +
+                "Укажите имя нужного слоя размера.");
+        }
+
+        private void RemovePlayers(object sender, RoutedEventArgs e)
+        {
+            if (_busy) return;
+            var selected = _playerGrid.SelectedCells.Select(cell => cell.Item as SportLayoutPlayer)
+                .Where(row => row != null).Distinct().ToList();
+            if (selected.Count == 0 && _playerGrid.SelectedItem is SportLayoutPlayer current)
+                selected.Add(current);
+            bool wasLoading = _loading;
+            _loading = true;
+            try { foreach (var row in selected) _players.Remove(row); }
+            finally { _loading = wasLoading; }
+            UpdateCount(); SaveDraft();
         }
 
         private TextBox ArtworkField(Panel panel, string title, string partName,
@@ -828,17 +810,14 @@ namespace VanyaTools.Native
                 SheetWidthMm = ParseMillimeters(_sheetWidth.Text, 300, 2000, "Ширина полотна"),
                 GapMm = ParseMillimeters(_gap.Text, 0, 100, "Расстояние между деталями"),
                 RotateSleeves = _rotateSleeves.IsChecked == true,
-                CutRotate180 = _cutRotate180.IsChecked == true,
-                NameStyle = cutting ? null : _nameStyle.Read("Имя"),
-                NumberStyle = cutting ? null : _numberStyle.Read("Номер"),
+                CutAllow180 = _cutAllow180.IsChecked == true,
+                NameStyle = cutting ? null : _legacyNameStyle,
+                NumberStyle = cutting ? null : _legacyNumberStyle,
                 FrontNameOnRight = _nameSide.SelectedIndex == 1,
                 FrontNameCase = (NamesGridLetterCase)_frontCase.SelectedIndex,
-                FrontNameTwoLines = _frontTwoLines.IsChecked == true,
-                FrontLineSpacingPercent = !cutting && _frontTwoLines.IsChecked == true
-                    ? ParseRange(_frontLineSpacing.Text, 10, 300,
-                        "Межстрочный интервал на груди, %") : 100,
-                WhiteText = _nameStyle.Fill.Text.Trim().Equals("#FFFFFF",
-                    StringComparison.OrdinalIgnoreCase),
+                FrontNameTwoLines = _legacyTwoLines,
+                FrontLineSpacingPercent = _legacyLineSpacing,
+                WhiteText = _whiteCaptions,
                 KeepGuides = _keepGuides.IsChecked == true
             };
         }
@@ -860,10 +839,8 @@ namespace VanyaTools.Native
             if (_loading || _frontArt == null || _backArt == null ||
                 _leftSleeveArt == null || _rightSleeveArt == null ||
                 _neckArt == null || _modelPath == null || _rotateSleeves == null ||
-                _sheetWidth == null || _gap == null || _nameStyle == null ||
-                _numberStyle == null || _nameSide == null || _frontCase == null ||
-                _frontTwoLines == null || _frontLineSpacing == null ||
-                _keepGuides == null || _cutRotate180 == null ||
+                _sheetWidth == null || _gap == null || _nameSide == null || _frontCase == null ||
+                _keepGuides == null || _cutAllow180 == null ||
                 _templateGrid == null || _playerGrid == null) return;
             try
             {
@@ -875,16 +852,15 @@ namespace VanyaTools.Native
                     RightSleeveArtworkPath = _rightSleeveArt.Text,
                     NeckArtworkPath = _neckArt.Text, ModelPath = _modelPath.Text,
                     RotateSleeves = _rotateSleeves.IsChecked == true,
-                    CutRotate180 = _cutRotate180.IsChecked == true,
+                    CutAllow180 = _cutAllow180.IsChecked == true,
                     SheetWidth = _sheetWidth.Text, Gap = _gap.Text,
-                    NameStyle = _nameStyle.Read("Имя"),
-                    NumberStyle = _numberStyle.Read("Номер"),
+                    NameStyle = _legacyNameStyle,
+                    NumberStyle = _legacyNumberStyle,
                     FrontNameOnRight = _nameSide.SelectedIndex == 1,
                     FrontNameCase = _frontCase.SelectedIndex,
-                    FrontNameTwoLines = _frontTwoLines.IsChecked == true,
-                    FrontLineSpacing = _frontLineSpacing.Text,
-                    WhiteText = _nameStyle.Fill.Text.Trim().Equals("#FFFFFF",
-                        StringComparison.OrdinalIgnoreCase),
+                    FrontNameTwoLines = _legacyTwoLines,
+                    FrontLineSpacing = _legacyLineSpacing.ToString(CultureInfo.InvariantCulture),
+                    WhiteText = _whiteCaptions,
                     KeepGuides = _keepGuides.IsChecked == true
                 };
                 File.WriteAllText(DraftPath, new JavaScriptSerializer().Serialize(draft),
@@ -915,22 +891,19 @@ namespace VanyaTools.Native
                         _neckArt.Text = draft.NeckArtworkPath ?? "";
                         _modelPath.Text = draft.ModelPath ?? "";
                         _rotateSleeves.IsChecked = draft.RotateSleeves ?? true;
-                        _cutRotate180.IsChecked = draft.CutRotate180;
+                        _cutAllow180.IsChecked = draft.CutAllow180 ?? true;
                         _sheetWidth.Text = draft.SheetWidth ?? "1500";
                         _gap.Text = draft.Gap ?? "10";
-                        if (draft.NameStyle != null) _nameStyle.Load(draft.NameStyle);
-                        else _nameStyle.Load(new SportTextStyle { FontName = draft.FontName ?? "Arial",
-                            MaxPoints = 72, FillHex = draft.WhiteText ? "#FFFFFF" : "#000000",
-                            OutlineHex = "#000000" });
-                        if (draft.NumberStyle != null) _numberStyle.Load(draft.NumberStyle);
-                        else _numberStyle.Load(new SportTextStyle { FontName = draft.FontName ?? "Arial",
-                            MaxPoints = 150, FillHex = draft.WhiteText ? "#FFFFFF" : "#000000",
-                            OutlineHex = "#000000" });
+                        _legacyNameStyle = draft.NameStyle ?? LegacyStyle(draft.FontName, 72, draft.WhiteText);
+                        _legacyNumberStyle = draft.NumberStyle ?? LegacyStyle(draft.FontName, 150, draft.WhiteText);
+                        _whiteCaptions = draft.WhiteText;
                         _nameSide.SelectedIndex = draft.FrontNameOnRight ? 1 : 0;
                         _frontCase.SelectedIndex = draft.FrontNameCase >= 0 &&
                             draft.FrontNameCase <= 3 ? draft.FrontNameCase : 0;
-                        _frontTwoLines.IsChecked = draft.FrontNameTwoLines;
-                        _frontLineSpacing.Text = draft.FrontLineSpacing ?? "100";
+                        _legacyTwoLines = draft.FrontNameTwoLines;
+                        if (Double.TryParse((draft.FrontLineSpacing ?? "100").Replace(',', '.'),
+                            NumberStyles.Float, CultureInfo.InvariantCulture, out double spacing) &&
+                            spacing >= 10 && spacing <= 300) _legacyLineSpacing = spacing;
                         _keepGuides.IsChecked = draft.KeepGuides;
                     }
                 }
