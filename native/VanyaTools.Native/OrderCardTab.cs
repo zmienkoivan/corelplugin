@@ -374,6 +374,8 @@ namespace VanyaTools.Native
             _customerTextile = new CheckBox { Content = "Текстиль клиента", ToolTip = "Изделия или текстиль предоставлены заказчиком", Margin = new Thickness(2, 5, 2, 5) };
             _editor.Children.Add(_customerTextile);
             _editor.Children.Add(_delivery);
+            _urgent = Button("⚡ Срочно", async (_, __) => await ToggleCardUrgency());
+            _editor.Children.Add(_urgent);
             _editor.Children.Add(Label("Срок сдачи"));
             var dueRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
             var clearDue = Button("Очистить", (_, __) => _dueDate.SelectedDate = null);
@@ -405,9 +407,8 @@ namespace VanyaTools.Native
             _state = Button("", async (_, __) => await ChangeWorkflow("state"));
             _blanksPause = Button("", async (_, __) => await ChangeWorkflow("blanks"));
             _applicationPause = Button("", async (_, __) => await ChangeWorkflow("application"));
-            _urgent = Button("", async (_, __) => await ChangeWorkflow("urgent"));
             _blanksReady = Button("", async (_, __) => await ChangeWorkflow("blanksReady"));
-            foreach (var button in new[] { _state, _blanksPause, _applicationPause, _urgent, _blanksReady })
+            foreach (var button in new[] { _state, _blanksPause, _applicationPause, _blanksReady })
                 workflow.Children.Add(button);
             _editor.Children.Add(workflow);
             _refreshServer = Button("Загрузить карточку с сервера", async (_, __) => await RefreshServer());
@@ -739,6 +740,7 @@ namespace VanyaTools.Native
                 if (loaded != null) loadedData = loaded;
             }
             _data = loadedData;
+            if (!_data.IsUrgent.HasValue) _data.IsUrgent = _data.ServerUrgent;
             if (_data.Frames == null) _data.Frames = new List<OrderCardFrame>();
             if (_data.Technologies == null) _data.Technologies = new List<string>();
             if (TryReadDocumentNamesFromPath(path, out string pathCustomer, out string pathDesign))
@@ -2364,6 +2366,8 @@ namespace VanyaTools.Native
                 }
                 SaveData(); SaveServerSettings(false);
                 int requestRevision = _data.ServerRevision;
+                bool requestedUrgency = _data.IsUrgent ?? _data.ServerUrgent;
+                bool urgencyEdited = requestedUrgency != _data.ServerUrgent;
                 string knownDueDate = _data.ServerDueDate ?? "";
                 string currentDueDate = knownDueDate;
                 bool confirmNoTelegramMessage = false;
@@ -2371,6 +2375,7 @@ namespace VanyaTools.Native
                 {
                     _status("Проверка изменений заказа на сервере…", false);
                     var current = await OrderServerClient.Get(server, key, _data.ServerOrderId);
+                    if (!urgencyEdited) requestedUrgency = Flag(current, "isUrgent");
                     currentDueDate = ServerDueDate(current);
                     if (!SameDocument((object)doc, (object)CorelApp.Get().ActiveDocument))
                         throw new InvalidOperationException("Вернитесь в исходный CDR и повторите обновление.");
@@ -2499,6 +2504,8 @@ namespace VanyaTools.Native
                     details["isCustomerTextile"] = _data.IsCustomerTextile;
                 if (_data.ServerOrderId == 0 || _data.IsDelivery != _data.ServerDelivery)
                     details["isDelivery"] = _data.IsDelivery;
+                if (_data.ServerOrderId == 0 || urgencyEdited)
+                    details["isUrgent"] = requestedUrgency;
                 var result = await OrderServerClient.Publish(server, key, details, photos, _data.ServerOrderId);
                 if (!SameDocument((object)doc, (object)CorelApp.Get().ActiveDocument))
                     throw new InvalidOperationException("Вернитесь в исходный CDR и загрузите заказ с сервера.");
@@ -2506,7 +2513,31 @@ namespace VanyaTools.Native
                 ApplyServerResult(result);
                 refreshOrders = true;
                 string deadlineWarning = null;
+                string urgencyWarning = null;
                 string resultSendState = Convert.ToString(result["sendState"]);
+                // Existing order servers accept urgency through a separate
+                // endpoint. Reconcile it after publication, preserving the
+                // requested draft value if sending or reconciliation fails.
+                _data.IsUrgent = requestedUrgency;
+                if ((resultSendState == "sent" || resultSendState == "local") &&
+                    requestedUrgency != _data.ServerUrgent)
+                {
+                    try
+                    {
+                        _status("Сохраняю срочность заказа…", false);
+                        var urgencyResult = await OrderServerClient.SetUrgency(server, key,
+                            _data.ServerOrderId, requestedUrgency, _data.ServerRevision);
+                        if (!SameDocument((object)doc, (object)CorelApp.Get().ActiveDocument))
+                            throw new InvalidOperationException("Вернитесь в исходный CDR и загрузите заказ с сервера.");
+                        ApplyServerResult(urgencyResult);
+                    }
+                    catch (Exception urgencyError)
+                    {
+                        Log.Error("Order published but urgency save failed", urgencyError);
+                        urgencyWarning = urgencyError.Message;
+                        _data.IsUrgent = requestedUrgency;
+                    }
+                }
                 if ((resultSendState == "sent" || resultSendState == "local") &&
                     deadlineEdited && !String.Equals(requestedDueDate, ServerDueDate(result),
                     StringComparison.Ordinal))
@@ -2548,12 +2579,13 @@ namespace VanyaTools.Native
                         ? "Публикация не завершена. Проверьте канал и повторите отправку этого заказа."
                         : reason);
                 }
-                if (saveWarning != null || deadlineWarning != null)
+                if (saveWarning != null || deadlineWarning != null || urgencyWarning != null)
                 {
                     Log.Info("Order card published: " + _data.ServerOrderNumber + " (save warning).");
                     _status("Заказ №" + _data.ServerOrderNumber +
                         " опубликован." + (deadlineWarning == null ? "" :
                             " Срок не сохранён: " + deadlineWarning + ".") +
+                        (urgencyWarning == null ? "" : " Срочность не сохранена: " + urgencyWarning + ".") +
                         (saveWarning == null ? "" : " CDR не сохранён: " + saveWarning), true);
                     return;
                 }
@@ -2716,6 +2748,7 @@ namespace VanyaTools.Native
                     box.IsChecked = technologies.Any(x => Convert.ToString(x) == Convert.ToString(box.Content));
                 _customerTextile.IsChecked = Flag(result, "isCustomerTextile");
                 _delivery.IsChecked = Flag(result, "isDelivery");
+                _data.IsUrgent = Flag(result, "isUrgent");
             }
             finally { _loadingForm = false; }
         }
@@ -2781,7 +2814,10 @@ namespace VanyaTools.Native
             _data.ServerBlanksPaused = Flag(result, "blanksPaused");
             _data.ServerBlanksReady = Flag(result, "blanksReady");
             _data.ServerApplicationPaused = Flag(result, "applicationPaused");
-            _data.ServerUrgent = Flag(result, "isUrgent");
+            bool serverUrgent = Flag(result, "isUrgent");
+            if (!_data.IsUrgent.HasValue || _data.IsUrgent.Value == _data.ServerUrgent)
+                _data.IsUrgent = serverUrgent;
+            _data.ServerUrgent = serverUrgent;
             bool serverCustomerTextile = Flag(result, "isCustomerTextile");
             if (_data.IsCustomerTextile == _data.ServerCustomerTextile && _customerTextile != null)
             {
@@ -2856,6 +2892,34 @@ namespace VanyaTools.Native
             }
             order.Updated = DateTime.Now.ToString("dd.MM.yy HH:mm");
             order.Status = OrderStatus(order);
+        }
+
+        private async Task ToggleCardUrgency()
+        {
+            if (_busy) return;
+            try
+            {
+                EnsureDocument(true, true);
+                bool published = _data.ServerOrderId > 0 &&
+                    (_data.ServerSendState == "sent" || _data.ServerSendState == "local");
+                if (published)
+                {
+                    await ChangeWorkflow("urgent");
+                    return;
+                }
+                ReadForm();
+                _data.IsUrgent = !(_data.IsUrgent ?? _data.ServerUrgent);
+                SaveData();
+                UpdateActions();
+                _status(_data.IsUrgent.Value ?
+                    "Срочность включена. Тег сохранится при публикации карточки." :
+                    "Срочность выключена для публикации карточки.", false);
+            }
+            catch (Exception error)
+            {
+                Log.Error("Could not select order publication urgency", error);
+                _status("Срочность: " + error.Message, true);
+            }
         }
 
         private async Task ChangeWorkflow(string action, bool fromList = false)
@@ -2970,6 +3034,14 @@ namespace VanyaTools.Native
             SetWorkflowButtons(new[] { _state, _blanksPause, _applicationPause, _urgent, _blanksReady },
                 _data.ServerState, _data.ServerBlanksPaused, _data.ServerApplicationPaused, _data.ServerUrgent,
                 _data.ServerBlanksReady, canWorkflow, assigned);
+            bool publicationUrgent = published ? _data.ServerUrgent : _data.IsUrgent ?? _data.ServerUrgent;
+            _urgent.Content = publicationUrgent ? "⚡ Снять срочность" : "⚡ Срочно";
+            _urgent.IsEnabled = !_busy;
+            _urgent.ToolTip = published ? "Изменить срочность заказа" :
+                "Добавить или убрать тег «Срочно» перед публикацией карточки";
+            _urgent.FontWeight = publicationUrgent ? FontWeights.Bold : FontWeights.Normal;
+            if (publicationUrgent) _urgent.Foreground = Brushes.Firebrick;
+            else _urgent.ClearValue(Control.ForegroundProperty);
             var selected = _ordersTable.SelectedItem as OrderListItem;
             SetWorkflowButtons(_listWorkflow, selected?.State, selected?.BlanksPaused == true,
                 selected?.ApplicationPaused == true, selected?.Urgent == true,
@@ -3162,6 +3234,7 @@ namespace VanyaTools.Native
         public string ServerDueDate { get; set; }
         public bool IsCustomerTextile { get; set; }
         public bool IsDelivery { get; set; }
+        public bool? IsUrgent { get; set; }
         public List<OrderCardFrame> Frames { get; set; } = new List<OrderCardFrame>();
         public string PublishedAtUtc { get; set; }
         public int TelegramMessageId { get; set; }
