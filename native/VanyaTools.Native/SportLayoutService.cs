@@ -158,6 +158,7 @@ namespace VanyaTools.Native
             public dynamic Document;
             public bool OpenedHere;
             public int OriginalUnit;
+            public bool OriginalDirty;
         }
 
         private sealed class NestedPiece
@@ -328,17 +329,7 @@ namespace VanyaTools.Native
             }
             finally
             {
-                foreach (TemplateSession session in sessions.Values)
-                    try
-                    {
-                        if (session.OpenedHere)
-                        {
-                            try { session.Document.Dirty = false; } catch { }
-                            session.Document.Close();
-                        }
-                        else session.Document.Unit = session.OriginalUnit;
-                    }
-                    catch (Exception closeError) { Log.Error("Could not close sport template.", closeError); }
+                RestoreTemplateSessions(sessions);
                 try { target.Activate(); } catch { }
                 try { target.Unit = previousUnit; } catch { }
                 try { if (commandStarted) target.EndCommandGroup(); } catch { }
@@ -378,7 +369,7 @@ namespace VanyaTools.Native
             }
             finally
             {
-                CloseTemplateSessions(sessions);
+                RestoreTemplateSessions(sessions);
                 try { previous?.Activate(); } catch { }
             }
         }
@@ -415,6 +406,7 @@ namespace VanyaTools.Native
             var sessions = new Dictionary<string, TemplateSession>(StringComparer.OrdinalIgnoreCase);
             var artworkCache = new Dictionary<string, Piece>(StringComparer.OrdinalIgnoreCase);
             dynamic overview = null;
+            bool clipboardUsed = false;
             try
             {
                 Log.Info("Sport overview: start, sizes=" + templates.Count);
@@ -448,6 +440,7 @@ namespace VanyaTools.Native
                             PasteGarment(app, source, sourcePage, target, overview, layer);
                         SplitBackTextZone(garment);
                     }
+                    clipboardUsed |= !same;
                     NameMasterGarment(garment);
                     Log.Info("Sport overview: contours and boxes copied, size " + size);
                     garment.FrontArtwork = AddOrCopyMasterArtwork(app, layer,
@@ -504,12 +497,23 @@ namespace VanyaTools.Native
             finally
             {
                 Log.Info("Sport overview: cleanup start");
+                if (clipboardUsed)
+                {
+                    try
+                    {
+                        // Release copied model data while its source CDR is
+                        // still alive. The operation replaced the clipboard.
+                        System.Windows.Clipboard.Clear();
+                        Log.Info("Sport overview: model clipboard cleared");
+                    }
+                    catch (Exception error) { Log.Error("Could not clear sport model clipboard.", error); }
+                }
                 try { target.Activate(); Log.Info("Sport overview: target active"); }
                 catch (Exception error) { Log.Error("Sport overview: target activation failed.", error); }
                 try { target.Unit = previousUnit; Log.Info("Sport overview: units restored"); }
                 catch (Exception error) { Log.Error("Sport overview: unit cleanup failed.", error); }
                 Log.Info("Sport overview: template cleanup start");
-                CloseTemplateSessions(sessions);
+                RestoreTemplateSessions(sessions);
                 Log.Info("Sport overview: cleanup complete");
             }
         }
@@ -521,19 +525,18 @@ namespace VanyaTools.Native
             return document.ActivePage;
         }
 
-        private static void CloseTemplateSessions(IDictionary<string, TemplateSession> sessions)
+        private static void RestoreTemplateSessions(IDictionary<string, TemplateSession> sessions)
         {
             foreach (TemplateSession session in sessions.Values)
                 try
                 {
-                    if (session.OpenedHere)
-                    {
-                        try { session.Document.Dirty = false; } catch { }
-                        session.Document.Close();
-                    }
-                    else session.Document.Unit = session.OriginalUnit;
+                    // Managed wrappers may outlive this method. Keep the source
+                    // CDR alive until Corel releases its native object references.
+                    session.Document.Unit = session.OriginalUnit;
+                    if (session.OpenedHere) session.Document.Dirty = session.OriginalDirty;
+                    Log.Info("Sport template: settings restored, document retained open");
                 }
-                catch (Exception error) { Log.Error("Could not close sport template.", error); }
+                catch (Exception error) { Log.Error("Could not restore sport template settings.", error); }
         }
 
         public SportLayoutResult GenerateInCurrentDocument(IList<SportLayoutPlayer> rows,
@@ -720,7 +723,8 @@ namespace VanyaTools.Native
             if (document == null)
                 throw new InvalidOperationException("Не удалось открыть шаблон " + path);
             var session = new TemplateSession { Document = document, OpenedHere = openedHere,
-                OriginalUnit = Convert.ToInt32(document.Unit) };
+                OriginalUnit = Convert.ToInt32(document.Unit),
+                OriginalDirty = Convert.ToBoolean(document.Dirty) };
             document.Unit = CorelConstants.CdrMillimeter;
             sessions.Add(path, session);
             return session;
