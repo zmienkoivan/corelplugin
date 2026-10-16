@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 
 namespace VanyaTools.Native
 {
@@ -30,19 +31,17 @@ namespace VanyaTools.Native
 
     internal sealed class NamesGridOptions
     {
-        public string FontName;
-        public double FontSizePt;
-        public double MaxWidthMm;
         public int Columns;
         public double HorizontalGapMm;
         public double VerticalGapMm;
         public bool CenterInCell;
-        public bool TwoLines;
         public NamesGridLetterCase LetterCase;
-        public bool Bold;
-        public bool Italic;
-        public bool CustomLineSpacing;
-        public double LineSpacingPercent;
+    }
+
+    internal sealed class NamesGridReferenceInfo
+    {
+        public double WidthMm, HeightMm;
+        public bool TwoLines;
     }
 
     internal sealed class NamesGridResult
@@ -55,10 +54,167 @@ namespace VanyaTools.Native
 
     internal sealed class NamesGridService
     {
+        private const string ReferenceName = "VT_NAMES_SAMPLE";
+
+        private static List<object> References(dynamic document)
+        {
+            var result = new List<object>();
+            var ids = new HashSet<long>();
+            foreach (dynamic page in document.Pages)
+                PageReferences((object)page, result, ids);
+            // Corel can put objects outside a page on its desktop layer.
+            PageReferences((object)document.MasterPage, result, ids);
+            return result;
+        }
+
+        private static void PageReferences(object pageValue, List<object> result, HashSet<long> ids)
+        {
+            dynamic page = pageValue;
+            // Explicit arguments avoid optional COM parameter conversion.
+            dynamic found = page.FindShapes(ReferenceName, 0, true);
+            foreach (dynamic shape in found)
+                if (ids.Add((long)Convert.ToInt64(shape.StaticID))) result.Add((object)shape);
+        }
+
+        private static dynamic Reference(dynamic document)
+        {
+            List<object> references = References(document);
+            if (references.Count == 0)
+                throw new InvalidOperationException("Назначьте текстовый образец: создайте заготовку " +
+                    "или выделите фигурный текст и нажмите «Взять выделенный текст».");
+            if (references.Count > 1)
+                throw new InvalidOperationException("В CDR несколько образцов имён. Выделите нужный " +
+                    "и нажмите «Взять выделенный текст».");
+            return references[0];
+        }
+
+        private static NamesGridReferenceInfo DescribeReference(dynamic sample)
+        {
+            if (Convert.ToInt32(sample.Type) != CorelConstants.CdrTextShape ||
+                Convert.ToInt32(sample.Text.Type) != CorelConstants.CdrArtisticText)
+                throw new InvalidOperationException("Образец должен быть фигурным текстом, " +
+                    "сохранённым текстом, а не кривыми или группой.");
+            string text = Convert.ToString(sample.Text.Story.WideText) ?? "";
+            string[] lines = text.Replace("\r\n", "\r").Replace('\n', '\r')
+                .Replace('\v', '\r').TrimEnd('\r').Split('\r');
+            if (lines.Length < 1 || lines.Length > 2 || lines.Any(String.IsNullOrWhiteSpace))
+                throw new InvalidOperationException("В образце нужны одна или две непустые строки текста, " +
+                    "например XXXXXXXXX.");
+            double width = Convert.ToDouble(sample.SizeWidth), height = Convert.ToDouble(sample.SizeHeight);
+            if (Double.IsNaN(width) || Double.IsInfinity(width) || width <= 0 || width > 2000 ||
+                Double.IsNaN(height) || Double.IsInfinity(height) || height <= 0)
+                throw new InvalidOperationException("Проверьте габариты образца: ширина должна быть от 0 до 2000 мм.");
+            return new NamesGridReferenceInfo { WidthMm = width, HeightMm = height,
+                TwoLines = lines.Length == 2 };
+        }
+
+        private static void AssignReference(dynamic document, dynamic sample)
+        {
+            long selectedId = Convert.ToInt64(sample.StaticID);
+            string originalName = Convert.ToString(sample.Name);
+            var renamed = new List<object>();
+            try
+            {
+                foreach (dynamic previous in References(document))
+                    if (Convert.ToInt64(previous.StaticID) != selectedId)
+                    {
+                        previous.Name = "VT_NAMES_PREVIOUS_SAMPLE";
+                        renamed.Add((object)previous);
+                    }
+                sample.Name = ReferenceName;
+            }
+            catch
+            {
+                try { sample.Name = originalName; } catch { }
+                foreach (dynamic previous in renamed)
+                    try { previous.Name = ReferenceName; } catch { }
+                throw;
+            }
+        }
+
+        public NamesGridReferenceInfo ReadReferenceInfo()
+        {
+            dynamic document = CorelApp.Get().ActiveDocument;
+            if (document == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
+            int oldUnit = Convert.ToInt32(document.Unit);
+            try
+            {
+                document.Unit = CorelConstants.CdrMillimeter;
+                return DescribeReference(Reference(document));
+            }
+            finally { document.Unit = oldUnit; }
+        }
+
+        public NamesGridReferenceInfo AssignSelectedReference()
+        {
+            dynamic app = CorelApp.Get(), document = app.ActiveDocument;
+            if (document == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
+            dynamic selected = app.ActiveSelectionRange;
+            if (selected == null || Convert.ToInt32(selected.Count) != 1)
+                throw new InvalidOperationException("Выделите один фигурный текст для образца имён.");
+            dynamic sample = selected[1];
+            int oldUnit = Convert.ToInt32(document.Unit);
+            bool commandStarted = false;
+            try
+            {
+                document.Unit = CorelConstants.CdrMillimeter;
+                NamesGridReferenceInfo info = DescribeReference(sample);
+                document.BeginCommandGroup("Vanya Tools - образец имён");
+                commandStarted = true;
+                AssignReference(document, sample);
+                return info;
+            }
+            finally
+            {
+                try { if (commandStarted) document.EndCommandGroup(); } finally { document.Unit = oldUnit; }
+            }
+        }
+
+        public NamesGridReferenceInfo CreateReference(bool twoLines)
+        {
+            dynamic app = CorelApp.Get(), document = app.ActiveDocument;
+            if (document == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
+            int oldUnit = Convert.ToInt32(document.Unit);
+            bool commandStarted = false;
+            dynamic sample = null;
+            try
+            {
+                document.Unit = CorelConstants.CdrMillimeter;
+                document.BeginCommandGroup("Vanya Tools - заготовка имён");
+                commandStarted = true;
+                sample = document.ActiveLayer.CreateArtisticTextWide(10.0,
+                    Convert.ToDouble(document.ActivePage.SizeHeight) - 25.0,
+                    twoLines ? "XXXXXXXXX\rXXXXXXXXX" : "XXXXXXXXX", 0, -1, "Arial", 36);
+                sample.Fill.UniformColor.RGBAssign(0, 0, 0);
+                sample.Outline.SetNoOutline();
+                if (twoLines) sample.Text.Story.Alignment = 3;
+                NamesGridReferenceInfo info = DescribeReference(sample);
+                // Keep a new reference outside the print area and away from
+                // generated names. Existing, assigned text is never moved.
+                sample.Move(-10.0 - info.WidthMm - Convert.ToDouble(sample.LeftX),
+                    Convert.ToDouble(document.ActivePage.SizeHeight) - 10.0 - Convert.ToDouble(sample.TopY));
+                sample.CreateSelection();
+                AssignReference(document, sample);
+                try { app.ActiveWindow.ActiveView.ToFitShape(sample); } catch { }
+                return info;
+            }
+            catch
+            {
+                try { if (sample != null) sample.Delete(); } catch { }
+                throw;
+            }
+            finally
+            {
+                try { if (commandStarted) document.EndCommandGroup(); } finally { document.Unit = oldUnit; }
+            }
+        }
+
         public NamesGridResult Create(IList<NamesGridEntry> names, NamesGridOptions options)
         {
             if (names == null || names.Count == 0)
                 throw new InvalidOperationException("Добавьте хотя бы одну строку с именем.");
+            if (options == null || options.Columns < 1 || options.Columns > 20)
+                throw new InvalidOperationException("Укажите от 1 до 20 колонок.");
 
             dynamic app = CorelApp.Get();
             dynamic doc = app.ActiveDocument;
@@ -67,7 +223,7 @@ namespace VanyaTools.Native
 
             int oldUnit = (int)doc.Unit;
             dynamic range = app.CreateShapeRange();
-            var shapes = new List<dynamic>();
+            var shapes = new List<object>();
             int rows = (names.Count + options.Columns - 1) / options.Columns;
             var columnWidths = new double[options.Columns];
             var rowHeights = new double[rows];
@@ -76,28 +232,34 @@ namespace VanyaTools.Native
 
             try
             {
+                doc.Unit = CorelConstants.CdrMillimeter;
+                dynamic sample = Reference(doc);
+                NamesGridReferenceInfo reference = DescribeReference(sample);
+                var paragraphs = new List<object>();
+                foreach (dynamic paragraph in sample.Text.Story.Paragraphs) paragraphs.Add((object)paragraph);
+                if (paragraphs.Count == 0)
+                    throw new InvalidOperationException("Текстовый образец пуст.");
                 doc.BeginCommandGroup("Vanya Tools - names grid");
                 commandStarted = true;
-                doc.Unit = CorelConstants.CdrMillimeter;
                 dynamic layer = doc.ActiveLayer;
+                if (Convert.ToBoolean(layer.IsDesktopLayer))
+                    layer = doc.ActivePage.CreateLayer("Имена");
 
                 for (int i = 0; i < names.Count; i++)
                 {
-                    // Wide text keeps Cyrillic and other Unicode characters intact.
-                    dynamic shape = layer.CreateArtisticTextWide(
-                        0.0, 0.0, names[i].PrintText(options.TwoLines, options.LetterCase), 0, -1,
-                        options.FontName, (float)options.FontSizePt,
-                        options.Bold ? -1 : 0, options.Italic ? -1 : 0);
-                    shapes.Add(shape);
+                    // Copy the shape's fill, outline and text attributes. The
+                    // reference stays untouched and is read afresh each run.
+                    dynamic shape = sample.CopyToLayer(layer);
+                    shapes.Add((object)shape);
                     range.Add(shape);
-                    if (options.TwoLines)
+                    shape.Name = "VT_NAME_" + (i + 1).ToString("0000", CultureInfo.InvariantCulture);
+                    shape.Text.Story.WideText = names[i].PrintText(reference.TwoLines, options.LetterCase);
+                    int paragraphIndex = 0;
+                    foreach (dynamic paragraph in shape.Text.Story.Paragraphs)
                     {
-                        shape.Text.Story.Alignment = 3;
-                        if (options.CustomLineSpacing)
-                            shape.Text.Story.SetLineSpacing(2, (float)options.LineSpacingPercent);
+                        paragraph.CopyAttributes(paragraphs[Math.Min(paragraphIndex, paragraphs.Count - 1)]);
+                        paragraphIndex++;
                     }
-                    shape.Fill.UniformColor.RGBAssign(0, 0, 0);
-                    shape.Outline.SetNoOutline();
 
                     double width = (double)shape.SizeWidth;
                     double height = (double)shape.SizeHeight;
@@ -105,8 +267,8 @@ namespace VanyaTools.Native
                         throw new InvalidOperationException("CorelDRAW не смог измерить текст: " + names[i].Text);
 
                     double maxWidth = names[i].MaxWidthMm.HasValue
-                        ? Math.Min(options.MaxWidthMm, names[i].MaxWidthMm.Value)
-                        : options.MaxWidthMm;
+                        ? Math.Min(reference.WidthMm, names[i].MaxWidthMm.Value)
+                        : reference.WidthMm;
                     if (width > maxWidth)
                     {
                         double scale = maxWidth / width;
@@ -155,6 +317,7 @@ namespace VanyaTools.Native
                 }
 
                 try { range.CreateSelection(); } catch (Exception ex) { Log.Info("Names grid selection: " + ex.Message); }
+                try { app.ActiveWindow.ActiveView.ToFitShapeRange(range); } catch { }
                 try { app.ActiveWindow.Refresh(); } catch { }
                 return new NamesGridResult
                 {

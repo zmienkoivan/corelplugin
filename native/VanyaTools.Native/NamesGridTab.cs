@@ -16,22 +16,14 @@ namespace VanyaTools.Native
     {
         private readonly Action<string, bool> _status;
         private readonly TextBox _names;
-        private readonly ComboBox _font;
         private readonly ComboBox _letterCase;
-        private readonly CheckBox _bold, _italic;
-        private readonly TextBox _size;
-        private readonly ComboBox _unit;
-        private readonly TextBox _maxWidth;
         private readonly TextBox _columns;
         private readonly TextBox _horizontalGap;
         private readonly TextBox _verticalGap;
         private readonly CheckBox _center;
-        private readonly CheckBox _twoLines;
-        private readonly CheckBox _lineSpacingToggle;
-        private readonly TextBox _lineSpacing;
-        private readonly TextBlock _count;
+        private readonly TextBlock _count, _sampleInfo;
         private readonly TextBox _preview;
-        private bool _sizeIsMm;
+        private bool _referenceTwoLines;
         private static readonly Regex NumberPrefix = new Regex(
             @"^\s*(?:\d{1,4}[.)]|\(\d{1,4}\))\s*", RegexOptions.Compiled);
         private static readonly Regex WidthNote = new Regex(
@@ -73,13 +65,19 @@ namespace VanyaTools.Native
                 Margin = new Thickness(0, 0, 0, 8) });
             _names.TextChanged += (_, __) => UpdatePreview();
 
-            panel.Children.Add(Label("Шрифт"));
-            _font = new ComboBox { IsEditable = true, IsTextSearchEnabled = true, FontSize = 11,
-                Margin = new Thickness(0, 0, 0, 8), MaxDropDownHeight = 230 };
-            foreach (string family in Fonts.SystemFontFamilies.Select(f => f.Source).OrderBy(f => f, StringComparer.CurrentCultureIgnoreCase))
-                _font.Items.Add(family);
-            _font.Text = "Arial";
-            panel.Children.Add(_font);
+            panel.Children.Add(Label("Текстовый образец в Corel"));
+            panel.Children.Add(Note("Создайте заготовку или выделите свой фигурный текст. " +
+                "Настройте в Corel шрифт, кегль, начертание, цвет, обводку и интервалы. " +
+                "Одна или две строки образца задают число строк имени; его ширина ограничивает надписи."));
+            var referenceButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
+            referenceButtons.Children.Add(Button("Заготовка: 1 строка", (_, __) => CreateReference(false)));
+            referenceButtons.Children.Add(Button("Заготовка: 2 строки", (_, __) => CreateReference(true)));
+            referenceButtons.Children.Add(Button("Взять выделенный текст", (_, __) => AssignReference()));
+            referenceButtons.Children.Add(Button("↻", (_, __) => RefreshReference(true)));
+            foreach (Button button in referenceButtons.Children) button.Margin = new Thickness(0, 0, 4, 3);
+            panel.Children.Add(referenceButtons);
+            _sampleInfo = Note("Образец не назначен. Создайте заготовку или выберите текст в Corel.");
+            panel.Children.Add(_sampleInfo);
 
             panel.Children.Add(Label("Регистр имён"));
             _letterCase = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 6) };
@@ -91,71 +89,19 @@ namespace VanyaTools.Native
             _letterCase.SelectionChanged += (_, __) => UpdatePreview();
             panel.Children.Add(_letterCase);
 
-            var styleRow = new StackPanel { Orientation = Orientation.Horizontal,
-                Margin = new Thickness(0, 0, 0, 8) };
-            _bold = new CheckBox { Content = "Жирный", FontSize = 11,
-                FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 18, 0) };
-            _italic = new CheckBox { Content = "Курсив", FontSize = 11,
-                FontStyle = FontStyles.Italic };
-            foreach (var modifier in new[] { _bold, _italic })
-            {
-                modifier.Checked += (_, __) => UpdatePreview();
-                modifier.Unchecked += (_, __) => UpdatePreview();
-                styleRow.Children.Add(modifier);
-            }
-            panel.Children.Add(styleRow);
-
-            var sizeRow = new Grid { Margin = new Thickness(0, 0, 0, 8) };
-            sizeRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            sizeRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(78) });
-            sizeRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(66) });
-            sizeRow.Children.Add(Label("Размер шрифта"));
-            _size = Field("36");
-            Grid.SetColumn(_size, 1);
-            sizeRow.Children.Add(_size);
-            _unit = new ComboBox { FontSize = 11, Margin = new Thickness(3, 0, 0, 0), Height = 25 };
-            _unit.Items.Add("pt");
-            _unit.Items.Add("мм");
-            _unit.SelectedIndex = 0;
-            _unit.SelectionChanged += ChangeUnit;
-            Grid.SetColumn(_unit, 2);
-            sizeRow.Children.Add(_unit);
-            panel.Children.Add(sizeRow);
-
-            _maxWidth = AddNumberRow(panel, "Макс. ширина надписи, мм", "150");
             _columns = AddNumberRow(panel, "Колонок", "2");
             _horizontalGap = AddNumberRow(panel, "Между колонками, мм", "10");
             _verticalGap = AddNumberRow(panel, "Между строками, мм", "8");
-            _twoLines = new CheckBox { Content = "Фамилия и имя в две строки", IsChecked = false,
-                FontSize = 11, Margin = new Thickness(0, 3, 0, 3) };
-            _twoLines.Checked += (_, __) => { UpdateLineSpacingAvailability(); UpdatePreview(); };
-            _twoLines.Unchecked += (_, __) => { UpdateLineSpacingAvailability(); UpdatePreview(); };
-            panel.Children.Add(_twoLines);
-            var spacingRow = new Grid { Margin = new Thickness(0, 0, 0, 5) };
-            spacingRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            spacingRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(66) });
-            spacingRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            _lineSpacingToggle = new CheckBox { Content = "Межстрочный интервал", FontSize = 11,
-                VerticalAlignment = VerticalAlignment.Center,
-                ToolTip = "Расстояние между фамилией и именем в одной надписи" };
-            _lineSpacingToggle.Checked += (_, __) => UpdateLineSpacingAvailability();
-            _lineSpacingToggle.Unchecked += (_, __) => UpdateLineSpacingAvailability();
-            spacingRow.Children.Add(_lineSpacingToggle);
-            _lineSpacing = Field("100");
-            _lineSpacing.ToolTip = "В процентах от размера шрифта; 100% — шаг равен размеру шрифта";
-            Grid.SetColumn(_lineSpacing, 1);
-            spacingRow.Children.Add(_lineSpacing);
-            var percent = Label("%");
-            percent.Margin = new Thickness(4, 0, 0, 0);
-            Grid.SetColumn(percent, 2);
-            spacingRow.Children.Add(percent);
-            panel.Children.Add(spacingRow);
-            UpdateLineSpacingAvailability();
             _center = new CheckBox { Content = "По центру ячеек", IsChecked = true, FontSize = 11,
                 Margin = new Thickness(0, 3, 0, 9) };
             panel.Children.Add(_center);
             panel.Children.Add(DockerTheme.Primary(Button("Создать сетку в CorelDRAW", CreateGrid)));
             panel.Children.Add(Note("Сетка начнётся в 10 мм от верхнего левого края страницы. Пустые строки пропускаются."));
+            panel.Children.Add(Note("Заготовка создаётся слева от страницы. Образец сохраняется " +
+                "в CDR и остаётся редактируемым. " +
+                "При создании читается его текущее оформление. Длинные имена уменьшаются " +
+                "до ширины образца; короткие сохраняют его кегль."));
+            Loaded += (_, __) => RefreshReference(false);
         }
 
         private void LoadFile(object sender, RoutedEventArgs e)
@@ -185,22 +131,45 @@ namespace VanyaTools.Native
             }
         }
 
-        private void ChangeUnit(object sender, SelectionChangedEventArgs e)
+        private void SetReferenceInfo(NamesGridReferenceInfo info)
         {
-            bool toMm = _unit.SelectedIndex == 1;
-            if (toMm == _sizeIsMm) return;
-            double value;
-            if (TryNumber(_size.Text, out value) && value > 0)
-                _size.Text = (toMm ? value * 25.4 / 72.0 : value * 72.0 / 25.4)
-                    .ToString("0.###", CultureInfo.CurrentCulture);
-            _sizeIsMm = toMm;
+            _referenceTwoLines = info.TwoLines;
+            _sampleInfo.Text = "Образец: " + (info.TwoLines ? "две строки" : "одна строка") +
+                " · " + info.WidthMm.ToString("0.#") + " × " + info.HeightMm.ToString("0.#") +
+                " мм. Изменяйте его оформление на холсте Corel.";
+            UpdatePreview();
         }
 
-        private void UpdateLineSpacingAvailability()
+        private void CreateReference(bool twoLines)
         {
-            bool twoLines = _twoLines.IsChecked == true;
-            _lineSpacingToggle.IsEnabled = twoLines;
-            _lineSpacing.IsEnabled = twoLines && _lineSpacingToggle.IsChecked == true;
+            try
+            {
+                SetReferenceInfo(new NamesGridService().CreateReference(twoLines));
+                _status("Заготовка создана и назначена образцом. Настройте текст в Corel.", false);
+            }
+            catch (Exception ex) { _status(ex.Message, true); }
+        }
+
+        private void AssignReference()
+        {
+            try
+            {
+                SetReferenceInfo(new NamesGridService().AssignSelectedReference());
+                _status("Выделенный текст назначен образцом имён.", false);
+            }
+            catch (Exception ex) { _status(ex.Message, true); }
+        }
+
+        private void RefreshReference(bool report)
+        {
+            try { SetReferenceInfo(new NamesGridService().ReadReferenceInfo()); }
+            catch (Exception ex)
+            {
+                _referenceTwoLines = false;
+                _sampleInfo.Text = ex.Message;
+                UpdatePreview();
+                if (report) _status(ex.Message, true);
+            }
         }
 
         private void CreateGrid(object sender, RoutedEventArgs e)
@@ -215,38 +184,19 @@ namespace VanyaTools.Native
                 if (names.Any(name => name.Text.Length > 200))
                     throw new InvalidOperationException("Одна из строк длиннее 200 символов.");
 
-                string font = _font.Text.Trim();
-                if (font.Length == 0)
-                    throw new InvalidOperationException("Выберите шрифт.");
-                double fontSize = Positive(_size.Text, "Размер шрифта");
-                double fontSizePt = _sizeIsMm ? fontSize * 72.0 / 25.4 : fontSize;
-                if (fontSizePt > 1000)
-                    throw new InvalidOperationException("Размер шрифта должен быть не больше 1000 pt.");
-                double maxWidth = Positive(_maxWidth.Text, "Максимальная ширина");
-                if (maxWidth > 2000)
-                    throw new InvalidOperationException("Максимальная ширина должна быть не больше 2000 мм.");
+                var service = new NamesGridService();
+                SetReferenceInfo(service.ReadReferenceInfo());
                 int columns;
                 if (!Int32.TryParse(_columns.Text.Trim(), out columns) || columns < 1 || columns > 20)
                     throw new InvalidOperationException("Укажите от 1 до 20 колонок.");
-                bool customLineSpacing = _twoLines.IsChecked == true && _lineSpacingToggle.IsChecked == true;
-                double lineSpacingPercent = customLineSpacing
-                    ? Positive(_lineSpacing.Text, "Межстрочный интервал") : 100;
-                if (lineSpacingPercent < 10 || lineSpacingPercent > 500)
-                    throw new InvalidOperationException("Межстрочный интервал: укажите от 10 до 500%.");
                 var options = new NamesGridOptions {
-                    FontName = font, FontSizePt = fontSizePt, MaxWidthMm = maxWidth,
                     Columns = Math.Min(columns, names.Count),
                     HorizontalGapMm = NonNegative(_horizontalGap.Text, "Расстояние между колонками"),
                     VerticalGapMm = NonNegative(_verticalGap.Text, "Расстояние между строками"),
                     CenterInCell = _center.IsChecked == true,
-                    TwoLines = _twoLines.IsChecked == true,
-                    LetterCase = (NamesGridLetterCase)_letterCase.SelectedIndex,
-                    Bold = _bold.IsChecked == true,
-                    Italic = _italic.IsChecked == true,
-                    CustomLineSpacing = customLineSpacing,
-                    LineSpacingPercent = lineSpacingPercent
+                    LetterCase = (NamesGridLetterCase)_letterCase.SelectedIndex
                 };
-                var result = new NamesGridService().Create(names, options);
+                var result = service.Create(names, options);
                 _status("Создано: " + result.Count + ". Уменьшено по ширине: " + result.ReducedCount +
                     ". Сетка: " + result.WidthMm.ToString("0.#") + " × " +
                     result.HeightMm.ToString("0.#") + " мм.", false);
@@ -266,11 +216,9 @@ namespace VanyaTools.Native
                 int customWidths = names.Count(name => name.MaxWidthMm.HasValue);
                 _count.Text = names.Count + " надписей" +
                     (customWidths > 0 ? " · " + customWidths + " пометок ширины" : "");
-                bool twoLines = _twoLines != null && _twoLines.IsChecked == true;
+                bool twoLines = _referenceTwoLines;
                 var letterCase = _letterCase == null ? NamesGridLetterCase.Original
                     : (NamesGridLetterCase)_letterCase.SelectedIndex;
-                _preview.FontWeight = _bold?.IsChecked == true ? FontWeights.Bold : FontWeights.Normal;
-                _preview.FontStyle = _italic?.IsChecked == true ? FontStyles.Italic : FontStyles.Normal;
                 _preview.Text = String.Join(twoLines ? Environment.NewLine + Environment.NewLine : Environment.NewLine,
                     names.Select(name => name.PrintText(twoLines, letterCase).Replace("\r", Environment.NewLine)));
             }
@@ -316,14 +264,6 @@ namespace VanyaTools.Native
         {
             return Double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.CurrentCulture, out result) ||
                    Double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out result);
-        }
-
-        private static double Positive(string text, string label)
-        {
-            double value;
-            if (!TryNumber(text, out value) || Double.IsNaN(value) || Double.IsInfinity(value) || value <= 0)
-                throw new InvalidOperationException(label + ": укажите положительное число.");
-            return value;
         }
 
         private static double NonNegative(string text, string label)
