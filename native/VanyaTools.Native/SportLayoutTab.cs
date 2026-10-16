@@ -67,7 +67,7 @@ namespace VanyaTools.Native
         private readonly TextBox _frontArt, _backArt, _leftSleeveArt, _rightSleeveArt,
             _neckArt, _modelPath;
         private readonly TextBox _sheetWidth, _gap;
-        private readonly ComboBox _nameSide, _frontCase;
+        private readonly ComboBox _nameSide, _frontCase, _batchSize;
         // Kept only for older masters with rectangle zones; text samples use Corel attributes.
         private SportTextStyle _legacyNameStyle = LegacyStyle("Arial", 72, false);
         private SportTextStyle _legacyNumberStyle = LegacyStyle("Arial", 150, false);
@@ -165,7 +165,9 @@ namespace VanyaTools.Native
             panel.Children.Add(Title("3. Игроки и допечатка"));
             panel.Children.Add(Note("Скопируйте диапазон из Excel или Google Таблиц. Ctrl+V вставляет " +
                 "его с выбранной ячейки; кнопка ниже добавляет строки в конец. Столбцы без " +
-                "заголовка: размер, имя, номер, количество. Заголовки распознаются автоматически. " +
+                "заголовка: размер, имя, номер, количество. Один столбец в пустой таблице " +
+                "или через кнопку добавления — имена; размеры можно назначить после вставки. " +
+                "Заголовки распознаются автоматически. " +
                 "Кнопка ↗ создаёт выбранную деталь для допечатки."));
             _playerGrid = new DataGrid { Height = 224, AutoGenerateColumns = false,
                 CanUserAddRows = false, CanUserDeleteRows = false, FontSize = 12,
@@ -199,6 +201,16 @@ namespace VanyaTools.Native
             playerButtons.Children.Add(Button("Добавить из Excel / Google Таблиц", PastePlayers));
             playerButtons.Children.Add(Button("Убрать строки", RemovePlayers));
             panel.Children.Add(playerButtons);
+            var batchSizeRow = new WrapPanel { Margin = new Thickness(0, 1, 0, 3) };
+            batchSizeRow.Children.Add(Label("Размер выделенным"));
+            _batchSize = new ComboBox { ItemsSource = _sizeOptions, Width = 110,
+                Margin = new Thickness(2, 1, 4, 3), MinHeight = 27,
+                ToolTip = "Выделите строки или ячейки игроков и выберите размер для них" };
+            batchSizeRow.Children.Add(_batchSize);
+            batchSizeRow.Children.Add(Button("Назначить", ApplySizeToSelection));
+            panel.Children.Add(batchSizeRow);
+            panel.Children.Add(Note("Для группы одного размера выделите диапазон ячеек с Shift " +
+                "или несколько строк с Ctrl, выберите размер выше и нажмите «Назначить»."));
             _count = Note("");
             panel.Children.Add(_count);
 
@@ -449,7 +461,11 @@ namespace VanyaTools.Native
                 }
             }
             if (placeholder) start = 0;
-            IList<SportPlayerClipboard.Row> input = SportPlayerClipboard.Parse(text, column);
+            bool autoColumn = append || _playerGrid.CurrentCell.Column == null ||
+                !(_playerGrid.CurrentCell.Item is SportLayoutPlayer);
+            IList<SportPlayerClipboard.Row> input = SportPlayerClipboard.Parse(text, column, autoColumn);
+            bool namesOnly = input.All(row => row.Cells.Count == 1 && row.Cells.ContainsKey(1));
+            if (autoColumn) column = input[0].Cells.Keys.Min();
             string defaultSize = _sizeOptions.FirstOrDefault() ?? "М";
             if (start < visibleRows.Count && _sizeOptions.Contains(visibleRows[start].Size))
                 defaultSize = visibleRows[start].Size;
@@ -462,7 +478,8 @@ namespace VanyaTools.Native
                 SportLayoutPlayer previous = !append && !placeholder && start + i < visibleRows.Count ?
                     visibleRows[start + i] : null;
                 targetIndices.Add(placeholder && i == 0 ? 0 : previous == null ? -1 : _players.IndexOf(previous));
-                var row = previous == null ? new SportLayoutPlayer { Size = defaultSize, Quantity = 1 } :
+                var row = previous == null ? new SportLayoutPlayer {
+                    Size = namesOnly ? "" : defaultSize, Quantity = 1 } :
                     new SportLayoutPlayer { Size = previous.Size, Name = previous.Name,
                         Number = previous.Number, Quantity = previous.Quantity };
                 try
@@ -504,7 +521,9 @@ namespace VanyaTools.Native
             UpdateCount();
             SaveDraft();
             _status("Вставлено строк: " + rows.Count + ". Добавлено: " + (rows.Count - updated) +
-                ", обновлено: " + updated + ".", false);
+                ", обновлено: " + updated + "." +
+                (namesOnly && rows.Any(row => String.IsNullOrWhiteSpace(row.Size)) ?
+                    " Теперь назначьте размеры строкам." : ""), false);
         }
 
         private string ResolvePastedSize(string value, string fallback)
@@ -524,13 +543,48 @@ namespace VanyaTools.Native
                 "Укажите имя нужного слоя размера.");
         }
 
-        private void RemovePlayers(object sender, RoutedEventArgs e)
+        private List<SportLayoutPlayer> SelectedPlayers()
         {
-            if (_busy) return;
             var selected = _playerGrid.SelectedCells.Select(cell => cell.Item as SportLayoutPlayer)
                 .Where(row => row != null).Distinct().ToList();
             if (selected.Count == 0 && _playerGrid.SelectedItem is SportLayoutPlayer current)
                 selected.Add(current);
+            return selected;
+        }
+
+        private void ApplySizeToSelection(object sender, RoutedEventArgs e)
+        {
+            if (_busy) return;
+            try
+            {
+                if (!_playerGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
+                    !_playerGrid.CommitEdit(DataGridEditingUnit.Row, true))
+                    throw new InvalidOperationException("Закончите редактирование ячейки перед назначением размера.");
+                var selected = SelectedPlayers();
+                if (selected.Count == 0)
+                    throw new InvalidOperationException("Выделите строки или ячейки игроков для назначения размера.");
+                string size = _batchSize.SelectedItem as string;
+                if (String.IsNullOrWhiteSpace(size) || !_sizeOptions.Contains(size))
+                    throw new InvalidOperationException("Выберите размер из списка лекал.");
+                bool wasLoading = _loading;
+                _loading = true;
+                try { foreach (var row in selected) row.Size = size; }
+                finally { _loading = wasLoading; }
+                _playerGrid.Items.Refresh();
+                _playerGrid.SelectedCells.Clear();
+                foreach (var row in selected)
+                    _playerGrid.SelectedCells.Add(new DataGridCellInfo(row, _playerGrid.Columns[0]));
+                _playerGrid.CurrentCell = new DataGridCellInfo(selected[0], _playerGrid.Columns[0]);
+                SaveDraft();
+                _status("Размер «" + size + "» назначен строкам: " + selected.Count + ".", false);
+            }
+            catch (Exception error) { _status(error.Message, true); }
+        }
+
+        private void RemovePlayers(object sender, RoutedEventArgs e)
+        {
+            if (_busy) return;
+            var selected = SelectedPlayers();
             bool wasLoading = _loading;
             _loading = true;
             try { foreach (var row in selected) _players.Remove(row); }

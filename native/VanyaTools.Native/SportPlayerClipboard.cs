@@ -15,13 +15,18 @@ namespace VanyaTools.Native
             public Dictionary<int, string> Cells = new Dictionary<int, string>();
         }
 
-        internal static IList<Row> Parse(string text, int startColumn)
+        internal static IList<Row> Parse(string text, int startColumn, bool singleColumnAsNames = false)
         {
             if (String.IsNullOrWhiteSpace(text))
                 throw new InvalidOperationException("В буфере обмена нет таблицы.");
             char separator = text.IndexOf('\t') >= 0 ? '\t' :
                 text.IndexOf(';') >= 0 ? ';' : '\t';
             IList<string[]> table = ReadTable(text, separator);
+            // A standalone list of names needs no size column. Headers still
+            // take precedence; explicit cell pastes keep their target column.
+            bool nameList = singleColumnAsNames && table
+                .Where(values => values.Any(value => !String.IsNullOrWhiteSpace(value)))
+                .All(values => values.Skip(1).All(String.IsNullOrWhiteSpace));
             var result = new List<Row>();
             Dictionary<int, int> header = null;
             for (int index = 0; index < table.Count; index++)
@@ -56,6 +61,12 @@ namespace VanyaTools.Native
                 }
                 else
                 {
+                    if (nameList)
+                    {
+                        row.Cells[1] = values[0].Trim();
+                        result.Add(row);
+                        continue;
+                    }
                     if (values.Length > 4 - startColumn)
                         throw new InvalidOperationException("Строка вставки " + row.Line +
                             ": диапазон шире четырёх столбцов игроков. Используйте заголовки " +

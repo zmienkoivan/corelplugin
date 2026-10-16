@@ -628,6 +628,9 @@ namespace VanyaTools.Native
             {
                 if (row == null) continue;
                 string size = NormalizeSize(row.Size);
+                if (size.Length == 0)
+                    throw new InvalidOperationException("Назначьте размер для игрока «" +
+                        (row.Name ?? "") + "» в таблице перед генерацией.");
                 if (!bySize.ContainsKey(size))
                     throw new InvalidOperationException("Нет шаблона для размера " + size + ".");
                 if (row.Quantity < 1 || row.Quantity > 100)
