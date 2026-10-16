@@ -104,7 +104,16 @@ namespace VanyaTools.Native
             var approvalCopy = new ApprovalCopyTool((message, isError) => SetStatus(message, isError));
             var settings = new StackPanel { Margin = new Thickness(5) };
             settings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
-            settings.Children.Add(Button("Показать / скрыть кнопки докера", (_, __) =>
+            settings.Children.Add(Button("Восстановить кнопки на панели Corel", (_, __) =>
+            {
+                try { SetStatus(CorelToolbarInstaller.RestoreButtons(), false); }
+                catch (Exception error)
+                {
+                    Log.Error("Could not restore Vanya Tools toolbar buttons.", error);
+                    SetStatus("Не удалось восстановить кнопки: " + error.Message, true);
+                }
+            }));
+            settings.Children.Add(Button("Показать / скрыть кнопки действий", (_, __) =>
             {
                 try
                 {

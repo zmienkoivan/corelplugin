@@ -78,6 +78,8 @@ namespace VanyaTools.Native
         private const string DockerButton = "60cc0805-a158-44eb-a286-49061c3d963d";
         private const string TrimButton = "a624e7f3-8a23-4b1e-b2e6-58cf6725b9e4";
         private const string FitFrameButton = "96b63d8e-86b4-433f-a315-126381e35e11";
+        private const string RecoveryToolbarName = "Vanya Tools";
+        private const int CuiBarTop = 1;
         private static readonly List<WeakReference<UserControl>> HostedButtons =
             new List<WeakReference<UserControl>>();
 
@@ -87,6 +89,9 @@ namespace VanyaTools.Native
 
         internal static string ToggleButtons()
         {
+            // The XSLT toolbar insertion is workspace-specific. A visibility
+            // toggle cannot show WPF hosts which have never been created.
+            if (CountHostedButtons() == 0) return RestoreButtons();
             bool show = File.Exists(VisibilityPath);
             if (show)
             {
@@ -105,12 +110,81 @@ namespace VanyaTools.Native
 
         internal static void ApplySavedVisibility()
         {
-            if (!File.Exists(VisibilityPath)) return;
             try
             {
-                SetHostedButtonsVisible(false);
+                int hosts = SetHostedButtonsVisible(!File.Exists(VisibilityPath));
+                Log.Info("Vanya Tools toolbar hosts: " + hosts + ", hidden=" + File.Exists(VisibilityPath));
+                if (hosts == 0)
+                    Log.Info("Vanya Tools toolbar: no action hosts in this workspace; use Restore buttons in settings.");
             }
             catch (Exception error) { Log.Error("Could not restore toolbar button visibility.", error); }
+        }
+
+        internal static string RestoreButtons()
+        {
+            if (File.Exists(VisibilityPath)) File.Delete(VisibilityPath);
+            dynamic app = CorelApp.Get();
+            dynamic bar = FindRecoveryToolbar((object)app);
+            bool created = bar == null;
+            if (created)
+            {
+                // A dedicated persistent toolbar avoids depending on the GUID
+                // or localized name of the user's standard command bar.
+                bar = app.FrameWork.CommandBars.Add(RecoveryToolbarName, CuiBarTop, false);
+                if (bar == null) throw new InvalidOperationException("Corel не создал панель Vanya Tools.");
+            }
+            int added = 0;
+            foreach (string id in new[] { DockerButton, TrimButton, FitFrameButton })
+                if (EnsureButton((object)bar.Controls, id)) added++;
+            bar.Visible = true;
+            if (!Convert.ToBoolean(bar.Visible))
+                throw new InvalidOperationException("Corel не показал панель Vanya Tools. Проверьте её в меню «Окно → Панели инструментов».");
+            SetHostedButtonsVisible(true);
+            Log.Info("Vanya Tools toolbar restored: created=" + created + ", added=" + added);
+            return "Панель Vanya Tools показана: открытие докера, обрезка и рамка. Её можно переместить в удобное место.";
+        }
+
+        private static object FindRecoveryToolbar(object appObject)
+        {
+            dynamic app = appObject;
+            foreach (dynamic bar in app.FrameWork.CommandBars)
+                if (String.Equals(Convert.ToString(bar.Name), RecoveryToolbarName, StringComparison.OrdinalIgnoreCase) &&
+                    !Convert.ToBoolean(bar.BuiltIn)) return (object)bar;
+            return null;
+        }
+
+        private static bool EnsureButton(object controlsObject, string id)
+        {
+            dynamic controls = controlsObject;
+            for (int i = 1; i <= Convert.ToInt32(controls.Count); i++)
+                if (String.Equals(GetOurControlId(controls.Item[i]), id, StringComparison.OrdinalIgnoreCase)) return false;
+            try
+            {
+                // Index=0 is the SDK's default insertion position. Only our
+                // recovery toolbar is modified by this operation.
+                dynamic added = controls.Add(id, 0, false);
+                if (added == null || !String.Equals(GetOurControlId(added), id, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Corel не вернул зарегистрированную команду.");
+                try { added.Tag = "VanyaTools:" + id; } catch { }
+                Log.Info("Vanya Tools recovery toolbar: added " + id);
+                return true;
+            }
+            catch (Exception error)
+            {
+                throw new InvalidOperationException("Не удалось добавить кнопку Vanya Tools. " +
+                    "Закройте Corel и установите полный пакет обновления через INSTALL.bat, затем повторите восстановление.", error);
+            }
+        }
+
+        private static int CountHostedButtons()
+        {
+            int count = 0;
+            for (int i = HostedButtons.Count - 1; i >= 0; i--)
+            {
+                if (!HostedButtons[i].TryGetTarget(out UserControl host)) { HostedButtons.RemoveAt(i); continue; }
+                if (host.IsLoaded) count++;
+            }
+            return count;
         }
 
         internal static void RegisterHostedButton(UserControl host)
