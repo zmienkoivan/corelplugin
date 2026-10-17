@@ -76,16 +76,26 @@ namespace VanyaTools.Native
                 variants[i] = new List<Variant>();
                 if (item.Bands != null)
                 {
-                    if (!profiles.TryGetValue(item.Bands, out SportContourNesting.Profile[] pair))
+                    if (!profiles.TryGetValue(item.Bands, out SportContourNesting.Profile[] cached))
                     {
-                        var source = new SportContourNesting.Item { Width = item.Width, Height = item.Height, Bands = item.Bands };
-                        pair = new[] { SportContourNesting.MakeProfile(source, step, false),
-                            SportContourNesting.MakeProfile(source, step, true) };
-                        profiles.Add(item.Bands, pair);
+                        cached = new SportContourNesting.Profile[3];
+                        profiles.Add(item.Bands, cached);
                     }
-                    variants[i].Add(new Variant { Width = item.Width, Height = item.Height, Profile = pair[0] });
-                    if (item.Allow180) variants[i].Add(new Variant { Width = item.Width,
-                        Height = item.Height, Rotation = 180, Profile = pair[1] });
+                    var source = new SportContourNesting.Item { Width = item.Width, Height = item.Height, Bands = item.Bands };
+                    if (cached[0] == null) cached[0] = SportContourNesting.MakeProfile(source, step, 0);
+                    variants[i].Add(new Variant { Width = item.Width, Height = item.Height, Profile = cached[0] });
+                    if (item.Allow90)
+                    {
+                        if (cached[1] == null) cached[1] = SportContourNesting.MakeProfile(source, step, 90);
+                        variants[i].Add(new Variant { Width = item.Height, Height = item.Width,
+                            Rotation = 90, Profile = cached[1] });
+                    }
+                    if (item.Allow180)
+                    {
+                        if (cached[2] == null) cached[2] = SportContourNesting.MakeProfile(source, step, 180);
+                        variants[i].Add(new Variant { Width = item.Width,
+                            Height = item.Height, Rotation = 180, Profile = cached[2] });
+                    }
                 }
                 else
                 {

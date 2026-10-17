@@ -87,7 +87,7 @@ namespace VanyaTools.Native
             Content = panel;
 
             if (styleOnly) panel.Children.Add(Label("Стилизация", true));
-            panel.Children.Add(Note("Выделите объект или группу."));
+            DockerHelp.Add(panel, "Выделите объект или группу.");
             _removeButton = Button("Удалить фон · AI", async (_, __) => await Run("background"));
             _backgroundModel = new ComboBox { FontSize = 11, Margin = new Thickness(0, 2, 0, 4) };
             _backgroundModel.Items.Add(new ModelChoice(BiRefNet, "BiRefNet · фото 2K", 0m, "general-hr"));

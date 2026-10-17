@@ -106,22 +106,22 @@ namespace VanyaTools.Native
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Content = panel };
             panel.Children.Add(Title("Раскладка спортформы"));
-            panel.Children.Add(Note("Сначала заполните таблицу игроков, назначьте размеры и отметьте кого печатать. " +
+            DockerHelp.Add(panel, "Сначала заполните таблицу игроков, назначьте размеры и отметьте кого печатать. " +
                 "Подготовьте страницу-макет и поправьте рисунки " +
-                "под видимыми контурами. Затем создайте комплекты и раскладку."));
+                "под видимыми контурами. Затем создайте комплекты и раскладку.");
 
             panel.Children.Add(Title("1. Лекала по размерам"));
             _modelPath = Field("");
             _modelPath.IsReadOnly = true;
             panel.Children.Add(PathRow(_modelPath, "Выбрать модель CDR", ChooseLayeredModel));
-            panel.Children.Add(Note("Новая модель: одна страница, общий верхний слой VT_ZONES; " +
+            DockerHelp.Add(panel, "Новая модель: одна страница, общий верхний слой VT_ZONES; " +
                 "в каждом слое размера — группа VT_TOP с пятью именованными деталями. " +
-                "Названия слоёв размеров станут вариантами в таблице игроков."));
-            panel.Children.Add(Note("В группе VT_TOP: VT_FRONT, VT_BACK, VT_SLEEVE_LEFT, " +
+                "Названия слоёв размеров станут вариантами в таблице игроков.");
+            DockerHelp.Add(panel, "В группе VT_TOP: VT_FRONT, VT_BACK, VT_SLEEVE_LEFT, " +
                 "VT_SLEEVE_RIGHT, VT_NECK. На VT_ZONES: VT_SPORT_ZONE_FRONT_LEFT, " +
                 "VT_SPORT_ZONE_FRONT_RIGHT, VT_SPORT_ZONE_BACK, " +
                 "VT_SPORT_ZONE_BACK_NUMBER, VT_SPORT_ZONE_LEFT_SLEEVE, " +
-                "VT_SPORT_ZONE_RIGHT_SLEEVE; VT_SPORT_ZONE_NECK — по желанию."));
+                "VT_SPORT_ZONE_RIGHT_SLEEVE; VT_SPORT_ZONE_NECK — по желанию.");
             _templateGrid = new DataGrid { Height = 132, AutoGenerateColumns = false,
                 CanUserAddRows = false, CanUserDeleteRows = false, FontSize = 12,
                 Margin = new Thickness(0, 3, 0, 4), ItemsSource = _templates };
@@ -139,23 +139,23 @@ namespace VanyaTools.Native
                 SaveDraft();
             }));
             panel.Children.Add(templateButtons);
-            panel.Children.Add(Note("Для размера М: перед, спина, верхний левый рукав и нижний правый. " +
+            DockerHelp.Add(panel, "Для размера М: перед, спина, верхний левый рукав и нижний правый. " +
                 "Временные S и XL масштабируются целиком; 95% и 110% можно изменить. " +
-                "Позже укажите отдельные файлы CDR и масштаб 100%."));
+                "Позже укажите отдельные файлы CDR и масштаб 100%.");
 
             panel.Children.Add(Title("2. Рисунки для деталей"));
-            panel.Children.Add(Note("Выберите файл или выделите готовый рисунок в Corel и нажмите " +
+            DockerHelp.Add(panel, "Выберите файл или выделите готовый рисунок в Corel и нажмите " +
                 "«Взять выделение» для нужной детали. На странице-макете рисунок " +
                 "лежит под контуром; выступающие края обрежутся при генерации. " +
-                "Выделение снимается в PNG 300 DPI; исходные объекты не меняются."));
+                "Выделение снимается в PNG 300 DPI; исходные объекты не меняются.");
             var captureRow = new WrapPanel { Margin = new Thickness(0, 2, 0, 4) };
             captureRow.Children.Add(Label("Предел захвата рисунка, Мп"));
             _artworkLimit = new ComboBox { Width = 90, MinHeight = 27, FontSize = 12,
                 Margin = new Thickness(3, 0, 0, 0), ItemsSource = new[] { 100, 150, 200, 250 }, SelectedItem = 150 };
             captureRow.Children.Add(_artworkLimit); panel.Children.Add(captureRow);
-            panel.Children.Add(Note("По умолчанию 150 Мп. Для тяжёлых рисунков можно выбрать до 250 Мп. " +
+            DockerHelp.Add(panel, "По умолчанию 150 Мп. Для тяжёлых рисунков можно выбрать до 250 Мп. " +
                 "Перед захватом проверяется свободная ОЗУ и доступная память Windows; " +
-                "DPI автоматически не уменьшается. Предел относится к одному захвату, а не ко всей раскладке."));
+                "DPI автоматически не уменьшается. Предел относится к одному захвату, а не ко всей раскладке.");
             _frontArt = ArtworkField(panel, "Перед", "переда", SportLayoutPart.Front);
             _backArt = ArtworkField(panel, "Спина", "спины", SportLayoutPart.Back);
             _leftSleeveArt = ArtworkField(panel, "Левый рукав (верхний на шаблоне)",
@@ -164,25 +164,25 @@ namespace VanyaTools.Native
                 "правого рукава", SportLayoutPart.RightSleeve);
             _neckArt = ArtworkField(panel, "Горловина (для модели с пятью деталями)",
                 "горловины", SportLayoutPart.Neck);
-            panel.Children.Add(Note("Крестик убирает рисунок только у выбранной детали. " +
+            DockerHelp.Add(panel, "Крестик убирает рисунок только у выбранной детали. " +
                 "Пустое поле оставляет деталь без печатного рисунка; на готовой обзорной " +
-                "странице рисунок убирается сразу."));
+                "странице рисунок убирается сразу.");
             _prepare = DockerTheme.Primary(Button("Этап 1 · Подготовить / добавить размеры", Prepare));
             panel.Children.Add(_prepare);
-            panel.Children.Add(Note("Этап 1 берёт только размеры строк с галочкой «Печатать» в таблице игроков. " +
+            DockerHelp.Add(panel, "Этап 1 берёт только размеры строк с галочкой «Печатать» в таблице игроков. " +
                 "При первом запуске комплекты располагаются по два размера в ряд, следующие пары ниже. " +
                 "Повторный запуск добавляет только недостающие размеры на ту же страницу. " +
                 "Готовые размеры и ваши правки сохраняются. Каждый размер остаётся на отдельном слое для ручной правки рисунков, " +
                 "контуров, текстовых образцов и подписей в подгибке. Оформление и положение " +
-                "подписей изменяйте в Corel. Чтобы пересоздать размер, удалите его слой на обзорной странице и повторите этап 1."));
-            panel.Children.Add(Note("Исходный CDR модели остаётся открытым в отдельной вкладке. " +
-                "Повторный запуск использует его; рабочий документ остаётся активным."));
-            panel.Children.Add(Note("Создайте фигурный текст: XXXXXXXXX для имени, две строки X для " +
+                "подписей изменяйте в Corel. Чтобы пересоздать размер, удалите его слой на обзорной странице и повторите этап 1.");
+            DockerHelp.Add(panel, "Исходный CDR модели остаётся открытым в отдельной вкладке. " +
+                "Повторный запуск использует его; рабочий документ остаётся активным.");
+            DockerHelp.Add(panel, "Создайте фигурный текст: XXXXXXXXX для имени, две строки X для " +
                 "имени в две строки, XX или XXX для номера. Настройте его в Corel, выделите и назначьте " +
-                "кнопкой ниже. Образец заменит прежний бокс на слое выбранного размера."));
-            panel.Children.Add(Note("Ненужное текстовое поле можно удалить на слое размера: " +
+                "кнопкой ниже. Образец заменит прежний бокс на слое выбранного размера.");
+            DockerHelp.Add(panel, "Ненужное текстовое поле можно удалить на слое размера: " +
                 "например, номер правого рукава только для маленьких размеров. Этап 2 пропустит " +
-                "удалённое поле. Текст XX на рукаве заменяется номером игрока."));
+                "удалённое поле. Текст XX на рукаве заменяется номером игрока.");
             var zoneButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
             zoneButtons.Children.Add(Button("Имя груди слева", (_, __) => AssignTextBox(
                 "VT_SPORT_ZONE_FRONT_LEFT", "имени на груди слева")));
@@ -195,12 +195,12 @@ namespace VanyaTools.Native
             panel.Children.Add(zoneButtons);
 
             panel.Children.Add(Title("3. Игроки и допечатка"));
-            panel.Children.Add(Note("Скопируйте диапазон из Excel или Google Таблиц. Ctrl+V вставляет " +
+            DockerHelp.Add(panel, "Скопируйте диапазон из Excel или Google Таблиц. Ctrl+V вставляет " +
                 "его с выбранной ячейки; кнопка ниже добавляет строки в конец. Столбцы без " +
                 "заголовка: размер, имя, номер, количество. Один столбец в пустой таблице " +
                 "или через кнопку добавления — имена; размеры можно назначить после вставки. " +
                 "Заголовки распознаются автоматически. " +
-                "Кнопка ↗ создаёт выбранную деталь для допечатки."));
+                "Кнопка ↗ создаёт выбранную деталь для допечатки.");
             _playerEditor = new Grid();
             _playerEditor.RowDefinitions.Add(new RowDefinition());
             _playerEditor.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -258,10 +258,10 @@ namespace VanyaTools.Native
             batchSizeRow.Children.Add(_batchSize);
             batchSizeRow.Children.Add(Button("Назначить", ApplySizeToSelection));
             playerControls.Children.Add(batchSizeRow);
-            playerControls.Children.Add(Note("Для группы одного размера выделите диапазон ячеек с Shift " +
-                "или несколько строк с Ctrl, выберите размер выше и нажмите «Назначить»."));
-            playerControls.Children.Add(Note("Этап 2 и резка включают только строки с галочкой «Печатать». " +
-                "Кнопка ↗ в строке по-прежнему создаёт одну деталь для допечатки."));
+            DockerHelp.Add(playerControls, "Для группы одного размера выделите диапазон ячеек с Shift " +
+                "или несколько строк с Ctrl, выберите размер выше и нажмите «Назначить».");
+            DockerHelp.Add(playerControls, "Этап 2 и резка включают только строки с галочкой «Печатать». " +
+                "Кнопка ↗ в строке по-прежнему создаёт одну деталь для допечатки.");
             _count = Note("");
             playerControls.Children.Add(_count);
             panel.Children.Add(_playerEditor);
@@ -285,18 +285,20 @@ namespace VanyaTools.Native
             _rotateSleeves = new CheckBox { Content = "Поворачивать рукава и горловину на 90° для плотной раскладки",
                 FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
             panel.Children.Add(_rotateSleeves);
-            panel.Children.Add(Note("Автораскладка заполняет свободные участки рядом с крупными " +
-                "деталями; при разрешённом повороте весь рисунок детали поворачивается вместе с ней. " +
+            DockerHelp.Add(panel, "Печать раскладывается по контуру контейнера с припуском +6 мм; " +
+                "видимые подписи и рамки за контуром тоже занимают место. " +
+                "Поиск перестановок заполняет свободные участки рядом с крупными деталями. " +
+                "При разрешённом повороте весь рисунок детали поворачивается вместе с ней. " +
                 "Страницы создаются в пределах заданной длины для печати и резки. " +
                 "Сначала заполняются свободные места на предыдущих страницах; " +
                 "нижний ряд по возможности выравнивается. Отступа от края полотна нет; " +
                 "расстояние применяется только между деталями. Для этапа 2 берутся текущие " +
                 "положения рисунков и зон со страницы-макета; после замены исходного файла " +
-                "рисунка подготовьте макет заново."));
-            panel.Children.Add(Note("У текстового образца берутся шрифт, кегль, начертание, цвет, " +
+                "рисунка подготовьте макет заново.");
+            DockerHelp.Add(panel, "У текстового образца берутся шрифт, кегль, начертание, цвет, " +
                 "обводка, выравнивание и интервалы из Corel. Ширина образца ограничивает надпись: " +
                 "длинный текст уменьшается пропорционально, короткий сохраняет кегль образца. " +
-                "Оформление меняйте в самом текстовом образце на странице-макете."));
+                "Оформление меняйте в самом текстовом образце на странице-макете.");
             var settings = new WrapPanel { Margin = new Thickness(0, 7, 0, 6) };
             settings.Children.Add(Label("Имя спереди (сторона футболки)"));
             _nameSide = new ComboBox { Width = 110, Height = 27, FontSize = 12,
@@ -315,14 +317,14 @@ namespace VanyaTools.Native
             _frontCase.Items.Add("ВСЕ ПРОПИСНЫЕ");
             _frontCase.SelectedIndex = 0;
             panel.Children.Add(_frontCase);
-            panel.Children.Add(Note("В текстовом образце две строки X задают две строки имени. " +
+            DockerHelp.Add(panel, "В текстовом образце две строки X задают две строки имени. " +
                 "Перенос — после первого слова; символ | в таблице задаёт его вручную. " +
-                "Имя и номер на спине назначаются отдельными текстовыми объектами."));
+                "Имя и номер на спине назначаются отдельными текстовыми объектами.");
             _keepGuides = new CheckBox { Content = "Оставить красные рамки в готовом CDR",
                 FontSize = 11, Margin = new Thickness(0, 0, 0, 8), IsChecked = false };
             panel.Children.Add(_keepGuides);
-            panel.Children.Add(Note("Свободная зона переда и зоны рукавов сохраняются как именованные " +
-                "фреймы для дополнительной графики. Подписи каждой детали находятся в нижнем припуске."));
+            DockerHelp.Add(panel, "Свободная зона переда и зоны рукавов сохраняются как именованные " +
+                "фреймы для дополнительной графики. Подписи каждой детали находятся в нижнем припуске.");
 
             _generate = DockerTheme.Primary(Button("Этап 2 · Создать комплекты и раскладку", Generate));
             _generate.Margin = new Thickness(0, 7, 0, 4);
@@ -343,21 +345,21 @@ namespace VanyaTools.Native
             panel.Children.Add(_printQuality);
             _exportPrint = Button("Экспортировать активный лист печати в PDF", ExportPrint);
             panel.Children.Add(_exportPrint);
-            panel.Children.Add(Note("Сохраняется активная страница после этапа 2, целиком и в масштабе 1:1. " +
+            DockerHelp.Add(panel, "Сохраняется активная страница после этапа 2, целиком и в масштабе 1:1. " +
                 "Надписи остаются векторными; изображения сжимаются с высоким качеством. " +
                 "При нескольких листах откройте нужный и повторите экспорт. Папка и качество запоминаются; " +
-                "каждый экспорт создаёт новый файл."));
+                "каждый экспорт создаёт новый файл.");
             panel.Children.Add(Title("6. Раскладка резки"));
             var cutWidthRow = new WrapPanel { Margin = new Thickness(0, 3, 0, 6) };
             cutWidthRow.Children.Add(Label("Ширина ткани для резки, мм"));
             _cutSheetWidth = Field("1500"); _cutSheetWidth.Width = 72;
             cutWidthRow.Children.Add(_cutSheetWidth);
             panel.Children.Add(cutWidthRow);
-            panel.Children.Add(Note("В каждой группе детали нужен замкнутый контур silhouette. " +
+            DockerHelp.Add(panel, "В каждой группе детали нужен замкнутый контур silhouette. " +
                 "Для печати она расширяется наружу на 6 мм; для резки берутся все исходные " +
                 "кривые группы, включая silhouette и надсечки. Рисунки и надписи не добавляются. " +
                 "Размеры и количество — из таблицы игроков. Ширина ткани задаётся отдельно от ширины печати; " +
-                "зазор и максимальная длина страницы — из общих настроек полотна."));
+                "зазор и максимальная длина страницы — из общих настроек полотна.");
             _cutAllow180 = new CheckBox { Content = "Разрешить поворот деталей резки на 180°",
                 FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
             panel.Children.Add(_cutAllow180);
@@ -370,27 +372,28 @@ namespace VanyaTools.Native
             _tagLetter = TagField(panel, "Высота буквы, мм", "8");
             _tagFirstOffset = TagField(panel, "Отступ первого размера слева, мм", "10");
             _tagSizeStep = TagField(panel, "Шаг следующих размеров, мм", "20");
-            panel.Children.Add(Note("П-образный язычок без ножек; два непрорезанных мостика на линии детали. " +
+            DockerHelp.Add(panel, "П-образный язычок без ножек; два непрорезанных мостика на линии детали. " +
                 "Надпись — однолинейные чертёжные знаки с трафаретными разрывами. " +
-                "Для длинного размера ширина увеличивается, высота букв сохраняется."));
-            panel.Children.Add(Note("Левый угол крепления: 10, 30, 50 мм и далее от начала прямого нижнего края " +
+                "Для длинного размера ширина увеличивается, высота букв сохраняется.");
+            DockerHelp.Add(panel, "Левый угол крепления: 10, 30, 50 мм и далее от начала прямого нижнего края " +
                 "до поворота в раскладке. Порядок размеров — от меньшей площади силуэта переда к большей " +
                 "только среди размеров отмеченных игроков текущей резки. Отступ и шаг можно изменить. " +
-                "Если на заданном месте нет свободного прямого нижнего края, появится сообщение с размером и деталью."));
+                "Если на заданном месте нет свободного прямого нижнего края, появится сообщение с размером и деталью.");
             _tagSamples = Button("Лист язычков для пробной резки", CreateTagSamples);
             panel.Children.Add(_tagSamples);
-            panel.Children.Add(Note("Новый лист: три ширины (текущая и ±4 мм), мостики 1 / 1,5 / 2 / 2,5 / 3 мм " +
+            DockerHelp.Add(panel, "Новый лист: три ширины (текущая и ±4 мм), мостики 1 / 1,5 / 2 / 2,5 / 3 мм " +
                 "и заданная длина; ниже — примеры размеров S, XS, XL, XXL, 116, 128, 152. " +
                 "Код 24X12/B2 означает язычок 24×12 мм, два мостика по 2 мм. " +
-                "Все линии, включая код, — сквозная резка. Сохраните лист кнопкой CDR ниже."));
+                "Все линии, включая код, — сквозная резка. Сохраните лист кнопкой CDR ниже.");
             _generateCut = Button("Создать раскладку резки", GenerateCutting);
             panel.Children.Add(_generateCut);
             _saveCut = Button("Сохранить страницу резки в отдельный CDR…", SaveCutting);
             panel.Children.Add(_saveCut);
-            panel.Children.Add(Note("Раскладка резки создаётся на отдельной странице текущего CDR. " +
+            DockerHelp.Add(panel, "Раскладка резки создаётся на отдельной странице текущего CDR. " +
                 "Сохранение копирует только эту страницу; версия CDR берётся из настроек Vanya Tools. " +
+                "При нескольких страницах переключайтесь между листами раскладки и сохраняйте каждый отдельно. " +
                 "Раскладка учитывает контуры деталей и заданный зазор. " +
-                "Повороты подбираются по контуру: 0° или 180°. Поворота на 90° для резки нет."));
+                "Повороты подбираются по контуру: 0° или 180°. Поворота на 90° для резки нет.");
             panel.Children.Add(Title("7. Экспорт резки"));
             _cutFolder = Field(""); _cutFolder.IsReadOnly = true;
             var cutFolderRow = new Grid { Margin = new Thickness(0, 2, 0, 5) };
@@ -402,9 +405,9 @@ namespace VanyaTools.Native
             panel.Children.Add(cutFolderRow);
             _exportCut = Button("Экспортировать активный лист резки в DXF", ExportCut);
             panel.Children.Add(_exportCut);
-            panel.Children.Add(Note("DXF AutoCAD 2000 · миллиметры · масштаб 1:1. Экспортируется активный лист резки " +
+            DockerHelp.Add(panel, "DXF AutoCAD 2000 · миллиметры · масштаб 1:1. Экспортируется активный лист резки " +
                 "целиком, с надсечками, язычками и прорезными буквами. Папка запоминается; каждый экспорт создаёт новый файл. " +
-                "При нескольких листах откройте нужный и повторите экспорт."));
+                "При нескольких листах откройте нужный и повторите экспорт.");
             _progress = Note("");
             panel.Children.Add(_progress);
 
@@ -929,8 +932,7 @@ namespace VanyaTools.Native
                 _progress.Text = "Создаю лист язычков для пробной резки…";
                 await Dispatcher.Yield(DispatcherPriority.Render);
                 int count = SportCutTagSamples.Create(settings);
-                _progress.Text = "Готово: " + count + " образца. Код на детали: ширина X высота / B длина мостика. " +
-                    "Буква " + settings.LetterHeightMm + " мм. Сохраните активную страницу в CDR кнопкой ниже.";
+                _progress.Text = "Готово: " + count + " образца, высота буквы " + settings.LetterHeightMm + " мм.";
                 _status("Лист пробной резки язычков создан.", false);
             }
             catch (Exception error)
@@ -1099,9 +1101,7 @@ namespace VanyaTools.Native
                     : service.GenerateInCurrentDocument(players, templates, options, progress);
                 _progress.Text = "Готово: " + result.GarmentCount + " комплектов, " +
                     result.PieceCount + " деталей, страниц: " + result.PageCount +
-                    ", общая длина " + (result.SheetHeightMm / 1000).ToString("0.###") + " м. " +
-                    (cutting ? "Кнопка сохранения резки сохраняет активную страницу; переключайтесь между страницами раскладки." :
-                        "Готовый лист можно экспортировать кнопкой PDF ниже. Сохраните CDR.");
+                    ", общая длина " + (result.SheetHeightMm / 1000).ToString("0.###") + " м.";
                 _status(cutting ? "Раскладка резки создана. Сохраните отдельный CDR кнопкой ниже." :
                     "Раскладка добавлена в текущий CDR. Сохраните документ.", false);
             }

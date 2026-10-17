@@ -48,11 +48,12 @@ namespace VanyaTools.Native
             var panel = new StackPanel { Margin = new Thickness(6) };
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Content = panel };
-            panel.Children.Add(Note("Выделите фотографию и один прямоугольник. Для расширения нарисуйте рамку желаемого кадра за краями фото — она может охватывать весь исходник. Фото сохранится, дорисуются новые края."));
-            panel.Children.Add(Note("Прямоугольник целиком внутри фото задаёт область замены: например, для удаления предмета или исправления руки. " +
-                "В расширении сохраняется исходник с небольшой полосой совмещения по краю."));
-            panel.Children.Add(Note("Достаточно короткой команды: «дорисуй сверху», «убери бутылку», «восстанови руку». " +
-                "Модель использует фотографию и выделенную область как ориентир."));
+            DockerHelp.Add(panel, "Выделите фотографию и один прямоугольник. Для расширения нарисуйте рамку желаемого кадра за краями фото — она может охватывать весь исходник. Фото сохранится, дорисуются новые края.");
+            DockerHelp.Add(panel, "Прямоугольник целиком внутри фото задаёт область замены: например, для удаления предмета или исправления руки. " +
+                "В расширении сохраняется исходник с небольшой полосой совмещения по краю.");
+            DockerHelp.Add(panel, "Достаточно короткой команды: «дорисуй сверху», «убери бутылку», «восстанови руку». " +
+                "Модель использует фотографию и выделенную область как ориентир. " +
+                "Пиксели вне области правки сохраняются из исходника.");
             _model = new ComboBox { Margin = new Thickness(1, 3, 1, 3) };
             _model.Items.Add(new ModelChoice("google/nano-banana-2", "Nano Banana 2 · 2K", "$0.101"));
             _model.Items.Add(new ModelChoice("google/nano-banana-pro", "Nano Banana Pro · 2K", "$0.15"));
@@ -331,8 +332,7 @@ namespace VanyaTools.Native
         private void UpdateModelNote()
         {
             var model = (ModelChoice)_model.SelectedItem;
-            _modelNote.Text = "Ориентировочно " + model.Price + " за результат 2K · Replicate. " +
-                "Пиксели вне области правки сохраняются из исходника.";
+            _modelNote.Text = "Ориентировочно " + model.Price + " за результат 2K · Replicate.";
         }
 
         private void SaveModel()

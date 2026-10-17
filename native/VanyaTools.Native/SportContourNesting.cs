@@ -73,27 +73,36 @@ namespace VanyaTools.Native
         }
 
         internal static Profile MakeProfile(Item item, double step, bool rotated)
+            => MakeProfile(item, step, rotated ? 180 : 0);
+
+        internal static Profile MakeProfile(Item item, double step, int angle)
         {
-            int width = Math.Max(1, (int)Math.Ceiling(item.Width / step - 0.00000001));
+            if (angle != 0 && angle != 90 && angle != 180)
+                throw new ArgumentOutOfRangeException(nameof(angle));
+            double rotatedWidth = angle == 90 ? item.Height : item.Width;
+            double rotatedHeight = angle == 90 ? item.Width : item.Height;
+            int width = Math.Max(1, (int)Math.Ceiling(rotatedWidth / step - 0.00000001));
             var result = new Profile { Top = Enumerable.Repeat(Double.PositiveInfinity, width).ToArray(),
                 Bottom = Enumerable.Repeat(Double.NegativeInfinity, width).ToArray() };
             foreach (Band band in item.Bands)
             {
-                double left = rotated ? item.Width - band.Right : band.Left;
-                double right = rotated ? item.Width - band.Left : band.Right;
-                double top = rotated ? item.Height - band.Bottom : band.Top;
-                double bottom = rotated ? item.Height - band.Top : band.Bottom;
+                // Corel's positive 90 degrees is counterclockwise. These
+                // bands use a downward Y axis, measured from the top left.
+                double left = angle == 90 ? band.Top : angle == 180 ? item.Width - band.Right : band.Left;
+                double right = angle == 90 ? band.Bottom : angle == 180 ? item.Width - band.Left : band.Right;
+                double top = angle == 90 ? item.Width - band.Right : angle == 180 ? item.Height - band.Bottom : band.Top;
+                double bottom = angle == 90 ? item.Width - band.Left : angle == 180 ? item.Height - band.Top : band.Bottom;
                 int first = Math.Max(0, Math.Min(width - 1, (int)Math.Floor(left / step - 0.00000001)));
                 int last = Math.Max(0, Math.Min(width - 1, (int)Math.Floor(right / step + 0.00000001)));
                 for (int j = first; j <= last; j++)
                 {
                     result.Top[j] = Math.Min(result.Top[j], Math.Max(0, top));
-                    result.Bottom[j] = Math.Max(result.Bottom[j], Math.Min(item.Height, bottom));
+                    result.Bottom[j] = Math.Max(result.Bottom[j], Math.Min(rotatedHeight, bottom));
                 }
             }
             for (int j = 0; j < width; j++)
                 if (Double.IsInfinity(result.Top[j]) || Double.IsInfinity(result.Bottom[j]))
-                { result.Top[j] = 0; result.Bottom[j] = item.Height; }
+                { result.Top[j] = 0; result.Bottom[j] = rotatedHeight; }
             return result;
         }
     }

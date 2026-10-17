@@ -58,13 +58,7 @@ namespace VanyaTools.Native
             AddRow(panel, 0, "Обрезать растр");
             AddRow(panel, 1, "Подогнать рамку");
             AddRow(panel, 2, "Копировать согласование");
-            panel.Children.Add(new TextBlock
-            {
-                Text = "Нажмите в поле Ctrl+Alt+клавишу. Delete — убрать. Работает при открытом докере CorelDRAW.",
-                FontSize = 10,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 3, 0, 0)
-            });
+            DockerHelp.Add(panel, "Нажмите в поле Ctrl+Alt+клавишу. Delete — убрать. Работает при открытом докере CorelDRAW.");
             _message = new TextBlock
             {
                 FontSize = 10,

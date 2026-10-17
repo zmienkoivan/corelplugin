@@ -74,8 +74,8 @@ namespace VanyaTools.Native
             SettingsView = settingsPanel;
             settingsPanel.Children.Add(Label("Replicate", true));
             settingsPanel.Children.Add(Button("Баланс / Billing ↗", (_, __) => OpenBilling()));
-            panel.Children.Add(Note("Выделите объект и запустите. Результат появится на холсте."));
-            fontPanel.Children.Add(Note("Выделите буквы. Результат — вероятные шрифты."));
+            DockerHelp.Add(panel, "Выделите объект и запустите. Результат появится на холсте.");
+            DockerHelp.Add(fontPanel, "Выделите буквы. Результат — вероятные шрифты.");
             fontPanel.Children.Add(Label("Модель анализа", false));
             _fontModel = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 4) };
             _fontModel.Items.Add(new ModelItem("anthropic/claude-4.5-sonnet", "Claude 4.5 Sonnet · $3/1M входных и $15/1M выходных токенов", 0m));
@@ -126,7 +126,7 @@ namespace VanyaTools.Native
             foreach (string item in new[] { "Авто · до 8 оттенков", "Сохранить все цвета и градиенты", "1 цвет · плоский принт", "2 цвета", "4 цвета", "6 цветов", "8 цветов" }) _palette.Items.Add(item);
             _palette.SelectedIndex = 0;
             panel.Children.Add(_palette);
-            panel.Children.Add(Note("Выход: A3 · 300 dpi. Авто: до 8 оттенков."));
+            DockerHelp.Add(panel, "Выход: A3 · 300 dpi. Авто: до 8 оттенков.");
             _analysisText = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 180, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 10 };
             panel.Children.Add(new Expander { Header = "Анализ AI", Content = _analysisText });
 

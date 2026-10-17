@@ -40,7 +40,7 @@ namespace VanyaTools.Native
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Content = panel };
 
-            panel.Children.Add(Note("Одна строка — одна надпись. Номера и пометки «укоротить до 110» удаляются."));
+            DockerHelp.Add(panel, "Одна строка — одна надпись. Номера и пометки «укоротить до 110» удаляются.");
 
             var inputHeader = new Grid { Margin = new Thickness(0, 4, 0, 3) };
             inputHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -66,9 +66,9 @@ namespace VanyaTools.Native
             _names.TextChanged += (_, __) => UpdatePreview();
 
             panel.Children.Add(Label("Текстовый образец в Corel"));
-            panel.Children.Add(Note("Создайте заготовку или выделите свой фигурный текст. " +
+            DockerHelp.Add(panel, "Создайте заготовку или выделите свой фигурный текст. " +
                 "Настройте в Corel шрифт, кегль, начертание, цвет, обводку и интервалы. " +
-                "Одна или две строки образца задают число строк имени; его ширина ограничивает надписи."));
+                "Одна или две строки образца задают число строк имени; его ширина ограничивает надписи.");
             var referenceButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
             referenceButtons.Children.Add(Button("Заготовка: 1 строка", (_, __) => CreateReference(false)));
             referenceButtons.Children.Add(Button("Заготовка: 2 строки", (_, __) => CreateReference(true)));
@@ -76,7 +76,7 @@ namespace VanyaTools.Native
             referenceButtons.Children.Add(Button("↻", (_, __) => RefreshReference(true)));
             foreach (Button button in referenceButtons.Children) button.Margin = new Thickness(0, 0, 4, 3);
             panel.Children.Add(referenceButtons);
-            _sampleInfo = Note("Образец не назначен. Создайте заготовку или выберите текст в Corel.");
+            _sampleInfo = Note("Образец не назначен.");
             panel.Children.Add(_sampleInfo);
 
             panel.Children.Add(Label("Регистр имён"));
@@ -96,11 +96,11 @@ namespace VanyaTools.Native
                 Margin = new Thickness(0, 3, 0, 9) };
             panel.Children.Add(_center);
             panel.Children.Add(DockerTheme.Primary(Button("Создать сетку в CorelDRAW", CreateGrid)));
-            panel.Children.Add(Note("Сетка начнётся в 10 мм от верхнего левого края страницы. Пустые строки пропускаются."));
-            panel.Children.Add(Note("Заготовка создаётся слева от страницы. Образец сохраняется " +
+            DockerHelp.Add(panel, "Сетка начнётся в 10 мм от верхнего левого края страницы. Пустые строки пропускаются.");
+            DockerHelp.Add(panel, "Заготовка создаётся слева от страницы. Образец сохраняется " +
                 "в CDR и остаётся редактируемым. " +
                 "При создании читается его текущее оформление. Длинные имена уменьшаются " +
-                "до ширины образца; короткие сохраняют его кегль."));
+                "до ширины образца; короткие сохраняют его кегль.");
             Loaded += (_, __) => RefreshReference(false);
         }
 

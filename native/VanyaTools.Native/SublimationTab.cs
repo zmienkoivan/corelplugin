@@ -60,7 +60,7 @@ namespace VanyaTools.Native
             var panel = new StackPanel { Margin = new Thickness(6) };
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Content = panel };
-            panel.Children.Add(Note("Выделите мокап. Один запуск — одна деталь."));
+            DockerHelp.Add(panel, "Выделите мокап. Один запуск — одна деталь.");
 
             var previews = new UniformGrid { Columns = 2 };
             previews.Children.Add(Preview("Выделение", out _sourcePreview));
@@ -72,7 +72,7 @@ namespace VanyaTools.Native
             _part.SelectedIndex = 0;
             _part.SelectionChanged += (_, __) => SetDefaultSize();
             panel.Children.Add(_part);
-            panel.Children.Add(Note("Спереди: правый рукав слева, левый справа."));
+            DockerHelp.Add(panel, "Спереди: правый рукав слева, левый справа.");
 
             panel.Children.Add(Label("Размер прямоугольника, мм: ширина × высота", false));
             var dimensions = new UniformGrid { Columns = 2 };
@@ -83,7 +83,7 @@ namespace VanyaTools.Native
             panel.Children.Add(dimensions);
             _size = Note(""); panel.Children.Add(_size);
             UpdateSize();
-            panel.Children.Add(Note("PNG 300 dpi; лекало добавьте в CorelDRAW."));
+            DockerHelp.Add(panel, "PNG 300 dpi; лекало добавьте в CorelDRAW.");
 
             panel.Children.Add(Label("Уточнение композиции (необязательно)", false));
             _hint = new TextBox { MinHeight = 48, MaxHeight = 72, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,

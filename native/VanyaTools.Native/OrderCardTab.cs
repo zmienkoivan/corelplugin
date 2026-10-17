@@ -32,7 +32,7 @@ namespace VanyaTools.Native
         private readonly List<RadioButton> _sourceButtons = new List<RadioButton>();
         private readonly PasswordBox _key;
         private readonly TextBlock _caption, _documentName, _orderInfo, _ordersCount, _unassignedCount,
-            _unassignedHint, _photoLabel, _photoMessage;
+            _photoLabel, _photoMessage;
         private readonly StackPanel _frames, _editor;
         private readonly Expander _frameExpander;
         private readonly Button _send, _updateText, _state, _refreshServer, _unassignedRefresh,
@@ -117,6 +117,7 @@ namespace VanyaTools.Native
             _unassignedCount = Note("Загрузка списка…");
             unassignedBar.Children.Add(_unassignedCount);
             openPanel.Children.Add(unassignedBar);
+            DockerHelp.Add(openPanel, "Нажмите на заказ в списке, чтобы связать его с текущим CDR.");
             _unassignedTable = new DataGrid { AutoGenerateColumns = false, IsReadOnly = true,
                 CanUserAddRows = false, CanUserDeleteRows = false, CanUserResizeRows = false,
                 HeadersVisibility = DataGridHeadersVisibility.Column,
@@ -134,9 +135,6 @@ namespace VanyaTools.Native
             _unassignedTable.AddHandler(UIElement.MouseLeftButtonUpEvent,
                 new MouseButtonEventHandler(UnassignedRowClicked), true);
             openPanel.Children.Add(_unassignedTable);
-            _unassignedHint = Note("Нажмите на заказ, чтобы связать его с текущим CDR.");
-            _unassignedHint.Visibility = Visibility.Collapsed;
-            openPanel.Children.Add(_unassignedHint);
             var openExpander = new Expander { Header = "Заказы без макета", Content = openPanel,
                 Margin = new Thickness(0, 1, 0, 2) };
             openExpander.Expanded += async (_, __) => await LoadUnassignedTable();
@@ -436,7 +434,7 @@ namespace VanyaTools.Native
                 }
                 catch (Exception error) { _status("Сервер заказов: " + error.Message, true); }
             }));
-            settings.Children.Add(Note("Токен бота хранится на сервере. Здесь нужен ключ публикации."));
+            DockerHelp.Add(settings, "Токен бота хранится на сервере. Здесь нужен ключ публикации.");
             settings.Children.Add(Label("Папка года"));
             var folderRow = new DockPanel { Margin = new Thickness(0, 0, 0, 3) };
             var browseFolder = Button("", (_, __) => Safe(ChooseYearFolder));
@@ -481,7 +479,7 @@ namespace VanyaTools.Native
                     "Версия сохранения CDR: " + CorelDocumentSaver.VersionLabel(version) + ".", false);
             });
             settings.Children.Add(saveVersion);
-            settings.Children.Add(Note("Применяется к сохранению через Vanya Tools. При выборе старой версии новые эффекты Corel могут измениться. Ctrl+S работает по настройкам CorelDRAW."));
+            DockerHelp.Add(settings, "Применяется к сохранению через Vanya Tools. При выборе старой версии новые эффекты Corel могут измениться. Ctrl+S работает по настройкам CorelDRAW.");
             SettingsView = settings;
             LoadServerSettings();
             LoadFileSettings();
@@ -912,8 +910,13 @@ namespace VanyaTools.Native
         {
             _frameExpander.Header = "Кадры (" + _data.Frames.Count + ")";
             _frames.Children.Clear();
-            if (_data.Frames.Count == 0) { _frames.Children.Add(Note("Кадров нет. При публикации текущее выделение станет первым кадром.")); return; }
-            _frames.Children.Add(Note("После изменения макета выделите объекты и нажмите ↻ у нужного кадра."));
+            if (_data.Frames.Count == 0)
+            {
+                _frames.Children.Add(Note("Кадров нет."));
+                DockerHelp.Add(_frames, "При публикации текущее выделение станет первым кадром.");
+                return;
+            }
+            DockerHelp.Add(_frames, "После изменения макета выделите объекты и нажмите ↻ у нужного кадра.");
             for (int i = 0; i < _data.Frames.Count; i++)
             {
                 int index = i;
@@ -1924,14 +1927,12 @@ namespace VanyaTools.Native
                 }
                 _unassignedTable.ItemsSource = available;
                 _unassignedTable.Visibility = available.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-                _unassignedHint.Visibility = available.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
                 _unassignedCount.Text = available.Count > 0
                     ? "Найдено: " + available.Count : "Сейчас заказов без макета нет.";
             }
             catch (Exception error)
             {
                 _unassignedTable.Visibility = Visibility.Collapsed;
-                _unassignedHint.Visibility = Visibility.Collapsed;
                 _unassignedCount.Text = "Не удалось загрузить заказы: " + error.Message;
             }
             finally { _unassignedLoading = false; _unassignedRefresh.IsEnabled = true; }
@@ -2285,7 +2286,6 @@ namespace VanyaTools.Native
                 {
                     _unassignedTable.ItemsSource = remaining;
                     _unassignedTable.Visibility = remaining.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-                    _unassignedHint.Visibility = remaining.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
                     _unassignedCount.Text = remaining.Count > 0
                         ? "Найдено: " + remaining.Count : "Сейчас заказов без макета нет.";
                 }

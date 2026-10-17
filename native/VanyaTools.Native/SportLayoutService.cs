@@ -253,7 +253,8 @@ namespace VanyaTools.Native
             public double Width, Height;
             public bool CanRotate { get; set; }
             public bool SmallPart { get; set; }
-            public SportContourNesting.Item CuttingLayout;
+            public SportContourNesting.Item ContourLayout;
+            public object PrintInkRange;
         }
 
         public string AssignSelectedTextBox(string zoneName)
@@ -995,6 +996,7 @@ namespace VanyaTools.Native
             bool commandStarted = false;
             var nested = new List<NestedPiece>();
             var cutPrepared = new Dictionary<string, NestedPiece>();
+            var printPrepared = new Dictionary<string, SportPrintFootprint.Body>();
             int complete = 0;
             try
             {
@@ -1049,7 +1051,7 @@ namespace VanyaTools.Native
                             Garment garment = CopyGarment(source, outputLayer, selectedPart);
                             Log.Info("Sport layout: garment copied, item " + (complete + 1));
                             nested.AddRange(BuildNestedPieces(app, outputLayer, garment, row, size,
-                                complete + 1, options, scale, selectedPart));
+                                complete + 1, options, scale, selectedPart, printPrepared));
                         }
                         Log.Info("Sport layout: pieces built, item " + (complete + 1));
                         complete++;
@@ -1060,8 +1062,8 @@ namespace VanyaTools.Native
                 Log.Info("Sport layout: nesting " + nested.Count + " pieces");
                 var inputs = nested.Select(p => new SportSheetNesting.Item { Width = p.Width, Height = p.Height,
                     SmallPart = p.SmallPart, Allow90 = !cutting && p.CanRotate,
-                    Allow180 = cutting && p.CuttingLayout.Allow180,
-                    Bands = cutting ? p.CuttingLayout.Bands : null }).ToList();
+                    Allow180 = cutting && p.ContourLayout.Allow180,
+                    Bands = p.ContourLayout.Bands }).ToList();
                 SportSheetNesting.Result layout = SportSheetNesting.Place(inputs, options.SheetWidthMm,
                     options.MaxPageLengthMm, options.GapMm);
                 var outputLayers = new List<object> { (object)outputLayer };
@@ -1090,11 +1092,27 @@ namespace VanyaTools.Native
                     page.Activate();
                     if (placed.Page != 0) item.Shape.MoveToLayer(outputLayers[placed.Page]);
                     double rotation = placed.Rotation;
-                    if (rotation != 0)
-                        item.Shape.RotateEx(rotation, Convert.ToDouble(item.Shape.CenterX),
-                            Convert.ToDouble(item.Shape.CenterY));
-                    item.Shape.Move(Convert.ToDouble(page.LeftX) + placed.Left - Convert.ToDouble(item.Shape.LeftX),
-                        Convert.ToDouble(page.TopY) - placed.Top - placed.Height - Convert.ToDouble(item.Shape.BottomY));
+                    if (cutting)
+                    {
+                        if (rotation != 0)
+                            item.Shape.RotateEx(rotation, Convert.ToDouble(item.Shape.CenterX), Convert.ToDouble(item.Shape.CenterY));
+                        item.Shape.Move(Convert.ToDouble(page.LeftX) + placed.Left - Convert.ToDouble(item.Shape.LeftX),
+                            Convert.ToDouble(page.TopY) - placed.Top - placed.Height - Convert.ToDouble(item.Shape.BottomY));
+                    }
+                    else
+                    {
+                        SportPrintFootprint.Bounds ink = SportPrintFootprint.Measure(item.PrintInkRange);
+                        if (rotation != 0)
+                        {
+                            item.Shape.RotateEx(rotation, ink.CenterX, ink.CenterY);
+                            ink = SportPrintFootprint.Measure(item.PrintInkRange);
+                        }
+                        if (Math.Abs(ink.Width - placed.Width) > 0.05 || Math.Abs(ink.Height - placed.Height) > 0.05)
+                            throw new InvalidOperationException("Габариты печатной детали изменились при повороте. " +
+                                "Отключите поворот рукавов и повторите раскладку.");
+                        item.Shape.Move(Convert.ToDouble(page.LeftX) + placed.Left - ink.Left,
+                            Convert.ToDouble(page.TopY) - placed.Top - placed.Height - ink.Bottom);
+                    }
                 }
                 outputPage.Activate();
                 Log.Info("Sport layout: complete, pages=" + outputPages.Count + ", max length=" + options.MaxPageLengthMm);
@@ -1855,7 +1873,7 @@ namespace VanyaTools.Native
                     // profile reading happen once, not once per player.
                     copy = prepared.Shape.CopyToLayer(layer);
                     width = prepared.Width; height = prepared.Height;
-                    bands = prepared.CuttingLayout.Bands;
+                    bands = prepared.ContourLayout.Bands;
                 }
                 else
                 {
@@ -1885,7 +1903,7 @@ namespace VanyaTools.Native
                 copy.Name = "VT_CUT_" + index.ToString("000", CultureInfo.InvariantCulture) +
                     "_" + Clean(size) + "_" + Clean(row.Name) + "_" + keys[i];
                 var item = new NestedPiece { Shape = copy, Width = width, Height = height,
-                    CanRotate = false, SmallPart = i >= 2, CuttingLayout = new SportContourNesting.Item {
+                    CanRotate = false, SmallPart = i >= 2, ContourLayout = new SportContourNesting.Item {
                         Width = width, Height = height, Bands = bands, Allow180 = options.CutAllow180 } };
                 result.Add(item);
                 if (!preparedCache.ContainsKey(key)) preparedCache.Add(key, item);
@@ -1988,7 +2006,8 @@ namespace VanyaTools.Native
 
         private static IList<NestedPiece> BuildNestedPieces(dynamic app, dynamic layer,
             Garment garment, SportLayoutPlayer row, string size, int index,
-            SportLayoutOptions options, double scale, SportLayoutPart? selectedPart)
+            SportLayoutOptions options, double scale, SportLayoutPart? selectedPart,
+            IDictionary<string, SportPrintFootprint.Body> printPrepared)
         {
             var pieces = new List<NestedPiece>();
             if (!selectedPart.HasValue || selectedPart == SportLayoutPart.Front)
@@ -1998,7 +2017,7 @@ namespace VanyaTools.Native
                 pieces.Add(BuildNestedPart(app, layer, garment.Front,
                     new[] { frontName, extra }, garment.FrontArtwork, "ПЕРЕД", row, size,
                     index, options, scale, frontName, null, null,
-                    garment.FrontCaption, garment.CaptionReferences));
+                    garment.FrontCaption, garment.CaptionReferences, printPrepared));
             }
             if (!selectedPart.HasValue || selectedPart == SportLayoutPart.Back)
                 pieces.Add(BuildNestedPart(app, layer, garment.Back,
@@ -2006,14 +2025,14 @@ namespace VanyaTools.Native
                         new[] { garment.BackText, garment.BackNumber },
                     garment.BackArtwork, "СПИНА", row, size,
                     index, options, scale, null, garment.BackText, garment.BackNumber,
-                    garment.BackCaption, garment.CaptionReferences));
+                    garment.BackCaption, garment.CaptionReferences, printPrepared));
             if (!selectedPart.HasValue || selectedPart == SportLayoutPart.LeftSleeve)
             {
                 var sleeve = BuildNestedPart(app, layer, garment.LeftSleeve,
                     new[] { garment.LeftSleeveFrame }, garment.LeftSleeveArtwork,
                     "ЛЕВЫЙ РУКАВ", row, size, index, options, scale, null, null,
                     IsTextSample(garment.LeftSleeveFrame) ? garment.LeftSleeveFrame : null,
-                    garment.LeftSleeveCaption, garment.CaptionReferences);
+                    garment.LeftSleeveCaption, garment.CaptionReferences, printPrepared);
                 sleeve.CanRotate = options.RotateSleeves;
                 sleeve.SmallPart = true;
                 pieces.Add(sleeve);
@@ -2024,7 +2043,7 @@ namespace VanyaTools.Native
                     new[] { garment.RightSleeveFrame }, garment.RightSleeveArtwork,
                     "ПРАВЫЙ РУКАВ", row, size, index, options, scale, null, null,
                     IsTextSample(garment.RightSleeveFrame) ? garment.RightSleeveFrame : null,
-                    garment.RightSleeveCaption, garment.CaptionReferences);
+                    garment.RightSleeveCaption, garment.CaptionReferences, printPrepared);
                 sleeve.CanRotate = options.RotateSleeves;
                 sleeve.SmallPart = true;
                 pieces.Add(sleeve);
@@ -2036,7 +2055,7 @@ namespace VanyaTools.Native
                     garment.NeckFrame == null ? new Piece[0] : new[] { garment.NeckFrame },
                     garment.NeckArtwork, "ГОРЛОВИНА", row, size, index, options,
                     scale, null, null, IsTextSample(garment.NeckFrame) ? garment.NeckFrame : null,
-                    garment.NeckCaption, garment.CaptionReferences);
+                    garment.NeckCaption, garment.CaptionReferences, printPrepared);
                 neck.CanRotate = options.RotateSleeves;
                 neck.SmallPart = true;
                 pieces.Add(neck);
@@ -2048,12 +2067,22 @@ namespace VanyaTools.Native
             Piece part, IEnumerable<Piece> frames, Piece artwork, string partName,
             SportLayoutPlayer row, string size, int index, SportLayoutOptions options,
             double scale, Piece frontName, Piece backText, Piece backNumber,
-            Piece captionSample, bool captionReferences)
+            Piece captionSample, bool captionReferences,
+            IDictionary<string, SportPrintFootprint.Body> printPrepared)
         {
             part.Shape.Name = "VT_" + partName.Replace(' ', '_');
             if (artwork != null) artwork.Shape.AddToPowerClip(part.Shape, 0);
             dynamic groupRange = app.CreateShapeRange();
             groupRange.Add(part.Shape);
+            dynamic inkRange = app.CreateShapeRange();
+            inkRange.Add(part.Shape);
+            var extras = new List<object>();
+            Action<object> addPrinted = shape =>
+            {
+                groupRange.Add(shape);
+                inkRange.Add(shape);
+                extras.Add(shape);
+            };
             foreach (Piece frame in frames.Where(frame => frame != null))
             {
                 if (IsTextSample(frame))
@@ -2068,6 +2097,7 @@ namespace VanyaTools.Native
                     ? "ИМЯ" : frame == backNumber ? "НОМЕР" : "ГРАФИКА");
                 FinishGuide(frame, "VT_FRAME_" + key.Replace(' ', '_'), options.KeepGuides);
                 groupRange.Add(frame.Shape);
+                if (options.KeepGuides) { inkRange.Add(frame.Shape); extras.Add((object)frame.Shape); }
             }
             if (captionSample != null)
             {
@@ -2075,10 +2105,10 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Подпись детали должна оставаться фигурным текстом.");
                 dynamic caption = ReplaceTextSample(layer, captionSample,
                     FormatCaption(partName, row, size), "VT_CAPTION_" + partName.Replace(' ', '_'), true);
-                if (caption != null) groupRange.Add(caption);
+                if (caption != null) addPrinted((object)caption);
             }
             else if (!captionReferences)
-                groupRange.Add(AddCaption(layer, part, partName, row, size, options.WhiteText));
+                addPrinted((object)AddCaption(layer, part, partName, row, size, options.WhiteText));
             if (frontName != null)
             {
                 string chestName = FormatFrontName(row.Name, options,
@@ -2086,12 +2116,12 @@ namespace VanyaTools.Native
                 dynamic text = AddCenteredText(layer, frontName, chestName,
                     options.NameStyle, "VT_PLAYER_NAME_FRONT",
                     options.FrontNameTwoLines ? options.FrontLineSpacingPercent : 0);
-                if (text != null) groupRange.Add(text);
+                if (text != null) addPrinted((object)text);
             }
             if (backText != null && backNumber == null && !IsTextSample(backText) && !captionReferences)
             {
                 foreach (dynamic text in AddLegacyBackText(layer, backText,
-                    (row.Name ?? "").Replace('|', ' '), row.Number, options)) groupRange.Add(text);
+                    (row.Name ?? "").Replace('|', ' '), row.Number, options)) addPrinted((object)text);
             }
             else
             {
@@ -2100,7 +2130,7 @@ namespace VanyaTools.Native
                     dynamic name = AddCenteredText(layer, backText,
                         FormatNameLines(row.Name, IsTextSample(backText) && SampleHasTwoLines(backText)),
                         options.NameStyle, "VT_PLAYER_NAME_BACK");
-                    if (name != null) groupRange.Add(name);
+                    if (name != null) addPrinted((object)name);
                 }
                 if (backNumber != null)
                 {
@@ -2109,7 +2139,7 @@ namespace VanyaTools.Native
                         partName == "ПРАВЫЙ РУКАВ" ? "RIGHT_SLEEVE" : "NECK";
                     dynamic number = AddCenteredText(layer, backNumber, row.Number,
                         options.NumberStyle, "VT_PLAYER_NUMBER_" + key);
-                    if (number != null) groupRange.Add(number);
+                    if (number != null) addPrinted((object)number);
                 }
             }
             dynamic group = Convert.ToInt32(groupRange.Count) == 1 ? part.Shape : groupRange.Group();
@@ -2121,9 +2151,10 @@ namespace VanyaTools.Native
                 scaled.Add(group);
                 scaled.Stretch(scale, scale, true);
             }
-            return new NestedPiece { Shape = group,
-                Width = Convert.ToDouble(group.SizeWidth),
-                Height = Convert.ToDouble(group.SizeHeight) };
+            SportContourNesting.Item layout = SportPrintFootprint.Build((object)part.Shape, extras, (object)inkRange,
+                printPrepared, size + "|" + partName + "|" + scale.ToString("R", CultureInfo.InvariantCulture));
+            return new NestedPiece { Shape = group, PrintInkRange = (object)inkRange,
+                Width = layout.Width, Height = layout.Height, ContourLayout = layout };
         }
 
         internal static string NormalizeSize(string value)

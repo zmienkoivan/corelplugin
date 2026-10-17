@@ -43,13 +43,14 @@ namespace VanyaTools.Native
                 Content = panel };
             panel.Children.Add(new TextBlock { Text = "Превью принта", FontSize = 14,
                 FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 1, 0, 6) });
-            panel.Children.Add(Note("Выделите принт. Ссылка действует 7 дней."));
+            DockerHelp.Add(panel, "Выделите принт. Ссылка действует 7 дней.");
             _publish = DockerTheme.Primary(Button("Опубликовать выделение", async (_, __) => await Publish()));
             panel.Children.Add(_publish);
+            DockerHelp.Add(panel, "Размер сохраняется. Большие макеты: 150 или 72 DPI.");
             _cancel = Button("Отменить", (_, __) => _cancellation?.Cancel());
             _cancel.Visibility = Visibility.Collapsed;
             panel.Children.Add(_cancel);
-            _size = Note("Размер сохраняется. Большие макеты: 150 или 72 DPI.");
+            _size = Note("");
             panel.Children.Add(_size);
             _activity = Note("");
             panel.Children.Add(_activity);
@@ -75,7 +76,7 @@ namespace VanyaTools.Native
             _settings = new Expander { Header = "Подключение", IsExpanded = false,
                 Margin = new Thickness(0, 7, 0, 0), Content = settingsPanel };
             panel.Children.Add(_settings);
-            settingsPanel.Children.Add(Note("Настраивается один раз. Ключ сохраняется в Windows в зашифрованном виде."));
+            DockerHelp.Add(settingsPanel, "Настраивается один раз. Ключ сохраняется в Windows в зашифрованном виде.");
             settingsPanel.Children.Add(Note("Адрес сервера"));
             _server = new TextBox { Text = "https://evpmerch.com:9443", FontSize = 11,
                 Margin = new Thickness(0, 0, 0, 4) };
