@@ -41,7 +41,7 @@ namespace VanyaTools.Native
         private readonly TextBlock _progress;
         private readonly ProgressBar _progressBar;
         private readonly Button _removeButton, _removeWhiteButton, _backgroundPipetteButton, _upscaleButton,
-            _alphaButton, _highlightButton, _smoothButton, _stairButton, _pipetteButton,
+            _alphaButton, _highlightButton, _smoothButton, _stairButton, _pipetteButton, _underlayColorButton,
             _editButton, _cancelButton, _retryButton;
         private readonly List<RadioButton> _styleButtons = new List<RadioButton>();
         private readonly DispatcherTimer _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -172,8 +172,13 @@ namespace VanyaTools.Native
                 Margin = new Thickness(5, 0, 2, 0) };
             edgeRow.Children.Add(_underlayHex);
             _underlaySwatch = new Border { Width = 18, Height = 18, Background = Brushes.White,
-                BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Margin = new Thickness(2) };
-            edgeRow.Children.Add(_underlaySwatch);
+                BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1) };
+            _underlayColorButton = new Button { Content = _underlaySwatch, Width = 28, Height = 28,
+                Padding = new Thickness(3), Margin = new Thickness(2, 0, 2, 0),
+                ToolTip = "Выбрать цвет обводки в палитре" };
+            System.Windows.Automation.AutomationProperties.SetName(_underlayColorButton, "Выбрать цвет обводки");
+            _underlayColorButton.Click += (_, __) => ChooseUnderlayColor();
+            edgeRow.Children.Add(_underlayColorButton);
             _pipetteButton = Button("Пипетка с экрана", async (_, __) => await BeginColorPick());
             edgeRow.Children.Add(_pipetteButton);
             _underlayHex.TextChanged += (_, __) => UpdateUnderlaySwatch();
@@ -1181,6 +1186,27 @@ namespace VanyaTools.Native
             }
         }
 
+        private void ChooseUnderlayColor()
+        {
+            if (_busy) return;
+            try
+            {
+                TryUnderlayColor(out Color current);
+                var source = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
+                Color? picked = WindowsColorPicker.Pick(source == null ? IntPtr.Zero : source.Handle, current);
+                if (!picked.HasValue) return;
+                Color color = picked.Value;
+                _underlayHex.Text = String.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}",
+                    color.R, color.G, color.B);
+                Report("Цвет обводки: " + _underlayHex.Text, false);
+            }
+            catch (Exception error)
+            {
+                Log.Error("Could not choose outline color.", error);
+                Report("Не удалось выбрать цвет обводки: " + error.GetBaseException().Message, true);
+            }
+        }
+
         private async Task BeginColorPick()
         {
             if (_busy) return;
@@ -1332,7 +1358,7 @@ namespace VanyaTools.Native
         {
             _busy = busy;
             _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _backgroundPipetteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
-                _highlightButton.IsEnabled = _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled =
+                _highlightButton.IsEnabled = _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled = _underlayColorButton.IsEnabled =
                 _editButton.IsEnabled = _localApplyButton.IsEnabled = _localPreviewButton.IsEnabled = !busy;
             _model.IsEnabled = _backgroundModel.IsEnabled = _localPreset.IsEnabled = _prompt.IsEnabled = _backgroundHex.IsEnabled = _backgroundTolerance.IsEnabled = _whiteCutPixels.IsEnabled = _alphaThreshold.IsEnabled =
                 _edgeRadius.IsEnabled = _edgeExpansion.IsEnabled = _underlayHex.IsEnabled = !busy;
