@@ -5,6 +5,8 @@ using System.Linq;
 
 namespace VanyaTools.Native
 {
+    internal enum SportNestingMode { Rectangles, Simplified, FullContour }
+    internal enum SportGroupingMode { Free, FrontBackPairs, Garment }
     // Bounded pages retain every occupied interval, including gaps above the
     // lowest placed pieces. Search never calls the Corel object model.
     internal static class SportSheetNesting
@@ -13,6 +15,7 @@ namespace VanyaTools.Native
         {
             public double Width, Height;
             public bool SmallPart, Allow90, Allow180;
+            public int Garment, Part;
             public IList<SportContourNesting.Band> Bands;
         }
 
@@ -57,12 +60,14 @@ namespace VanyaTools.Native
             }
         }
 
-        internal static Result Place(IList<Item> items, double width, double limit, double gap)
+        internal static Result Place(IList<Item> items, double width, double limit, double gap,
+            SportNestingMode mode = SportNestingMode.FullContour, bool improve = true, double? firstPageLimit = null)
         {
+            if (!Enum.IsDefined(typeof(SportNestingMode), mode)) throw new ArgumentOutOfRangeException(nameof(mode));
             if (width <= 0 || limit <= 0 || gap < 0 || Double.IsNaN(width + limit + gap) ||
                 Double.IsInfinity(width + limit + gap))
                 throw new InvalidOperationException("Некорректные размеры страницы или зазор.");
-            int columns = Math.Max(1, (int)Math.Ceiling(width / 2));
+            int columns = ColumnCount(width, mode);
             double step = width / columns;
             int gapColumns = (int)Math.Ceiling(gap / step);
             var profiles = new Dictionary<IList<SportContourNesting.Band>, SportContourNesting.Profile[]>();
@@ -74,7 +79,7 @@ namespace VanyaTools.Native
                     Double.IsInfinity(item.Width + item.Height))
                     throw new InvalidOperationException("У детали некорректный размер.");
                 variants[i] = new List<Variant>();
-                if (item.Bands != null)
+                if (item.Bands != null && mode != SportNestingMode.Rectangles)
                 {
                     if (!profiles.TryGetValue(item.Bands, out SportContourNesting.Profile[] cached))
                     {
@@ -82,17 +87,17 @@ namespace VanyaTools.Native
                         profiles.Add(item.Bands, cached);
                     }
                     var source = new SportContourNesting.Item { Width = item.Width, Height = item.Height, Bands = item.Bands };
-                    if (cached[0] == null) cached[0] = SportContourNesting.MakeProfile(source, step, 0);
+                    if (cached[0] == null) cached[0] = Profile(source, step, 0, mode);
                     variants[i].Add(new Variant { Width = item.Width, Height = item.Height, Profile = cached[0] });
                     if (item.Allow90)
                     {
-                        if (cached[1] == null) cached[1] = SportContourNesting.MakeProfile(source, step, 90);
+                        if (cached[1] == null) cached[1] = Profile(source, step, 90, mode);
                         variants[i].Add(new Variant { Width = item.Height, Height = item.Width,
                             Rotation = 90, Profile = cached[1] });
                     }
                     if (item.Allow180)
                     {
-                        if (cached[2] == null) cached[2] = SportContourNesting.MakeProfile(source, step, 180);
+                        if (cached[2] == null) cached[2] = Profile(source, step, 180, mode);
                         variants[i].Add(new Variant { Width = item.Width,
                             Height = item.Height, Rotation = 180, Profile = cached[2] });
                     }
@@ -101,6 +106,7 @@ namespace VanyaTools.Native
                 {
                     variants[i].Add(Rectangle(item.Width, item.Height, 0, step));
                     if (item.Allow90) variants[i].Add(Rectangle(item.Height, item.Width, 90, step));
+                    if (item.Allow180) variants[i].Add(Rectangle(item.Width, item.Height, 180, step));
                 }
                 variants[i].RemoveAll(v => v.Profile.Top.Length > columns || v.Height > limit + 0.000001);
                 if (variants[i].Count == 0)
@@ -119,13 +125,15 @@ namespace VanyaTools.Native
                 else order = order.OrderByDescending(i => items[i].Width * items[i].Height)
                     .ThenByDescending(i => Math.Max(items[i].Width, items[i].Height));
                 var pages = new List<Page>();
+                if (firstPageLimit.HasValue)
+                    pages.Add(new Page(columns, Math.Max(0, Math.Min(limit, firstPageLimit.Value))));
                 foreach (int index in order)
                 {
                     Placement selected = null;
                     int pageIndex = 0;
                     for (; pageIndex < pages.Count; pageIndex++)
                     {
-                        selected = Find(pages[pageIndex], variants[index], columns, step, limit, gapColumns);
+                        selected = Find(pages[pageIndex], variants[index], columns, step, pages[pageIndex].Limit, gapColumns);
                         if (selected != null) break; // Fill earlier pages before creating another.
                     }
                     if (selected == null)
@@ -149,7 +157,7 @@ namespace VanyaTools.Native
                     PageHeights = pages.Select(p => Math.Max(10, p.Height)).ToList(), Roughness = roughness };
                 if (Better(result, best)) best = result;
             }
-            if (items.Any(item => item.Bands != null))
+            if (improve && !firstPageLimit.HasValue && mode != SportNestingMode.Rectangles && items.Any(item => item.Bands != null))
                 best = ImproveContours(best, items, variants, columns, step, limit, gap, gapColumns);
             AlignBottomRow(best, gap, gapColumns);
             if (best.Placements.Count != items.Count || best.Placements.Select(p => p.Index).Distinct().Count() != items.Count ||
@@ -157,6 +165,32 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Нестинг вернул некорректное число деталей или длину страницы.");
             return best;
         }
+
+        private static SportContourNesting.Profile Profile(SportContourNesting.Item item, double step,
+            int angle, SportNestingMode mode)
+        {
+            var profile = SportContourNesting.MakeProfile(item, step, angle);
+            if (mode == SportNestingMode.Simplified)
+            {
+                // Widen the occupied silhouette to strips of at least 20 mm.
+                // Use minima/maxima, never a chord that could cut into a part.
+                int strip = Math.Max(1, (int)Math.Ceiling(20 / step));
+                for (int first = 0; first < profile.Top.Length; first += strip)
+                {
+                    int end = Math.Min(profile.Top.Length, first + strip);
+                    double top = Double.PositiveInfinity, bottom = Double.NegativeInfinity;
+                    for (int column = first; column < end; column++)
+                    { top = Math.Min(top, profile.Top[column]); bottom = Math.Max(bottom, profile.Bottom[column]); }
+                    for (int column = first; column < end; column++)
+                    { profile.Top[column] = top; profile.Bottom[column] = bottom; }
+                }
+            }
+            return profile;
+        }
+
+        private static int ColumnCount(double width, SportNestingMode mode) =>
+            Math.Max(1, (int)Math.Ceiling(width / (mode == SportNestingMode.Simplified ? 10 : 2)));
+        internal static double GridStep(double width, SportNestingMode mode) => width / ColumnCount(width, mode);
 
         private static bool Better(Result candidate, Result current) => current == null ||
             candidate.PageHeights.Count < current.PageHeights.Count ||

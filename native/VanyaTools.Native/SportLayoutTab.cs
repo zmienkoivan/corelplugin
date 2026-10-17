@@ -14,7 +14,6 @@ using System.Windows.Threading;
 using System.Windows.Input;
 using System.Text.RegularExpressions;
 using System.ComponentModel;
-using System.Runtime.InteropServices;
 using System.Windows.Automation;
 using System.Windows.Controls.Primitives;
 using Microsoft.Win32;
@@ -61,6 +60,9 @@ namespace VanyaTools.Native
             public SportTextStyle NumberStyle { get; set; }
             public bool KeepGuides { get; set; }
             public int WorkflowTab { get; set; }
+            public int? WorkflowUiVersion { get; set; }
+            public int? NestingMode { get; set; }
+            public int? GroupingMode { get; set; }
         }
 
         private static SportTextStyle LegacyStyle(string font, float points, bool white)
@@ -88,6 +90,8 @@ namespace VanyaTools.Native
         private readonly TextBox _tagWidth, _tagHeight, _tagBridge, _tagLetter, _tagFirstOffset, _tagSizeStep;
         private readonly ComboBox _nameSide, _frontCase, _batchSize, _printQuality;
         private readonly ComboBox _artworkLimit;
+        private readonly ComboBox _nestingMode, _groupingMode;
+        private readonly TextBlock _pdfProgress;
         // Kept only for older masters with rectangle zones; text samples use Corel attributes.
         private SportTextStyle _legacyNameStyle = LegacyStyle("Arial", 72, false);
         private SportTextStyle _legacyNumberStyle = LegacyStyle("Arial", 150, false);
@@ -102,16 +106,17 @@ namespace VanyaTools.Native
         private readonly Grid _playerEditor;
         private Window _playerWindow;
         private bool _loading, _busy;
-        private static readonly string[] StepNames = { "Лекала", "Рисунки", "Игроки", "Печать", "PDF", "Резка" };
+        private static readonly string[] StepNames = { "Лекала", "Рисунки", "Игроки", "Печать", "Резка" };
+        private static readonly int[] StepStates = { 0, 1, 2, 3, 5 };
         private readonly TabControl _steps;
-        private readonly TabItem[] _stepTabs = new TabItem[6];
-        private readonly TextBlock[] _stepMarks = new TextBlock[6];
+        private readonly TabItem[] _stepTabs = new TabItem[5];
+        private readonly TextBlock[] _stepMarks = new TextBlock[5];
         private readonly bool[] _completedSteps = new bool[6];
         private readonly string[] _stepDetails = new string[6];
         private string[] _stepInputs;
         private readonly DispatcherTimer _documentWatch = new DispatcherTimer {
             Interval = TimeSpan.FromSeconds(1) };
-        private IntPtr _workflowDocument;
+        private string _workflowDocument, _workflowSession, _workflowId, _savedWorkflow;
 
         public SportLayoutTab(Action<string, bool> status)
         {
@@ -127,10 +132,11 @@ namespace VanyaTools.Native
                 "Подготовьте страницу-макет и поправьте рисунки " +
                 "под видимыми контурами. Затем создайте комплекты и раскладку. " +
                 "Галочки на вкладках показывают назначенные лекала, заполненную таблицу и успешные действия в текущем CDR. " +
-                "После изменения данных зависимые отметки снимаются; при переключении CDR отметки действий сбрасываются. " +
+                "После изменения данных зависимые отметки снимаются. Отметки действий хранятся в самом CDR; " +
+                "сохраните документ, чтобы оставить их после закрытия Corel. " +
                 "PDF отмечает экспорт активного листа; при нескольких листах экспортируйте каждый отдельно.");
             root.Children.Add(intro);
-            var panels = Enumerable.Range(0, 6).Select(_ => new StackPanel { Margin = new Thickness(7) }).ToArray();
+            var panels = Enumerable.Range(0, 5).Select(_ => new StackPanel { Margin = new Thickness(7) }).ToArray();
             _steps = CreateSteps(panels);
             Grid.SetRow(_steps, 1); root.Children.Add(_steps);
             StackPanel panel = panels[0];
@@ -310,6 +316,25 @@ namespace VanyaTools.Native
             _maxPageLength = Field("4"); _maxPageLength.Width = 72;
             lengthRow.Children.Add(_maxPageLength);
             panel.Children.Add(lengthRow);
+            panel.Children.Add(Label("Плотность раскладки"));
+            _nestingMode = new ComboBox { MinHeight = 27, Margin = new Thickness(0, 0, 0, 4) };
+            foreach (string label in new[] { "Прямоугольники · быстрее", "Упрощённые фигуры · баланс", "Полный контур · плотнее" })
+                _nestingMode.Items.Add(label);
+            _nestingMode.SelectedIndex = 2; panel.Children.Add(_nestingMode);
+            DockerHelp.Add(panel, "Прямоугольники резервируют полные габариты. Упрощённые фигуры " +
+                "используют наружные полосы по 20 мм; полный контур — профиль с шагом до 2 мм. " +
+                "Упрощение увеличивает занятую область, не обрезая реальные детали. " +
+                "Режимы применяются к печати и резке, геометрия деталей не меняется.");
+            panel.Children.Add(Label("Как держать детали заказа"));
+            _groupingMode = new ComboBox { MinHeight = 27, Margin = new Thickness(0, 0, 0, 4) };
+            foreach (string label in new[] { "Свободно · максимальное уплотнение", "Парами · перед + спина, затем рукава", "Комплектом · все пять деталей рядом" })
+                _groupingMode.Items.Add(label);
+            _groupingMode.SelectedIndex = 0; panel.Children.Add(_groupingMode);
+            DockerHelp.Add(panel, "Парами: перед и спина одного комплекта укладываются единым блоком; " +
+                "после всех пар идут рукава и горловины, начиная с остатка последнего листа. " +
+                "Комплектом: все имеющиеся детали одного комплекта остаются одним блоком на одном листе. " +
+                "Смежные блоки могут сближаться по контуру. Группировка может увеличить расход материала. " +
+                "Если целый блок не помещается, увеличьте лист или выберите свободную раскладку.");
             _rotateSleeves = new CheckBox { Content = "Поворачивать рукава и горловину на 90° для плотной раскладки",
                 FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
             panel.Children.Add(_rotateSleeves);
@@ -357,7 +382,6 @@ namespace VanyaTools.Native
             _generate = DockerTheme.Primary(Button("Этап 2 · Создать комплекты и раскладку", Generate));
             _generate.Margin = new Thickness(0, 7, 0, 4);
             panel.Children.Add(_generate);
-            panel = panels[4];
             panel.Children.Add(Title("Экспорт печати в PDF"));
             _printFolder = Field(""); _printFolder.IsReadOnly = true;
             var folderRow = new Grid { Margin = new Thickness(0, 2, 0, 5) };
@@ -378,13 +402,17 @@ namespace VanyaTools.Native
                 "Надписи остаются векторными; изображения сжимаются с высоким качеством. " +
                 "При нескольких листах откройте нужный и повторите экспорт. Папка и качество запоминаются; " +
                 "каждый экспорт создаёт новый файл.");
-            panel = panels[5];
+            _pdfProgress = Note(""); panel.Children.Add(_pdfProgress);
+            panel = panels[4];
             panel.Children.Add(Title("Раскладка резки"));
             var cutWidthRow = new WrapPanel { Margin = new Thickness(0, 3, 0, 6) };
             cutWidthRow.Children.Add(Label("Ширина ткани для резки, мм"));
             _cutSheetWidth = Field("1500"); _cutSheetWidth.Width = 72;
             cutWidthRow.Children.Add(_cutSheetWidth);
             panel.Children.Add(cutWidthRow);
+            panel.Children.Add(Label("Плотность и группировка (общие с печатью)"));
+            panel.Children.Add(MirrorChoice(_nestingMode));
+            panel.Children.Add(MirrorChoice(_groupingMode));
             DockerHelp.Add(panel, "В каждой группе детали нужен замкнутый контур silhouette. " +
                 "Для печати она расширяется наружу на 6 мм; для резки берутся все исходные " +
                 "кривые группы, включая silhouette и надсечки. Рисунки и надписи не добавляются. " +
@@ -457,6 +485,8 @@ namespace VanyaTools.Native
             _neckArt.TextChanged += (_, __) => SaveDraft();
             _modelPath.TextChanged += (_, __) => SaveDraft();
             _artworkLimit.SelectionChanged += (_, __) => SaveDraft();
+            _nestingMode.SelectionChanged += (_, __) => SaveDraft();
+            _groupingMode.SelectionChanged += (_, __) => SaveDraft();
             _sheetWidth.TextChanged += (_, __) => SaveDraft();
             _cutSheetWidth.TextChanged += (_, __) => SaveDraft();
             _maxPageLength.TextChanged += (_, __) => SaveDraft();
@@ -490,12 +520,12 @@ namespace VanyaTools.Native
         private TabControl CreateSteps(StackPanel[] panels)
         {
             var tabs = new TabControl { TabStripPlacement = Dock.Top, BorderThickness = new Thickness(0) };
-            // A single equal-width row keeps all six tabs at the top even in
+            // A single equal-width row keeps all tabs at the top even in
             // a narrow docker. Each page owns its vertical scroll position.
             var dock = new FrameworkElementFactory(typeof(DockPanel));
             var headers = new FrameworkElementFactory(typeof(UniformGrid));
             headers.SetValue(UniformGrid.RowsProperty, 1);
-            headers.SetValue(UniformGrid.ColumnsProperty, 6);
+            headers.SetValue(UniformGrid.ColumnsProperty, StepNames.Length);
             headers.SetValue(Panel.IsItemsHostProperty, true);
             headers.SetValue(DockPanel.DockProperty, Dock.Top);
             headers.SetValue(KeyboardNavigation.TabNavigationProperty, KeyboardNavigationMode.Once);
@@ -532,13 +562,24 @@ namespace VanyaTools.Native
         {
             for (int index = 0; index < StepNames.Length; index++)
             {
-                bool done = _completedSteps[index];
+                int state = StepStates[index];
+                bool done = _completedSteps[state] || (state == 3 && _completedSteps[4]);
                 _stepMarks[index].Text = (index + 1).ToString(CultureInfo.InvariantCulture) + (done ? " ✓" : "");
                 _stepMarks[index].Foreground = done ? Brushes.ForestGreen : Brushes.DimGray;
-                string description = StepNames[index] + ": " + (done ? _stepDetails[index] ?? "выполнено" : "не выполнено");
+                string detail = state == 3 && _completedSteps[4] ? _stepDetails[4] : _stepDetails[state];
+                string description = StepNames[index] + ": " + (done ? detail ?? "выполнено" : "не выполнено");
                 _stepTabs[index].ToolTip = description;
                 AutomationProperties.SetName(_stepTabs[index], description);
             }
+            if (_pdfProgress != null) _pdfProgress.Text = _completedSteps[4] ? "✓ Активный лист сохранён в PDF" : "";
+        }
+
+        private static ComboBox MirrorChoice(ComboBox source)
+        {
+            var choice = new ComboBox { ItemsSource = source.Items, MinHeight = 27, Margin = new Thickness(0, 0, 0, 4) };
+            choice.SetBinding(ComboBox.SelectedIndexProperty, new Binding("SelectedIndex") {
+                Source = source, Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
+            return choice;
         }
 
         private static bool TemplateConfigured(SportLayoutTemplate template)
@@ -552,13 +593,16 @@ namespace VanyaTools.Native
 
         private void RefreshWorkflow()
         {
-            if (_loading || _stepTabs[5] == null || _tagSizeStep == null || _keepGuides == null) return;
+            if (_loading || _stepTabs[4] == null || _tagSizeStep == null || _keepGuides == null) return;
             var json = new JavaScriptSerializer();
             var selected = _players.Where(player => player != null && player.PrintEnabled).ToArray();
             string models = json.Serialize(_templates.Select(template => template == null ? null : new {
-                template.Size, template.Path, template.LayerName,
-                Scale = template.ScalePercent.ToString("R", CultureInfo.InvariantCulture) }).ToArray());
-            string players = json.Serialize(selected);
+                Size = SportLayoutService.NormalizeSize(template.Size), Path = template.Path ?? "",
+                Layer = template.LayerName ?? "",
+                Scale = (template.ScalePercent <= 0 ? 100 : template.ScalePercent).ToString("R", CultureInfo.InvariantCulture) }).ToArray());
+            string players = json.Serialize(selected.Select(player => new {
+                Size = SportLayoutService.NormalizeSize(player.Size), Name = player.Name ?? "",
+                Number = player.Number ?? "", player.Quantity }).ToArray());
             string preparation = json.Serialize(new { Models = models,
                 Sizes = selected.Select(player => SportLayoutService.NormalizeSize(player.Size))
                     .Distinct().OrderBy(size => size, StringComparer.Ordinal).ToArray(),
@@ -566,11 +610,13 @@ namespace VanyaTools.Native
             string printing = json.Serialize(new { Preparation = preparation, Players = players,
                 Width = _sheetWidth.Text, Gap = _gap.Text, Length = _maxPageLength.Text,
                 Rotate = _rotateSleeves.IsChecked, Guides = _keepGuides.IsChecked,
-                NameSide = _nameSide.SelectedIndex, NameCase = _frontCase.SelectedIndex });
+                NameSide = _nameSide.SelectedIndex, NameCase = _frontCase.SelectedIndex,
+                Density = _nestingMode.SelectedIndex, Grouping = _groupingMode.SelectedIndex });
             string pdf = json.Serialize(new { Print = printing, Folder = _printFolder.Text, Quality = _printQuality.SelectedIndex });
             string cutting = json.Serialize(new { Models = models, Players = players,
                 Width = _cutSheetWidth.Text, Gap = _gap.Text, Length = _maxPageLength.Text,
                 Rotate = _cutAllow180.IsChecked, Tags = _cutSizeTags.IsChecked,
+                Density = _nestingMode.SelectedIndex, Grouping = _groupingMode.SelectedIndex,
                 Tag = new[] { _tagWidth.Text, _tagHeight.Text, _tagBridge.Text, _tagLetter.Text,
                     _tagFirstOffset.Text, _tagSizeStep.Text } });
             string[] inputs = { models, preparation, players, printing, pdf, cutting };
@@ -595,6 +641,7 @@ namespace VanyaTools.Native
         {
             foreach (int step in steps) _completedSteps[step] = false;
             RefreshStepHeaders();
+            PersistWorkflow(false);
         }
 
         private void CompleteStep(int step, string detail)
@@ -604,24 +651,60 @@ namespace VanyaTools.Native
             _completedSteps[step] = true;
             _stepDetails[step] = detail;
             RefreshStepHeaders();
+            PersistWorkflow(true);
+            Log.Info("Sport workflow: step completed=" + step);
         }
 
         private void RefreshWorkflowDocument()
         {
-            IntPtr identity = IntPtr.Zero;
+            try
+            {
+                dynamic app = CorelApp.Get();
+                object document = (object)app.ActiveDocument;
+                if (document == null)
+                {
+                    if (Convert.ToInt32(app.Documents.Count) != 0) return;
+                    _workflowDocument = _workflowSession = _workflowId = _savedWorkflow = null;
+                    ClearCompletedSteps(1, 3, 4, 5);
+                    return;
+                }
+                string session = SportWorkflowProgress.SessionKey(document);
+                SportWorkflowProgress stored = SportWorkflowProgress.Read(document);
+                // A missing property during a native transition or Undo must
+                // not erase a successful action in the same open document.
+                if (stored == null && session == _workflowSession && _workflowId != null) return;
+                string key = (stored?.DocumentId ?? "session") + "|" + session;
+                if (key == _workflowDocument) return;
+                _workflowDocument = key; _workflowSession = session;
+                _workflowId = stored?.DocumentId; _savedWorkflow = stored?.Serialize();
+                foreach (int step in new[] { 1, 3, 4, 5 }) _completedSteps[step] = false;
+                _stepInputs = stored?.Inputs.ToArray();
+                if (stored != null)
+                    for (int step = 0; step < 6; step++)
+                    { _completedSteps[step] = stored.Completed[step]; _stepDetails[step] = stored.Details[step]; }
+                _progress.Text = "";
+                RefreshWorkflow();
+                Log.Info("Sport workflow: document context restored, saved marks=" + (stored != null));
+            }
+            catch { /* Corel can temporarily reject calls while a native dialog is open. */ }
+        }
+
+        private void PersistWorkflow(bool create)
+        {
+            if (_stepInputs == null || (!create && _workflowId == null)) return;
             try
             {
                 object document = (object)CorelApp.Get().ActiveDocument;
-                if (document != null) identity = Marshal.GetIUnknownForObject(document);
-                if (identity != _workflowDocument)
-                {
-                    _workflowDocument = identity;
-                    ClearCompletedSteps(1, 3, 4, 5);
-                    _progress.Text = "";
-                }
+                if (document == null || SportWorkflowProgress.SessionKey(document) != _workflowSession) return;
+                var state = new SportWorkflowProgress { DocumentId = _workflowId ?? Guid.NewGuid().ToString("D"),
+                    Inputs = _stepInputs.ToArray(), Completed = _completedSteps.ToArray(), Details = _stepDetails.ToArray() };
+                string json = state.Serialize();
+                if (json == _savedWorkflow) return;
+                SportWorkflowProgress.Write(document, json);
+                _workflowId = state.DocumentId; _savedWorkflow = json;
+                _workflowDocument = _workflowId + "|" + _workflowSession;
             }
-            catch { /* Corel can temporarily reject calls while a native dialog is open. */ }
-            finally { if (identity != IntPtr.Zero) Marshal.Release(identity); }
+            catch (Exception error) { Log.Error("Could not persist sport workflow marks.", error); }
         }
 
         private void UpdateDocumentWatch()
@@ -1105,6 +1188,7 @@ namespace VanyaTools.Native
         private void SetActionButtons(bool enabled)
         {
             if (!enabled) RefreshWorkflowDocument();
+            else PersistWorkflow(false);
             _steps.IsEnabled = enabled;
             _playerEditor.IsEnabled = enabled;
             _prepare.IsEnabled = _generate.IsEnabled = _generateCut.IsEnabled = _saveCut.IsEnabled = enabled;
@@ -1332,6 +1416,8 @@ namespace VanyaTools.Native
                 MaxPageLengthMm = ParseMillimeters(_maxPageLength.Text, 0.5, 45, "Максимальная длина страницы, м") * 1000,
                 GapMm = ParseMillimeters(_gap.Text, 0, 100, "Расстояние между деталями"),
                 RotateSleeves = _rotateSleeves.IsChecked == true,
+                NestingMode = (SportNestingMode)_nestingMode.SelectedIndex,
+                GroupingMode = (SportGroupingMode)_groupingMode.SelectedIndex,
                 CutAllow180 = _cutAllow180.IsChecked == true,
                 CutSizeTags = cutting && _cutSizeTags.IsChecked == true,
                 CutTag = cutting && _cutSizeTags.IsChecked == true ? ReadTagSettings() : new SportCutTagSettings(),
@@ -1436,7 +1522,9 @@ namespace VanyaTools.Native
                 _templateGrid == null || _playerGrid == null) return;
             try
             {
+                if (IsLoaded && !_busy) RefreshWorkflowDocument();
                 RefreshWorkflow();
+                PersistWorkflow(false);
                 Directory.CreateDirectory(Path.GetDirectoryName(DraftPath));
                 var draft = new Draft {
                     Templates = _templates.ToList(), Players = _players.ToList(),
@@ -1465,7 +1553,8 @@ namespace VanyaTools.Native
                     FrontLineSpacing = _legacyLineSpacing.ToString(CultureInfo.InvariantCulture),
                     WhiteText = _whiteCaptions,
                     KeepGuides = _keepGuides.IsChecked == true,
-                    WorkflowTab = _steps.SelectedIndex
+                    WorkflowTab = _steps.SelectedIndex, WorkflowUiVersion = 2,
+                    NestingMode = _nestingMode.SelectedIndex, GroupingMode = _groupingMode.SelectedIndex
                 };
                 File.WriteAllText(DraftPath, new JavaScriptSerializer().Serialize(draft),
                     new UTF8Encoding(false));
@@ -1523,7 +1612,11 @@ namespace VanyaTools.Native
                             NumberStyles.Float, CultureInfo.InvariantCulture, out double spacing) &&
                             spacing >= 10 && spacing <= 300) _legacyLineSpacing = spacing;
                         _keepGuides.IsChecked = draft.KeepGuides;
-                        _steps.SelectedIndex = draft.WorkflowTab >= 0 && draft.WorkflowTab < 6 ? draft.WorkflowTab : 0;
+                        int tab = draft.WorkflowUiVersion == 2 ? draft.WorkflowTab :
+                            draft.WorkflowTab == 4 ? 3 : draft.WorkflowTab == 5 ? 4 : draft.WorkflowTab;
+                        _steps.SelectedIndex = tab >= 0 && tab < 5 ? tab : 0;
+                        _nestingMode.SelectedIndex = draft.NestingMode >= 0 && draft.NestingMode <= 2 ? draft.NestingMode.Value : 2;
+                        _groupingMode.SelectedIndex = draft.GroupingMode >= 0 && draft.GroupingMode <= 2 ? draft.GroupingMode.Value : 0;
                     }
                 }
                 if (_templates.Count == 0)

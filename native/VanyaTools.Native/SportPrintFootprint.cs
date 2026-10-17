@@ -71,8 +71,13 @@ namespace VanyaTools.Native
         }
 
         internal static SportContourNesting.Item Build(object container, IList<object> extras, object inkRange,
-            IDictionary<string, Body> cache, string key)
+            IDictionary<string, Body> cache, string key, bool readContour = true)
         {
+            if (!readContour)
+            {
+                Bounds rectangle = Measure(inkRange);
+                return new SportContourNesting.Item { Width = rectangle.Width, Height = rectangle.Height };
+            }
             Bounds geometry = Measure(container, false), bodyBounds = Measure(container), ink = Measure(inkRange);
             if (!cache.TryGetValue(key, out Body body) ||
                 !Same(body.GeometryWidth, geometry.Width) || !Same(body.GeometryHeight, geometry.Height) ||

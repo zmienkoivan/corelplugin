@@ -50,6 +50,8 @@ namespace VanyaTools.Native
         public double MaxPageLengthMm = 4000;
         public double GapMm;
         public bool RotateSleeves;
+        public SportNestingMode NestingMode = SportNestingMode.FullContour;
+        public SportGroupingMode GroupingMode = SportGroupingMode.Free;
         public bool CutAllow180;
         public bool CutSizeTags;
         public SportCutTagSettings CutTag = new SportCutTagSettings();
@@ -249,6 +251,7 @@ namespace VanyaTools.Native
 
         private sealed class NestedPiece
         {
+            public int GarmentIndex, PartIndex;
             public dynamic Shape;
             public double Width, Height;
             public bool CanRotate { get; set; }
@@ -1041,18 +1044,21 @@ namespace VanyaTools.Native
                     {
                         target.Activate();
                         outputPage.Activate();
+                        IList<NestedPiece> kit;
                         if (cutting)
-                            nested.AddRange(BuildCuttingPieces(app, outputLayer, source, row, size,
+                            kit = BuildCuttingPieces(app, outputLayer, source, row, size,
                                 complete + 1, options, scale, tagRanks == null ? 0 :
                                     options.CutTag.FirstOffsetMm + tagRanks[size] * options.CutTag.SizeStepMm,
-                                cutPrepared));
+                                cutPrepared);
                         else
                         {
                             Garment garment = CopyGarment(source, outputLayer, selectedPart);
                             Log.Info("Sport layout: garment copied, item " + (complete + 1));
-                            nested.AddRange(BuildNestedPieces(app, outputLayer, garment, row, size,
-                                complete + 1, options, scale, selectedPart, printPrepared));
+                            kit = BuildNestedPieces(app, outputLayer, garment, row, size,
+                                complete + 1, options, scale, selectedPart, printPrepared);
                         }
+                        foreach (var piece in kit) piece.GarmentIndex = complete + 1;
+                        nested.AddRange(kit);
                         Log.Info("Sport layout: pieces built, item " + (complete + 1));
                         complete++;
                         progress?.Invoke(complete, total, size + " · " + row.Name);
@@ -1063,9 +1069,10 @@ namespace VanyaTools.Native
                 var inputs = nested.Select(p => new SportSheetNesting.Item { Width = p.Width, Height = p.Height,
                     SmallPart = p.SmallPart, Allow90 = !cutting && p.CanRotate,
                     Allow180 = cutting && p.ContourLayout.Allow180,
-                    Bands = p.ContourLayout.Bands }).ToList();
-                SportSheetNesting.Result layout = SportSheetNesting.Place(inputs, options.SheetWidthMm,
-                    options.MaxPageLengthMm, options.GapMm);
+                    Bands = p.ContourLayout.Bands, Garment = p.GarmentIndex, Part = p.PartIndex }).ToList();
+                SportSheetNesting.Result layout = SportGroupedNesting.Place(inputs, options.SheetWidthMm,
+                    options.MaxPageLengthMm, options.GapMm, options.NestingMode,
+                    selectedPart.HasValue ? SportGroupingMode.Free : options.GroupingMode);
                 var outputLayers = new List<object> { (object)outputLayer };
                 for (int i = 1; i < layout.PageHeights.Count; i++)
                 {
@@ -1895,15 +1902,16 @@ namespace VanyaTools.Native
                             size, titles[i], options.CutTag, tagOffsetMm);
                         copiedCurves.Clear();
                         CollectCutCurves((object)copy, copiedCurves);
-                        bands = ReadCutGeometry(Describe(copy), copiedCurves, 1);
+                        bands = options.NestingMode == SportNestingMode.Rectangles ? null :
+                            ReadCutGeometry(Describe(copy), copiedCurves, 1);
                     }
-                    else bands = ReadCutGeometry(original, curves, scale);
+                    else bands = options.NestingMode == SportNestingMode.Rectangles ? null : ReadCutGeometry(original, curves, scale);
                     width = Convert.ToDouble(copy.SizeWidth); height = Convert.ToDouble(copy.SizeHeight);
                 }
                 copy.Name = "VT_CUT_" + index.ToString("000", CultureInfo.InvariantCulture) +
                     "_" + Clean(size) + "_" + Clean(row.Name) + "_" + keys[i];
                 var item = new NestedPiece { Shape = copy, Width = width, Height = height,
-                    CanRotate = false, SmallPart = i >= 2, ContourLayout = new SportContourNesting.Item {
+                    CanRotate = false, SmallPart = i >= 2, PartIndex = i, ContourLayout = new SportContourNesting.Item {
                         Width = width, Height = height, Bands = bands, Allow180 = options.CutAllow180 } };
                 result.Add(item);
                 if (!preparedCache.ContainsKey(key)) preparedCache.Add(key, item);
@@ -2152,8 +2160,11 @@ namespace VanyaTools.Native
                 scaled.Stretch(scale, scale, true);
             }
             SportContourNesting.Item layout = SportPrintFootprint.Build((object)part.Shape, extras, (object)inkRange,
-                printPrepared, size + "|" + partName + "|" + scale.ToString("R", CultureInfo.InvariantCulture));
+                printPrepared, size + "|" + partName + "|" + scale.ToString("R", CultureInfo.InvariantCulture),
+                options.NestingMode != SportNestingMode.Rectangles);
             return new NestedPiece { Shape = group, PrintInkRange = (object)inkRange,
+                PartIndex = partName == "ПЕРЕД" ? 0 : partName == "СПИНА" ? 1 :
+                    partName == "ЛЕВЫЙ РУКАВ" ? 2 : partName == "ПРАВЫЙ РУКАВ" ? 3 : 4,
                 Width = layout.Width, Height = layout.Height, ContourLayout = layout };
         }
 
