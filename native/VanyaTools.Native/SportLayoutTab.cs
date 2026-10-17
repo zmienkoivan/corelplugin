@@ -31,6 +31,7 @@ namespace VanyaTools.Native
             public string RightSleeveArtworkPath { get; set; }
             public string NeckArtworkPath { get; set; }
             public string ModelPath { get; set; }
+            public int? ArtworkMaxMegapixels { get; set; }
             public bool? RotateSleeves { get; set; }
             public bool? CutAllow180 { get; set; }
             public bool? CutSizeTags { get; set; }
@@ -81,6 +82,7 @@ namespace VanyaTools.Native
         private readonly TextBox _sheetWidth, _cutSheetWidth, _maxPageLength, _gap, _printFolder;
         private readonly TextBox _tagWidth, _tagHeight, _tagBridge, _tagLetter, _tagFirstOffset, _tagSizeStep;
         private readonly ComboBox _nameSide, _frontCase, _batchSize, _printQuality;
+        private readonly ComboBox _artworkLimit;
         // Kept only for older masters with rectangle zones; text samples use Corel attributes.
         private SportTextStyle _legacyNameStyle = LegacyStyle("Arial", 72, false);
         private SportTextStyle _legacyNumberStyle = LegacyStyle("Arial", 150, false);
@@ -143,6 +145,14 @@ namespace VanyaTools.Native
                 "«Взять выделение» для нужной детали. На странице-макете рисунок " +
                 "лежит под контуром; выступающие края обрежутся при генерации. " +
                 "Выделение снимается в PNG 300 DPI; исходные объекты не меняются."));
+            var captureRow = new WrapPanel { Margin = new Thickness(0, 2, 0, 4) };
+            captureRow.Children.Add(Label("Предел захвата рисунка, Мп"));
+            _artworkLimit = new ComboBox { Width = 90, MinHeight = 27, FontSize = 12,
+                Margin = new Thickness(3, 0, 0, 0), ItemsSource = new[] { 100, 150, 200, 250 }, SelectedItem = 150 };
+            captureRow.Children.Add(_artworkLimit); panel.Children.Add(captureRow);
+            panel.Children.Add(Note("По умолчанию 150 Мп. Для тяжёлых рисунков можно выбрать до 250 Мп. " +
+                "Перед захватом проверяется свободная ОЗУ и доступная память Windows; " +
+                "DPI автоматически не уменьшается. Предел относится к одному захвату, а не ко всей раскладке."));
             _frontArt = ArtworkField(panel, "Перед", "переда", SportLayoutPart.Front);
             _backArt = ArtworkField(panel, "Спина", "спины", SportLayoutPart.Back);
             _leftSleeveArt = ArtworkField(panel, "Левый рукав (верхний на шаблоне)",
@@ -392,6 +402,7 @@ namespace VanyaTools.Native
             _rightSleeveArt.TextChanged += (_, __) => SaveDraft();
             _neckArt.TextChanged += (_, __) => SaveDraft();
             _modelPath.TextChanged += (_, __) => SaveDraft();
+            _artworkLimit.SelectionChanged += (_, __) => SaveDraft();
             _sheetWidth.TextChanged += (_, __) => SaveDraft();
             _cutSheetWidth.TextChanged += (_, __) => SaveDraft();
             _maxPageLength.TextChanged += (_, __) => SaveDraft();
@@ -750,10 +761,13 @@ namespace VanyaTools.Native
 
         private void CaptureArtwork(TextBox field, string partName)
         {
+            if (_busy) return;
             string temporary = null;
+            _busy = true; SetActionButtons(false);
             try
             {
-                temporary = AiSelectionCapture.CaptureForPublish(300);
+                int megapixels = _artworkLimit.SelectedItem is int value ? value : 150;
+                temporary = AiSelectionCapture.CaptureForArtwork(300, checked(megapixels * 1000000));
                 string folder = Path.Combine(Environment.GetFolderPath(
                     Environment.SpecialFolder.LocalApplicationData), "VanyaTools", "sport-patterns");
                 Directory.CreateDirectory(folder);
@@ -763,7 +777,7 @@ namespace VanyaTools.Native
                 File.Move(temporary, destination);
                 temporary = null;
                 field.Text = destination;
-                _status("Рисунок " + partName + " взят из выделения (300 DPI).", false);
+                _status("Рисунок " + partName + " взят из выделения (300 DPI; предел " + megapixels + " Мп).", false);
             }
             catch (Exception error)
             {
@@ -773,6 +787,7 @@ namespace VanyaTools.Native
             finally
             {
                 try { if (temporary != null) File.Delete(temporary); } catch { }
+                _busy = false; SetActionButtons(true);
             }
         }
 
@@ -884,6 +899,7 @@ namespace VanyaTools.Native
             _exportPrint.IsEnabled = _choosePrintFolder.IsEnabled = _printQuality.IsEnabled = enabled;
             _tagSamples.IsEnabled = enabled;
             _expandPlayers.IsEnabled = enabled;
+            _artworkLimit.IsEnabled = enabled;
         }
 
         private async void CreateTagSamples(object sender, RoutedEventArgs e)
@@ -1151,7 +1167,7 @@ namespace VanyaTools.Native
                 _leftSleeveArt == null || _rightSleeveArt == null ||
                 _neckArt == null || _modelPath == null || _rotateSleeves == null ||
                 _sheetWidth == null || _cutSheetWidth == null || _maxPageLength == null || _gap == null || _nameSide == null || _frontCase == null ||
-                _printFolder == null || _printQuality == null ||
+                _printFolder == null || _printQuality == null || _artworkLimit == null ||
                 _keepGuides == null || _cutAllow180 == null || _cutSizeTags == null ||
                 _tagWidth == null || _tagHeight == null || _tagBridge == null || _tagLetter == null ||
                 _tagFirstOffset == null || _tagSizeStep == null ||
@@ -1165,6 +1181,7 @@ namespace VanyaTools.Native
                     LeftSleeveArtworkPath = _leftSleeveArt.Text,
                     RightSleeveArtworkPath = _rightSleeveArt.Text,
                     NeckArtworkPath = _neckArt.Text, ModelPath = _modelPath.Text,
+                    ArtworkMaxMegapixels = _artworkLimit.SelectedItem is int value ? value : 150,
                     RotateSleeves = _rotateSleeves.IsChecked == true,
                     CutAllow180 = _cutAllow180.IsChecked == true,
                     CutSizeTags = _cutSizeTags.IsChecked == true,
@@ -1212,6 +1229,8 @@ namespace VanyaTools.Native
                         _rightSleeveArt.Text = draft.RightSleeveArtworkPath ?? "";
                         _neckArt.Text = draft.NeckArtworkPath ?? "";
                         _modelPath.Text = draft.ModelPath ?? "";
+                        int artworkLimit = draft.ArtworkMaxMegapixels ?? 150;
+                        _artworkLimit.SelectedItem = new[] { 100, 150, 200, 250 }.Contains(artworkLimit) ? artworkLimit : 150;
                         _rotateSleeves.IsChecked = draft.RotateSleeves ?? true;
                         _cutAllow180.IsChecked = draft.CutAllow180 ?? true;
                         _cutSizeTags.IsChecked = draft.CutSizeTags ?? true;

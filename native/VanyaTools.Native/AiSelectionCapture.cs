@@ -13,6 +13,9 @@ namespace VanyaTools.Native
     internal static class AiSelectionCapture
     {
         private const int CaptureDpi = 400;
+        internal const int DefaultArtworkMaxPixels = 150000000;
+        internal const int MaximumArtworkPixels = 250000000;
+        private const int ArtworkMaxSide = 20000;
 
         public static string Capture(int maxDimension = 0, int maxPixels = 32000000,
             bool restoreSelection = true, bool refreshWindow = true)
@@ -38,6 +41,14 @@ namespace VanyaTools.Native
             return CaptureCore(dpi, 0, 70000000, true, true, true);
         }
 
+        public static string CaptureForArtwork(int dpi = 300, int maxPixels = DefaultArtworkMaxPixels)
+        {
+            if (dpi < 72 || dpi > 300) throw new InvalidOperationException("DPI рисунка: от 72 до 300.");
+            if (maxPixels < 100000000 || maxPixels > MaximumArtworkPixels)
+                throw new InvalidOperationException("Предел рисунка: от 100 до 250 Мп.");
+            return CaptureCore(dpi, ArtworkMaxSide, maxPixels, true, true, true, true);
+        }
+
         internal static BitmapSource CaptureOrderFrame(bool restoreSelection)
         {
             // Match the final Telegram photo limits before rasterisation.
@@ -53,14 +64,21 @@ namespace VanyaTools.Native
             if (doc == null) throw new InvalidOperationException("Сначала откройте документ CorelDRAW.");
             dynamic selected = app.ActiveSelectionRange;
             if (selected == null || Convert.ToInt32(selected.Count) == 0)
-                throw new InvalidOperationException("Выделите макет для публикации.");
+                throw new InvalidOperationException("Выделите нужный макет на холсте.");
+            return EstimateShapePixels(doc, selected, dpi, out widthMm, out heightMm);
+        }
+
+        private static long EstimateShapePixels(dynamic doc, dynamic shape, int dpi,
+            out double widthMm, out double heightMm)
+        {
             int oldUnit = Convert.ToInt32(doc.Unit);
             try
             {
                 doc.Unit = CorelConstants.CdrMillimeter;
-                widthMm = Convert.ToDouble(selected.SizeWidth);
-                heightMm = Convert.ToDouble(selected.SizeHeight);
-                if (widthMm <= 0 || heightMm <= 0 || Double.IsNaN(widthMm) || Double.IsNaN(heightMm))
+                widthMm = Convert.ToDouble(shape.SizeWidth);
+                heightMm = Convert.ToDouble(shape.SizeHeight);
+                if (widthMm <= 0 || heightMm <= 0 || Double.IsNaN(widthMm) || Double.IsNaN(heightMm) ||
+                    Double.IsInfinity(widthMm) || Double.IsInfinity(heightMm))
                     throw new InvalidOperationException("Не удалось определить размер выделения CorelDRAW.");
                 return checked((long)Math.Ceiling(widthMm * dpi / 25.4) *
                     (long)Math.Ceiling(heightMm * dpi / 25.4));
@@ -69,13 +87,13 @@ namespace VanyaTools.Native
         }
 
         private static string CaptureCore(int desiredDpi, int maxDimension, int maxPixels,
-            bool exactDpi, bool restoreSelection, bool refreshWindow)
+            bool exactDpi, bool restoreSelection, bool refreshWindow, bool checkMemory = false)
         {
             string path = Path.Combine(Path.GetTempPath(), "Vanya-AI-Selection-" + Guid.NewGuid().ToString("N") + ".png");
             try
             {
                 BitmapSource image = CaptureBitmapCore(desiredDpi, maxDimension, maxPixels,
-                    exactDpi, restoreSelection, refreshWindow);
+                    exactDpi, restoreSelection, refreshWindow, checkMemory: checkMemory);
                 var encoder = new PngBitmapEncoder();
                 encoder.Frames.Add(BitmapFrame.Create(image));
                 using (var stream = File.Create(path)) encoder.Save(stream);
@@ -90,7 +108,7 @@ namespace VanyaTools.Native
 
         private static BitmapSource CaptureBitmapCore(int desiredDpi, int maxDimension, int maxPixels,
             bool exactDpi, bool restoreSelection, bool refreshWindow, int maxDimensionSum = 0,
-            bool whiteBackground = false)
+            bool whiteBackground = false, bool checkMemory = false)
         {
             dynamic app = CorelApp.Get();
             dynamic doc = app.ActiveDocument;
@@ -108,12 +126,24 @@ namespace VanyaTools.Native
             dynamic rasterShape = null;
             bool oldOptimization = false;
             bool commandGroupStarted = false;
-            string step = "создание временной копии";
+            string step = "проверка размера и памяти";
             var timer = Stopwatch.StartNew();
 
             try
             {
                 try { oldOptimization = Convert.ToBoolean(app.Optimization); } catch { }
+                int captureDpi = ChooseDpi(doc, sourceRange, desiredDpi, maxDimension, maxPixels, maxDimensionSum);
+                if (exactDpi && captureDpi != desiredDpi)
+                    throw SizeLimitError(desiredDpi, maxPixels, maxDimension);
+                if (checkMemory)
+                {
+                    double width, height;
+                    long pixels = EstimateShapePixels(doc, sourceRange, captureDpi, out width, out height);
+                    RasterCaptureMemory.EnsureAvailable(pixels);
+                    Log.Info("Artwork capture: " + width + "x" + height + " mm, " + pixels +
+                        " pixels, limit=" + maxPixels + ", " + captureDpi + " DPI.");
+                }
+                step = "создание временной копии";
                 doc.BeginCommandGroup("Vanya Tools - capture AI selection");
                 commandGroupStarted = true;
                 app.Optimization = true;
@@ -139,10 +169,16 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Не удалось получить временную копию объекта CorelDRAW.");
                 Log.Info("Selection capture: duplicate/group " + timer.ElapsedMilliseconds + " ms.");
                 step = "растрирование копии";
-                int captureDpi = ChooseDpi(doc, workingShape, desiredDpi, maxDimension, maxPixels,
+                captureDpi = ChooseDpi(doc, workingShape, desiredDpi, maxDimension, maxPixels,
                     maxDimensionSum);
                 if (exactDpi && captureDpi != desiredDpi)
-                    throw new InvalidOperationException("Макет слишком велик для экспорта с заданным DPI (предел 70 Мп).");
+                    throw SizeLimitError(desiredDpi, maxPixels, maxDimension);
+                if (checkMemory)
+                {
+                    // Duplication itself can consume substantial native memory.
+                    double width, height;
+                    RasterCaptureMemory.EnsureAvailable(EstimateShapePixels(doc, workingShape, captureDpi, out width, out height));
+                }
                 rasterShape = workingShape.ConvertToBitmapEx(
                     CorelConstants.CdrRgbColorImage,
                     true,  // transparent background
@@ -175,7 +211,7 @@ namespace VanyaTools.Native
                 TryDelete(rasterShape);
                 TryDelete(workingShape);
                 TryDeleteRange(workingRange);
-                if (restoreSelection) try
+                if (restoreSelection && workingRange != null) try
                 {
                     for (int i = 0; i < originals.Count; i++)
                     {
@@ -191,6 +227,12 @@ namespace VanyaTools.Native
             }
         }
 
+        private static InvalidOperationException SizeLimitError(int dpi, int maxPixels, int maxDimension) =>
+            new InvalidOperationException("Макет слишком велик для экспорта при " + dpi + " DPI: предел " +
+                (maxPixels / 1000000.0).ToString("0.#") + " Мп" +
+                (maxDimension > 0 ? ", до " + maxDimension + " пикселей по каждой стороне" : "") +
+                ". Выделите только нужную графику или измените предел захвата.");
+
         private static int ChooseDpi(dynamic doc, dynamic shape, int desiredDpi, int maxDimension, int maxPixels,
             int maxDimensionSum = 0)
         {
@@ -200,7 +242,8 @@ namespace VanyaTools.Native
                 doc.Unit = CorelConstants.CdrMillimeter;
                 double widthMm = Convert.ToDouble(shape.SizeWidth);
                 double heightMm = Convert.ToDouble(shape.SizeHeight);
-                if (widthMm <= 0 || heightMm <= 0 || Double.IsNaN(widthMm) || Double.IsNaN(heightMm))
+                if (widthMm <= 0 || heightMm <= 0 || Double.IsNaN(widthMm) || Double.IsNaN(heightMm) ||
+                    Double.IsInfinity(widthMm) || Double.IsInfinity(heightMm))
                     throw new InvalidOperationException("Не удалось определить размер выделения CorelDRAW.");
                 double widthPx = widthMm * desiredDpi / 25.4;
                 double heightPx = heightMm * desiredDpi / 25.4;
