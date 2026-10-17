@@ -63,6 +63,8 @@ namespace VanyaTools.Native
             public int? WorkflowUiVersion { get; set; }
             public int? NestingMode { get; set; }
             public int? GroupingMode { get; set; }
+            public int? CutNestingMode { get; set; }
+            public int? CutGroupingMode { get; set; }
         }
 
         private static SportTextStyle LegacyStyle(string font, float points, bool white)
@@ -90,7 +92,7 @@ namespace VanyaTools.Native
         private readonly TextBox _tagWidth, _tagHeight, _tagBridge, _tagLetter, _tagFirstOffset, _tagSizeStep;
         private readonly ComboBox _nameSide, _frontCase, _batchSize, _printQuality;
         private readonly ComboBox _artworkLimit;
-        private readonly ComboBox _nestingMode, _groupingMode;
+        private readonly ComboBox _nestingMode, _groupingMode, _cutNestingMode, _cutGroupingMode;
         private readonly TextBlock _pdfProgress;
         // Kept only for older masters with rectangle zones; text samples use Corel attributes.
         private SportTextStyle _legacyNameStyle = LegacyStyle("Arial", 72, false);
@@ -324,7 +326,8 @@ namespace VanyaTools.Native
             DockerHelp.Add(panel, "Прямоугольники резервируют полные габариты. Упрощённые фигуры " +
                 "используют наружные полосы по 20 мм; полный контур — профиль с шагом до 2 мм. " +
                 "Упрощение увеличивает занятую область, не обрезая реальные детали. " +
-                "Режимы применяются к печати и резке, геометрия деталей не меняется.");
+                "Для печати и резки режим выбирается отдельно; изменение одной раскладки " +
+                "не снимает отметку другой. Геометрия деталей не меняется.");
             panel.Children.Add(Label("Как держать детали заказа"));
             _groupingMode = new ComboBox { MinHeight = 27, Margin = new Thickness(0, 0, 0, 4) };
             foreach (string label in new[] { "Свободно · максимальное уплотнение", "Парами · перед + спина, затем рукава", "Комплектом · все пять деталей рядом" })
@@ -410,9 +413,12 @@ namespace VanyaTools.Native
             _cutSheetWidth = Field("1500"); _cutSheetWidth.Width = 72;
             cutWidthRow.Children.Add(_cutSheetWidth);
             panel.Children.Add(cutWidthRow);
-            panel.Children.Add(Label("Плотность и группировка (общие с печатью)"));
-            panel.Children.Add(MirrorChoice(_nestingMode));
-            panel.Children.Add(MirrorChoice(_groupingMode));
+            panel.Children.Add(Label("Плотность раскладки резки"));
+            _cutNestingMode = CopyChoice(_nestingMode); panel.Children.Add(_cutNestingMode);
+            panel.Children.Add(Label("Как держать детали заказа при резке"));
+            _cutGroupingMode = CopyChoice(_groupingMode); panel.Children.Add(_cutGroupingMode);
+            DockerHelp.Add(panel, "Плотность и группировка резки выбираются независимо от печати. " +
+                "Изменение этих настроек снимает только отметку резки; готовая печать и PDF сохраняют свои отметки.");
             DockerHelp.Add(panel, "В каждой группе детали нужен замкнутый контур silhouette. " +
                 "Для печати она расширяется наружу на 6 мм; для резки берутся все исходные " +
                 "кривые группы, включая silhouette и надсечки. Рисунки и надписи не добавляются. " +
@@ -487,6 +493,8 @@ namespace VanyaTools.Native
             _artworkLimit.SelectionChanged += (_, __) => SaveDraft();
             _nestingMode.SelectionChanged += (_, __) => SaveDraft();
             _groupingMode.SelectionChanged += (_, __) => SaveDraft();
+            _cutNestingMode.SelectionChanged += (_, __) => SaveDraft();
+            _cutGroupingMode.SelectionChanged += (_, __) => SaveDraft();
             _sheetWidth.TextChanged += (_, __) => SaveDraft();
             _cutSheetWidth.TextChanged += (_, __) => SaveDraft();
             _maxPageLength.TextChanged += (_, __) => SaveDraft();
@@ -574,12 +582,12 @@ namespace VanyaTools.Native
             if (_pdfProgress != null) _pdfProgress.Text = _completedSteps[4] ? "✓ Активный лист сохранён в PDF" : "";
         }
 
-        private static ComboBox MirrorChoice(ComboBox source)
+        private static ComboBox CopyChoice(ComboBox source)
         {
-            var choice = new ComboBox { ItemsSource = source.Items, MinHeight = 27, Margin = new Thickness(0, 0, 0, 4) };
-            choice.SetBinding(ComboBox.SelectedIndexProperty, new Binding("SelectedIndex") {
-                Source = source, Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
-            return choice;
+            // Copy labels without a shared collection view or selection binding.
+            return new ComboBox { ItemsSource = source.Items.Cast<string>().ToArray(),
+                IsSynchronizedWithCurrentItem = false, SelectedIndex = source.SelectedIndex,
+                MinHeight = 27, Margin = new Thickness(0, 0, 0, 4) };
         }
 
         private static bool TemplateConfigured(SportLayoutTemplate template)
@@ -616,7 +624,7 @@ namespace VanyaTools.Native
             string cutting = json.Serialize(new { Models = models, Players = players,
                 Width = _cutSheetWidth.Text, Gap = _gap.Text, Length = _maxPageLength.Text,
                 Rotate = _cutAllow180.IsChecked, Tags = _cutSizeTags.IsChecked,
-                Density = _nestingMode.SelectedIndex, Grouping = _groupingMode.SelectedIndex,
+                Density = _cutNestingMode.SelectedIndex, Grouping = _cutGroupingMode.SelectedIndex,
                 Tag = new[] { _tagWidth.Text, _tagHeight.Text, _tagBridge.Text, _tagLetter.Text,
                     _tagFirstOffset.Text, _tagSizeStep.Text } });
             string[] inputs = { models, preparation, players, printing, pdf, cutting };
@@ -1416,8 +1424,8 @@ namespace VanyaTools.Native
                 MaxPageLengthMm = ParseMillimeters(_maxPageLength.Text, 0.5, 45, "Максимальная длина страницы, м") * 1000,
                 GapMm = ParseMillimeters(_gap.Text, 0, 100, "Расстояние между деталями"),
                 RotateSleeves = _rotateSleeves.IsChecked == true,
-                NestingMode = (SportNestingMode)_nestingMode.SelectedIndex,
-                GroupingMode = (SportGroupingMode)_groupingMode.SelectedIndex,
+                NestingMode = (SportNestingMode)(cutting ? _cutNestingMode : _nestingMode).SelectedIndex,
+                GroupingMode = (SportGroupingMode)(cutting ? _cutGroupingMode : _groupingMode).SelectedIndex,
                 CutAllow180 = _cutAllow180.IsChecked == true,
                 CutSizeTags = cutting && _cutSizeTags.IsChecked == true,
                 CutTag = cutting && _cutSizeTags.IsChecked == true ? ReadTagSettings() : new SportCutTagSettings(),
@@ -1554,7 +1562,8 @@ namespace VanyaTools.Native
                     WhiteText = _whiteCaptions,
                     KeepGuides = _keepGuides.IsChecked == true,
                     WorkflowTab = _steps.SelectedIndex, WorkflowUiVersion = 2,
-                    NestingMode = _nestingMode.SelectedIndex, GroupingMode = _groupingMode.SelectedIndex
+                    NestingMode = _nestingMode.SelectedIndex, GroupingMode = _groupingMode.SelectedIndex,
+                    CutNestingMode = _cutNestingMode.SelectedIndex, CutGroupingMode = _cutGroupingMode.SelectedIndex
                 };
                 File.WriteAllText(DraftPath, new JavaScriptSerializer().Serialize(draft),
                     new UTF8Encoding(false));
@@ -1617,6 +1626,11 @@ namespace VanyaTools.Native
                         _steps.SelectedIndex = tab >= 0 && tab < 5 ? tab : 0;
                         _nestingMode.SelectedIndex = draft.NestingMode >= 0 && draft.NestingMode <= 2 ? draft.NestingMode.Value : 2;
                         _groupingMode.SelectedIndex = draft.GroupingMode >= 0 && draft.GroupingMode <= 2 ? draft.GroupingMode.Value : 0;
+                        // Older drafts used one common choice; use it as the initial value for both operations.
+                        _cutNestingMode.SelectedIndex = draft.CutNestingMode >= 0 && draft.CutNestingMode <= 2
+                            ? draft.CutNestingMode.Value : _nestingMode.SelectedIndex;
+                        _cutGroupingMode.SelectedIndex = draft.CutGroupingMode >= 0 && draft.CutGroupingMode <= 2
+                            ? draft.CutGroupingMode.Value : _groupingMode.SelectedIndex;
                     }
                 }
                 if (_templates.Count == 0)
