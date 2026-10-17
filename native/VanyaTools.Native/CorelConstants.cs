@@ -15,6 +15,8 @@ namespace VanyaTools.Native
         public const int CdrRgbColorImage = 4;
         public const int CdrNormalAntiAliasing = 1;
         public const int CdrPng = 802;
+        public const int CdrDxf = 1296;
+        public const int CdrCurrentPage = 1;
         public const int CdrSelection = 2;
         public const int CdrCompressionNone = 0;
 

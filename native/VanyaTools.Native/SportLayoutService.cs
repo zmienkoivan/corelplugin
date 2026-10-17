@@ -77,6 +77,12 @@ namespace VanyaTools.Native
         public int PageCount;
     }
 
+    internal sealed class SportOverviewResult
+    {
+        public readonly List<string> AddedSizes = new List<string>();
+        public readonly List<string> KeptSizes = new List<string>();
+    }
+
     internal enum SportLayoutPart { Front, Back, LeftSleeve, RightSleeve, Neck }
 
     // Named models retain their original cutting groups. Print containers are
@@ -116,26 +122,80 @@ namespace VanyaTools.Native
         private sealed class OverviewBlock
         {
             public object Layer;
+            public object Shapes;
+            public bool CreatedLayer, SizeLayer;
+            public double Left, Top;
             public double Width, Height;
         }
 
+        private sealed class OverviewSnapshot
+        {
+            public double Width, Height;
+            public string Name;
+            public bool ResizeAttempted;
+            public readonly List<OverviewBlock> Blocks = new List<OverviewBlock>();
+        }
+
         private const string MasterPrefix = "Спорт · макет · ";
-        private const string OverviewName = "Спорт · макеты · все размеры";
+        private const string OverviewName = "Спорт · макеты · выбранные размеры";
+        private const string LegacyOverviewName = "Спорт · макеты · все размеры";
         private const string SizeLayerPrefix = "VT_SPORT_SIZE_";
         private const string ZonesLayerName = "VT_ZONES";
         private const double PrintBleedMm = 6;
         private const string CuttingPagePrefix = "Резка спортформы · ";
         private const string CaptionReferenceMarker = "VT_SPORT_META_CAPTION_REFERENCES";
 
+        private static bool IsOverviewName(string name) =>
+            String.Equals(name, OverviewName, StringComparison.OrdinalIgnoreCase) ||
+            String.Equals(name, LegacyOverviewName, StringComparison.OrdinalIgnoreCase);
+
+        private static object FindOverviewPage(dynamic document)
+        {
+            dynamic active = document.ActivePage;
+            if (IsOverviewName(Convert.ToString(active.Name))) return (object)active;
+            object latest = null;
+            foreach (dynamic page in document.Pages)
+                if (IsOverviewName(Convert.ToString(page.Name))) latest = (object)page;
+            return latest;
+        }
+
+        internal static IList<SportLayoutTemplate> RequestedTemplates(
+            IEnumerable<SportLayoutTemplate> templates, IEnumerable<SportLayoutPlayer> players)
+        {
+            var requested = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var row in players ?? Enumerable.Empty<SportLayoutPlayer>())
+            {
+                if (row == null || !row.PrintEnabled) continue;
+                string size = NormalizeSize(row.Size);
+                if (size.Length == 0)
+                    throw new InvalidOperationException("Назначьте размер для отмеченного игрока «" +
+                        (row.Name ?? "") + "» в таблице.");
+                requested.Add(size);
+            }
+            if (requested.Count == 0)
+                throw new InvalidOperationException("Отметьте галочкой «Печатать» хотя бы одного игрока.");
+            var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var result = new List<SportLayoutTemplate>();
+            foreach (var template in templates ?? Enumerable.Empty<SportLayoutTemplate>())
+            {
+                string size = NormalizeSize(template?.Size);
+                if (!requested.Contains(size)) continue;
+                if (!found.Add(size))
+                    throw new InvalidOperationException("Шаблон размера " + size + " добавлен дважды.");
+                result.Add(template);
+            }
+            string[] missing = requested.Where(size => !found.Contains(size)).OrderBy(size => size).ToArray();
+            if (missing.Length > 0)
+                throw new InvalidOperationException("Добавьте шаблоны для размеров: " + String.Join(", ", missing) + ".");
+            return result;
+        }
+
         public int ClearPreparedArtwork(SportLayoutPart part)
         {
             dynamic app = CorelApp.Get();
             dynamic document = app.ActiveDocument;
             if (document == null) return 0;
-            dynamic overview = null;
-            foreach (dynamic page in document.Pages)
-                if (String.Equals(Convert.ToString(page.Name), OverviewName,
-                    StringComparison.OrdinalIgnoreCase)) overview = page;
+            dynamic overview = FindOverviewPage(document);
             if (overview == null) return 0;
             string key = part == SportLayoutPart.Front ? "FRONT" :
                 part == SportLayoutPart.Back ? "BACK" :
@@ -202,8 +262,7 @@ namespace VanyaTools.Native
             dynamic document = app.ActiveDocument;
             string pageName = document == null ? "" : Convert.ToString(document.ActivePage.Name);
             if (document == null || (!pageName.StartsWith(MasterPrefix,
-                StringComparison.OrdinalIgnoreCase) && !String.Equals(pageName,
-                OverviewName, StringComparison.OrdinalIgnoreCase)))
+                StringComparison.OrdinalIgnoreCase) && !IsOverviewName(pageName)))
                 throw new InvalidOperationException("Откройте страницу-макет с размерами.");
             dynamic selection = app.ActiveSelectionRange;
             if (selection == null || Convert.ToInt32(selection.Count) != 1)
@@ -221,14 +280,14 @@ namespace VanyaTools.Native
                 !String.Equals(previousName, zoneName, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Этот объект уже назначен другой надписи.");
             dynamic currentLayer = chosen.Layer;
-            if (String.Equals(pageName, OverviewName, StringComparison.OrdinalIgnoreCase) &&
+            if (IsOverviewName(pageName) &&
                 !Convert.ToString(currentLayer.Name).StartsWith(SizeLayerPrefix,
                     StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Разместите образец на слое нужного размера.");
             dynamic previous = null;
             foreach (dynamic layer in document.ActivePage.Layers)
             {
-                if (String.Equals(pageName, OverviewName, StringComparison.OrdinalIgnoreCase) &&
+                if (IsOverviewName(pageName) &&
                     !String.Equals(Convert.ToString(layer.Name),
                         Convert.ToString(currentLayer.Name), StringComparison.OrdinalIgnoreCase))
                     continue;
@@ -398,7 +457,7 @@ namespace VanyaTools.Native
             }
         }
 
-        public string PrepareOverview(IList<SportLayoutTemplate> templates, SportLayoutOptions options)
+        public SportOverviewResult PrepareOverview(IList<SportLayoutTemplate> templates, SportLayoutOptions options)
         {
             if (templates == null || templates.Count == 0)
                 throw new InvalidOperationException("Добавьте размеры лекал.");
@@ -409,15 +468,7 @@ namespace VanyaTools.Native
                 string size = NormalizeSize(template?.Size);
                 if (size.Length == 0 || !sizes.Add(size))
                     throw new InvalidOperationException("Размеры должны быть заполнены и уникальны.");
-                if (String.IsNullOrWhiteSpace(template.Path) || !File.Exists(template.Path))
-                    throw new InvalidOperationException("Не найден шаблон размера " + size + ".");
-                if (template.ScalePercent > 0 && (template.ScalePercent < 50 || template.ScalePercent > 200))
-                    throw new InvalidOperationException("Масштаб размера " + size + ": от 50 до 200%.");
             }
-            foreach (string path in new[] { options.FrontArtworkPath, options.BackArtworkPath,
-                options.LeftSleeveArtworkPath, options.RightSleeveArtworkPath, options.NeckArtworkPath })
-                if (!String.IsNullOrWhiteSpace(path) && !File.Exists(path))
-                    throw new FileNotFoundException("Рисунок для детали не найден.", path);
 
             dynamic app = CorelApp.Get();
             dynamic target = app.ActiveDocument;
@@ -429,47 +480,105 @@ namespace VanyaTools.Native
             catch { }
             var sessions = new Dictionary<string, TemplateSession>(StringComparer.OrdinalIgnoreCase);
             var artworkCache = new Dictionary<string, Piece>(StringComparer.OrdinalIgnoreCase);
-            dynamic overview = null;
+            dynamic overview = FindOverviewPage(target);
+            var addedLayers = new List<OverviewBlock>();
+            OverviewSnapshot snapshot = null;
+            bool createdOverview = false;
             bool clipboardUsed = false;
             try
             {
                 Log.Info("Sport overview: start, sizes=" + templates.Count);
                 target.Unit = CorelConstants.CdrMillimeter;
-                // Validate all requested layers before allocating the overview
-                // or importing large artwork for earlier, valid sizes.
-                foreach (SportLayoutTemplate template in templates)
+                var result = new SportOverviewResult();
+                var knownLayers = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+                if (overview != null)
+                    foreach (dynamic layer in overview.Layers)
+                    {
+                        string name = Convert.ToString(layer.Name) ?? "";
+                        if (!name.StartsWith(SizeLayerPrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                        string size = NormalizeSize(name.Substring(SizeLayerPrefix.Length));
+                        if (knownLayers.ContainsKey(size))
+                            throw new InvalidOperationException("На обзорной странице два слоя размера " + size + ".");
+                        knownLayers.Add(size, (object)layer);
+                    }
+                var missing = new List<SportLayoutTemplate>();
+                foreach (var template in templates)
                 {
-                    if (String.IsNullOrWhiteSpace(template.LayerName)) continue;
+                    string size = NormalizeSize(template.Size);
+                    if (knownLayers.TryGetValue(size, out object layerObject) &&
+                        Convert.ToInt32(((dynamic)layerObject).Shapes.Count) > 0)
+                        result.KeptSizes.Add(size);
+                    else missing.Add(template);
+                }
+                if (missing.Count == 0)
+                {
+                    target.Activate();
+                    overview.Activate();
+                    Log.Info("Sport overview: requested sizes already prepared; no template opened.");
+                    return result;
+                }
+                // Existing edited sizes do not depend on their original CDR/PNG
+                // still being present. Only missing sizes open source models.
+                foreach (var template in missing)
+                {
+                    string size = NormalizeSize(template.Size);
+                    if (String.IsNullOrWhiteSpace(template.Path) || !File.Exists(template.Path) ||
+                        !String.Equals(System.IO.Path.GetExtension(template.Path), ".cdr", StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Не найден CDR-шаблон размера " + size + ".");
+                    if (Double.IsNaN(template.ScalePercent) || Double.IsInfinity(template.ScalePercent) ||
+                        (template.ScalePercent > 0 && (template.ScalePercent < 50 || template.ScalePercent > 200)))
+                        throw new InvalidOperationException("Масштаб размера " + size + ": от 50 до 200%.");
+                }
+                foreach (string path in new[] { options.FrontArtworkPath, options.BackArtworkPath,
+                    options.LeftSleeveArtworkPath, options.RightSleeveArtworkPath, options.NeckArtworkPath })
+                    if (!String.IsNullOrWhiteSpace(path) && !File.Exists(path))
+                        throw new FileNotFoundException("Рисунок для детали не найден.", path);
+                if (overview != null) snapshot = SnapshotOverview((object)app, (object)overview);
+                // Validate missing layers before allocating new layers or
+                // importing large artwork. Existing layers remain untouched.
+                foreach (SportLayoutTemplate template in missing)
+                {
                     string path = System.IO.Path.GetFullPath(template.Path);
                     bool same = String.Equals(path, targetPath, StringComparison.OrdinalIgnoreCase);
-                    dynamic sourcePage = same ? previousPage :
+                    dynamic sourcePage = same ? FindOverviewSourcePage((object)target, (object)previousPage, template.LayerName) :
                         OnlyTemplatePage(GetTemplateSession(app, path, sessions).Document);
-                    try { ReadLayeredSources(sourcePage, template.LayerName); }
+                    if (same && IsOverviewName(Convert.ToString(sourcePage.Name)))
+                        throw new InvalidOperationException("Выберите исходный шаблон, а не обзорную страницу.");
+                    try
+                    {
+                        if (String.IsNullOrWhiteSpace(template.LayerName)) ReadGarment(sourcePage);
+                        else ReadLayeredSources(sourcePage, template.LayerName);
+                    }
                     catch (Exception error)
                     {
-                        throw new InvalidOperationException("Размер «" + template.LayerName +
+                        throw new InvalidOperationException("Размер «" + NormalizeSize(template.Size) +
                             "»: " + error.Message, error);
                     }
                 }
                 target.Activate();
                 // Keep source CDR switches outside a target undo group.
-                overview = target.AddPages(1);
+                if (overview == null)
+                {
+                    overview = target.AddPages(1);
+                    createdOverview = true;
+                }
                 overview.Activate();
-                var overviewBlocks = new List<OverviewBlock>();
-                foreach (SportLayoutTemplate template in templates)
+                foreach (SportLayoutTemplate template in missing)
                 {
                     string size = NormalizeSize(template.Size);
                     Log.Info("Sport overview: preparing size " + size);
                     string path = System.IO.Path.GetFullPath(template.Path);
                     bool same = String.Equals(path, targetPath, StringComparison.OrdinalIgnoreCase);
-                    dynamic sourcePage = same ? previousPage :
+                    dynamic sourcePage = same ? FindOverviewSourcePage((object)target, (object)previousPage, template.LayerName) :
                         OnlyTemplatePage(GetTemplateSession(app, path, sessions).Document);
-                    if (same && String.Equals(Convert.ToString(sourcePage.Name), OverviewName,
-                        StringComparison.OrdinalIgnoreCase))
+                    if (same && IsOverviewName(Convert.ToString(sourcePage.Name)))
                         throw new InvalidOperationException("Выберите исходный шаблон, а не обзорную страницу.");
                     target.Activate();
                     overview.Activate();
-                    dynamic layer = overview.CreateLayer(SizeLayerPrefix + size);
+                    bool newLayer = !knownLayers.TryGetValue(size, out object emptyLayer);
+                    dynamic layer = newLayer ? overview.CreateLayer(SizeLayerPrefix + size) : emptyLayer;
+                    var block = new OverviewBlock { Layer = (object)layer, CreatedLayer = newLayer, SizeLayer = true };
+                    addedLayers.Add(block);
                     Garment garment;
                     if (!String.IsNullOrWhiteSpace(template.LayerName))
                         garment = CopyLayeredGarment(app, sourcePage, template.LayerName,
@@ -510,28 +619,52 @@ namespace VanyaTools.Native
                         size, 0, 0, "Arial", 24);
                     label.Name = "VT_SPORT_LABEL_" + size;
                     tile.Add(label);
-                    overviewBlocks.Add(new OverviewBlock { Layer = (object)layer,
-                        Width = Convert.ToDouble(tile.SizeWidth), Height = Convert.ToDouble(tile.SizeHeight) });
+                    block.Shapes = (object)tile;
+                    block.Width = Convert.ToDouble(tile.SizeWidth);
+                    block.Height = Convert.ToDouble(tile.SizeHeight);
+                    result.AddedSizes.Add(size);
                 }
-                PlaceOverviewBlocks((object)app, (object)overview, overviewBlocks);
-                foreach (dynamic page in target.Pages)
-                    if (!Object.ReferenceEquals(page, overview) &&
-                        String.Equals(Convert.ToString(page.Name), OverviewName,
-                            StringComparison.OrdinalIgnoreCase))
-                        page.Name = "Спорт · прежние макеты · " + Convert.ToInt32(page.Index);
+                if (snapshot == null) PlaceOverviewBlocks((object)app, (object)overview, addedLayers);
+                else AppendOverviewBlocks((object)overview, addedLayers, snapshot);
                 overview.Name = OverviewName;
-                Log.Info("Sport overview: complete");
-                return String.Join(", ", templates.Select(x => NormalizeSize(x.Size)));
+                Log.Info("Sport overview: complete, added=" + String.Join(",", result.AddedSizes) +
+                    ", kept=" + String.Join(",", result.KeptSizes));
+                return result;
             }
             catch (Exception error)
             {
                 try
                 {
                     target.Activate();
-                    if (overview != null) target.DeletePages(Convert.ToInt32(overview.Index));
+                    if (createdOverview && overview != null) target.DeletePages(Convert.ToInt32(overview.Index));
+                    else if (overview != null)
+                    {
+                        overview.Activate();
+                        for (int i = addedLayers.Count - 1; i >= 0; i--)
+                        {
+                            try
+                            {
+                                dynamic layer = addedLayers[i].Layer;
+                                if (addedLayers[i].CreatedLayer) layer.Delete();
+                                else
+                                {
+                                    var shapes = new List<object>();
+                                    foreach (dynamic shape in layer.Shapes) shapes.Add((object)shape);
+                                    foreach (dynamic shape in shapes) shape.Delete();
+                                }
+                            }
+                            catch (Exception rollbackError) { Log.Error("Could not remove a failed new size layer.", rollbackError); }
+                        }
+                        if (snapshot != null && snapshot.ResizeAttempted)
+                        {
+                            overview.SetSize(snapshot.Width, snapshot.Height);
+                            RestoreOverviewPositions((object)overview, snapshot);
+                            overview.Name = snapshot.Name;
+                        }
+                    }
                     previousPage.Activate();
                 }
-                catch (Exception rollbackError) { Log.Error("Could not remove sport overview.", rollbackError); }
+                catch (Exception rollbackError) { Log.Error("Could not roll back new sport sizes.", rollbackError); }
                 throw new InvalidOperationException("Макеты не подготовлены: " + error.Message, error);
             }
             finally
@@ -547,6 +680,116 @@ namespace VanyaTools.Native
                 RestoreTemplateSessions(sessions);
                 Log.Info("Sport overview: cleanup complete");
             }
+        }
+
+        private static OverviewSnapshot SnapshotOverview(object appObject, object pageObject)
+        {
+            dynamic app = appObject, page = pageObject;
+            var snapshot = new OverviewSnapshot { Width = Convert.ToDouble(page.SizeWidth),
+                Height = Convert.ToDouble(page.SizeHeight), Name = Convert.ToString(page.Name) };
+            double pageLeft = Convert.ToDouble(page.LeftX), pageTop = Convert.ToDouble(page.TopY);
+            foreach (dynamic layer in page.Layers)
+            {
+                if (Convert.ToBoolean(layer.Master) || Convert.ToBoolean(layer.IsSpecialLayer)) continue;
+                dynamic shapes = app.CreateShapeRange();
+                foreach (dynamic shape in layer.Shapes) shapes.Add(shape);
+                if (Convert.ToInt32(shapes.Count) == 0) continue;
+                snapshot.Blocks.Add(new OverviewBlock { Layer = (object)layer, Shapes = (object)shapes,
+                    SizeLayer = (Convert.ToString(layer.Name) ?? "").StartsWith(SizeLayerPrefix,
+                        StringComparison.OrdinalIgnoreCase),
+                    Left = Convert.ToDouble(shapes.LeftX) - pageLeft,
+                    Top = pageTop - Convert.ToDouble(shapes.TopY),
+                    Width = Convert.ToDouble(shapes.SizeWidth), Height = Convert.ToDouble(shapes.SizeHeight) });
+            }
+            return snapshot;
+        }
+
+        private static void RestoreOverviewPositions(object pageObject, OverviewSnapshot snapshot)
+        {
+            dynamic page = pageObject;
+            double pageLeft = Convert.ToDouble(page.LeftX), pageTop = Convert.ToDouble(page.TopY);
+            foreach (var block in snapshot.Blocks)
+                MoveOverviewBlock(block, pageLeft + block.Left, pageTop - block.Top);
+        }
+
+        private static void MoveOverviewBlock(OverviewBlock block, double left, double top)
+        {
+            dynamic shapes = block.Shapes, layer = block.Layer;
+            double dx = left - Convert.ToDouble(shapes.LeftX), dy = top - Convert.ToDouble(shapes.TopY);
+            if (Math.Abs(dx) < 0.000001 && Math.Abs(dy) < 0.000001) return;
+            bool editable = Convert.ToBoolean(layer.Editable);
+            var locked = new List<object>();
+            try
+            {
+                if (!editable) layer.Editable = true;
+                foreach (dynamic shape in shapes.Shapes)
+                    if (Convert.ToBoolean(shape.Locked))
+                    {
+                        locked.Add((object)shape);
+                        shape.Locked = false;
+                    }
+                shapes.Move(dx, dy);
+                if (Math.Abs(Convert.ToDouble(shapes.LeftX) - left) > 0.01 ||
+                    Math.Abs(Convert.ToDouble(shapes.TopY) - top) > 0.01)
+                    throw new InvalidOperationException("Corel не переместил весь слой «" + layer.Name + "». Проверьте блокировки объектов.");
+            }
+            finally
+            {
+                foreach (dynamic shape in locked)
+                    try { shape.Locked = true; }
+                    catch (Exception error) { Log.Error("Could not restore a sport overview object lock.", error); }
+                if (!editable) layer.Editable = false;
+            }
+        }
+
+        private static void AppendOverviewBlocks(object pageObject, IList<OverviewBlock> added,
+            OverviewSnapshot snapshot)
+        {
+            const double margin = 20, gap = 40;
+            var occupied = new List<OverviewBlock>(snapshot.Blocks);
+            var sizeBlocks = snapshot.Blocks.Where(block => block.SizeLayer).ToList();
+            double columnWidth = Math.Max(added.Max(block => block.Width),
+                sizeBlocks.Count == 0 ? 0 : sizeBlocks.Max(block => block.Width));
+            double rightColumn = margin + columnWidth + gap;
+            double rowTop = sizeBlocks.Count == 0 ? margin : Math.Max(margin, sizeBlocks.Max(block => block.Top));
+            foreach (var block in added)
+            {
+                bool placed = false;
+                while (!placed)
+                {
+                    foreach (double left in new[] { margin, rightColumn })
+                    {
+                        // A free second cell in the last row can be filled.
+                        // User-moved blocks and other page objects are obstacles.
+                        bool overlap = occupied.Any(other =>
+                            left < other.Left + other.Width + gap - 0.01 &&
+                            left + block.Width > other.Left - gap + 0.01 &&
+                            rowTop < other.Top + other.Height + gap - 0.01 &&
+                            rowTop + block.Height > other.Top - gap + 0.01);
+                        if (overlap) continue;
+                        block.Left = left; block.Top = rowTop;
+                        occupied.Add(block); placed = true; break;
+                    }
+                    if (!placed) rowTop = Math.Max(rowTop,
+                        occupied.Max(other => other.Top + other.Height)) + gap;
+                }
+            }
+            double width = Math.Max(snapshot.Width, occupied.Max(block => block.Left + block.Width) + margin);
+            double height = Math.Max(snapshot.Height, occupied.Max(block => block.Top + block.Height) + margin);
+            dynamic page = pageObject;
+            snapshot.ResizeAttempted = true;
+            page.SetSize(width, height);
+            if (Convert.ToDouble(page.SizeWidth) + 0.01 < width ||
+                Convert.ToDouble(page.SizeHeight) + 0.01 < height)
+                throw new InvalidOperationException("Corel ограничил размер обзорной страницы. Добавьте размеры в другом рабочем CDR.");
+            // Corel can change the page origin when it grows. Preserve every
+            // existing layer's position relative to the page, without reflow.
+            RestoreOverviewPositions(pageObject, snapshot);
+            double pageLeft = Convert.ToDouble(page.LeftX), pageTop = Convert.ToDouble(page.TopY);
+            foreach (var block in added)
+                MoveOverviewBlock(block, pageLeft + block.Left, pageTop - block.Top);
+            Log.Info("Sport overview append: new sizes=" + added.Count + ", existing layers=" + snapshot.Blocks.Count +
+                ", page=" + width + "x" + height + " mm");
         }
 
         private static void PlaceOverviewBlocks(object appObject, object pageObject,
@@ -594,6 +837,34 @@ namespace VanyaTools.Native
             return document.ActivePage;
         }
 
+        private static object FindOverviewSourcePage(object documentObject, object preferredObject, string layerName)
+        {
+            dynamic document = documentObject;
+            bool Candidate(object pageObject)
+            {
+                dynamic page = pageObject;
+                string name = Convert.ToString(page.Name) ?? "";
+                if (IsOverviewName(name) || name.StartsWith(MasterPrefix, StringComparison.OrdinalIgnoreCase) ||
+                    name.StartsWith("Спорт · прежн", StringComparison.OrdinalIgnoreCase) ||
+                    name.StartsWith("Спортформа · ", StringComparison.OrdinalIgnoreCase) ||
+                    name.StartsWith("Допечатка · ", StringComparison.OrdinalIgnoreCase) ||
+                    name.StartsWith(CuttingPagePrefix, StringComparison.OrdinalIgnoreCase)) return false;
+                if (String.IsNullOrWhiteSpace(layerName)) return true;
+                foreach (dynamic layer in page.Layers)
+                    if (String.Equals(Convert.ToString(layer.Name), layerName, StringComparison.OrdinalIgnoreCase)) return true;
+                return false;
+            }
+            if (Candidate(preferredObject)) return preferredObject;
+            var candidates = new List<object>();
+            foreach (dynamic page in document.Pages)
+                if (Candidate((object)page)) candidates.Add((object)page);
+            if (candidates.Count == 1) return candidates[0];
+            throw new InvalidOperationException(candidates.Count == 0
+                ? "В рабочем CDR не найдена исходная страница лекала" +
+                    (String.IsNullOrWhiteSpace(layerName) ? "." : " со слоем «" + layerName + "».")
+                : "В рабочем CDR несколько исходных страниц. Откройте нужную страницу лекала и повторите этап 1.");
+        }
+
         private static void RestoreTemplateSessions(IDictionary<string, TemplateSession> sessions)
         {
             foreach (TemplateSession session in sessions.Values)
@@ -625,11 +896,19 @@ namespace VanyaTools.Native
         public void SaveCurrentCuttingPage(string path)
         {
             dynamic document = CorelApp.Get().ActiveDocument;
-            if (document == null || !Convert.ToString(document.ActivePage.Name)
+            if (document == null) throw new InvalidOperationException("Откройте страницу раскладки резки.");
+            ValidateCuttingPage((object)document.ActivePage);
+            CorelDocumentSaver.SaveCurrentPageCopy(document, path);
+        }
+
+        internal static int ValidateCuttingPage(object pageObject)
+        {
+            dynamic page = pageObject;
+            if (page == null || !(Convert.ToString(page.Name) ?? "")
                 .StartsWith(CuttingPagePrefix, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Откройте страницу раскладки резки.");
             int count = 0;
-            foreach (dynamic layer in document.ActivePage.Layers)
+            foreach (dynamic layer in page.Layers)
                 foreach (dynamic shape in layer.Shapes)
                 {
                     // Also reject accidental bitmaps/text from master layers.
@@ -638,7 +917,7 @@ namespace VanyaTools.Native
                     count += curves.Count;
                 }
             if (count == 0) throw new InvalidOperationException("Страница резки пуста.");
-            CorelDocumentSaver.SaveCurrentPageCopy(document, path);
+            return count;
         }
 
         public SportLayoutResult GenerateReplacementPiece(SportLayoutPlayer row,
@@ -726,8 +1005,15 @@ namespace VanyaTools.Native
                     (cutting ? "раскладка резки" : "раскладка спортформы"));
                 commandStarted = true;
                 Dictionary<string, int> tagRanks = cutting && options.CutSizeTags
-                    ? CutTagSizeRanks((object)target, bySize) : null;
-                if (tagRanks != null) options.CutTag.Validate();
+                    ? CutTagSizeRanks((object)target,
+                        rows.Where(row => row != null).Select(row => NormalizeSize(row.Size))) : null;
+                if (tagRanks != null)
+                {
+                    options.CutTag.Validate();
+                    foreach (string size in rows.Where(row => row != null).Select(row => NormalizeSize(row.Size)).Distinct())
+                        if (!tagRanks.ContainsKey(size))
+                            throw new InvalidOperationException("Подготовьте размер " + size + " на этапе 1 перед резкой с язычками.");
+                }
                 outputPage = target.AddPages(1);
                 outputPages.Add((object)outputPage);
                 outputPage.Activate();
@@ -1396,15 +1682,7 @@ namespace VanyaTools.Native
             IDictionary<string, SportLayoutTemplate> templates, out double scale)
         {
             scale = 1;
-            foreach (dynamic page in document.Pages)
-            {
-                if (!String.Equals(Convert.ToString(page.Name), OverviewName,
-                    StringComparison.OrdinalIgnoreCase)) continue;
-                foreach (dynamic layer in page.Layers)
-                    if (String.Equals(Convert.ToString(layer.Name), SizeLayerPrefix + size,
-                        StringComparison.OrdinalIgnoreCase)) return page;
-            }
-            dynamic exact = FindNamedMaster(document, size);
+            dynamic exact = FindPreparedPage(document, size);
             if (exact != null) return exact;
             if (size != "M" && templates.TryGetValue("M", out SportLayoutTemplate medium) &&
                 String.Equals(System.IO.Path.GetFullPath(medium.Path),
@@ -1422,7 +1700,21 @@ namespace VanyaTools.Native
                 }
             }
             throw new InvalidOperationException("Для размера " + size +
-                " нет страницы-макета. Выберите его шаблон и нажмите «Подготовить макет». ");
+                " нет страницы-макета. Отметьте строку игрока этого размера и запустите этап 1.");
+        }
+
+        private static object FindPreparedPage(dynamic document, string size)
+        {
+            object latest = null;
+            foreach (dynamic page in document.Pages)
+            {
+                if (!IsOverviewName(Convert.ToString(page.Name))) continue;
+                foreach (dynamic layer in page.Layers)
+                    if (String.Equals(Convert.ToString(layer.Name), SizeLayerPrefix + size,
+                        StringComparison.OrdinalIgnoreCase) && Convert.ToInt32(layer.Shapes.Count) > 0)
+                        latest = (object)page;
+            }
+            return latest ?? (object)FindNamedMaster(document, size);
         }
 
         private static dynamic FindNamedMaster(dynamic document, string size)
@@ -1439,8 +1731,7 @@ namespace VanyaTools.Native
             var named = new Dictionary<string, Piece>(StringComparer.OrdinalIgnoreCase);
             foreach (dynamic layer in page.Layers)
             {
-                if (String.Equals(Convert.ToString(page.Name), OverviewName,
-                    StringComparison.OrdinalIgnoreCase) &&
+                if (IsOverviewName(Convert.ToString(page.Name)) &&
                     !String.Equals(Convert.ToString(layer.Name), SizeLayerPrefix + size,
                         StringComparison.OrdinalIgnoreCase)) continue;
                 foreach (dynamic shape in layer.Shapes)
@@ -1454,14 +1745,15 @@ namespace VanyaTools.Native
             {
                 if (named.TryGetValue(name, out Piece found)) return found;
                 throw new InvalidOperationException("На странице «" + page.Name +
-                    "» не найден объект " + name + ". Верните его или подготовьте макет заново.");
+                    "» не найден объект " + name + ". Верните его или удалите слой размера " +
+                    size + " и подготовьте этот размер на этапе 1 заново.");
             }
             Piece Optional(string name) => named.TryGetValue(name, out Piece found) ? found : null;
             if (cutting)
             {
                 if (!named.ContainsKey("VT_SPORT_CUT_FRONT"))
-                    throw new InvalidOperationException("Подготовьте макеты заново на этапе 1: " +
-                        "на прежней странице ещё нет исходных групп резки.");
+                    throw new InvalidOperationException("На прежней странице нет исходных групп резки. " +
+                        "Удалите слой размера " + size + " и подготовьте этот размер на этапе 1 заново.");
                 return new Garment {
                     FrontCut = Required("VT_SPORT_CUT_FRONT"),
                     BackCut = Required("VT_SPORT_CUT_BACK"),
@@ -1511,17 +1803,19 @@ namespace VanyaTools.Native
         }
 
         private static Dictionary<string, int> CutTagSizeRanks(object documentObject,
-            IDictionary<string, SportLayoutTemplate> templates)
+            IEnumerable<string> selectedSizes)
         {
             dynamic document = documentObject;
             var sizes = new List<KeyValuePair<string, double>>();
-            foreach (string size in templates.Keys)
+            foreach (string size in selectedSizes.Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                double scale;
-                object page = FindMasterPage(document, size, templates, out scale);
+                // Tab offsets start afresh for the sizes in this cutting run.
+                object page = FindPreparedPage(document, size);
+                if (page == null)
+                    throw new InvalidOperationException("Подготовьте размер " + size + " на этапе 1 перед резкой с язычками.");
                 Garment source = ReadPreparedGarment(page, size, true);
                 dynamic silhouette = FindSilhouette(source.FrontCut);
-                double area = Math.Abs(Convert.ToDouble(silhouette.DisplayCurve.Area)) * scale * scale;
+                double area = Math.Abs(Convert.ToDouble(silhouette.DisplayCurve.Area));
                 if (area <= 0 || Double.IsNaN(area) || Double.IsInfinity(area))
                     throw new InvalidOperationException("Не удалось определить порядок размера «" + size +
                         "»: проверьте замкнутую silhouette переда.");

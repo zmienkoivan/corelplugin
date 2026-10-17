@@ -46,6 +46,7 @@ namespace VanyaTools.Native
             public string MaxPageLength { get; set; }
             public string Gap { get; set; }
             public string PrintFolder { get; set; }
+            public string CutFolder { get; set; }
             public int PrintDpi { get; set; }
             public string FontName { get; set; }
             public bool FrontNameOnRight { get; set; }
@@ -79,7 +80,7 @@ namespace VanyaTools.Native
         private readonly DataGrid _templateGrid, _playerGrid;
         private readonly TextBox _frontArt, _backArt, _leftSleeveArt, _rightSleeveArt,
             _neckArt, _modelPath;
-        private readonly TextBox _sheetWidth, _cutSheetWidth, _maxPageLength, _gap, _printFolder;
+        private readonly TextBox _sheetWidth, _cutSheetWidth, _maxPageLength, _gap, _printFolder, _cutFolder;
         private readonly TextBox _tagWidth, _tagHeight, _tagBridge, _tagLetter, _tagFirstOffset, _tagSizeStep;
         private readonly ComboBox _nameSide, _frontCase, _batchSize, _printQuality;
         private readonly ComboBox _artworkLimit;
@@ -91,6 +92,7 @@ namespace VanyaTools.Native
         private readonly CheckBox _keepGuides, _rotateSleeves, _cutAllow180, _cutSizeTags;
         private readonly TextBlock _count, _progress;
         private readonly Button _prepare, _generate, _generateCut, _saveCut, _exportPrint, _choosePrintFolder;
+        private readonly Button _exportCut, _chooseCutFolder;
         private readonly Button _tagSamples;
         private readonly Button _expandPlayers;
         private readonly Grid _playerEditor;
@@ -104,7 +106,8 @@ namespace VanyaTools.Native
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Content = panel };
             panel.Children.Add(Title("Раскладка спортформы"));
-            panel.Children.Add(Note("Сначала подготовьте страницу-макет и поправьте рисунки " +
+            panel.Children.Add(Note("Сначала заполните таблицу игроков, назначьте размеры и отметьте кого печатать. " +
+                "Подготовьте страницу-макет и поправьте рисунки " +
                 "под видимыми контурами. Затем создайте комплекты и раскладку."));
 
             panel.Children.Add(Title("1. Лекала по размерам"));
@@ -164,12 +167,14 @@ namespace VanyaTools.Native
             panel.Children.Add(Note("Крестик убирает рисунок только у выбранной детали. " +
                 "Пустое поле оставляет деталь без печатного рисунка; на готовой обзорной " +
                 "странице рисунок убирается сразу."));
-            _prepare = DockerTheme.Primary(Button("Этап 1 · Подготовить макет", Prepare));
+            _prepare = DockerTheme.Primary(Button("Этап 1 · Подготовить / добавить размеры", Prepare));
             panel.Children.Add(_prepare);
-            panel.Children.Add(Note("Этап 1 создаёт одну обзорную страницу: по два размера в ряд, следующие пары ниже. " +
-                "Каждый размер остаётся на отдельном слое для ручной правки рисунков, " +
+            panel.Children.Add(Note("Этап 1 берёт только размеры строк с галочкой «Печатать» в таблице игроков. " +
+                "При первом запуске комплекты располагаются по два размера в ряд, следующие пары ниже. " +
+                "Повторный запуск добавляет только недостающие размеры на ту же страницу. " +
+                "Готовые размеры и ваши правки сохраняются. Каждый размер остаётся на отдельном слое для ручной правки рисунков, " +
                 "контуров, текстовых образцов и подписей в подгибке. Оформление и положение " +
-                "подписей изменяйте в Corel. Повторный запуск сохранит прежнюю страницу отдельно."));
+                "подписей изменяйте в Corel. Чтобы пересоздать размер, удалите его слой на обзорной странице и повторите этап 1."));
             panel.Children.Add(Note("Исходный CDR модели остаётся открытым в отдельной вкладке. " +
                 "Повторный запуск использует его; рабочий документ остаётся активным."));
             panel.Children.Add(Note("Создайте фигурный текст: XXXXXXXXX для имени, две строки X для " +
@@ -370,7 +375,7 @@ namespace VanyaTools.Native
                 "Для длинного размера ширина увеличивается, высота букв сохраняется."));
             panel.Children.Add(Note("Левый угол крепления: 10, 30, 50 мм и далее от начала прямого нижнего края " +
                 "до поворота в раскладке. Порядок размеров — от меньшей площади силуэта переда к большей " +
-                "по всем подготовленным размерам. Отступ и шаг можно изменить. " +
+                "только среди размеров отмеченных игроков текущей резки. Отступ и шаг можно изменить. " +
                 "Если на заданном месте нет свободного прямого нижнего края, появится сообщение с размером и деталью."));
             _tagSamples = Button("Лист язычков для пробной резки", CreateTagSamples);
             panel.Children.Add(_tagSamples);
@@ -386,6 +391,20 @@ namespace VanyaTools.Native
                 "Сохранение копирует только эту страницу; версия CDR берётся из настроек Vanya Tools. " +
                 "Раскладка учитывает контуры деталей и заданный зазор. " +
                 "Повороты подбираются по контуру: 0° или 180°. Поворота на 90° для резки нет."));
+            panel.Children.Add(Title("7. Экспорт резки"));
+            _cutFolder = Field(""); _cutFolder.IsReadOnly = true;
+            var cutFolderRow = new Grid { Margin = new Thickness(0, 2, 0, 5) };
+            cutFolderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            cutFolderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            cutFolderRow.Children.Add(_cutFolder);
+            _chooseCutFolder = Button("Папка резки…", ChooseCutFolder);
+            Grid.SetColumn(_chooseCutFolder, 1); cutFolderRow.Children.Add(_chooseCutFolder);
+            panel.Children.Add(cutFolderRow);
+            _exportCut = Button("Экспортировать активный лист резки в DXF", ExportCut);
+            panel.Children.Add(_exportCut);
+            panel.Children.Add(Note("DXF AutoCAD 2000 · миллиметры · масштаб 1:1. Экспортируется активный лист резки " +
+                "целиком, с надсечками, язычками и прорезными буквами. Папка запоминается; каждый экспорт создаёт новый файл. " +
+                "При нескольких листах откройте нужный и повторите экспорт."));
             _progress = Note("");
             panel.Children.Add(_progress);
 
@@ -407,6 +426,7 @@ namespace VanyaTools.Native
             _cutSheetWidth.TextChanged += (_, __) => SaveDraft();
             _maxPageLength.TextChanged += (_, __) => SaveDraft();
             _printFolder.TextChanged += (_, __) => SaveDraft();
+            _cutFolder.TextChanged += (_, __) => SaveDraft();
             _printQuality.SelectionChanged += (_, __) => SaveDraft();
             _gap.TextChanged += (_, __) => SaveDraft();
             _nameSide.SelectionChanged += (_, __) => SaveDraft();
@@ -808,38 +828,33 @@ namespace VanyaTools.Native
         private async void Prepare(object sender, RoutedEventArgs e)
         {
             if (_busy) return;
-            if (!_templateGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
+            if (!_playerGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
+                !_playerGrid.CommitEdit(DataGridEditingUnit.Row, true) ||
+                !_templateGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
                 !_templateGrid.CommitEdit(DataGridEditingUnit.Row, true))
             {
-                _status("Закончите редактирование шаблона.", true);
+                _status("Закончите редактирование таблицы.", true);
                 return;
             }
-            var templates = _templates.ToList();
-            if (templates.Count == 0) { _status("Добавьте шаблоны лекал.", true); return; }
             _busy = true;
             SetActionButtons(false);
             try
             {
+                var templates = SportLayoutService.RequestedTemplates(_templates, _players);
                 SportLayoutOptions options = ReadOptions();
-                var sizes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var template in templates)
-                {
-                    string size = SportLayoutService.NormalizeSize(template.Size);
-                    if (size.Length == 0 || !sizes.Add(size))
-                        throw new InvalidOperationException("Укажите разные размеры в таблице лекал.");
-                    if (String.IsNullOrWhiteSpace(template.Path) || !File.Exists(template.Path))
-                        throw new InvalidOperationException("Не найден шаблон размера " + size + ".");
-                }
                 SaveDraft();
                 var service = new SportLayoutService();
-                _progress.Text = "Подготавливаю одну страницу для " + templates.Count +
-                    " размеров…";
+                _progress.Text = "Проверяю и добавляю выбранные размеры: " +
+                    String.Join(", ", templates.Select(t => SportLayoutService.NormalizeSize(t.Size))) + "…";
                 await Dispatcher.Yield(DispatcherPriority.Background);
-                string prepared = service.PrepareOverview(templates, options);
+                SportOverviewResult prepared = service.PrepareOverview(templates, options);
                 Log.Info("Sport overview: returned to docker");
-                _progress.Text = "Готова обзорная страница: " + prepared +
-                    ". Поправьте рисунки на слоях размеров, затем запустите этап 2.";
-                _status("Макеты всех размеров готовы на одной странице.", false);
+                string added = prepared.AddedSizes.Count == 0 ? "Новые размеры не требуются." :
+                    "Добавлены размеры: " + String.Join(", ", prepared.AddedSizes) + ".";
+                string kept = prepared.KeptSizes.Count == 0 ? "" :
+                    " Уже подготовлены: " + String.Join(", ", prepared.KeptSizes) + ".";
+                _progress.Text = added + kept + " Поправьте макеты и запустите этап 2.";
+                _status(added + kept, false);
                 Log.Info("Sport overview: docker status updated");
             }
             catch (Exception error)
@@ -897,6 +912,7 @@ namespace VanyaTools.Native
         {
             _prepare.IsEnabled = _generate.IsEnabled = _generateCut.IsEnabled = _saveCut.IsEnabled = enabled;
             _exportPrint.IsEnabled = _choosePrintFolder.IsEnabled = _printQuality.IsEnabled = enabled;
+            _exportCut.IsEnabled = _chooseCutFolder.IsEnabled = enabled;
             _tagSamples.IsEnabled = enabled;
             _expandPlayers.IsEnabled = enabled;
             _artworkLimit.IsEnabled = enabled;
@@ -983,6 +999,48 @@ namespace VanyaTools.Native
             finally { _busy = false; SetActionButtons(true); }
         }
 
+        private void ChooseCutFolder(object sender, RoutedEventArgs e)
+        {
+            if (_busy) return;
+            try
+            {
+                var source = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
+                string selected = WindowsFolderPicker.Pick(source == null ? IntPtr.Zero : source.Handle,
+                    _cutFolder.Text.Trim(), "Папка для готовых листов резки DXF");
+                if (!String.IsNullOrWhiteSpace(selected)) _cutFolder.Text = selected;
+            }
+            catch (Exception error)
+            { Log.Error("Could not choose sport cutting folder.", error); _status(error.Message, true); }
+        }
+
+        private async void ExportCut(object sender, RoutedEventArgs e)
+        {
+            if (_busy) return;
+            if (String.IsNullOrWhiteSpace(_cutFolder.Text)) ChooseCutFolder(sender, e);
+            if (String.IsNullOrWhiteSpace(_cutFolder.Text)) return;
+            string folder = _cutFolder.Text.Trim();
+            SaveDraft();
+            _busy = true; SetActionButtons(false);
+            try
+            {
+                _progress.Text = "Экспортирую активный лист резки в DXF…";
+                await Dispatcher.Yield(DispatcherPriority.Render);
+                SportCutDxfExporter.Result result = SportCutDxfExporter.ExportCurrentPage(folder);
+                _progress.Text = "DXF готов: " + result.WidthMm.ToString("0.#") + " × " +
+                    result.HeightMm.ToString("0.#") + " мм · 1:1 · " +
+                    (result.Bytes / 1048576.0).ToString("0.#") + " МБ.\n" + result.Path;
+                _status(result.Warning ?? "Лист резки сохранён в DXF: " + result.Path,
+                    !String.IsNullOrEmpty(result.Warning));
+            }
+            catch (Exception error)
+            {
+                Log.Error("Could not export sport cutting DXF.", error);
+                _progress.Text = "DXF резки не сохранён.";
+                _status("DXF резки не сохранён: " + error.Message, true);
+            }
+            finally { _busy = false; SetActionButtons(true); }
+        }
+
         private void SaveCutting(object sender, RoutedEventArgs e)
         {
             if (_busy) return;
@@ -1022,7 +1080,7 @@ namespace VanyaTools.Native
             try
             {
                 var players = _players.Where(row => row.PrintEnabled).ToList();
-                var templates = _templates.ToList();
+                var templates = SportLayoutService.RequestedTemplates(_templates, players);
                 if (players.Count == 0)
                     throw new InvalidOperationException("Отметьте галочкой «Печатать» хотя бы одного игрока.");
                 if (players.Any(row => row.Quantity < 1 || row.Quantity > 100))
@@ -1167,7 +1225,7 @@ namespace VanyaTools.Native
                 _leftSleeveArt == null || _rightSleeveArt == null ||
                 _neckArt == null || _modelPath == null || _rotateSleeves == null ||
                 _sheetWidth == null || _cutSheetWidth == null || _maxPageLength == null || _gap == null || _nameSide == null || _frontCase == null ||
-                _printFolder == null || _printQuality == null || _artworkLimit == null ||
+                _printFolder == null || _cutFolder == null || _printQuality == null || _artworkLimit == null ||
                 _keepGuides == null || _cutAllow180 == null || _cutSizeTags == null ||
                 _tagWidth == null || _tagHeight == null || _tagBridge == null || _tagLetter == null ||
                 _tagFirstOffset == null || _tagSizeStep == null ||
@@ -1192,6 +1250,7 @@ namespace VanyaTools.Native
                     CutSheetWidth = _cutSheetWidth.Text,
                     MaxPageLength = _maxPageLength.Text,
                     PrintFolder = _printFolder.Text,
+                    CutFolder = _cutFolder.Text,
                     PrintDpi = _printQuality.SelectedIndex == 1 ? 300 : 150,
                     NameStyle = _legacyNameStyle,
                     NumberStyle = _legacyNumberStyle,
@@ -1245,6 +1304,7 @@ namespace VanyaTools.Native
                         _maxPageLength.Text = draft.MaxPageLength ?? "4";
                         _gap.Text = draft.Gap ?? "10";
                         _printFolder.Text = draft.PrintFolder ?? "";
+                        _cutFolder.Text = draft.CutFolder ?? "";
                         _printQuality.SelectedIndex = draft.PrintDpi == 300 ? 1 : 0;
                         _legacyNameStyle = draft.NameStyle ?? LegacyStyle(draft.FontName, 72, draft.WhiteText);
                         _legacyNumberStyle = draft.NumberStyle ?? LegacyStyle(draft.FontName, 150, draft.WhiteText);

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 namespace VanyaTools.Native
@@ -136,14 +137,175 @@ namespace VanyaTools.Native
                 }));
                 var result = new Result { Placements = pages.SelectMany(p => p.Placed).ToList(),
                     PageHeights = pages.Select(p => Math.Max(10, p.Height)).ToList(), Roughness = roughness };
-                if (best == null || result.PageHeights.Count < best.PageHeights.Count ||
-                    (result.PageHeights.Count == best.PageHeights.Count &&
-                    (result.PageHeights.Sum() < best.PageHeights.Sum() - 0.001 ||
-                    (Math.Abs(result.PageHeights.Sum() - best.PageHeights.Sum()) <= 0.001 && result.Roughness < best.Roughness))))
-                    best = result;
+                if (Better(result, best)) best = result;
             }
+            if (items.Any(item => item.Bands != null))
+                best = ImproveContours(best, items, variants, columns, step, limit, gap, gapColumns);
             AlignBottomRow(best, gap, gapColumns);
+            if (best.Placements.Count != items.Count || best.Placements.Select(p => p.Index).Distinct().Count() != items.Count ||
+                best.PageHeights.Any(height => height > limit + 0.001))
+                throw new InvalidOperationException("Нестинг вернул некорректное число деталей или длину страницы.");
             return best;
+        }
+
+        private static bool Better(Result candidate, Result current) => current == null ||
+            candidate.PageHeights.Count < current.PageHeights.Count ||
+            (candidate.PageHeights.Count == current.PageHeights.Count &&
+            (candidate.PageHeights.Sum() < current.PageHeights.Sum() - 0.001 ||
+            (Math.Abs(candidate.PageHeights.Sum() - current.PageHeights.Sum()) <= 0.001 && candidate.Roughness < current.Roughness - 0.001)));
+
+        private static double Roughness(Page page, double gap) => page.Occupied.Sum(cell =>
+        {
+            double bottom = cell == null ? 0 : Math.Max(0, cell[cell.Count - 1].Bottom - gap);
+            return Math.Pow(page.Height - bottom, 2);
+        });
+
+        private static bool BetterPage(Page candidate, Page current, double gap) => candidate != null &&
+            (candidate.Height < current.Height - 0.001 ||
+            (Math.Abs(candidate.Height - current.Height) <= 0.001 && Roughness(candidate, gap) < Roughness(current, gap) - 0.001));
+
+        private static bool Expired(long deadline) => deadline != 0 && Stopwatch.GetTimestamp() >= deadline;
+
+        private static Page RebuildPage(IEnumerable<Placement> placements, int columns, double limit, double gap, int gapColumns)
+        {
+            var page = new Page(columns, limit);
+            foreach (var placement in placements)
+            {
+                var copy = new Placement { Index = placement.Index, Page = placement.Page, Column = placement.Column,
+                    Left = placement.Left, Top = placement.Top, Width = placement.Width, Height = placement.Height,
+                    Rotation = placement.Rotation, Profile = placement.Profile };
+                page.Placed.Add(copy);
+                page.Height = Math.Max(page.Height, copy.Top + copy.Height);
+                Occupy(page, copy, gap, gapColumns);
+            }
+            return page;
+        }
+
+        private static Page PackPage(IList<int> order, IList<Variant>[] variants, int columns, double step,
+            double heightLimit, double gap, int gapColumns, long deadline)
+        {
+            var page = new Page(columns, heightLimit);
+            foreach (int index in order)
+            {
+                if (Expired(deadline)) return null;
+                Placement placed = Find(page, variants[index], columns, step, heightLimit, gapColumns,
+                    deadline, order.Count <= 24);
+                if (placed == null) return null;
+                placed.Index = index;
+                page.Placed.Add(placed);
+                page.Height = Math.Max(page.Height, placed.Top + placed.Height);
+                Occupy(page, placed, gap, gapColumns);
+            }
+            return page;
+        }
+
+        private static Page ImprovePage(Page source, IList<Item> items, IList<Variant>[] variants,
+            int columns, double step, double gap, int gapColumns, long deadline)
+        {
+            // A deferred torso can occupy a bottom side pocket instead of
+            // forcing every sleeve below a central torso. Repack complete
+            // permutations, so accepting a move never drops another piece.
+            Page best = source;
+            for (int round = 0; round < 2 && !Expired(deadline); round++)
+            {
+                Page before = best;
+                var order = best.Placed.Select(p => p.Index).ToList();
+                var positions = best.Placed.ToDictionary(p => p.Index);
+                var priorities = order.OrderBy(index => items[index].SmallPart).ThenByDescending(index =>
+                {
+                    Placement placed = positions[index];
+                    double sideSpace = Math.Max(0, Math.Min(placed.Left,
+                        columns * step - placed.Left - placed.Width));
+                    return sideSpace * placed.Width * placed.Height / (placed.Top + 100);
+                }).ToList();
+                // First try all deferrals, then earlier/later insertions.
+                // The center blocker in an odd row gets a chance before a
+                // large family of less useful insertion permutations.
+                foreach (int phase in new[] { 0, 1 })
+                foreach (int index in priorities)
+                {
+                    if (Expired(deadline)) return best;
+                    int from = order.IndexOf(index);
+                    IEnumerable<int> destinations = phase == 0 ? new[] { order.Count - 1 } : order.Count <= 24
+                        ? Enumerable.Range(0, order.Count).OrderByDescending(to => Math.Abs(to - from))
+                        : new[] { 0, Math.Min(order.Count - 1, from + 2), Math.Max(0, from - 2), order.Count / 2 };
+                    foreach (int to in destinations)
+                    {
+                        if (to == from || (phase == 1 && to == order.Count - 1)) continue;
+                        if (Expired(deadline)) return best;
+                        var proposed = new List<int>(order);
+                        proposed.RemoveAt(from); proposed.Insert(to, index);
+                        Page candidate = PackPage(proposed, variants, columns, step, best.Height, gap, gapColumns, deadline);
+                        if (BetterPage(candidate, best, gap)) best = candidate;
+                    }
+                }
+                if (Object.ReferenceEquals(before, best)) break;
+            }
+            return best;
+        }
+
+        private static Result ImproveContours(Result original, IList<Item> items, IList<Variant>[] variants,
+            int columns, double step, double limit, double gap, int gapColumns)
+        {
+            long started = Stopwatch.GetTimestamp();
+            long deadline = started + 8 * Stopwatch.Frequency;
+            long localDeadline = started + (original.PageHeights.Count == 1 ? 8 : 6) * Stopwatch.Frequency;
+            var pages = Enumerable.Range(0, original.PageHeights.Count).Select(index =>
+                RebuildPage(original.Placements.Where(p => p.Page == index), columns, limit, gap, gapColumns)).ToList();
+            var targets = Enumerable.Range(0, pages.Count).Where(index => pages[index].Placed.Count <= 80)
+                .OrderByDescending(index => pages[index].Occupied.Sum(cell =>
+                    pages[index].Height - (cell == null ? 0 : cell.Sum(interval =>
+                        Math.Max(0, Math.Min(pages[index].Height, interval.Bottom) - Math.Max(0, interval.Top)))))).ToList();
+            for (int at = 0; at < targets.Count && !Expired(localDeadline); at++)
+            {
+                long now = Stopwatch.GetTimestamp();
+                long pageDeadline = now + (localDeadline - now) / Math.Max(1, Math.Min(4, targets.Count - at));
+                int index = targets[at];
+                pages[index] = ImprovePage(pages[index], items, variants, columns, step, gap, gapColumns, pageDeadline);
+            }
+            // Compaction can open pockets that did not exist during the first
+            // pass. Fill them from later sheets without extending earlier ones.
+            for (int source = pages.Count - 1; source > 0 && !Expired(deadline); source--)
+            {
+                bool moved = false;
+                foreach (var piece in pages[source].Placed.OrderBy(p => p.Width * p.Height).ToList())
+                {
+                    if (Expired(deadline)) break;
+                    for (int destination = 0; destination < source && !Expired(deadline); destination++)
+                    {
+                        Placement placed = Find(pages[destination], variants[piece.Index], columns, step,
+                            pages[destination].Height, gapColumns, deadline, true);
+                        if (placed == null) continue;
+                        placed.Index = piece.Index;
+                        pages[destination].Placed.Add(placed);
+                        Occupy(pages[destination], placed, gap, gapColumns);
+                        pages[source].Placed.Remove(piece);
+                        moved = true; break;
+                    }
+                }
+                if (moved)
+                {
+                    pages[source] = RebuildPage(pages[source].Placed, columns, limit, gap, gapColumns);
+                    if (pages[source].Placed.Count > 0 && !Expired(deadline))
+                    {
+                        Page compact = PackPage(pages[source].Placed.Select(p => p.Index).ToList(), variants,
+                            columns, step, pages[source].Height, gap, gapColumns, deadline);
+                        if (BetterPage(compact, pages[source], gap)) pages[source] = compact;
+                    }
+                }
+            }
+            pages.RemoveAll(page => page.Placed.Count == 0);
+            for (int index = 0; index < pages.Count; index++)
+                foreach (var placed in pages[index].Placed) placed.Page = index;
+            var result = new Result { Placements = pages.SelectMany(page => page.Placed).ToList(),
+                PageHeights = pages.Select(page => Math.Max(10, page.Height)).ToList(),
+                Roughness = pages.Sum(page => Roughness(page, gap)) };
+            bool accepted = Better(result, original);
+            Log.Info("Sport nesting improvement: elapsed=" +
+                ((Stopwatch.GetTimestamp() - started) * 1000 / Stopwatch.Frequency) +
+                " ms, accepted=" + accepted + ", pages=" + original.PageHeights.Count + " -> " + result.PageHeights.Count +
+                ", length=" + original.PageHeights.Sum().ToString("0.#") + " -> " + result.PageHeights.Sum().ToString("0.#") + " mm");
+            return accepted ? result : original;
         }
 
         private static Variant Rectangle(double width, double height, double rotation, double step)
@@ -156,7 +318,7 @@ namespace VanyaTools.Native
         }
 
         private static Placement Find(Page page, IList<Variant> variants, int columns,
-            double step, double limit, int gapColumns)
+            double step, double limit, int gapColumns, long deadline = 0, bool dense = false)
         {
             Placement best = null;
             foreach (Variant variant in variants)
@@ -166,7 +328,7 @@ namespace VanyaTools.Native
                 var candidates = new SortedSet<int> { 0, last };
                 // Regular anchors explore contour interlocks; exact previous
                 // edges keep narrow side strips and internal gaps discoverable.
-                int stride = Math.Max(1, (int)Math.Floor(8 / step));
+                int stride = Math.Max(1, (int)Math.Floor((dense ? 2 : 8) / step));
                 for (int column = 0; column <= last; column += stride) candidates.Add(column);
                 foreach (Placement placed in page.Placed)
                     foreach (int anchor in new[] { placed.Column, placed.Column + placed.Profile.Top.Length + gapColumns,
@@ -175,7 +337,8 @@ namespace VanyaTools.Native
                         if (anchor >= 0 && anchor <= last) candidates.Add(anchor);
                 foreach (int column in candidates)
                 {
-                    double top = LowestTop(page, variant, column, limit);
+                    if (Expired(deadline)) return null;
+                    double top = LowestTop(page, variant, column, limit, deadline);
                     if (Double.IsInfinity(top)) continue;
                     double bottom = top + variant.Height;
                     if (best == null || bottom < best.Top + best.Height - 0.000001 ||
@@ -199,11 +362,12 @@ namespace VanyaTools.Native
             return false;
         }
 
-        private static double LowestTop(Page page, Variant variant, int column, double limit)
+        private static double LowestTop(Page page, Variant variant, int column, double limit, long deadline)
         {
             double top = 0;
             while (top + variant.Height <= limit + 0.000001)
             {
+                if (Expired(deadline)) return Double.PositiveInfinity;
                 double next = top;
                 for (int j = 0; j < variant.Profile.Top.Length; j++)
                 {
