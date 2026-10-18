@@ -167,7 +167,23 @@ namespace VanyaTools.Native
         public static Dictionary<string, object> ImageInput(string model, string data, string prompt)
         {
             var input = new Dictionary<string, object> { ["prompt"] = prompt, ["output_format"] = "png" };
-            if (model.Contains("kontext")) { input["input_image"] = data; input["aspect_ratio"] = "match_input_image"; input["safety_tolerance"] = 2; }
+            if (model.StartsWith("google/nano-banana", StringComparison.Ordinal))
+            {
+                input["image_input"] = new[] { data };
+                input["aspect_ratio"] = "match_input_image";
+                input["resolution"] = "2K";
+                if (model == "google/nano-banana-pro") input["allow_fallback_model"] = false;
+            }
+            else if (model == "bytedance/seedream-4.5")
+            {
+                input.Remove("output_format"); // Seedream has no output_format input; convert its result locally.
+                input["image_input"] = new[] { data };
+                input["aspect_ratio"] = "match_input_image";
+                input["size"] = "2K";
+                input["sequential_image_generation"] = "disabled";
+                input["max_images"] = 1;
+            }
+            else if (model.Contains("kontext")) { input["input_image"] = data; input["aspect_ratio"] = "match_input_image"; input["safety_tolerance"] = 2; }
             // Keep headroom below FLUX.2's hard 2048x2048 output cap: aspect-ratio
             // matching can round a 4 MP target slightly over the service limit.
             else if (model.Contains("flux-2")) { input["input_images"] = new[] { data }; input["aspect_ratio"] = "match_input_image"; input["resolution"] = "2 MP"; }

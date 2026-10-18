@@ -15,6 +15,8 @@ using System.Windows.Threading;
 
 namespace VanyaTools.Native
 {
+    internal enum SimpleAiMode { Raster, Prompt, AiStyles, LocalStyles }
+
     internal sealed class SimpleAiTab : UserControl
     {
         private readonly Func<string> _capture;
@@ -22,7 +24,7 @@ namespace VanyaTools.Native
         private readonly Func<string, string, string> _import;
         private readonly Func<string, string, string> _importDtf;
         private readonly Action<string, bool> _status;
-        private readonly bool _styleOnly;
+        private readonly SimpleAiMode _mode;
         private readonly ComboBox _model;
         private readonly ComboBox _backgroundModel;
         private readonly ComboBox _localPreset;
@@ -44,6 +46,10 @@ namespace VanyaTools.Native
             _alphaButton, _highlightButton, _smoothButton, _stairButton, _pipetteButton, _underlayColorButton,
             _editButton, _cancelButton, _retryButton;
         private readonly List<RadioButton> _styleButtons = new List<RadioButton>();
+        private readonly List<RadioButton> _localStyleButtons = new List<RadioButton>();
+        private readonly List<Image> _localStyleImages = new List<Image>();
+        private readonly string _radioGroup = Guid.NewGuid().ToString("N");
+        private BitmapSource _localStyleSample;
         private readonly DispatcherTimer _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         private readonly DispatcherTimer _localPreviewTimer = new DispatcherTimer
             { Interval = TimeSpan.FromMilliseconds(70) };
@@ -77,17 +83,26 @@ namespace VanyaTools.Native
         }
 
         public SimpleAiTab(Func<string> capture, Func<string> token,
-            Func<string, string, string> import, Action<string, bool> status, bool styleOnly,
+            Func<string, string, string> import, Action<string, bool> status, SimpleAiMode mode,
             Func<string, string, string> importDtf = null)
         {
             _capture = capture; _token = token; _import = import;
             _importDtf = importDtf ?? import; _status = status;
-            _styleOnly = styleOnly;
+            _mode = mode;
+            bool styleOnly = mode != SimpleAiMode.Raster;
+            bool localStyles = mode == SimpleAiMode.LocalStyles;
+            bool aiStyles = mode == SimpleAiMode.AiStyles;
+            bool aiEdit = mode == SimpleAiMode.Prompt || aiStyles;
             var panel = new StackPanel { Margin = new Thickness(5) };
             Content = panel;
 
-            if (styleOnly) panel.Children.Add(Label("Стилизация", true));
+            if (styleOnly) panel.Children.Add(Label(localStyles ? "Стили фото · без интернета" :
+                aiStyles ? "Готовые ИИ-стили" : "Обработка фото по промпту", true));
             DockerHelp.Add(panel, "Выделите объект или группу.");
+            if (mode == SimpleAiMode.Prompt) DockerHelp.Add(panel,
+                "Напишите короткую команду: «убери бутылку», «замени фон на лес», «сделай студийный свет». " +
+                "Модель получает выделенное фото целиком. Для точной области правки используйте вкладку «Заливка». " +
+                "Результат вставляется рядом с исходником. Модель и стоимость показываются перед платным запросом.");
             _removeButton = Button("Удалить фон · AI", async (_, __) => await Run("background"));
             _backgroundModel = new ComboBox { FontSize = 11, Margin = new Thickness(0, 2, 0, 4) };
             _backgroundModel.Items.Add(new ModelChoice(BiRefNet, "BiRefNet · фото 2K", 0m, "general-hr"));
@@ -188,7 +203,7 @@ namespace VanyaTools.Native
             _edgeRadius.TextChanged += (_, __) => UpdateEdgeUnits();
             _edgeExpansion.TextChanged += (_, __) => UpdateEdgeUnits();
             edgeRow.MouseEnter += (_, __) => UpdateEdgeUnits();
-            UpdateEdgeUnits();
+            if (!styleOnly) UpdateEdgeUnits();
 
             var localPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 5) };
             _localPreviewButton = Button("Загрузить выделение для предпросмотра",
@@ -200,10 +215,19 @@ namespace VanyaTools.Native
             _localPreset.Items.Add("Сепия");
             _localPreset.Items.Add("Благородное золото");
             _localPreset.Items.Add("Тёплый матовый");
-            _localPreset.Items.Add("Винтаж · серо-коричневый (как на фото)");
+            _localPreset.Items.Add("Винтаж · серо-коричневый");
             _localPreset.Items.Add("Свой тон");
             _localPreset.SelectedIndex = 4;
-            localPanel.Children.Add(_localPreset);
+            if (localStyles)
+            {
+                var localCards = new UniformGrid { Columns = 3, Margin = new Thickness(0, 2, 0, 4) };
+                for (int index = 0; index < _localPreset.Items.Count; index++)
+                    localCards.Children.Add(LocalStyleCard(index, Convert.ToString(_localPreset.Items[index])));
+                localPanel.Children.Add(localCards);
+                DockerHelp.Add(localPanel, "Миниатюры показывают действие каждого эффекта на одном образце. " +
+                    "После загрузки выделения все миниатюры строятся по вашему фото. " +
+                    "Выберите эффект нажатием на картинку; сила и тонкая настройка меняют предпросмотр без платных запросов.");
+            }
             _localStrength = AddLocalStyleSlider(localPanel, "Сила эффекта", 0, 100, 100, "%");
             var localFineTuning = new StackPanel { Margin = new Thickness(3, 2, 3, 3) };
             _localContrast = AddLocalStyleSlider(localFineTuning, "Контраст", -50, 50, 0, "");
@@ -216,33 +240,35 @@ namespace VanyaTools.Native
                 async (_, __) => await ApplyLocalStyle()));
             _localApplyButton.ToolTip = "Обрабатывает выделение на этом ПК без Replicate. Оригинал остаётся на холсте.";
             localPanel.Children.Add(_localApplyButton);
-            if (styleOnly)
+            if (localStyles)
             {
-                panel.Children.Add(Label("Локальные фотоэффекты · без интернета", true));
                 panel.Children.Add(localPanel);
-                panel.Children.Add(new Separator { Margin = new Thickness(0, 3, 0, 3) });
             }
 
             var previews = new UniformGrid { Columns = 2 };
             previews.Children.Add(Preview("Выделение", out _sourcePreview, styleOnly ? 220 : 72));
             previews.Children.Add(Preview("Результат", out _resultPreview, styleOnly ? 220 : 72));
             panel.Children.Add(previews);
-            if (styleOnly)
+            if (localStyles)
             {
                 _localPreviewTimer.Tick += (_, __) =>
                 {
                     _localPreviewTimer.Stop();
                     UpdateLocalPreview();
                 };
-                _localPreset.SelectionChanged += (_, __) => QueueLocalPreview();
+                _localPreset.SelectionChanged += (_, __) => {
+                    for (int i = 0; i < _localStyleButtons.Count; i++)
+                        _localStyleButtons[i].IsChecked = i == _localPreset.SelectedIndex;
+                    QueueLocalPreview(); };
                 foreach (Slider slider in new[] { _localStrength, _localContrast, _localWarmth,
                     _localSaturation, _localBrightness })
                     slider.ValueChanged += (_, __) => QueueLocalPreview();
+                _localStyleButtons[_localPreset.SelectedIndex].IsChecked = true;
+                UpdateLocalStyleCards();
             }
 
-            if (styleOnly) panel.Children.Add(Label("ИИ-стили", true));
             var styles = new UniformGrid { Columns = 3 };
-            foreach (var style in new[]
+            if (aiStyles) foreach (var style in new[]
             {
                 new StyleChoice("Аниме", "anime", "Transform the selected image into polished Japanese anime illustration with clean expressive linework and cel shading."),
                 new StyleChoice("Наивная иллюстрация", "naive", "Transform the selected image into a playful handmade naive illustration with simple shapes, uneven ink outlines and flat warm colors."),
@@ -251,27 +277,40 @@ namespace VanyaTools.Native
                 new StyleChoice("Комикс", "comic", "Transform the selected image into modern comic-book art with bold ink outlines, halftone shadows and vivid flat color blocks."),
                 new StyleChoice("Городская иллюстрация", "street-illustration", "Render the selected subject as a playful hand-painted editorial street illustration: irregular thick black ink outlines, flat warm peach and cream areas, vivid cobalt blue and orange accents, simplified expressive figures and subtle painted-paper texture. Preserve the source subject and composition.")
             }) styles.Children.Add(StyleCard(style));
-            if (styleOnly)
+            if (aiStyles)
             {
                 panel.Children.Add(styles);
-                panel.Children.Add(Button("Свой промпт без образца стиля", (_, __) => ClearStyle()));
-                panel.Children.Add(Label("Модель", false));
             }
+            if (aiEdit) panel.Children.Add(Label("Модель", false));
             _model = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 5) };
+            _model.Items.Add(new ModelChoice("google/nano-banana-2", "Nano Banana 2 · 2K", 0.101m));
+            _model.Items.Add(new ModelChoice("google/nano-banana-pro", "Nano Banana Pro · 2K", 0.15m));
+            _model.Items.Add(new ModelChoice("bytedance/seedream-4.5", "Seedream 4.5 · 2K", 0.04m));
             _model.Items.Add(new ModelChoice("black-forest-labs/flux-2-pro", "FLUX.2 Pro", 0.14m));
             _model.Items.Add(new ModelChoice("black-forest-labs/flux-kontext-max", "FLUX.1 Kontext Max", 0.08m));
             _model.Items.Add(new ModelChoice("qwen/qwen-image-edit", "Qwen Image Edit", 0.03m));
             _model.SelectedIndex = 0;
-            if (styleOnly) panel.Children.Add(_model);
-            if (styleOnly) panel.Children.Add(Label("Промпт", false));
+            if (aiEdit)
+            {
+                panel.Children.Add(_model);
+                var modelCost = Note(""); panel.Children.Add(modelCost);
+                Action updateCost = () => {
+                    var choice = _model.SelectedItem as ModelChoice;
+                    modelCost.Text = choice == null ? "" : "Ориентировочно $" +
+                        choice.EstimatedCost.ToString("0.###", CultureInfo.InvariantCulture) + " за результат · Replicate"; };
+                _model.SelectionChanged += (_, __) => updateCost(); updateCost();
+                panel.Children.Add(Label(aiStyles ? "Промпт выбранного стиля · можно уточнить" : "Что изменить на фото", false));
+            }
             _prompt = new TextBox { MinHeight = 55, MaxHeight = 78, AcceptsReturn = true,
-                TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, FontSize = 11 };
-            if (styleOnly)
+                TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 11 };
+            if (aiEdit)
             {
                 panel.Children.Add(_prompt);
             }
-            _editButton = DockerTheme.Primary(Button("Применить стиль / промпт", async (_, __) => await Run("edit")));
-            if (styleOnly) panel.Children.Add(_editButton);
+            _editButton = DockerTheme.Primary(Button(aiStyles ? "Применить ИИ-стиль" : "Обработать фото по промпту",
+                async (_, __) => await Run("edit")));
+            if (aiEdit) panel.Children.Add(_editButton);
+            if (aiStyles && _styleButtons.Count > 0) _styleButtons[0].IsChecked = true;
 
             _cancelButton = Button("Отменить", (_, __) => Cancel());
             _cancelButton.Visibility = Visibility.Collapsed;
@@ -285,19 +324,11 @@ namespace VanyaTools.Native
             panel.Children.Add(_progress); panel.Children.Add(_progressBar);
             _timer.Tick += (_, __) => _progress.Text = _stage + " · " + (int)_elapsed.Elapsed.TotalSeconds + " с";
             RestorePending();
-            if (styleOnly) Unloaded += (_, __) =>
+            if (localStyles)
             {
-                _localPreviewTimer.Stop();
-                if (_busy) return;
-                string source = _localSourcePath;
-                _localSourcePath = null;
-                _localPreviewSource = null;
-                _sourcePreview.Source = null;
-                if (String.IsNullOrEmpty(_readyOutput)) _resultPreview.Source = null;
-                if (!String.IsNullOrEmpty(source))
-                    try { File.Delete(source); } catch { }
-                _localPreviewButton.Content = "Загрузить выделение для предпросмотра";
-            };
+                Unloaded += (_, __) => _localPreviewTimer.Stop();
+                Loaded += (_, __) => QueueLocalPreview();
+            }
         }
 
         private Border StyleCard(StyleChoice style)
@@ -307,7 +338,7 @@ namespace VanyaTools.Native
                 Stretch = Stretch.UniformToFill, Margin = new Thickness(1) });
             content.Children.Add(new TextBlock { Text = style.Name, TextAlignment = TextAlignment.Center,
                 TextWrapping = TextWrapping.Wrap, FontSize = 10, MaxWidth = 100 });
-            var choice = new RadioButton { GroupName = "VanyaSimpleAiStyle", Content = content,
+            var choice = new RadioButton { GroupName = "VanyaSimpleAiStyle" + _radioGroup, Content = content,
                 HorizontalAlignment = HorizontalAlignment.Center };
             _styleButtons.Add(choice);
             var border = new Border { BorderBrush = Brushes.LightGray, BorderThickness = new Thickness(1),
@@ -321,10 +352,43 @@ namespace VanyaTools.Native
             return border;
         }
 
-        private void ClearStyle()
+        private Border LocalStyleCard(int index, string name)
         {
-            foreach (var choice in _styleButtons) choice.IsChecked = false;
-            _selectedStyle = null;
+            var image = new Image { Width = 92, Height = 64, Stretch = Stretch.UniformToFill };
+            _localStyleImages.Add(image);
+            var content = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
+            content.Children.Add(image);
+            content.Children.Add(new TextBlock { Text = name, TextAlignment = TextAlignment.Center,
+                TextWrapping = TextWrapping.Wrap, FontSize = 10, MaxWidth = 105, Margin = new Thickness(0, 2, 0, 0) });
+            var choice = new RadioButton { Content = content, GroupName = "VanyaLocalPhotoStyle" + _radioGroup,
+                HorizontalAlignment = HorizontalAlignment.Center };
+            _localStyleButtons.Add(choice);
+            var border = new Border { Child = choice, BorderBrush = Brushes.LightGray,
+                BorderThickness = new Thickness(1), Margin = new Thickness(1), Padding = new Thickness(2) };
+            choice.Checked += (_, __) => { _localPreset.SelectedIndex = index;
+                border.BorderBrush = Brushes.SteelBlue; border.BorderThickness = new Thickness(2); };
+            choice.Unchecked += (_, __) => { border.BorderBrush = Brushes.LightGray;
+                border.BorderThickness = new Thickness(1); };
+            return border;
+        }
+
+        private void UpdateLocalStyleCards()
+        {
+            if (_localStyleImages.Count == 0) return;
+            BitmapSource source = _localPreviewSource ?? (_localStyleSample ??
+                (_localStyleSample = LocalPhotoStyleSample.Create()));
+            double scale = Math.Min(1, 128.0 / Math.Max(source.PixelWidth, source.PixelHeight));
+            if (scale < 1)
+            {
+                var small = new TransformedBitmap(source, new ScaleTransform(scale, scale));
+                small.Freeze(); source = small;
+            }
+            for (int index = 0; index < _localStyleImages.Count; index++)
+            {
+                LocalPhotoStyleSettings settings = LocalSettings();
+                settings.Preset = (LocalPhotoPreset)index;
+                _localStyleImages[index].Source = LocalPhotoStyleProcessor.Render(source, settings, CancellationToken.None);
+            }
         }
 
         private static BitmapSource Thumbnail(string asset)
@@ -374,7 +438,7 @@ namespace VanyaTools.Native
 
         private void QueueLocalPreview()
         {
-            if (!_styleOnly || _busy || _localPreviewSource == null ||
+            if (_mode != SimpleAiMode.LocalStyles || _busy ||
                 _localPreset.SelectedIndex < 0) return;
             // Throttle rather than debounce: the image must keep changing while dragging.
             if (!_localPreviewTimer.IsEnabled) _localPreviewTimer.Start();
@@ -382,11 +446,13 @@ namespace VanyaTools.Native
 
         private void UpdateLocalPreview()
         {
-            if (_busy || _localPreviewSource == null || _localPreset.SelectedIndex < 0) return;
+            if (_busy || _localPreset.SelectedIndex < 0) return;
             try
             {
-                _resultPreview.Source = LocalPhotoStyleProcessor.Render(_localPreviewSource,
-                    LocalSettings(), CancellationToken.None);
+                if (_localPreviewSource != null)
+                    _resultPreview.Source = LocalPhotoStyleProcessor.Render(_localPreviewSource,
+                        LocalSettings(), CancellationToken.None);
+                UpdateLocalStyleCards();
             }
             catch (Exception ex)
             {
@@ -413,6 +479,7 @@ namespace VanyaTools.Native
                 _sourcePreview.Source = preview;
                 _resultPreview.Source = LocalPhotoStyleProcessor.Render(preview,
                     LocalSettings(), CancellationToken.None);
+                UpdateLocalStyleCards();
                 _localPreviewButton.Content = "Обновить выделение для предпросмотра";
                 if (!String.IsNullOrEmpty(previous))
                     try { File.Delete(previous); } catch { }
@@ -454,6 +521,7 @@ namespace VanyaTools.Native
                     _localPreviewSource = PreviewBitmap(source);
                     _sourcePreview.Source = _localPreviewSource;
                     _localPreviewButton.Content = "Обновить выделение для предпросмотра";
+                    UpdateLocalStyleCards();
                 }
                 string output = Path.Combine(Path.GetTempPath(),
                     "Vanya-Local-Style-" + Guid.NewGuid().ToString("N") + ".png");
@@ -492,6 +560,8 @@ namespace VanyaTools.Native
             { Report("Выберите модель удаления фона.", true); return; }
             string prompt = _prompt.Text.Trim();
             if (action == "edit" && prompt.Length == 0) { Report("Выберите стиль или введите промпт.", true); return; }
+            if (action == "edit" && selectedModel.Id == "bytedance/seedream-4.5" && prompt.Length > 4000)
+            { Report("Для Seedream 4.5 сократите промпт до 4000 символов.", true); return; }
             string model = action == "background" ? backgroundModel.Id :
                 action == "upscale" ? TiledUpscaler : selectedModel.Id;
             string key = _token();
@@ -1307,7 +1377,8 @@ namespace VanyaTools.Native
             if (filename.StartsWith("Vanya-Upscale-Ready-", StringComparison.OrdinalIgnoreCase))
                 return "Апскейл ×2";
             if (filename.StartsWith("Vanya-Style-Ready-", StringComparison.OrdinalIgnoreCase))
-                return _selectedStyle == null ? "Стилизация AI" : "Стилизация · " + _selectedStyle.Name;
+                return _mode == SimpleAiMode.Prompt ? "ИИ · обработка фото по промпту" :
+                    _selectedStyle == null ? "Стилизация AI" : "Стилизация · " + _selectedStyle.Name;
             if (filename.StartsWith("Vanya-Local-Style-", StringComparison.OrdinalIgnoreCase))
                 return "Локальная стилизация фото";
             return "Обработка растра";
@@ -1366,6 +1437,7 @@ namespace VanyaTools.Native
                 _localSaturation.IsEnabled = _localBrightness.IsEnabled = !busy;
             _highlightColor.IsEnabled = !busy;
             foreach (var choice in _styleButtons) choice.IsEnabled = !busy;
+            foreach (var choice in _localStyleButtons) choice.IsEnabled = !busy;
             _cancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             _cancelButton.IsEnabled = busy;
             _retryButton.Visibility = !busy && ((!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput)) ||
@@ -1388,16 +1460,27 @@ namespace VanyaTools.Native
         private string PendingPath()
         {
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "VanyaTools", _styleOnly ? "pending-simple-style-result.txt" : "pending-simple-ai-result.txt");
+                "VanyaTools", _mode == SimpleAiMode.Raster ? "pending-simple-ai-result.txt" :
+                _mode == SimpleAiMode.Prompt ? "pending-photo-prompt-result.txt" :
+                _mode == SimpleAiMode.LocalStyles ? "pending-local-photo-style-result.txt" : "pending-simple-style-result.txt");
         }
 
         private void RestorePending()
         {
             try
             {
+                string legacy = Path.Combine(Path.GetDirectoryName(PendingPath()), "pending-simple-style-result.txt");
+                if (_mode == SimpleAiMode.LocalStyles && !File.Exists(PendingPath()) && File.Exists(legacy))
+                {
+                    string previous = File.ReadAllText(legacy).Trim();
+                    if (Path.GetFileName(previous).StartsWith("Vanya-Local-Style-", StringComparison.OrdinalIgnoreCase) && File.Exists(previous))
+                    { File.WriteAllText(PendingPath(), previous); File.Delete(legacy); }
+                }
                 if (!File.Exists(PendingPath())) return;
                 string path = File.ReadAllText(PendingPath()).Trim();
                 if (!File.Exists(path)) return;
+                if (_mode == SimpleAiMode.AiStyles &&
+                    Path.GetFileName(path).StartsWith("Vanya-Local-Style-", StringComparison.OrdinalIgnoreCase)) return;
                 _readyOutput = path;
                 _resultPreview.Source = PreviewBitmap(path);
                 SetBusy(false, null);

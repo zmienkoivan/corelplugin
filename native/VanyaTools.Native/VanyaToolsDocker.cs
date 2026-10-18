@@ -192,20 +192,24 @@ namespace VanyaTools.Native
             tabs.Items.Add(ThumbnailTabs.Create("Цветопроба", ThumbnailTabs.ColorProof,
                 Color.FromRgb(130, 106, 65),
                 new ColorProofTab((message, isError) => SetStatus(message, isError))));
-            tabs.Items.Add(ThumbnailTabs.Create("Стилизация", ThumbnailTabs.Style,
+            Func<SimpleAiMode, ScrollViewer> photoTools = mode =>
+                new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    Content = new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
+                        () => aiTools.GetToken(), ImportAiResult,
+                        (message, isError) => SetStatus(message, isError), mode, ImportDtfResult) };
+            tabs.Items.Add(ThumbnailTabs.Create("Фото и ИИ", ThumbnailTabs.Style,
                 Color.FromRgb(167, 83, 123),
                 new TabControl
                 {
                     Items =
                     {
-                        new TabItem { Header = "Стили", Content =
-                            new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                                Content = new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
-                                () => aiTools.GetToken(), ImportAiResult,
-                                (message, isError) => SetStatus(message, isError), true, ImportDtfResult) } },
-                        new TabItem { Header = "Генеративная заливка", Content =
+                        new TabItem { Header = "Заливка", ToolTip = "Генеративная заливка выделенной области", Content =
                             new GenerativeFillTab(() => aiTools.GetToken(), ImportGenerativeFillResult,
-                                (message, isError) => SetStatus(message, isError)) }
+                                (message, isError) => SetStatus(message, isError)) },
+                        new TabItem { Header = "ИИ промпт", Content = photoTools(SimpleAiMode.Prompt) },
+                        new TabItem { Header = "ИИ стили", Content = photoTools(SimpleAiMode.AiStyles) },
+                        new TabItem { Header = "Стили", ToolTip = "Обычные эффекты фото без интернета", Content =
+                            photoTools(SimpleAiMode.LocalStyles) }
                     }
                 }));
             tabs.Items.Add(ThumbnailTabs.Create("Настройки", ThumbnailTabs.Settings,
@@ -258,7 +262,7 @@ namespace VanyaTools.Native
 
             root.Children.Add(new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
                 () => aiTools.GetToken(), ImportAiResult,
-                (message, isError) => SetStatus(message, isError), false, ImportDtfResult));
+                (message, isError) => SetStatus(message, isError), SimpleAiMode.Raster, ImportDtfResult));
 
             root = stickerTools;
             AddSectionTitle(root, "Подготовка стикерпака");
