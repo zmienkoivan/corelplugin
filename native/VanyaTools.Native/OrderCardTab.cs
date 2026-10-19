@@ -362,7 +362,7 @@ namespace VanyaTools.Native
             _editor.Children.Add(sourceRow);
             _editor.Children.Add(Label("Технология печати"));
             var techGrid = new UniformGrid { Columns = 2 };
-            foreach (string name in new[] { "ДТФ", "Шелкография", "ПУФ", "Вышивка", "Сублимация", "Лазер" })
+            foreach (string name in new[] { "ДТФ", "Шелкография", "ПУФ", "Вышивка", "Сублимация", "Лазер", "УФ ДТФ", "ТЕРМ" })
             {
                 var box = new CheckBox { Content = name, Margin = new Thickness(2, 1, 2, 1) };
                 _technologies.Add(box); techGrid.Children.Add(box);
