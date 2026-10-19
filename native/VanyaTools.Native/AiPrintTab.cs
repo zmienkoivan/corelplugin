@@ -20,6 +20,7 @@ namespace VanyaTools.Native
     internal sealed class AiPrintTab : UserControl
     {
         internal FrameworkElement SettingsView { get; private set; }
+        internal FrameworkElement FontToolsView { get; private set; }
         internal string GetToken() { return CurrentToken(); }
         private readonly Func<string, string, string> _import;
         private readonly Action<string, bool> _status;
@@ -66,10 +67,9 @@ namespace VanyaTools.Native
                 Content = sections };
             var panel = new StackPanel { Margin = new Thickness(7) };
             var fontPanel = new StackPanel { Margin = new Thickness(7) };
-            sections.Children.Add(new Expander { Header = "Определить шрифт",
-                IsExpanded = true, Content = fontPanel });
+            FontToolsView = fontPanel;
             sections.Children.Add(new Expander { Header = "Восстановление принта",
-                IsExpanded = false, Content = panel });
+                IsExpanded = true, Content = panel });
             var settingsPanel = new StackPanel { Margin = new Thickness(7) };
             SettingsView = settingsPanel;
             settingsPanel.Children.Add(Label("Replicate", true));
@@ -599,7 +599,7 @@ namespace VanyaTools.Native
             return "replicate-file:" + path;
         }
 
-        private static BitmapSource FontReference(BitmapSource image)
+        internal static BitmapSource FontReference(BitmapSource image)
         {
             // Give transparent letters a contrasting opaque background so the
             // vision model sees the same glyph contours regardless of its alpha handling.

@@ -37,6 +37,12 @@ namespace VanyaTools.Native
         private readonly TextBox _alphaThreshold;
         private readonly ComboBox _highlightColor;
         private readonly TextBox _edgeRadius, _edgeExpansion, _underlayHex;
+        private readonly ComboBox _edgeLengthUnit;
+        private readonly Button _thinOutline, _thickOutline;
+        private readonly DtfOutlineSettings _outlineSettings;
+        private bool _convertingEdgeUnits, _edgeDpiKnown;
+        private int _previousEdgeUnit;
+        private double _edgeDpi = 400;
         private readonly Border _underlaySwatch;
         private readonly TextBlock _edgeUnits;
         private readonly Image _sourcePreview, _resultPreview;
@@ -84,10 +90,11 @@ namespace VanyaTools.Native
 
         public SimpleAiTab(Func<string> capture, Func<string> token,
             Func<string, string, string> import, Action<string, bool> status, SimpleAiMode mode,
-            Func<string, string, string> importDtf = null)
+            Func<string, string, string> importDtf = null, DtfOutlineSettings outlineSettings = null)
         {
             _capture = capture; _token = token; _import = import;
             _importDtf = importDtf ?? import; _status = status;
+            _outlineSettings = outlineSettings ?? DtfOutlineSettings.Load();
             _mode = mode;
             bool styleOnly = mode != SimpleAiMode.Raster;
             bool localStyles = mode == SimpleAiMode.LocalStyles;
@@ -176,11 +183,15 @@ namespace VanyaTools.Native
             var edgeRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 1) };
             _smoothButton = Button("Обводка", async (_, __) => await SmoothEdge());
             edgeRow.Children.Add(_smoothButton);
-            edgeRow.Children.Add(new TextBlock { Text = "Радиус px", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
-            _edgeRadius = new TextBox { Text = "2", Width = 30, FontSize = 11, Margin = new Thickness(3, 0, 6, 0) };
+            _edgeLengthUnit = new ComboBox { Width = 53, FontSize = 11, MinHeight = 24,
+                Margin = new Thickness(3, 0, 6, 0), ItemsSource = new[] { "мм", "px" }, SelectedIndex = 0 };
+            edgeRow.Children.Add(_edgeLengthUnit);
+            edgeRow.Children.Add(new TextBlock { Text = "Сглаживание", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
+            _edgeRadius = new TextBox { Text = DtfOutlineUnits.Format(2 * 25.4 / 400), Width = 68, FontSize = 11, Margin = new Thickness(3, 0, 6, 0) };
             edgeRow.Children.Add(_edgeRadius);
-            edgeRow.Children.Add(new TextBlock { Text = "Обводка px", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
-            _edgeExpansion = new TextBox { Text = "0", Width = 30, FontSize = 11, Margin = new Thickness(3, 0, 6, 0) };
+            edgeRow.Children.Add(new TextBlock { Text = "Обводка +", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
+            _edgeExpansion = new TextBox { Text = DtfOutlineUnits.Format(_outlineSettings.ThinMm), Width = 68,
+                FontSize = 11, Margin = new Thickness(3, 0, 6, 0) };
             edgeRow.Children.Add(_edgeExpansion);
             edgeRow.Children.Add(new TextBlock { Text = "Цвет", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
             _underlayHex = new TextBox { Text = "#FFFFFF", Width = 72, FontSize = 11,
@@ -200,8 +211,24 @@ namespace VanyaTools.Native
             if (!styleOnly) panel.Children.Add(edgeRow);
             _edgeUnits = Note("");
             if (!styleOnly) panel.Children.Add(_edgeUnits);
-            _edgeRadius.TextChanged += (_, __) => UpdateEdgeUnits();
-            _edgeExpansion.TextChanged += (_, __) => UpdateEdgeUnits();
+            var outlinePresets = new WrapPanel();
+            _thinOutline = Button("", (_, __) => ApplyOutlinePreset(_outlineSettings.ThinMm));
+            _thickOutline = Button("", (_, __) => ApplyOutlinePreset(_outlineSettings.ThickMm));
+            outlinePresets.Children.Add(_thinOutline); outlinePresets.Children.Add(_thickOutline);
+            RefreshOutlinePresets();
+            if (!styleOnly)
+            {
+                panel.Children.Add(outlinePresets);
+                DockerHelp.Add(panel, "Единицы мм/px относятся к сглаживанию и наружной обводке. " +
+                    "При переключении значения пересчитываются туда и обратно по DPI захвата. " +
+                    "Под полями показаны целые пиксели и фактический размер после округления. " +
+                    "«Тонкая» и «Толстая» заполняют только обводку; их значения меняются в «Настройки → ДТФ · пресеты обводки».");
+                _outlineSettings.Changed += RefreshOutlinePresets;
+                Loaded += (_, __) => { RefreshOutlinePresets(); UpdateEdgeUnits(); };
+            }
+            _edgeLengthUnit.SelectionChanged += (_, __) => SwitchEdgeUnits();
+            _edgeRadius.TextChanged += (_, __) => UpdateEdgeUnits(false);
+            _edgeExpansion.TextChanged += (_, __) => UpdateEdgeUnits(false);
             edgeRow.MouseEnter += (_, __) => UpdateEdgeUnits();
             if (!styleOnly) UpdateEdgeUnits();
 
@@ -912,22 +939,85 @@ namespace VanyaTools.Native
             return scale;
         }
 
-        private void UpdateEdgeUnits()
+        private void RefreshOutlinePresets()
         {
-            if (_edgeUnits == null || _busy) return;
-            int radius, expansion;
-            if (!Int32.TryParse(_edgeRadius.Text, out radius) ||
-                !Int32.TryParse(_edgeExpansion.Text, out expansion))
-            { _edgeUnits.Text = "Введите радиус и обводку в пикселях."; return; }
+            _thinOutline.Content = "Тонкая +" + DtfOutlineUnits.Format(_outlineSettings.ThinMm) + " мм";
+            _thickOutline.Content = "Толстая +" + DtfOutlineUnits.Format(_outlineSettings.ThickMm) + " мм";
+        }
+
+        private void RefreshEdgeDpi()
+        {
+            try { _edgeDpi = AiSelectionCapture.EstimateDefaultCaptureDpi(); _edgeDpiKnown = true; }
+            catch { _edgeDpiKnown = false; }
+        }
+
+        private void ApplyOutlinePreset(double millimeters)
+        {
+            if (_busy) return;
+            RefreshEdgeDpi();
+            _edgeExpansion.Text = DtfOutlineUnits.Format(_edgeLengthUnit.SelectedIndex == 0
+                ? millimeters : millimeters * _edgeDpi / 25.4);
+            UpdateEdgeUnits(false);
+        }
+
+        private void SwitchEdgeUnits()
+        {
+            if (_convertingEdgeUnits || _edgeLengthUnit.SelectedIndex < 0) return;
+            int next = _edgeLengthUnit.SelectedIndex;
+            if (next == _previousEdgeUnit) return;
+            RefreshEdgeDpi();
+            _convertingEdgeUnits = true;
             try
             {
-                int dpi = AiSelectionCapture.EstimateDefaultCaptureDpi();
-                double mmPerPixel = 25.4 / dpi;
-                _edgeUnits.Text = String.Format(CultureInfo.CurrentCulture,
-                    "Радиус ≈ {0:0.00} мм · обводка ≈ {1:0.00} мм · {2} DPI",
-                    radius * mmPerPixel, expansion * mmPerPixel, dpi);
+                if (!DtfOutlineUnits.TryNumber(_edgeRadius.Text, out double radius) ||
+                    !DtfOutlineUnits.TryNumber(_edgeExpansion.Text, out double expansion))
+                { _edgeLengthUnit.SelectedIndex = _previousEdgeUnit; _edgeUnits.Text = "Закончите ввод размеров перед переключением единиц."; return; }
+                double factor = next == 0 ? 25.4 / _edgeDpi : _edgeDpi / 25.4;
+                _edgeRadius.Text = DtfOutlineUnits.Format(radius * factor);
+                _edgeExpansion.Text = DtfOutlineUnits.Format(expansion * factor);
+                _previousEdgeUnit = next;
             }
-            catch { _edgeUnits.Text = "Выделите объект для расчёта мм."; }
+            finally { _convertingEdgeUnits = false; }
+            UpdateEdgeUnits(false);
+        }
+
+        private sealed class EdgeMetrics
+        {
+            internal int RadiusX, RadiusY, ExpansionX, ExpansionY;
+            internal double DpiX, DpiY;
+            internal static EdgeMetrics Measure(double radius, double expansion, bool mm, double dpiX, double dpiY) =>
+                new EdgeMetrics { DpiX = dpiX, DpiY = dpiY,
+                    RadiusX = DtfOutlineUnits.Pixels(radius, mm, dpiX, DtfOutlineUnits.MaxRadiusPixels, "Сглаживание"),
+                    RadiusY = DtfOutlineUnits.Pixels(radius, mm, dpiY, DtfOutlineUnits.MaxRadiusPixels, "Сглаживание"),
+                    ExpansionX = DtfOutlineUnits.Pixels(expansion, mm, dpiX, DtfOutlineUnits.MaxExpansionPixels, "Обводка"),
+                    ExpansionY = DtfOutlineUnits.Pixels(expansion, mm, dpiY, DtfOutlineUnits.MaxExpansionPixels, "Обводка") };
+            private static string Pair(double x, double y) => Math.Abs(x - y) < 0.000001
+                ? DtfOutlineUnits.Format(x) : DtfOutlineUnits.Format(x) + "×" + DtfOutlineUnits.Format(y);
+            internal string Description => "Сглаживание: " + Pair(RadiusX, RadiusY) + " px ≈ " +
+                Pair(RadiusX * 25.4 / DpiX, RadiusY * 25.4 / DpiY) + " мм · обводка: +" +
+                Pair(ExpansionX, ExpansionY) + " px ≈ " + Pair(ExpansionX * 25.4 / DpiX, ExpansionY * 25.4 / DpiY) +
+                " мм · " + Pair(DpiX, DpiY) + " DPI";
+        }
+
+        private sealed class EdgeResult
+        {
+            internal Tuple<double, double> Offset;
+            internal EdgeMetrics Metrics;
+        }
+
+        private void UpdateEdgeUnits(bool refreshDpi = true)
+        {
+            if (_edgeUnits == null || _busy || _convertingEdgeUnits) return;
+            if (refreshDpi) RefreshEdgeDpi();
+            if (!DtfOutlineUnits.TryNumber(_edgeRadius.Text, out double radius) ||
+                !DtfOutlineUnits.TryNumber(_edgeExpansion.Text, out double expansion))
+            { _edgeUnits.Text = "Введите неотрицательные размеры, запятую или точку можно использовать как разделитель."; return; }
+            try
+            {
+                _edgeUnits.Text = EdgeMetrics.Measure(radius, expansion, _edgeLengthUnit.SelectedIndex == 0, _edgeDpi, _edgeDpi).Description +
+                    (_edgeDpiKnown ? "" : ". Предварительно: выделите объект; точный пересчёт выполняется после захвата.");
+            }
+            catch (Exception error) { _edgeUnits.Text = error.Message; }
         }
 
         private async Task SmoothEdge()
@@ -935,11 +1025,12 @@ namespace VanyaTools.Native
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
             { Report("Сначала вставьте готовый результат.", true); return; }
-            int threshold, radius, expansion;
+            int threshold;
             if (!Int32.TryParse(_alphaThreshold.Text, out threshold) || threshold < 0 || threshold > 255 ||
-                !Int32.TryParse(_edgeRadius.Text, out radius) || radius < 0 || radius > 12 ||
-                !Int32.TryParse(_edgeExpansion.Text, out expansion) || expansion < 0 || expansion > 20)
-            { Report("Порог: 0–255, радиус: 0–12, расширение: 0–20 пикселей.", true); return; }
+                !DtfOutlineUnits.TryNumber(_edgeRadius.Text, out double radius) ||
+                !DtfOutlineUnits.TryNumber(_edgeExpansion.Text, out double expansion))
+            { Report("Порог: 0–255; сглаживание и обводка — неотрицательные числа в выбранных единицах.", true); return; }
+            bool millimeters = _edgeLengthUnit.SelectedIndex == 0;
             Color fill;
             if (!TryUnderlayColor(out fill)) { Report("Введите цвет подложки в формате #RRGGBB.", true); return; }
             SetBusy(true, "Сглаживаю край…");
@@ -951,8 +1042,10 @@ namespace VanyaTools.Native
                 _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Edge-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
-                Tuple<double, double> edgeOffset = await Task.Run(() => SmoothBinaryEdge(source, output, threshold, radius,
-                    expansion, fill, cancellation), cancellation);
+                EdgeResult edge = await Task.Run(() => SmoothBinaryEdge(source, output, threshold, radius,
+                    expansion, millimeters, fill, cancellation), cancellation);
+                _edgeDpi = edge.Metrics.DpiX; _edgeDpiKnown = true;
+                _edgeUnits.Text = edge.Metrics.Description;
                 cancellation.ThrowIfCancellationRequested();
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
@@ -960,7 +1053,7 @@ namespace VanyaTools.Native
                 _resultPreview.Source = PreviewBitmap(output);
                 SetStage("Вставляю результат в Corel…");
                 InsertReady();
-                try { MoveImportedEdge(edgeOffset); }
+                try { MoveImportedEdge(edge.Offset); }
                 catch (Exception placementError)
                 {
                     Log.Error("Edge result inserted but placement correction failed.", placementError);
@@ -974,33 +1067,35 @@ namespace VanyaTools.Native
             finally { SetBusy(false, null); }
         }
 
-        private static Tuple<double, double> SmoothBinaryEdge(string source, string output, int threshold,
-            int radius, int expansion, Color fill, CancellationToken cancellation)
+        private static EdgeResult SmoothBinaryEdge(string source, string output, int threshold,
+            double radius, double expansion, bool millimeters, Color fill, CancellationToken cancellation)
         {
             BitmapSource input = AiPrintTab.Bitmap(source);
+            EdgeMetrics metrics = EdgeMetrics.Measure(radius, expansion, millimeters, input.DpiX, input.DpiY);
             var bgra = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
             int width = bgra.PixelWidth, height = bgra.PixelHeight;
-            int padding = checked(expansion + radius + 2);
-            int canvasWidth = checked(width + 2 * padding);
-            int canvasHeight = checked(height + 2 * padding);
+            int paddingX = checked(metrics.ExpansionX + metrics.RadiusX + 2);
+            int paddingY = checked(metrics.ExpansionY + metrics.RadiusY + 2);
+            int canvasWidth = checked(width + 2 * paddingX);
+            int canvasHeight = checked(height + 2 * paddingY);
             int length = checked(canvasWidth * canvasHeight);
             byte[] pixels = new byte[checked(length * 4)];
             byte[] mask = new byte[length];
             byte[] work = new byte[length];
             bgra.CopyPixels(new Int32Rect(0, 0, width, height), pixels,
-                checked(canvasWidth * 4), checked(((padding * canvasWidth) + padding) * 4));
+                checked(canvasWidth * 4), checked(((paddingY * canvasWidth) + paddingX) * 4));
             cancellation.ThrowIfCancellationRequested();
             for (int p = 0; p < length; p++)
                 mask[p] = pixels[p * 4 + 3] > 0 && pixels[p * 4 + 3] >= threshold ? (byte)255 : (byte)0;
             if (expansion > 0)
             {
-                DilateHorizontal(mask, work, canvasWidth, canvasHeight, expansion, cancellation);
-                DilateVertical(work, mask, canvasWidth, canvasHeight, expansion, cancellation);
+                DilateHorizontal(mask, work, canvasWidth, canvasHeight, metrics.ExpansionX, cancellation);
+                DilateVertical(work, mask, canvasWidth, canvasHeight, metrics.ExpansionY, cancellation);
             }
             if (radius > 0)
             {
-                GaussianHorizontal(mask, work, canvasWidth, canvasHeight, radius, cancellation);
-                GaussianVertical(work, mask, canvasWidth, canvasHeight, radius, cancellation);
+                GaussianHorizontal(mask, work, canvasWidth, canvasHeight, metrics.RadiusX, cancellation);
+                GaussianVertical(work, mask, canvasWidth, canvasHeight, metrics.RadiusY, cancellation);
             }
             for (int p = 0; p < length; p++)
             {
@@ -1023,8 +1118,8 @@ namespace VanyaTools.Native
                 input.DpiX, input.DpiY, cancellation);
             double dpiX = input.DpiX > 0 ? input.DpiX : 96.0;
             double dpiY = input.DpiY > 0 ? input.DpiY : 96.0;
-            return Tuple.Create((padding - crop.X) * 25.4 / dpiX,
-                (padding - crop.Y) * 25.4 / dpiY);
+            return new EdgeResult { Metrics = metrics, Offset = Tuple.Create((paddingX - crop.X) * 25.4 / dpiX,
+                (paddingY - crop.Y) * 25.4 / dpiY) };
         }
 
         private static void MoveImportedEdge(Tuple<double, double> offsetMm)
@@ -1436,6 +1531,7 @@ namespace VanyaTools.Native
             _localStrength.IsEnabled = _localContrast.IsEnabled = _localWarmth.IsEnabled =
                 _localSaturation.IsEnabled = _localBrightness.IsEnabled = !busy;
             _highlightColor.IsEnabled = !busy;
+            _edgeLengthUnit.IsEnabled = _thinOutline.IsEnabled = _thickOutline.IsEnabled = !busy;
             foreach (var choice in _styleButtons) choice.IsEnabled = !busy;
             foreach (var choice in _localStyleButtons) choice.IsEnabled = !busy;
             _cancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;

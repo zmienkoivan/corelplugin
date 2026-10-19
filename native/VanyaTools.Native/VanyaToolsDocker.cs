@@ -103,6 +103,7 @@ namespace VanyaTools.Native
             standardPage.Children.Add(standardTools);
             var approvalCopy = new ApprovalCopyTool((message, isError) => SetStatus(message, isError));
             var settings = new StackPanel { Margin = new Thickness(5) };
+            var outlineSettings = DtfOutlineSettings.Load();
             settings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
             settings.Children.Add(Button("Восстановить кнопки на панели Corel", (_, __) =>
             {
@@ -139,6 +140,7 @@ namespace VanyaTools.Native
                 (message, isError) => SetStatus(message, isError));
             settings.Children.Add(_hotkeys.SettingsView);
             settings.Children.Add(approvalCopy.SettingsView);
+            settings.Children.Add(outlineSettings.CreateSettingsView(SetStatus));
             settings.Children.Add(aiTools.SettingsView);
             settings.Children.Add(orderCards.SettingsView);
             Loaded += (_, __) =>
@@ -196,7 +198,7 @@ namespace VanyaTools.Native
                 new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                     Content = new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
                         () => aiTools.GetToken(), ImportAiResult,
-                        (message, isError) => SetStatus(message, isError), mode, ImportDtfResult) };
+                        (message, isError) => SetStatus(message, isError), mode, ImportDtfResult, outlineSettings) };
             tabs.Items.Add(ThumbnailTabs.Create("Фото и ИИ", ThumbnailTabs.Style,
                 Color.FromRgb(167, 83, 123),
                 new TabControl
@@ -215,7 +217,12 @@ namespace VanyaTools.Native
             tabs.Items.Add(ThumbnailTabs.Create("Настройки", ThumbnailTabs.Settings,
                 Color.FromRgb(91, 104, 116),
                 new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = settings }));
-            tabs.Items.Add(ThumbnailTabs.Create("Шрифт и принт", ThumbnailTabs.Restore,
+            tabs.Items.Add(ThumbnailTabs.Create("Экспериментальное", ThumbnailTabs.Experiment,
+                Color.FromRgb(120, 92, 139), new TabControl { Items = {
+                    new TabItem { Header = "Шум ДТФ", Content = new DtfNoiseTab(ImportDtfResult, SetStatus) },
+                    new TabItem { Header = "Шрифт", Content = new FontSearchTab(aiTools.FontToolsView, SetStatus) }
+                } }));
+            tabs.Items.Add(ThumbnailTabs.Create("Восстановление принта", ThumbnailTabs.Restore,
                 Color.FromRgb(95, 88, 152), aiTools));
             tabs.SelectedIndex = 0;
             Grid.SetRow(tabs, 2);
@@ -262,7 +269,7 @@ namespace VanyaTools.Native
 
             root.Children.Add(new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
                 () => aiTools.GetToken(), ImportAiResult,
-                (message, isError) => SetStatus(message, isError), SimpleAiMode.Raster, ImportDtfResult));
+                (message, isError) => SetStatus(message, isError), SimpleAiMode.Raster, ImportDtfResult, outlineSettings));
 
             root = stickerTools;
             AddSectionTitle(root, "Подготовка стикерпака");
