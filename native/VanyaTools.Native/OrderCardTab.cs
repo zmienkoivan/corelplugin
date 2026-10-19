@@ -76,6 +76,16 @@ namespace VanyaTools.Native
         internal FrameworkElement SettingsView { get; }
         internal FrameworkElement OrdersView { get; }
         internal FrameworkElement QuickDocumentFields { get; }
+        internal string ConfiguredYearFolder => _yearFolder.Text.Trim();
+        internal string FilmOutputYearFolder
+        {
+            get
+            {
+                string path = null;
+                try { path = Convert.ToString(CorelApp.Get().ActiveDocument.FullFileName); } catch { }
+                return YearFolderForDocument(path) ?? ConfiguredYearFolder;
+            }
+        }
 
         private static string SettingsPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

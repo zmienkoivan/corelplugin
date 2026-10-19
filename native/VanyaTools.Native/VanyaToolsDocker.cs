@@ -196,6 +196,8 @@ namespace VanyaTools.Native
             tabs.Items.Add(ThumbnailTabs.Create("Цветопроба", ThumbnailTabs.ColorProof,
                 Color.FromRgb(130, 106, 65),
                 new ColorProofTab((message, isError) => SetStatus(message, isError))));
+            tabs.Items.Add(ThumbnailTabs.Create("Фотовывод", ThumbnailTabs.FilmOutput,
+                Color.FromRgb(35, 35, 35), new FilmOutputTab(() => orderCards.FilmOutputYearFolder, SetStatus)));
             Func<SimpleAiMode, ScrollViewer> photoTools = mode =>
                 new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                     Content = new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
