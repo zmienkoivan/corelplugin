@@ -82,6 +82,15 @@ namespace VanyaTools.Native
             Task.Run(() => RunWorker("blanks-ready", server, key, orderId, null,
                 new JavaScriptSerializer().Serialize(new { blanksReady = ready, revision })));
 
+        internal static Task<Dictionary<string, object>> NetworkPrinters(string server, string key) =>
+            Task.Run(() => RunWorker("print-printers", server, key, 0, null, null));
+
+        internal static Task<Dictionary<string, object>> SubmitPrint(string server, string key, Dictionary<string, object> job) =>
+            Task.Run(() => RunWorker("print-submit", server, key, 0, null, new JavaScriptSerializer().Serialize(job)));
+
+        internal static Task<Dictionary<string, object>> PrintStatus(string server, string key, string clientKey) =>
+            Task.Run(() => RunWorker("print-status", server, key, 0, clientKey, null));
+
         private static Dictionary<string, object> RunWorker(string action, string server, string key,
             int orderId, string number, string details, IList<byte[]> photos = null)
         {
@@ -123,11 +132,12 @@ namespace VanyaTools.Native
                     process.StandardInput.Write(Convert.ToBase64String(
                         Encoding.UTF8.GetBytes(serializer.Serialize(job))));
                     process.StandardInput.Close();
-                    if (!process.WaitForExit(action == "photo" || action == "photo-full"
+                    bool printing = action.StartsWith("print-", StringComparison.Ordinal);
+                    if (!process.WaitForExit(printing ? 60 * 1000 : action == "photo" || action == "photo-full"
                         ? 90 * 1000 : 8 * 60 * 1000))
                     {
                         try { process.Kill(); } catch { }
-                        throw new TimeoutException("Сервер заказов не ответил за 8 минут. Проверьте канал перед повтором.");
+                        throw new TimeoutException(printing ? "Очередь печати не ответила за минуту. Повторная кнопка проверит то же задание." : "Сервер заказов не ответил за 8 минут. Проверьте канал перед повтором.");
                     }
                     Dictionary<string, object> reply;
                     try
@@ -141,8 +151,9 @@ namespace VanyaTools.Native
                             errors.GetAwaiter().GetResult());
                     }
                     if (reply == null || !reply.ContainsKey("ok") || !Convert.ToBoolean(reply["ok"]))
-                        throw new InvalidOperationException(reply != null && reply.ContainsKey("error")
-                            ? Convert.ToString(reply["error"]) : "Сервер заказов не ответил.");
+                        throw new OrderServerRequestException(reply != null && reply.ContainsKey("error")
+                            ? Convert.ToString(reply["error"]) : "Сервер заказов не ответил.",
+                            reply != null && reply.ContainsKey("status") ? Convert.ToInt32(reply["status"]) : 0);
                     if (action == "check") return new Dictionary<string, object>();
                     string data = reply.ContainsKey("data") ? Convert.ToString(reply["data"]) : null;
                     return serializer.Deserialize<Dictionary<string, object>>(data);

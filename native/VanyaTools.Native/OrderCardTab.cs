@@ -23,7 +23,7 @@ using System.Windows.Threading;
 
 namespace VanyaTools.Native
 {
-    internal sealed class OrderCardTab : UserControl
+    internal sealed partial class OrderCardTab : UserControl
     {
         private const string PropertyOwner = "CD899165-445C-40F0-91D7-2DF6703B0AF8";
         private readonly Action<string, bool> _status;
@@ -402,6 +402,7 @@ namespace VanyaTools.Native
             _editor.Children.Add(_send);
             _updateText = Button("Обновить текст без экспорта фото", async (_, __) => await Publish(false));
             _editor.Children.Add(_updateText);
+            AddLabelPrinting(_editor);
             var workflow = new UniformGrid { Columns = 2 };
             _state = Button("", async (_, __) => await ChangeWorkflow("state"));
             _blanksPause = Button("", async (_, __) => await ChangeWorkflow("blanks"));
@@ -435,6 +436,7 @@ namespace VanyaTools.Native
                 catch (Exception error) { _status("Сервер заказов: " + error.Message, true); }
             }));
             DockerHelp.Add(settings, "Токен бота хранится на сервере. Здесь нужен ключ публикации.");
+            AddNetworkPrinterSettings(settings);
             settings.Children.Add(Label("Папка года"));
             var folderRow = new DockPanel { Margin = new Thickness(0, 0, 0, 3) };
             var browseFolder = Button("", (_, __) => Safe(ChooseYearFolder));
@@ -482,6 +484,7 @@ namespace VanyaTools.Native
             DockerHelp.Add(settings, "Применяется к сохранению через Vanya Tools. При выборе старой версии новые эффекты Corel могут измениться. Ctrl+S работает по настройкам CorelDRAW.");
             SettingsView = settings;
             LoadServerSettings();
+            LoadPrinterPreferences();
             LoadFileSettings();
             foreach (var input in new[] { _customer, _designName, _description, _items })
                 input.TextChanged += (_, __) => FormChanged();
@@ -3024,6 +3027,7 @@ namespace VanyaTools.Native
         private void UpdateActions()
         {
             if (_send == null) return;
+            UpdateLabelPrinting();
             bool assigned = _data.ServerOrderId > 0;
             bool draft = _data.ServerSendState == "draft";
             bool published = assigned && (_data.ServerSendState == "sent" || _data.ServerSendState == "local");
