@@ -55,7 +55,7 @@ namespace VanyaTools.Native
             };
             panel.Children.Add(save);
             DockerHelp.Add(panel, "Значения задают наружное расширение с каждой стороны детали. " +
-                "Кнопки «Тонкая» и «Толстая» заполняют поле обводки; обработка запускается кнопкой «Обводка». " +
+                "Иконки тонкого и толстого контура заполняют поле обводки; обработка запускается кнопкой «Обводка». " +
                 "Миллиметры пересчитываются по DPI захваченного изображения и округляются до целого пикселя. " +
                 "Положительное значение занимает хотя бы один пиксель. Радиус сглаживания задаётся отдельно.");
             return new Expander { Header = "ДТФ · пресеты обводки", Content = panel, IsExpanded = false,
@@ -64,11 +64,9 @@ namespace VanyaTools.Native
 
         private static TextBox AddField(Panel panel, string title, double value)
         {
-            var row = new WrapPanel { Margin = new Thickness(0, 2, 0, 2) };
-            row.Children.Add(new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center, FontSize = 11 });
-            var field = new TextBox { Text = DtfOutlineUnits.Format(value), Width = 85, FontSize = 11,
-                Margin = new Thickness(5, 0, 0, 0), VerticalContentAlignment = VerticalAlignment.Center };
-            row.Children.Add(field); panel.Children.Add(row); return field;
+            var field = new TextBox { Text = DtfOutlineUnits.Format(value), FontSize = 11,
+                MinHeight = 25, VerticalContentAlignment = VerticalAlignment.Center };
+            panel.Children.Add(DockerLayout.FieldRow(title, field, 85)); return field;
         }
     }
 

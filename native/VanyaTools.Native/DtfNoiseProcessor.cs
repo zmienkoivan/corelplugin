@@ -66,42 +66,68 @@ namespace VanyaTools.Native
         internal static void Apply(string source, string output, double percent, int seed, bool protect, CancellationToken cancellation)
         { Save(Render(AiPrintTab.Bitmap(source), percent, seed, protect, cancellation), output); }
 
-        internal static void Comparison(string source, string output, int seed, bool protect, CancellationToken cancellation)
+        internal static void Comparison(string source, string output, int seed, bool protect, int sampleSizeMm, CancellationToken cancellation)
         {
+            if (sampleSizeMm != 50 && sampleSizeMm != 100)
+                throw new ArgumentOutOfRangeException(nameof(sampleSizeMm), "Квадраты тестового листа: 50 или 100 мм.");
             // WPF's text and visual renderer own COM/Dispatcher objects. Keep the
             // proof renderer on an STA thread rather than the pool's MTA thread.
             Exception failure = null;
             var renderer = new Thread(() => {
-                try { BuildComparison(source, output, seed, protect, cancellation); }
+                try { BuildComparison(source, output, seed, protect, sampleSizeMm, cancellation); }
                 catch (Exception error) { failure = error; }
             }) { IsBackground = true };
             renderer.SetApartmentState(ApartmentState.STA); renderer.Start(); renderer.Join();
             if (failure != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         }
 
-        private static void BuildComparison(string source, string output, int seed, bool protect, CancellationToken cancellation)
+        private static void BuildComparison(string source, string output, int seed, bool protect, int sampleSizeMm, CancellationToken cancellation)
         {
             BitmapSource input = AiPrintTab.Bitmap(source);
-            int width = Math.Min(input.PixelWidth, Math.Max(1, (int)Math.Round(40 * input.DpiX / 25.4)));
-            int height = Math.Min(input.PixelHeight, Math.Max(1, (int)Math.Round(40 * input.DpiY / 25.4)));
-            int x = (input.PixelWidth - width) / 2, y = (input.PixelHeight - height) / 2;
-            var crop = new CroppedBitmap(input, new Int32Rect(x, y, width, height)); crop.Freeze();
-            int margin = Math.Max(8, (int)Math.Round(input.DpiX / 25.4));
+            int width = Math.Max(1, checked((int)Math.Round(sampleSizeMm * input.DpiX / 25.4)));
+            int height = Math.Max(1, checked((int)Math.Round(sampleSizeMm * input.DpiY / 25.4)));
+            const int columns = 4;
+            double[] amounts = { 0, 0.5, 1, 1.5, 2, 3, 4, 5 };
+            int rows = (amounts.Length + columns - 1) / columns;
+            int marginX = Math.Max(8, (int)Math.Round(2 * input.DpiX / 25.4));
+            int marginY = Math.Max(8, (int)Math.Round(2 * input.DpiY / 25.4));
             int labelHeight = Math.Max(26, (int)Math.Round(3 * input.DpiY / 25.4));
-            int canvasWidth = checked((width + margin) * 4 + margin), canvasHeight = checked(height + labelHeight + margin * 2);
+            int canvasWidth = checked((width + marginX) * columns + marginX);
+            int canvasHeight = checked((height + labelHeight + marginY) * rows + marginY);
+            if ((long)canvasWidth * canvasHeight > 100000000)
+                throw new InvalidOperationException("Тестовый лист слишком велик. Выберите квадраты 5×5 см или уменьшите DPI захвата.");
+            cancellation.ThrowIfCancellationRequested();
+            // Preserve the artwork scale whenever the requested square fits.
+            // A smaller source is enlarged before adding noise so that every
+            // output cell has the requested physical size and noise pixel size.
+            double scale = Math.Max(1, Math.Max(width / (double)input.PixelWidth, height / (double)input.PixelHeight));
+            int cropWidth = Math.Min(input.PixelWidth, Math.Max(1, (int)Math.Ceiling(width / scale)));
+            int cropHeight = Math.Min(input.PixelHeight, Math.Max(1, (int)Math.Ceiling(height / scale)));
+            int x = (input.PixelWidth - cropWidth) / 2, y = (input.PixelHeight - cropHeight) / 2;
+            BitmapSource crop = new CroppedBitmap(input, new Int32Rect(x, y, cropWidth, cropHeight)); crop.Freeze();
+            if (cropWidth != width || cropHeight != height)
+            {
+                var sampleVisual = new DrawingVisual();
+                using (DrawingContext draw = sampleVisual.RenderOpen())
+                    draw.DrawImage(crop, new Rect(0, 0, width, height));
+                var sample = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+                sample.Render(sampleVisual); sample.Freeze(); crop = sample;
+            }
             var visual = new DrawingVisual();
-            double[] amounts = { 0, 0.5, 1, 2 };
             using (DrawingContext draw = visual.RenderOpen())
                 for (int i = 0; i < amounts.Length; i++)
                 {
                     cancellation.ThrowIfCancellationRequested();
-                    int left = margin + i * (width + margin);
-                    draw.DrawText(new FormattedText(amounts[i].ToString("0.#", CultureInfo.CurrentCulture) + "%",
+                    int left = marginX + (i % columns) * (width + marginX);
+                    int top = marginY + (i / columns) * (height + labelHeight + marginY);
+                    draw.DrawText(new FormattedText(amounts[i].ToString("0.#", CultureInfo.CurrentCulture) + "% · " +
+                        sampleSizeMm + "×" + sampleSizeMm + " мм",
                         CultureInfo.CurrentCulture, FlowDirection.LeftToRight, new Typeface("Segoe UI"), labelHeight * 0.65, Brushes.Black, 1.0),
-                        new Point(left, margin));
+                        new Point(left, top));
                     draw.DrawImage(Render(crop, amounts[i], seed, protect, cancellation, x, y),
-                        new Rect(left, margin + labelHeight, width, height));
+                        new Rect(left, top + labelHeight, width, height));
                 }
+            cancellation.ThrowIfCancellationRequested();
             var rendered = new RenderTargetBitmap(canvasWidth, canvasHeight, 96, 96, PixelFormats.Pbgra32);
             rendered.Render(visual); rendered.Freeze();
             var bgra = new FormatConvertedBitmap(rendered, PixelFormats.Bgra32, null, 0);

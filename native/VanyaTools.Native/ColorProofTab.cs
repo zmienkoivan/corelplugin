@@ -290,10 +290,7 @@ namespace VanyaTools.Native
         }
         private static Grid Row(string label, UIElement control)
         {
-            var row = new Grid { Margin = new Thickness(0, 0, 0, 6) };
-            row.ColumnDefinitions.Add(new ColumnDefinition()); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
-            row.Children.Add(new TextBlock { Text = label, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
-            Grid.SetColumn(control, 1); row.Children.Add(control); return row;
+            return DockerLayout.FieldRow(label, (FrameworkElement)control, control is TextBox ? 80 : 0);
         }
         private static TextBox Field(string value) => new TextBox { Text = value, MinHeight = 26, FontSize = 11, TextAlignment = TextAlignment.Center };
         private static Button Button(string label, RoutedEventHandler click)
@@ -302,7 +299,7 @@ namespace VanyaTools.Native
             button.Click += click; return button;
         }
         private static TextBlock Title(string text) => new TextBlock { Text = text, FontSize = 14,
-            FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 4) };
+            FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) };
         private static TextBlock Note(string text) => new TextBlock { Text = text, FontSize = 10,
             TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, Margin = new Thickness(0, 0, 0, 8) };
     }

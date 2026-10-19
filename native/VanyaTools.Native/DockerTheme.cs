@@ -9,6 +9,23 @@ namespace VanyaTools.Native
 {
     internal static class DockerTheme
     {
+        private sealed class WrappingTextTemplate : DataTemplateSelector
+        {
+            private readonly DataTemplate _text;
+            internal WrappingTextTemplate(TextAlignment alignment = TextAlignment.Center)
+            {
+                var text = new FrameworkElementFactory(typeof(TextBlock));
+                text.SetBinding(TextBlock.TextProperty, new Binding());
+                text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+                text.SetValue(TextBlock.TextAlignmentProperty, alignment);
+                _text = new DataTemplate { VisualTree = text };
+            }
+            public override DataTemplate SelectTemplate(object item, DependencyObject container) =>
+                item is string ? _text : null;
+        }
+
+        private static readonly DataTemplateSelector WrappingContent = new WrappingTextTemplate();
+        private static readonly DataTemplateSelector ChoiceContent = new WrappingTextTemplate(TextAlignment.Left);
         private static readonly Style PrimaryButtonStyle = ButtonStyle(
             "#376A8B", "#2B5876", "#244B66", "#FFFFFF", "#2B5876");
 
@@ -16,6 +33,13 @@ namespace VanyaTools.Native
         {
             root.Resources[typeof(Button)] = ButtonStyle(
                 "#EDF1F3", "#DFE9EF", "#C9DCE7", "#253C4C", "#A6BAC7");
+            foreach (var type in new[] { typeof(CheckBox), typeof(RadioButton) })
+            {
+                var style = new Style(type);
+                style.Setters.Add(new Setter(ContentControl.ContentTemplateSelectorProperty, ChoiceContent));
+                style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch));
+                root.Resources[type] = style;
+            }
         }
 
         public static Button Primary(Button button)
@@ -34,6 +58,7 @@ namespace VanyaTools.Native
             style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(8, 3, 8, 3)));
             style.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 27.0));
             style.Setters.Add(new Setter(FrameworkElement.CursorProperty, Cursors.Hand));
+            style.Setters.Add(new Setter(ContentControl.ContentTemplateSelectorProperty, WrappingContent));
 
             var border = new FrameworkElementFactory(typeof(Border));
             border.Name = "Chrome";
@@ -45,7 +70,7 @@ namespace VanyaTools.Native
 
             var content = new FrameworkElementFactory(typeof(ContentPresenter));
             content.SetValue(ContentPresenter.ContentSourceProperty, "Content");
-            content.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            content.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
             content.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
             content.SetBinding(FrameworkElement.MarginProperty,
                 new Binding("Padding") { RelativeSource = RelativeSource.TemplatedParent });

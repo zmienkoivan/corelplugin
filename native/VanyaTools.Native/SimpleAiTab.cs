@@ -100,12 +100,12 @@ namespace VanyaTools.Native
             bool localStyles = mode == SimpleAiMode.LocalStyles;
             bool aiStyles = mode == SimpleAiMode.AiStyles;
             bool aiEdit = mode == SimpleAiMode.Prompt || aiStyles;
-            var panel = new StackPanel { Margin = new Thickness(5) };
+            var panel = new StackPanel { Margin = styleOnly ? new Thickness(5) : new Thickness(0, 3, 0, 0) };
             Content = panel;
 
             if (styleOnly) panel.Children.Add(Label(localStyles ? "Стили фото · без интернета" :
                 aiStyles ? "Готовые ИИ-стили" : "Обработка фото по промпту", true));
-            DockerHelp.Add(panel, "Выделите объект или группу.");
+            if (styleOnly) DockerHelp.Add(panel, "Выделите объект или группу.");
             if (mode == SimpleAiMode.Prompt) DockerHelp.Add(panel,
                 "Напишите короткую команду: «убери бутылку», «замени фон на лес», «сделай студийный свет». " +
                 "Модель получает выделенное фото целиком. Для точной области правки используйте вкладку «Заливка». " +
@@ -118,33 +118,39 @@ namespace VanyaTools.Native
             _backgroundModel.SelectedIndex = 0;
             _backgroundModel.ToolTip = "Модель строит маску прозрачности. Настоящие отверстия в объекте автоматически не закрашиваются.";
             _upscaleButton = Button("Апскейл ×2", async (_, __) => await Run("upscale"));
-            var whiteRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 2) };
+            var whiteRow = new Grid { Margin = new Thickness(0, 0, 0, 2) };
+            whiteRow.ColumnDefinitions.Add(new ColumnDefinition());
+            for (int column = 0; column < 3; column++)
+                whiteRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             _removeWhiteButton = Button("Удалить фон", async (_, __) => await RemoveWhiteBackground());
             whiteRow.Children.Add(_removeWhiteButton);
             _backgroundHex = new TextBox { Text = "#FFFFFF", Width = 72, FontSize = 11,
-                Margin = new Thickness(5, 0, 2, 0), VerticalContentAlignment = VerticalAlignment.Center };
+                Margin = new Thickness(3, 0, 2, 0), VerticalContentAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(_backgroundHex, 1);
             whiteRow.Children.Add(_backgroundHex);
             _backgroundSwatch = new Border { Width = 18, Height = 18, Background = Brushes.White,
                 BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Margin = new Thickness(2) };
-            whiteRow.Children.Add(_backgroundSwatch);
+            Grid.SetColumn(_backgroundSwatch, 2); whiteRow.Children.Add(_backgroundSwatch);
             _backgroundPipetteButton = Button("Пипетка", (_, __) => PickBackgroundFromCanvas());
             _backgroundPipetteButton.ToolTip = "Выберите цвет на холсте CorelDRAW. Esc — отмена.";
-            whiteRow.Children.Add(_backgroundPipetteButton);
+            Grid.SetColumn(_backgroundPipetteButton, 3); whiteRow.Children.Add(_backgroundPipetteButton);
             _backgroundHex.TextChanged += (_, __) => UpdateBackgroundSwatch();
-            whiteRow.Children.Add(new TextBlock { Text = "Допуск", VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 10, Margin = new Thickness(5, 0, 3, 0) });
-            _backgroundTolerance = new TextBox { Text = "10", Width = 34, FontSize = 11,
+            _backgroundTolerance = new TextBox { Text = "10", FontSize = 11,
                 VerticalContentAlignment = VerticalAlignment.Center };
-            whiteRow.Children.Add(_backgroundTolerance);
-            whiteRow.Children.Add(new TextBlock { Text = "Подрезать, px", VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 10, Margin = new Thickness(8, 0, 3, 0) });
-            _whiteCutPixels = new TextBox { Text = "0", Width = 34, FontSize = 11,
+            _whiteCutPixels = new TextBox { Text = "0", FontSize = 11,
                 VerticalContentAlignment = VerticalAlignment.Center };
             _whiteCutPixels.ToolTip = "Сдвинуть край прозрачности внутрь на указанное число пикселей.";
-            whiteRow.Children.Add(_whiteCutPixels);
+            var backgroundFields = new UniformGrid { Columns = 2 };
+            var toleranceRow = DockerLayout.FieldRow("Допуск", _backgroundTolerance, 42);
+            toleranceRow.Margin = new Thickness(1, 0, 6, 3);
+            backgroundFields.Children.Add(toleranceRow);
+            backgroundFields.Children.Add(DockerLayout.FieldRow("Подрезать, px", _whiteCutPixels, 42));
             if (!styleOnly)
             {
                 panel.Children.Add(whiteRow);
+                DockerHelp.Add(panel, "Выделите объект или группу. Цвет удаляемого фона можно ввести в HEX или взять пипеткой с холста. " +
+                    "Допуск задаёт близость к выбранному цвету; подрезка сдвигает край прозрачности внутрь в пикселях.");
+                panel.Children.Add(backgroundFields);
                 var aiRow = new UniformGrid { Columns = 2 };
                 aiRow.Children.Add(_removeButton);
                 aiRow.Children.Add(_upscaleButton);
@@ -154,49 +160,54 @@ namespace VanyaTools.Native
                 panel.Children.Add(new Separator { Margin = new Thickness(0, 4, 0, 2) });
                 panel.Children.Add(Label("ДТФ", true));
             }
-            var alphaRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 2) };
             _alphaButton = Button("Убрать полупрозрачность", async (_, __) => await RemoveSemiTransparent());
-            alphaRow.Children.Add(_alphaButton);
-            alphaRow.Children.Add(new TextBlock { Text = "Порог:", VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 10, Margin = new Thickness(5, 0, 3, 0) });
             _alphaThreshold = new TextBox { Text = "130", Width = 40, FontSize = 11,
-                VerticalContentAlignment = VerticalAlignment.Center };
-            alphaRow.Children.Add(_alphaThreshold);
+                VerticalContentAlignment = VerticalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            var alphaRow = DockerLayout.Trailing(_alphaButton,
+                DockerLayout.FieldRow("Порог", _alphaThreshold, 42));
+            alphaRow.Margin = new Thickness(0, 0, 0, 2);
             if (!styleOnly) panel.Children.Add(alphaRow);
 
-            var highlightRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 2) };
             _highlightButton = Button("Подсветить полупрозрачные", async (_, __) => await HighlightSemiTransparent());
             _highlightButton.ToolTip = "Создаёт рядом с оригиналом копию с яркой отметкой пикселей, у которых прозрачность между 0 и 100%.";
-            highlightRow.Children.Add(_highlightButton);
             _highlightColor = new ComboBox { Width = 78, FontSize = 10,
                 Margin = new Thickness(3, 1, 0, 1), VerticalAlignment = VerticalAlignment.Center };
             _highlightColor.Items.Add("Зелёный");
             _highlightColor.Items.Add("Красный");
             _highlightColor.SelectedIndex = 0;
-            highlightRow.Children.Add(_highlightColor);
+            var highlightRow = DockerLayout.Trailing(_highlightButton, _highlightColor);
+            highlightRow.Margin = new Thickness(0, 0, 0, 2);
             if (!styleOnly) panel.Children.Add(highlightRow);
 
             _stairButton = Button("Сгладить лесенку", async (_, __) => await SmoothStairs());
             _stairButton.ToolTip = "Создаёт в 2–4 раза более плотную сетку пикселей и сглаживает край и цветовые границы рисунка. Прозрачность результата остаётся 0 или 100%.";
             if (!styleOnly) panel.Children.Add(_stairButton);
 
-            var edgeRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 1) };
+            var edgeRow = new StackPanel { Margin = new Thickness(0, 3, 0, 1) };
             _smoothButton = Button("Обводка", async (_, __) => await SmoothEdge());
-            edgeRow.Children.Add(_smoothButton);
             _edgeLengthUnit = new ComboBox { Width = 53, FontSize = 11, MinHeight = 24,
-                Margin = new Thickness(3, 0, 6, 0), ItemsSource = new[] { "мм", "px" }, SelectedIndex = 0 };
-            edgeRow.Children.Add(_edgeLengthUnit);
-            edgeRow.Children.Add(new TextBlock { Text = "Сглаживание", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
-            _edgeRadius = new TextBox { Text = DtfOutlineUnits.Format(2 * 25.4 / 400), Width = 68, FontSize = 11, Margin = new Thickness(3, 0, 6, 0) };
-            edgeRow.Children.Add(_edgeRadius);
-            edgeRow.Children.Add(new TextBlock { Text = "Обводка +", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
-            _edgeExpansion = new TextBox { Text = DtfOutlineUnits.Format(_outlineSettings.ThinMm), Width = 68,
-                FontSize = 11, Margin = new Thickness(3, 0, 6, 0) };
-            edgeRow.Children.Add(_edgeExpansion);
-            edgeRow.Children.Add(new TextBlock { Text = "Цвет", VerticalAlignment = VerticalAlignment.Center, FontSize = 10 });
+                Margin = new Thickness(3, 1, 0, 1), ItemsSource = new[] { "мм", "px" }, SelectedIndex = 0 };
+            _thinOutline = OutlinePreset(false, (_, __) => ApplyOutlinePreset(_outlineSettings.ThinMm));
+            _thickOutline = OutlinePreset(true, (_, __) => ApplyOutlinePreset(_outlineSettings.ThickMm));
+            var outlineActions = new StackPanel { Orientation = Orientation.Horizontal };
+            outlineActions.Children.Add(_thinOutline); outlineActions.Children.Add(_thickOutline);
+            outlineActions.Children.Add(_edgeLengthUnit);
+            edgeRow.Children.Add(DockerLayout.Trailing(_smoothButton, outlineActions));
+            DockerHelp.Add(edgeRow, "Единицы мм/px относятся к сглаживанию и наружной обводке. " +
+                "При переключении значения пересчитываются туда и обратно по DPI захвата. " +
+                "Под полями показаны целые пиксели и фактический размер после округления. " +
+                "Иконки тонкого и толстого контура заполняют только обводку; значения видны в подсказках " +
+                "и меняются в «Настройки → ДТФ · пресеты обводки».");
+            _edgeRadius = new TextBox { Text = DtfOutlineUnits.Format(2 * 25.4 / 400), FontSize = 11,
+                MinHeight = 24, VerticalContentAlignment = VerticalAlignment.Center };
+            _edgeExpansion = new TextBox { Text = DtfOutlineUnits.Format(_outlineSettings.ThinMm), FontSize = 11,
+                MinHeight = 24, VerticalContentAlignment = VerticalAlignment.Center };
+            var outlineFields = new UniformGrid { Columns = 2, Margin = new Thickness(1, 1, 1, 2) };
+            outlineFields.Children.Add(OutlineField("Сглаживание", _edgeRadius, true));
+            outlineFields.Children.Add(OutlineField("Обводка +", _edgeExpansion, false));
+            edgeRow.Children.Add(outlineFields);
             _underlayHex = new TextBox { Text = "#FFFFFF", Width = 72, FontSize = 11,
-                Margin = new Thickness(5, 0, 2, 0) };
-            edgeRow.Children.Add(_underlayHex);
+                Margin = new Thickness(3, 0, 2, 0), VerticalContentAlignment = VerticalAlignment.Center };
             _underlaySwatch = new Border { Width = 18, Height = 18, Background = Brushes.White,
                 BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1) };
             _underlayColorButton = new Button { Content = _underlaySwatch, Width = 28, Height = 28,
@@ -204,25 +215,25 @@ namespace VanyaTools.Native
                 ToolTip = "Выбрать цвет обводки в палитре" };
             System.Windows.Automation.AutomationProperties.SetName(_underlayColorButton, "Выбрать цвет обводки");
             _underlayColorButton.Click += (_, __) => ChooseUnderlayColor();
-            edgeRow.Children.Add(_underlayColorButton);
-            _pipetteButton = Button("Пипетка с экрана", async (_, __) => await BeginColorPick());
-            edgeRow.Children.Add(_pipetteButton);
+            _pipetteButton = Button("Пипетка", async (_, __) => await BeginColorPick());
+            _pipetteButton.ToolTip = "Взять цвет обводки с экрана. Esc — отмена.";
+            var colorFields = new StackPanel { Orientation = Orientation.Horizontal };
+            colorFields.Children.Add(new TextBlock { Text = "Цвет", FontSize = 10,
+                VerticalAlignment = VerticalAlignment.Center });
+            colorFields.Children.Add(_underlayHex); colorFields.Children.Add(_underlayColorButton);
+            var outlineColorRow = new Grid();
+            outlineColorRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            outlineColorRow.ColumnDefinitions.Add(new ColumnDefinition());
+            outlineColorRow.Children.Add(colorFields);
+            Grid.SetColumn(_pipetteButton, 1); outlineColorRow.Children.Add(_pipetteButton);
+            edgeRow.Children.Add(outlineColorRow);
             _underlayHex.TextChanged += (_, __) => UpdateUnderlaySwatch();
             if (!styleOnly) panel.Children.Add(edgeRow);
             _edgeUnits = Note("");
             if (!styleOnly) panel.Children.Add(_edgeUnits);
-            var outlinePresets = new WrapPanel();
-            _thinOutline = Button("", (_, __) => ApplyOutlinePreset(_outlineSettings.ThinMm));
-            _thickOutline = Button("", (_, __) => ApplyOutlinePreset(_outlineSettings.ThickMm));
-            outlinePresets.Children.Add(_thinOutline); outlinePresets.Children.Add(_thickOutline);
             RefreshOutlinePresets();
             if (!styleOnly)
             {
-                panel.Children.Add(outlinePresets);
-                DockerHelp.Add(panel, "Единицы мм/px относятся к сглаживанию и наружной обводке. " +
-                    "При переключении значения пересчитываются туда и обратно по DPI захвата. " +
-                    "Под полями показаны целые пиксели и фактический размер после округления. " +
-                    "«Тонкая» и «Толстая» заполняют только обводку; их значения меняются в «Настройки → ДТФ · пресеты обводки».");
                 _outlineSettings.Changed += RefreshOutlinePresets;
                 Loaded += (_, __) => { RefreshOutlinePresets(); UpdateEdgeUnits(); };
             }
@@ -247,7 +258,8 @@ namespace VanyaTools.Native
             _localPreset.SelectedIndex = 4;
             if (localStyles)
             {
-                var localCards = new UniformGrid { Columns = 3, Margin = new Thickness(0, 2, 0, 4) };
+                var localCards = DockerLayout.Cards(130);
+                localCards.Margin = new Thickness(0, 2, 0, 4);
                 for (int index = 0; index < _localPreset.Items.Count; index++)
                     localCards.Children.Add(LocalStyleCard(index, Convert.ToString(_localPreset.Items[index])));
                 localPanel.Children.Add(localCards);
@@ -294,7 +306,7 @@ namespace VanyaTools.Native
                 UpdateLocalStyleCards();
             }
 
-            var styles = new UniformGrid { Columns = 3 };
+            var styles = DockerLayout.Cards(120);
             if (aiStyles) foreach (var style in new[]
             {
                 new StyleChoice("Аниме", "anime", "Transform the selected image into polished Japanese anime illustration with clean expressive linework and cel shading."),
@@ -941,8 +953,32 @@ namespace VanyaTools.Native
 
         private void RefreshOutlinePresets()
         {
-            _thinOutline.Content = "Тонкая +" + DtfOutlineUnits.Format(_outlineSettings.ThinMm) + " мм";
-            _thickOutline.Content = "Толстая +" + DtfOutlineUnits.Format(_outlineSettings.ThickMm) + " мм";
+            string thin = "Тонкая обводка +" + DtfOutlineUnits.Format(_outlineSettings.ThinMm) + " мм";
+            string thick = "Толстая обводка +" + DtfOutlineUnits.Format(_outlineSettings.ThickMm) + " мм";
+            _thinOutline.ToolTip = thin; _thickOutline.ToolTip = thick;
+            System.Windows.Automation.AutomationProperties.SetName(_thinOutline, thin);
+            System.Windows.Automation.AutomationProperties.SetName(_thickOutline, thick);
+        }
+
+        private static Button OutlinePreset(bool thick, RoutedEventHandler handler)
+        {
+            var shape = new System.Windows.Shapes.Path
+            {
+                Data = Geometry.Parse("M5,4 C8,0 18,0 21,6 L23,14 C24,20 18,24 13,22 L4,20 C0,18 2,9 5,4 Z"),
+                Stroke = Brushes.SlateGray, StrokeThickness = thick ? 3.0 : 1.0,
+                StrokeLineJoin = PenLineJoin.Round, Fill = Brushes.Transparent,
+                Width = 22, Height = 22, Stretch = Stretch.Uniform
+            };
+            var button = new Button { Content = shape, Width = 32, Height = 28,
+                MinWidth = 32, MinHeight = 28, Padding = new Thickness(4, 2, 4, 2), Margin = new Thickness(1) };
+            button.Click += handler; return button;
+        }
+
+        private static FrameworkElement OutlineField(string label, TextBox editor, bool first)
+        {
+            var field = DockerLayout.FieldRow(label, editor, 64);
+            field.Margin = first ? new Thickness(0, 0, 4, 0) : new Thickness(4, 0, 0, 0);
+            return field;
         }
 
         private void RefreshEdgeDpi()

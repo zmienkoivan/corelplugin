@@ -100,7 +100,9 @@ namespace VanyaTools.Native
             var standardPage = new DockPanel();
             DockPanel.SetDock(orderCards.QuickDocumentFields, Dock.Bottom);
             standardPage.Children.Add(orderCards.QuickDocumentFields);
-            standardPage.Children.Add(standardTools);
+            standardPage.Children.Add(new ScrollViewer { Content = standardTools,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
             var approvalCopy = new ApprovalCopyTool((message, isError) => SetStatus(message, isError));
             var settings = new StackPanel { Margin = new Thickness(5) };
             var outlineSettings = DtfOutlineSettings.Load();
@@ -220,10 +222,9 @@ namespace VanyaTools.Native
             tabs.Items.Add(ThumbnailTabs.Create("Экспериментальное", ThumbnailTabs.Experiment,
                 Color.FromRgb(120, 92, 139), new TabControl { Items = {
                     new TabItem { Header = "Шум ДТФ", Content = new DtfNoiseTab(ImportDtfResult, SetStatus) },
-                    new TabItem { Header = "Шрифт", Content = new FontSearchTab(aiTools.FontToolsView, SetStatus) }
+                    new TabItem { Header = "Шрифт", Content = new FontSearchTab(aiTools.FontToolsView, SetStatus) },
+                    new TabItem { Header = "Восстановление принта", Content = aiTools }
                 } }));
-            tabs.Items.Add(ThumbnailTabs.Create("Восстановление принта", ThumbnailTabs.Restore,
-                Color.FromRgb(95, 88, 152), aiTools));
             tabs.SelectedIndex = 0;
             Grid.SetRow(tabs, 2);
             outer.Children.Add(tabs);
@@ -822,6 +823,8 @@ namespace VanyaTools.Native
             {
                 Text = label,
                 FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 5, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
             Grid.SetColumn(text, 0);

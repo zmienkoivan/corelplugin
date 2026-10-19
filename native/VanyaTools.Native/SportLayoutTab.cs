@@ -182,11 +182,9 @@ namespace VanyaTools.Native
                 "«Взять выделение» для нужной детали. На странице-макете рисунок " +
                 "лежит под контуром; выступающие края обрежутся при генерации. " +
                 "Выделение снимается в PNG 300 DPI; исходные объекты не меняются.");
-            var captureRow = new WrapPanel { Margin = new Thickness(0, 2, 0, 4) };
-            captureRow.Children.Add(Label("Предел захвата рисунка, Мп"));
             _artworkLimit = new ComboBox { Width = 90, MinHeight = 27, FontSize = 12,
                 Margin = new Thickness(3, 0, 0, 0), ItemsSource = new[] { 100, 150, 200, 250 }, SelectedItem = 150 };
-            captureRow.Children.Add(_artworkLimit); panel.Children.Add(captureRow);
+            panel.Children.Add(DockerLayout.FieldRow("Предел захвата рисунка, Мп", _artworkLimit, 94));
             DockerHelp.Add(panel, "По умолчанию 150 Мп. Для тяжёлых рисунков можно выбрать до 250 Мп. " +
                 "Перед захватом проверяется свободная ОЗУ и доступная память Windows; " +
                 "DPI автоматически не уменьшается. Предел относится к одному захвату, а не ко всей раскладке.");
@@ -285,13 +283,12 @@ namespace VanyaTools.Native
             printButtons.Children.Add(Button("Снять все", (_, __) => SetPlayersEnabled(false)));
             _expandPlayers = Button("Открыть таблицу большим окном", OpenPlayersEditor);
             printButtons.Children.Add(_expandPlayers); playerControls.Children.Add(printButtons);
-            var batchSizeRow = new WrapPanel { Margin = new Thickness(0, 1, 0, 3) };
+            var batchSizeRow = new StackPanel { Margin = new Thickness(0, 1, 0, 3) };
             batchSizeRow.Children.Add(Label("Размер выделенным"));
-            _batchSize = new ComboBox { ItemsSource = _sizeOptions, Width = 110,
+            _batchSize = new ComboBox { ItemsSource = _sizeOptions,
                 Margin = new Thickness(2, 1, 4, 3), MinHeight = 27,
                 ToolTip = "Выделите строки или ячейки игроков и выберите размер для них" };
-            batchSizeRow.Children.Add(_batchSize);
-            batchSizeRow.Children.Add(Button("Назначить", ApplySizeToSelection));
+            batchSizeRow.Children.Add(DockerLayout.Trailing(_batchSize, Button("Назначить", ApplySizeToSelection)));
             playerControls.Children.Add(batchSizeRow);
             DockerHelp.Add(playerControls, "Для группы одного размера выделите диапазон ячеек с Shift " +
                 "или несколько строк с Ctrl, выберите размер выше и нажмите «Назначить».");
@@ -303,21 +300,16 @@ namespace VanyaTools.Native
 
             panel = panels[3];
             panel.Children.Add(Title("Полотно, надписи и печатная раскладка"));
-            var roll = new WrapPanel { Margin = new Thickness(0, 3, 0, 6) };
-            roll.Children.Add(Label("Ширина печати, мм"));
+            var roll = new StackPanel { Margin = new Thickness(0, 3, 0, 2) };
             _sheetWidth = Field("1500");
             _sheetWidth.Width = 72;
-            roll.Children.Add(_sheetWidth);
-            roll.Children.Add(Label("Между деталями, мм"));
+            roll.Children.Add(DockerLayout.FieldRow("Ширина печати, мм", _sheetWidth));
             _gap = Field("10");
             _gap.Width = 60;
-            roll.Children.Add(_gap);
+            roll.Children.Add(DockerLayout.FieldRow("Между деталями, мм", _gap));
             panel.Children.Add(roll);
-            var lengthRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
-            lengthRow.Children.Add(Label("Макс. длина страницы, м"));
             _maxPageLength = Field("4"); _maxPageLength.Width = 72;
-            lengthRow.Children.Add(_maxPageLength);
-            panel.Children.Add(lengthRow);
+            panel.Children.Add(DockerLayout.FieldRow("Макс. длина страницы, м", _maxPageLength));
             panel.Children.Add(Label("Плотность раскладки"));
             _nestingMode = new ComboBox { MinHeight = 27, Margin = new Thickness(0, 0, 0, 4) };
             foreach (string label in new[] { "Прямоугольники · быстрее", "Упрощённые фигуры · баланс", "Полный контур · плотнее" })
@@ -355,15 +347,12 @@ namespace VanyaTools.Native
                 "обводка, выравнивание и интервалы из Corel. Ширина образца ограничивает надпись: " +
                 "длинный текст уменьшается пропорционально, короткий сохраняет кегль образца. " +
                 "Оформление меняйте в самом текстовом образце на странице-макете.");
-            var settings = new WrapPanel { Margin = new Thickness(0, 7, 0, 6) };
-            settings.Children.Add(Label("Имя спереди (сторона футболки)"));
             _nameSide = new ComboBox { Width = 110, Height = 27, FontSize = 12,
-                Margin = new Thickness(4, 0, 12, 0) };
+                Margin = new Thickness(0) };
             _nameSide.Items.Add("Слева");
             _nameSide.Items.Add("Справа");
             _nameSide.SelectedIndex = 0;
-            settings.Children.Add(_nameSide);
-            panel.Children.Add(settings);
+            panel.Children.Add(DockerLayout.FieldRow("Имя спереди (сторона футболки)", _nameSide, 110));
             panel.Children.Add(Label("Регистр имени на груди"));
             _frontCase = new ComboBox { Height = 27, FontSize = 12,
                 Margin = new Thickness(0, 0, 0, 4) };
@@ -408,11 +397,8 @@ namespace VanyaTools.Native
             _pdfProgress = Note(""); panel.Children.Add(_pdfProgress);
             panel = panels[4];
             panel.Children.Add(Title("Раскладка резки"));
-            var cutWidthRow = new WrapPanel { Margin = new Thickness(0, 3, 0, 6) };
-            cutWidthRow.Children.Add(Label("Ширина ткани для резки, мм"));
             _cutSheetWidth = Field("1500"); _cutSheetWidth.Width = 72;
-            cutWidthRow.Children.Add(_cutSheetWidth);
-            panel.Children.Add(cutWidthRow);
+            panel.Children.Add(DockerLayout.FieldRow("Ширина ткани для резки, мм", _cutSheetWidth));
             panel.Children.Add(Label("Плотность раскладки резки"));
             _cutNestingMode = CopyChoice(_nestingMode); panel.Children.Add(_cutNestingMode);
             panel.Children.Add(Label("Как держать детали заказа при резке"));
@@ -1718,10 +1704,8 @@ namespace VanyaTools.Native
 
         private static TextBox TagField(Panel panel, string label, string value)
         {
-            var row = new WrapPanel { Margin = new Thickness(0, 1, 0, 4) };
-            row.Children.Add(Label(label));
             var field = Field(value); field.Width = 64;
-            row.Children.Add(field); panel.Children.Add(row);
+            panel.Children.Add(DockerLayout.FieldRow(label, field, 72));
             return field;
         }
 
@@ -1735,13 +1719,13 @@ namespace VanyaTools.Native
         private static TextBlock Title(string value)
         {
             return new TextBlock { Text = value, FontSize = 13,
-                FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 8, 0, 2) };
+                FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 2) };
         }
 
         private static TextBlock Label(string value)
         {
             return new TextBlock { Text = value, FontSize = 11,
-                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 0, 2) };
+                TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 0, 2) };
         }
 
         private static TextBlock Note(string value)

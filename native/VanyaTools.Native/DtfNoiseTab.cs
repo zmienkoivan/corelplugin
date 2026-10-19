@@ -16,6 +16,7 @@ namespace VanyaTools.Native
         private readonly Action<string, bool> _status;
         private readonly TextBox _amount;
         private readonly Slider _slider;
+        private readonly ComboBox _sampleSize;
         private readonly CheckBox _protect;
         private readonly Button _load, _apply, _compare, _pattern, _retry, _cancel;
         private readonly Image _before, _after;
@@ -40,9 +41,8 @@ namespace VanyaTools.Native
                 "Изображение может стать зернистее и изменить оттенок при ограничении каналов. Начните с 0,5% и сравните на реальной печати. " +
                 "Прозрачность, разрешение и физический размер результата сохраняются; исходник остаётся на холсте.");
             _load = MakeButton("Загрузить / обновить выделение", async (_, __) => await LoadSource()); panel.Children.Add(_load);
-            var row = new WrapPanel { Margin = new Thickness(0, 4, 0, 1) };
-            row.Children.Add(new TextBlock { Text = "Сила шума, %", FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
-            _amount = new TextBox { Text = "0,5", Width = 65, Margin = new Thickness(5, 0, 0, 0) }; row.Children.Add(_amount); panel.Children.Add(row);
+            _amount = new TextBox { Text = "0,5", MinHeight = 25, VerticalContentAlignment = VerticalAlignment.Center };
+            panel.Children.Add(DockerLayout.FieldRow("Сила шума, %", _amount, 65));
             _slider = new Slider { Minimum = 0, Maximum = 5, Value = 0.5, TickFrequency = 0.25, Margin = new Thickness(0, 3, 0, 3) };
             panel.Children.Add(_slider);
             _protect = new CheckBox { Content = "Не менять чистый белый и чистый чёрный", IsChecked = true, FontSize = 11,
@@ -52,10 +52,15 @@ namespace VanyaTools.Native
             previews.Children.Add(Preview("Исходный фрагмент", out _before)); previews.Children.Add(Preview("С шумом", out _after)); panel.Children.Add(previews);
             DockerHelp.Add(panel, "Предпросмотр показывает центральный фрагмент в пикселях исходника. " +
                 "Используется тот же рисунок шума, что и при полной обработке. " +
-                "Кнопка сравнения создаёт четыре центральных образца до 40×40 мм с уровнями 0 / 0,5 / 1 / 2%. " +
+                "Кнопка сравнения создаёт восемь квадратов с уровнями 0 / 0,5 / 1 / 1,5 / 2 / 3 / 4 / 5%. " +
+                "Размер каждого квадрата — 5×5 или 10×10 см; на листе четыре столбца и два ряда. " +
+                "Берётся центральный фрагмент 1:1. Если исходник меньше квадрата, фрагмент увеличивается с сохранением пропорций. " +
+                "Шум накладывается после увеличения, с исходным DPI. " +
                 "Напечатайте их с одинаковыми параметрами CADlink и PrintExp. Эффект зависит от вашего принтера и RIP.");
             _apply = DockerTheme.Primary(MakeButton("Создать копию с шумом", async (_, __) => await Generate(false))); panel.Children.Add(_apply);
-            _compare = MakeButton("Сравнение 0 / 0,5 / 1 / 2% на печать", async (_, __) => await Generate(true)); panel.Children.Add(_compare);
+            _sampleSize = new ComboBox { ItemsSource = new[] { "5×5 см", "10×10 см" }, SelectedIndex = 0, MinHeight = 27 };
+            panel.Children.Add(DockerLayout.FieldRow("Квадраты тестового листа", _sampleSize, 105));
+            _compare = MakeButton("Тестовый лист шума · 0–5%", async (_, __) => await Generate(true)); panel.Children.Add(_compare);
             _retry = MakeButton("Повторить вставку готового результата", (_, __) => InsertReady()); panel.Children.Add(_retry);
             _cancel = MakeButton("Отменить", (_, __) => _cancellation?.Cancel()); panel.Children.Add(_cancel);
             _progress = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 11, Margin = new Thickness(0, 4, 0, 0) }; panel.Children.Add(_progress);
@@ -108,16 +113,18 @@ namespace VanyaTools.Native
         {
             if (_busy) return;
             if (_ready != null) { Report("Сначала вставьте готовый результат.", true); return; }
-            if (!TryAmount(out double amount)) { Report("Сила шума: от 0 до 5%.", true); return; }
+            double amount = 0;
+            if (!comparison && !TryAmount(out amount)) { Report("Сила шума: от 0 до 5%.", true); return; }
             if ((_source == null || !File.Exists(_source)) && !await LoadSource()) return;
             int seed = _seed; bool protect = _protect.IsChecked == true;
+            int sampleSizeMm = _sampleSize.SelectedIndex == 1 ? 100 : 50;
             _cancellation = new CancellationTokenSource(); SetBusy(true);
             try
             {
                 Report(comparison ? "Готовлю образцы шума…" : "Добавляю шум…", false);
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Dtf-Noise-" + (comparison ? "Samples-" : "") + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
-                await Task.Run(() => { if (comparison) DtfNoiseProcessor.Comparison(_source, output, seed, protect, cancellation);
+                await Task.Run(() => { if (comparison) DtfNoiseProcessor.Comparison(_source, output, seed, protect, sampleSizeMm, cancellation);
                     else DtfNoiseProcessor.Apply(_source, output, amount, seed, protect, cancellation); }, cancellation);
                 cancellation.ThrowIfCancellationRequested(); _ready = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath)); File.WriteAllText(PendingPath, output);
@@ -144,7 +151,8 @@ namespace VanyaTools.Native
         private void SetBusy(bool busy)
         {
             _busy = busy;
-            _load.IsEnabled = _apply.IsEnabled = _compare.IsEnabled = _pattern.IsEnabled = _amount.IsEnabled = _slider.IsEnabled = _protect.IsEnabled = !busy;
+            _load.IsEnabled = _apply.IsEnabled = _compare.IsEnabled = _pattern.IsEnabled = _amount.IsEnabled =
+                _slider.IsEnabled = _protect.IsEnabled = _sampleSize.IsEnabled = !busy;
             _retry.IsEnabled = !busy; _retry.Visibility = _ready != null ? Visibility.Visible : Visibility.Collapsed;
             _cancel.Visibility = busy && _cancellation != null ? Visibility.Visible : Visibility.Collapsed;
         }
