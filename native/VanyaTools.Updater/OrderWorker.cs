@@ -59,6 +59,13 @@ namespace VanyaTools.Updater
                     route += "/" + id + "/" + action;
                     method = "PATCH";
                 }
+                else if (action == "print-printers") route = "/api/network-printing/printers";
+                else if (action == "print-submit") { route = "/api/network-printing/jobs"; method = "POST"; }
+                else if (action == "print-status")
+                {
+                    if (!Guid.TryParse(Required(job, "number"), out Guid jobId)) throw new InvalidDataException("Неверный ID печати.");
+                    route = "/api/network-printing/jobs/" + jobId.ToString();
+                }
                 else if (action == "unassigned") route += "/unassigned";
                 else if (action == "photo" || action == "photo-full")
                 {
@@ -85,11 +92,15 @@ namespace VanyaTools.Updater
                     ? 80 * 1000 : 8 * 60 * 1000;
                 request.ReadWriteTimeout = request.Timeout;
                 request.KeepAlive = false;
+                request.AllowAutoRedirect = false;
+                if (action.StartsWith("print-", StringComparison.Ordinal)) request.Timeout = request.ReadWriteTimeout = 30000;
                 if (action == "publish") WriteMultipart(request, Required(job, "details"), job["photos"] as IEnumerable);
-                if (action == "state" || action == "pause" || action == "urgency" || action == "blanks-ready" || action == "deadline" || action == "assign")
+                if (action == "state" || action == "pause" || action == "urgency" || action == "blanks-ready" || action == "deadline" || action == "assign" || action == "print-submit")
                     WriteJson(request, Required(job, "details"));
                 using (var response = (HttpWebResponse)request.GetResponse())
                 {
+                    if ((int)response.StatusCode < 200 || (int)response.StatusCode >= 300)
+                        throw new InvalidDataException("Сервер заказов вернул HTTP " + (int)response.StatusCode + ". Укажите прямой адрес сервера без перенаправлений.");
                     if (action == "photo" || action == "photo-full")
                     {
                         int maximum = action == "photo" ? 5 * 1024 * 1024 : 21 * 1024 * 1024;
@@ -119,7 +130,7 @@ namespace VanyaTools.Updater
             }
             catch (Exception error)
             {
-                Reply(serializer, false, null, Describe(error));
+                Reply(serializer, false, null, Describe(error), error is WebException webError && webError.Response is HttpWebResponse response ? (int)response.StatusCode : 0);
                 return 1;
             }
         }
@@ -203,10 +214,10 @@ namespace VanyaTools.Updater
             return error.GetBaseException().Message;
         }
 
-        private static void Reply(JavaScriptSerializer serializer, bool ok, string data, string error)
+        private static void Reply(JavaScriptSerializer serializer, bool ok, string data, string error, int status = 0)
         {
             string json = serializer.Serialize(new Dictionary<string, object>
-                { ["ok"] = ok, ["data"] = data, ["error"] = error });
+                { ["ok"] = ok, ["data"] = data, ["error"] = error, ["status"] = status });
             Console.Out.Write(Convert.ToBase64String(Encoding.UTF8.GetBytes(json)));
         }
     }
