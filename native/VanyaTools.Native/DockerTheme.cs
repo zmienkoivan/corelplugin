@@ -48,6 +48,15 @@ namespace VanyaTools.Native
             return button;
         }
 
+        internal static Button Accent(Button button, Color color, bool darkText = false)
+        {
+            string normal = color.ToString();
+            string hover = Color.FromRgb((byte)(color.R * .88), (byte)(color.G * .88), (byte)(color.B * .88)).ToString();
+            string pressed = Color.FromRgb((byte)(color.R * .75), (byte)(color.G * .75), (byte)(color.B * .75)).ToString();
+            button.Style = ButtonStyle(normal, hover, pressed, darkText ? "#253C4C" : "#FFFFFF", pressed);
+            return button;
+        }
+
         private static Style ButtonStyle(string normal, string hover, string pressed,
             string foreground, string outline)
         {

@@ -150,11 +150,11 @@ namespace VanyaTools.Native
             _modelPath = Field("");
             _modelPath.IsReadOnly = true;
             panel.Children.Add(PathRow(_modelPath, "Выбрать модель CDR", ChooseLayeredModel));
-            DockerHelp.Add(panel, "Новая модель: одна страница, общий верхний слой VT_ZONES; " +
+            DockerHelp.Add(panel, "Новая модель: одна страница; поля переменной информации персональны для каждого размера на слое VT_ZONES_<размер>. " +
                 "в каждом слое размера — группа VT_TOP с пятью именованными деталями. " +
                 "Названия слоёв размеров станут вариантами в таблице игроков.");
             DockerHelp.Add(panel, "В группе VT_TOP: VT_FRONT, VT_BACK, VT_SLEEVE_LEFT, " +
-                "VT_SLEEVE_RIGHT, VT_NECK. На VT_ZONES: VT_SPORT_ZONE_FRONT_LEFT, " +
+                "VT_SLEEVE_RIGHT, VT_NECK. На персональном слое полей: VT_SPORT_ZONE_FRONT_LEFT, " +
                 "VT_SPORT_ZONE_FRONT_RIGHT, VT_SPORT_ZONE_BACK, " +
                 "VT_SPORT_ZONE_BACK_NUMBER, VT_SPORT_ZONE_LEFT_SLEEVE, " +
                 "VT_SPORT_ZONE_RIGHT_SLEEVE; VT_SPORT_ZONE_NECK — по желанию.");
@@ -166,6 +166,17 @@ namespace VanyaTools.Native
             _templateGrid.Columns.Add(Column("Масштаб %", "ScalePercent", 85));
             _templateGrid.Columns.Add(Column("Файл CDR", "Path", 290));
             panel.Children.Add(_templateGrid);
+            panel.Children.Add(Button("Создать персональные поля в модели", (_, __) =>
+            {
+                if (_busy) return;
+                try { _status(new SportLayoutService().CreatePersonalSizeZones(), false); }
+                catch (Exception error) { Log.Error("Could not initialize personal size zones.", error); _status(error.Message, true); }
+            }));
+            DockerHelp.Add(panel, "Откройте исходную страницу модели в Corel. Кнопка создаёт отдельный слой VT_ZONES_S, VT_ZONES_M и т. д. " +
+                "с независимыми копиями полей; существующие персональные слои сохраняются. Настройте положение и шрифты каждого размера и сохраните CDR модели. " +
+                "Этап 1 берёт только его поля. Общий VT_ZONES служит запасным вариантом для старых моделей без персональных слоёв. " +
+                "Удаление поля с персонального слоя отключает его для этого размера; пустой персональный слой отключает все его поля. " +
+                "Готовые макеты не перезаписываются: их поля редактируйте на слое размера либо удалите слой размера и повторите этап 1.");
             var templateButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
             templateButtons.Children.Add(Button("Добавить шаблон CDR", AddTemplate));
             templateButtons.Children.Add(Button("Сделать S и XL из М", AddApproximateSizes));
@@ -229,7 +240,8 @@ namespace VanyaTools.Native
                 "Повторный запуск использует его; рабочий документ остаётся активным.");
             DockerHelp.Add(panel, "Создайте фигурный текст: XXXXXXXXX для имени, две строки X для " +
                 "имени в две строки, XX или XXX для номера. Настройте его в Corel, выделите и назначьте " +
-                "кнопкой ниже. Образец заменит прежний бокс на слое выбранного размера.");
+                "кнопкой ниже. Образец заменит прежний бокс только своего размера. " +
+                "Кнопки работают и в готовом макете, и в исходной модели: разместите образец на слое размера или на его VT_ZONES_<размер>.");
             DockerHelp.Add(panel, "Ненужное текстовое поле можно удалить на слое размера: " +
                 "например, номер правого рукава только для маленьких размеров. Этап 2 пропустит " +
                 "удалённое поле. Текст XX на рукаве заменяется номером игрока.");
@@ -242,6 +254,12 @@ namespace VanyaTools.Native
                 "VT_SPORT_ZONE_BACK", "имени на спине")));
             zoneButtons.Children.Add(Button("Номер на спине", (_, __) => AssignTextBox(
                 "VT_SPORT_ZONE_BACK_NUMBER", "номера на спине")));
+            zoneButtons.Children.Add(Button("Номер левого рукава", (_, __) => AssignTextBox(
+                "VT_SPORT_ZONE_LEFT_SLEEVE", "номера левого рукава")));
+            zoneButtons.Children.Add(Button("Номер правого рукава", (_, __) => AssignTextBox(
+                "VT_SPORT_ZONE_RIGHT_SLEEVE", "номера правого рукава")));
+            zoneButtons.Children.Add(Button("Номер горловины", (_, __) => AssignTextBox(
+                "VT_SPORT_ZONE_NECK", "номера горловины")));
             panel.Children.Add(zoneButtons);
 
             panel = panels[2];
@@ -1150,11 +1168,12 @@ namespace VanyaTools.Native
 
         private void AssignTextBox(string key, string label)
         {
+            if (_busy) return;
             try
             {
-                string page = new SportLayoutService().AssignSelectedTextBox(key);
-                ClearCompletedSteps(3, 4);
-                _status("Назначен образец " + label + " на странице «" + page + "».", false);
+                string page = new SportLayoutService().AssignSelectedTextBox(key, out bool prepared);
+                if (prepared) { RefreshWorkflowDocument(); ClearCompletedSteps(3, 4); }
+                _status("Назначен образец " + label + ": «" + page + "».", false);
             }
             catch (Exception error)
             {

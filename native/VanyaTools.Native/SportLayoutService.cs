@@ -180,6 +180,7 @@ namespace VanyaTools.Native
         private const string LegacyOverviewName = "Спорт · макеты · все размеры";
         private const string SizeLayerPrefix = "VT_SPORT_SIZE_";
         private const string ZonesLayerName = "VT_ZONES";
+        private const string PersonalZonesPrefix = "VT_ZONES_";
         private const double PrintBleedMm = 6;
         private const string CuttingPagePrefix = "Резка спортформы · ";
         private const string CaptionReferenceMarker = "VT_SPORT_META_CAPTION_REFERENCES";
@@ -341,14 +342,16 @@ namespace VanyaTools.Native
             public object PrintInkRange;
         }
 
-        public string AssignSelectedTextBox(string zoneName)
+        public string AssignSelectedTextBox(string zoneName, out bool prepared)
         {
+            prepared = false;
             dynamic app = CorelApp.Get();
             dynamic document = app.ActiveDocument;
             string pageName = document == null ? "" : Convert.ToString(document.ActivePage.Name);
-            if (document == null || (!pageName.StartsWith(MasterPrefix,
-                StringComparison.OrdinalIgnoreCase) && !IsOverviewName(pageName)))
-                throw new InvalidOperationException("Откройте страницу-макет с размерами.");
+            if (document == null) throw new InvalidOperationException("Откройте модель или страницу-макет с размерами.");
+            bool overview = IsOverviewName(pageName);
+            bool master = pageName.StartsWith(MasterPrefix, StringComparison.OrdinalIgnoreCase);
+            prepared = overview || master;
             dynamic selection = app.ActiveSelectionRange;
             if (selection == null || Convert.ToInt32(selection.Count) != 1)
                 throw new InvalidOperationException("Выделите один текстовый образец или прямоугольник.");
@@ -365,14 +368,27 @@ namespace VanyaTools.Native
                 !String.Equals(previousName, zoneName, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Этот объект уже назначен другой надписи.");
             dynamic currentLayer = chosen.Layer;
-            if (IsOverviewName(pageName) &&
+            string layerName = Convert.ToString(currentLayer.Name) ?? "";
+            if (overview &&
                 !Convert.ToString(currentLayer.Name).StartsWith(SizeLayerPrefix,
                     StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Разместите образец на слое нужного размера.");
-            dynamic previous = null;
-            foreach (dynamic layer in document.ActivePage.Layers)
+            string sourceSize = null;
+            object personalLayer = null;
+            Dictionary<string, object> initialZones = null;
+            if (!overview && !master)
             {
-                if (IsOverviewName(pageName) &&
+                sourceSize = layerName.StartsWith(PersonalZonesPrefix, StringComparison.OrdinalIgnoreCase)
+                    ? layerName.Substring(PersonalZonesPrefix.Length) : layerName;
+                if (!HasSizeTop(FindSourceLayer((object)document.ActivePage, sourceSize)))
+                    throw new InvalidOperationException("Разместите образец на слое нужного размера с VT_TOP или на его персональном слое VT_ZONES_<размер>.");
+                personalLayer = FindSourceLayer((object)document.ActivePage, PersonalZonesPrefix + sourceSize);
+                if (personalLayer == null) initialZones = SizeZones((object)document.ActivePage, sourceSize);
+            }
+            dynamic previous = null;
+            if (overview || master) foreach (dynamic layer in document.ActivePage.Layers)
+            {
+                if (overview &&
                     !String.Equals(Convert.ToString(layer.Name),
                         Convert.ToString(currentLayer.Name), StringComparison.OrdinalIgnoreCase))
                     continue;
@@ -380,21 +396,53 @@ namespace VanyaTools.Native
                     if (String.Equals(Convert.ToString(shape.Name), zoneName,
                         StringComparison.OrdinalIgnoreCase)) previous = shape;
             }
+            int oldUnit = Convert.ToInt32(document.Unit);
+            bool changed = false, commandOpen = true;
             document.BeginCommandGroup("Vanya Tools - образец надписи спортформы");
             try
             {
-                if (previous != null && !String.Equals(previousName, zoneName,
-                    StringComparison.OrdinalIgnoreCase)) previous.Delete();
+                document.Unit = CorelConstants.CdrMillimeter;
+                if (sourceSize != null)
+                {
+                    if (personalLayer == null)
+                    {
+                        personalLayer = (object)document.ActivePage.CreateLayer(PersonalZonesPrefix + sourceSize);
+                        changed = true;
+                        foreach (var zone in initialZones)
+                        {
+                            if (Convert.ToInt64(((dynamic)zone.Value).StaticID) == Convert.ToInt64(chosen.StaticID)) continue;
+                            dynamic copy = ((dynamic)zone.Value).CopyToLayer((dynamic)personalLayer); copy.Name = zone.Key;
+                        }
+                    }
+                    ZoneShapes(personalLayer).TryGetValue(zoneName, out object oldZone); previous = oldZone;
+                    if (!String.Equals(layerName, Convert.ToString(((dynamic)personalLayer).Name), StringComparison.OrdinalIgnoreCase))
+                    { chosen.MoveToLayer((dynamic)personalLayer); changed = true; }
+                }
+                if (previous != null && Convert.ToInt64(previous.StaticID) != Convert.ToInt64(chosen.StaticID))
+                { previous.Delete(); changed = true; }
                 if (!textSample)
                 {
                     chosen.Fill.ApplyNoFill();
+                    changed = true;
                     chosen.Outline.Width = 0.5;
                     chosen.Outline.Color.RGBAssign(255, 0, 0);
                 }
                 chosen.Name = zoneName;
-                return Convert.ToString(document.ActivePage.Name);
+                changed = true;
+                return sourceSize != null ? "размер " + sourceSize : overview
+                    ? "размер " + layerName.Substring(SizeLayerPrefix.Length) : pageName;
             }
-            finally { document.EndCommandGroup(); }
+            catch
+            {
+                document.EndCommandGroup(); commandOpen = false;
+                if (changed) try { document.Undo(); } catch (Exception error) { Log.Error("Could not undo size text assignment.", error); }
+                throw;
+            }
+            finally
+            {
+                try { document.Unit = oldUnit; }
+                finally { if (commandOpen) document.EndCommandGroup(); }
+            }
         }
 
         // The master remains editable in the current CDR. Artwork is placed
@@ -518,19 +566,19 @@ namespace VanyaTools.Native
                 TemplateSession session = GetTemplateSession(app, fullPath, sessions);
                 dynamic page = OnlyTemplatePage(session.Document);
                 var names = new List<string>();
-                bool zonesFound = false;
                 foreach (dynamic layer in page.Layers)
                 {
                     string name = Convert.ToString(layer.Name).Trim();
                     if (String.Equals(name, ZonesLayerName, StringComparison.OrdinalIgnoreCase))
-                    { zonesFound = true; continue; }
+                    { continue; }
+                    if (name.StartsWith(PersonalZonesPrefix, StringComparison.OrdinalIgnoreCase)) continue;
                     foreach (dynamic shape in layer.Shapes)
                         if (String.Equals(Convert.ToString(shape.Name), "VT_TOP",
                             StringComparison.OrdinalIgnoreCase))
                         { names.Add(name); break; }
                 }
-                if (!zonesFound || names.Count == 0)
-                    throw new InvalidOperationException("В CDR нужен верхний слой VT_ZONES и слои размеров с группой VT_TOP.");
+                if (names.Count == 0)
+                    throw new InvalidOperationException("В CDR нужны слои размеров с группой VT_TOP. Поля можно разместить отдельно для каждого размера на VT_ZONES_<размер>.");
                 if (names.Distinct(StringComparer.OrdinalIgnoreCase).Count() != names.Count)
                     throw new InvalidOperationException("Названия слоёв размеров должны быть уникальными.");
                 return names;
@@ -1279,18 +1327,9 @@ namespace VanyaTools.Native
 
         private static List<dynamic> ReadLayeredSources(dynamic sourcePage, string sourceLayerName)
         {
-            dynamic sizeLayer = null, zonesLayer = null;
-            foreach (dynamic layer in sourcePage.Layers)
-            {
-                string name = Convert.ToString(layer.Name);
-                if (String.Equals(name, sourceLayerName, StringComparison.OrdinalIgnoreCase))
-                    sizeLayer = layer;
-                if (String.Equals(name, ZonesLayerName, StringComparison.OrdinalIgnoreCase))
-                    zonesLayer = layer;
-            }
-            if (sizeLayer == null || zonesLayer == null)
-                throw new InvalidOperationException("Нужны слой размера «" + sourceLayerName +
-                    "» и общий слой VT_ZONES.");
+            dynamic sizeLayer = FindSourceLayer((object)sourcePage, sourceLayerName);
+            if (sizeLayer == null)
+                throw new InvalidOperationException("Не найден слой размера «" + sourceLayerName + "».");
             dynamic top = null;
             foreach (dynamic shape in sizeLayer.Shapes)
                 if (String.Equals(Convert.ToString(shape.Name), "VT_TOP",
@@ -1300,18 +1339,111 @@ namespace VanyaTools.Native
                     "» не найдена группа VT_TOP.");
             ValidateLayeredParts(top, sourceLayerName);
             var sources = new List<dynamic> { top };
-            var zoneNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (dynamic shape in zonesLayer.Shapes)
-            {
-                string name = Convert.ToString(shape.Name);
-                if (String.IsNullOrWhiteSpace(name) ||
-                    !name.StartsWith("VT_SPORT_ZONE_", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (!zoneNames.Add(name))
-                    throw new InvalidOperationException("Бокс «" + name + "» на VT_ZONES повторяется.");
-                sources.Add(shape);
-            }
+            foreach (object shape in SizeZones((object)sourcePage, sourceLayerName).Values) sources.Add((dynamic)shape);
             return sources;
+        }
+
+        private static object FindSourceLayer(object pageObject, string name)
+        {
+            object found = null;
+            foreach (dynamic layer in ((dynamic)pageObject).Layers)
+                if (String.Equals(Convert.ToString(layer.Name), name, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (found != null) throw new InvalidOperationException("На странице повторяется слой «" + name + "». Названия слоёв должны быть уникальными.");
+                    found = (object)layer;
+                }
+            return found;
+        }
+
+        private static bool HasSizeTop(object layerObject)
+        {
+            if (layerObject == null) return false;
+            foreach (dynamic shape in ((dynamic)layerObject).Shapes)
+                if (String.Equals(Convert.ToString(shape.Name), "VT_TOP", StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        private static Dictionary<string, object> ZoneShapes(object layerObject)
+        {
+            var result = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            if (layerObject == null) return result;
+            void Read(object shapesObject, int depth)
+            {
+                if (depth > 16) throw new InvalidOperationException("Слишком глубокая вложенность полей переменной информации.");
+                foreach (dynamic shape in (dynamic)shapesObject)
+                {
+                    string name = Convert.ToString(shape.Name) ?? "";
+                    if (String.Equals(name, "VT_TOP", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (name.StartsWith("VT_SPORT_ZONE_", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (result.ContainsKey(name)) throw new InvalidOperationException("Поле «" + name +
+                            "» повторяется на слое «" + Convert.ToString(((dynamic)layerObject).Name) + "».");
+                        result.Add(name, (object)shape);
+                    }
+                    else if (Convert.ToInt32(shape.Type) == CorelConstants.CdrGroupShape) Read((object)shape.Shapes, depth + 1);
+                }
+            }
+            Read((object)((dynamic)layerObject).Shapes, 0);
+            return result;
+        }
+
+        private static Dictionary<string, object> SizeZones(object page, string sizeLayerName)
+        {
+            // An explicit personal layer owns the whole set, including an empty
+            // set. Deleting a field must never resurrect its shared predecessor.
+            object personal = FindSourceLayer(page, PersonalZonesPrefix + sizeLayerName);
+            if (personal != null) return ZoneShapes(personal);
+            Dictionary<string, object> local = ZoneShapes(FindSourceLayer(page, sizeLayerName));
+            return local.Count > 0 ? local : ZoneShapes(FindSourceLayer(page, ZonesLayerName));
+        }
+
+        public string CreatePersonalSizeZones()
+        {
+            dynamic document = CorelApp.Get().ActiveDocument;
+            if (document == null) throw new InvalidOperationException("Откройте исходный CDR модели со слоями размеров.");
+            dynamic page = document.ActivePage;
+            string pageName = Convert.ToString(page.Name) ?? "";
+            if (IsOverviewName(pageName) || pageName.StartsWith(MasterPrefix, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("В готовых макетах поля уже персональны. Для переноса в шаблон откройте исходную страницу модели с VT_TOP.");
+            var pending = new List<KeyValuePair<string, Dictionary<string, object>>>();
+            int kept = 0, sizes = 0;
+            foreach (dynamic layer in page.Layers)
+            {
+                string name = Convert.ToString(layer.Name) ?? "";
+                if (name.StartsWith(PersonalZonesPrefix, StringComparison.OrdinalIgnoreCase) || !HasSizeTop((object)layer)) continue;
+                sizes++;
+                if (FindSourceLayer((object)page, PersonalZonesPrefix + name) != null) { kept++; continue; }
+                pending.Add(new KeyValuePair<string, Dictionary<string, object>>(name, SizeZones((object)page, name)));
+            }
+            if (sizes == 0) throw new InvalidOperationException("На активной странице не найдены слои размеров с VT_TOP.");
+            if (pending.Count == 0) return "Персональные поля уже созданы для всех размеров (" + kept + ").";
+            object activeLayer = document.ActiveLayer;
+            var created = new List<object>();
+            document.BeginCommandGroup("Vanya Tools - персональные поля размеров");
+            try
+            {
+                foreach (var item in pending)
+                {
+                    dynamic layer = page.CreateLayer(PersonalZonesPrefix + item.Key); created.Add((object)layer);
+                    foreach (var zone in item.Value)
+                    {
+                        dynamic copy = ((dynamic)zone.Value).CopyToLayer(layer); copy.Name = zone.Key;
+                    }
+                }
+                return "Созданы персональные слои полей: " + pending.Count + "; прежние сохранены: " + kept +
+                    ". Отредактируйте VT_ZONES_<размер> и сохраните CDR модели.";
+            }
+            catch
+            {
+                for (int i = created.Count - 1; i >= 0; i--)
+                    try { ((dynamic)created[i]).Delete(); } catch (Exception error) { Log.Error("Could not roll back size zones.", error); }
+                throw;
+            }
+            finally
+            {
+                try { ((dynamic)activeLayer).Activate(); } catch { }
+                document.EndCommandGroup();
+            }
         }
 
         private static void ValidateLayeredParts(dynamic top, string size)
@@ -1341,7 +1473,7 @@ namespace VanyaTools.Native
         {
             List<dynamic> sources = ReadLayeredSources(sourcePage, sourceLayerName);
             // One clipboard round trip per size is much less fragile than
-            // copying the top group and each shared zone independently.
+            // copying the top group and each size-specific zone independently.
             var copied = new List<dynamic>();
             if (sameDocument)
             {
@@ -1798,7 +1930,8 @@ namespace VanyaTools.Native
             scale = 1;
             dynamic exact = FindPreparedPage(document, size);
             if (exact != null) return exact;
-            if (size != "M" && templates.TryGetValue("M", out SportLayoutTemplate medium) &&
+            if (size != "M" && String.IsNullOrWhiteSpace(templates[size].LayerName) &&
+                templates.TryGetValue("M", out SportLayoutTemplate medium) && String.IsNullOrWhiteSpace(medium.LayerName) &&
                 String.Equals(System.IO.Path.GetFullPath(medium.Path),
                     System.IO.Path.GetFullPath(templates[size].Path),
                     StringComparison.OrdinalIgnoreCase))

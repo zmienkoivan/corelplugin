@@ -18,6 +18,14 @@ namespace VanyaTools.Native
 
         public static Result ExportCurrentPage(string folder, int dpi)
         {
+            return Export(folder, dpi, false, false, true);
+        }
+
+        // Shared PDF publisher: ordinary CDRs need no sport markers or page names.
+        // DTF/UV deliberately have no fallback from an empty selection to a whole page.
+        internal static Result Export(string folder, int dpi, bool selectionOrPage,
+            bool selectionOnly, bool sportPage = false, string processName = "DTF")
+        {
             if (dpi != 150 && dpi != 300)
                 throw new InvalidOperationException("Выберите качество экспорта 150 или 300 DPI.");
             if (String.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
@@ -25,8 +33,12 @@ namespace VanyaTools.Native
             folder = System.IO.Path.GetFullPath(folder);
             dynamic document = CorelApp.Get().ActiveDocument;
             if (document == null)
-                throw new InvalidOperationException("Откройте CDR со страницей раскладки печати.");
+                throw new InvalidOperationException("Откройте документ CorelDRAW для печати.");
             dynamic page = document.ActivePage;
+            dynamic selection = CorelApp.Get().ActiveSelectionRange;
+            bool selected = (selectionOrPage || selectionOnly) && selection != null && Convert.ToInt32(selection.Count) > 0;
+            if (selectionOnly && !selected)
+                throw new InvalidOperationException("Для " + processName + " выделите объекты, которые нужно напечатать. Целая страница без выделения не отправляется.");
             string pageName = Convert.ToString(page.Name) ?? "";
             bool printPage = pageName.StartsWith("Спортформа · ", StringComparison.OrdinalIgnoreCase) ||
                 pageName.StartsWith("Допечатка · ", StringComparison.OrdinalIgnoreCase);
@@ -38,14 +50,14 @@ namespace VanyaTools.Native
                 if (count > 0 && String.Equals(Convert.ToString(layer.Name), "Детали печати",
                     StringComparison.OrdinalIgnoreCase)) printPage = true;
             }
-            if (!printPage || pageName.StartsWith("Резка спортформы · ", StringComparison.OrdinalIgnoreCase))
+            if (sportPage && (!printPage || pageName.StartsWith("Резка спортформы · ", StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException("Откройте страницу раскладки печати или допечатки после этапа 2.");
-            if (shapeCount == 0) throw new InvalidOperationException("Лист печати пуст.");
+            if (!selected && shapeCount == 0) throw new InvalidOperationException("Лист печати пуст.");
 
             int oldUnit = Convert.ToInt32(document.Unit);
             bool oldDirty = Convert.ToBoolean(document.Dirty);
             object settings = document.PDFSettings;
-            var values = Settings(dpi);
+            var values = Settings(dpi, selected, selectionOnly);
             var previous = new List<KeyValuePair<string, object>>();
             int applied = 0;
             string temporary = null, staging = null;
@@ -53,8 +65,17 @@ namespace VanyaTools.Native
             try
             {
                 document.Unit = CorelConstants.CdrMillimeter;
-                result.WidthMm = Convert.ToDouble(page.SizeWidth);
-                result.HeightMm = Convert.ToDouble(page.SizeHeight);
+                if (selected)
+                {
+                    double left, bottom, width, height;
+                    selection.GetBoundingBox(out left, out bottom, out width, out height, true);
+                    result.WidthMm = width; result.HeightMm = height;
+                }
+                else
+                {
+                    result.WidthMm = Convert.ToDouble(page.SizeWidth);
+                    result.HeightMm = Convert.ToDouble(page.SizeHeight);
+                }
                 if (result.WidthMm <= 0 || result.HeightMm <= 0 ||
                     Double.IsNaN(result.WidthMm + result.HeightMm) || Double.IsInfinity(result.WidthMm + result.HeightMm))
                     throw new InvalidOperationException("У страницы нет корректного размера.");
@@ -62,7 +83,7 @@ namespace VanyaTools.Native
                 // silently scale a roll-printing job to fit a smaller PDF page.
                 if (Math.Max(result.WidthMm, result.HeightMm) > 5080.01)
                     throw new InvalidOperationException("Для PDF в масштабе 1:1 размер страницы должен быть не более 5,08 м. " +
-                        "Укажите длину страницы, например 4 м, и повторите этап 2.");
+                        "Разделите задание на меньшие листы или выделения.");
 
                 // Snapshot everything before changing anything. PDF settings
                 // belong to the document and must not affect the next export.
@@ -75,14 +96,15 @@ namespace VanyaTools.Native
                 }
 
                 string documentName = System.IO.Path.GetFileNameWithoutExtension(Convert.ToString(document.FileName));
-                string prefix = SafeName(documentName) + " - печать - лист " +
-                    Convert.ToInt32(page.Index).ToString("000", CultureInfo.InvariantCulture) + " - " +
-                    DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
-                string target = AvailablePath(folder, prefix);
                 string job = Guid.NewGuid().ToString("N");
+                string prefix = SafeName(documentName) + (selectionOnly ? " - " + processName + " - " : " - печать - ") +
+                    (selected ? "выделение - лист " : "лист ") +
+                    Convert.ToInt32(page.Index).ToString("000", CultureInfo.InvariantCulture) + " - " +
+                    DateTime.Now.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture) + "-" + job.Substring(0, 8);
+                string target = AvailablePath(folder, prefix);
                 temporary = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Vanya-print-" + job + ".pdf");
                 staging = System.IO.Path.Combine(folder, ".Vanya-print-" + job + ".partial");
-                Log.Info("Sport print export: page=" + page.Index + ", " +
+                Log.Info("Print PDF export: selection=" + selected + ", lossless=" + selectionOnly + ", page=" + page.Index + ", " +
                     result.WidthMm.ToString("0.###", CultureInfo.InvariantCulture) + "x" +
                     result.HeightMm.ToString("0.###", CultureInfo.InvariantCulture) + " mm, " + dpi + " DPI, PDF.");
                 document.PublishToPDF(temporary);
@@ -126,19 +148,19 @@ namespace VanyaTools.Native
             }
         }
 
-        private static IList<KeyValuePair<string, object>> Settings(int dpi)
+        private static IList<KeyValuePair<string, object>> Settings(int dpi, bool selected, bool lossless)
         {
             // Values verified against CdrPDFVBALib in CorelDRAW 2026.
             // PDF 1.7 preserves transparency; only bitmap resolution is capped.
             return new List<KeyValuePair<string, object>> {
                 Pair("pdfVersion", 8), // pdfVersion17
-                Pair("PublishRange", 1), // pdfCurrentPage, never the selection
-                Pair("UsePageBoundingBox", true),
-                Pair("BitmapCompression", 2), // pdfJPEG
+                Pair("PublishRange", selected ? 2 : 1), // pdfSelection / pdfCurrentPage
+                Pair("UsePageBoundingBox", !selected), // selection gets its own bounds, including outside the page
+                Pair("BitmapCompression", lossless ? 3 : 2), // pdfZIP (lossless) / pdfJPEG
                 Pair("JPEGQualityFactor", 95),
-                Pair("DownsampleColor", true), Pair("ColorResolution", dpi),
-                Pair("DownsampleGray", true), Pair("GrayResolution", dpi),
-                Pair("DownsampleMono", true), Pair("MonoResolution", 1200),
+                Pair("DownsampleColor", !lossless), Pair("ColorResolution", dpi),
+                Pair("DownsampleGray", !lossless), Pair("GrayResolution", dpi),
+                Pair("DownsampleMono", !lossless), Pair("MonoResolution", 1200),
                 Pair("TextAsCurves", true), Pair("CompressText", true),
                 Pair("Encoding", 1), // pdfBinary
                 Pair("ComplexFillsAsBitmaps", false),
@@ -184,7 +206,7 @@ namespace VanyaTools.Native
 
         private static string SafeName(string name)
         {
-            if (String.IsNullOrWhiteSpace(name)) name = "Спортформа";
+            if (String.IsNullOrWhiteSpace(name)) name = "Документ";
             var invalid = System.IO.Path.GetInvalidFileNameChars();
             var result = new StringBuilder();
             foreach (char character in name)
@@ -193,7 +215,7 @@ namespace VanyaTools.Native
                 if (result.Length >= 100) break;
             }
             string safe = result.ToString().Trim().TrimEnd('.');
-            return safe.Length == 0 ? "Спортформа" : safe;
+            return safe.Length == 0 ? "Документ" : safe;
         }
 
         private static string AvailablePath(string folder, string prefix)

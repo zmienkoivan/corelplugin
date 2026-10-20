@@ -107,6 +107,7 @@ namespace VanyaTools.Native
             var settings = new StackPanel { Margin = new Thickness(5) };
             var outlineSettings = DtfOutlineSettings.Load();
             var filmRipSettings = FilmRipSettings.Load();
+            var printExportSettings = PrintExportSettings.Load();
             settings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
             settings.Children.Add(Button("Восстановить кнопки на панели Corel", (_, __) =>
             {
@@ -145,6 +146,7 @@ namespace VanyaTools.Native
             settings.Children.Add(approvalCopy.SettingsView);
             settings.Children.Add(outlineSettings.CreateSettingsView(SetStatus));
             settings.Children.Add(filmRipSettings.CreateSettingsView(SetStatus));
+            settings.Children.Add(printExportSettings.CreateSettingsView(SetStatus));
             settings.Children.Add(aiTools.SettingsView);
             settings.Children.Add(orderCards.SettingsView);
             Loaded += (_, __) =>
@@ -200,6 +202,8 @@ namespace VanyaTools.Native
                 new ColorProofTab((message, isError) => SetStatus(message, isError))));
             tabs.Items.Add(ThumbnailTabs.Create("Фотовывод", ThumbnailTabs.FilmOutput,
                 Color.FromRgb(35, 35, 35), new FilmOutputTab(() => orderCards.FilmOutputYearFolder, filmRipSettings, SetStatus)));
+            tabs.Items.Add(ThumbnailTabs.Create("Печать", ThumbnailTabs.Print,
+                Color.FromRgb(56, 105, 145), new PrintExportTab(printExportSettings, SetStatus)));
             Func<SimpleAiMode, ScrollViewer> photoTools = mode =>
                 new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                     Content = new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
