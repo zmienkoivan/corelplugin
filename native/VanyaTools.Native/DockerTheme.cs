@@ -48,17 +48,20 @@ namespace VanyaTools.Native
             return button;
         }
 
-        internal static Button Accent(Button button, Color color, bool darkText = false)
+        internal static Button Accent(Button button, Color color, bool darkText = false, bool preserveDisabledColor = false)
         {
             string normal = color.ToString();
             string hover = Color.FromRgb((byte)(color.R * .88), (byte)(color.G * .88), (byte)(color.B * .88)).ToString();
             string pressed = Color.FromRgb((byte)(color.R * .75), (byte)(color.G * .75), (byte)(color.B * .75)).ToString();
-            button.Style = ButtonStyle(normal, hover, pressed, darkText ? "#253C4C" : "#FFFFFF", pressed);
+            string muted = Color.FromRgb((byte)(color.R * .55 + 255 * .45),
+                (byte)(color.G * .55 + 255 * .45), (byte)(color.B * .55 + 255 * .45)).ToString();
+            button.Style = ButtonStyle(normal, hover, pressed, darkText ? "#253C4C" : "#FFFFFF", pressed,
+                preserveDisabledColor ? muted : null, preserveDisabledColor ? "#475569" : null);
             return button;
         }
 
         private static Style ButtonStyle(string normal, string hover, string pressed,
-            string foreground, string outline)
+            string foreground, string outline, string disabledBackground = null, string disabledForeground = null)
         {
             var style = new Style(typeof(Button));
             style.Setters.Add(new Setter(Control.ForegroundProperty, Brush(foreground)));
@@ -93,8 +96,8 @@ namespace VanyaTools.Native
             down.Setters.Add(new Setter(Border.BackgroundProperty, Brush(pressed)) { TargetName = "Chrome" });
             template.Triggers.Add(down);
             var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
-            disabled.Setters.Add(new Setter(Border.BackgroundProperty, Brush("#E4E7E9")) { TargetName = "Chrome" });
-            disabled.Setters.Add(new Setter(Control.ForegroundProperty, Brush("#88949C")));
+            disabled.Setters.Add(new Setter(Border.BackgroundProperty, Brush(disabledBackground ?? "#E4E7E9")) { TargetName = "Chrome" });
+            disabled.Setters.Add(new Setter(Control.ForegroundProperty, Brush(disabledForeground ?? "#88949C")));
             template.Triggers.Add(disabled);
             style.Setters.Add(new Setter(Control.TemplateProperty, template));
             return style;
