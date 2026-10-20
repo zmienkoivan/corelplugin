@@ -106,6 +106,9 @@ namespace VanyaTools.Native
                     Set(settings, value.Key, value.Value);
                     applied++;
                 }
+                if (Convert.ToInt32(Get(settings, "OutputSpotColorsAs")) != 0 ||
+                    !Convert.ToBoolean(Get(settings, "Overprints")))
+                    throw new InvalidOperationException("Corel не применил сохранение плашечных цветов и наложений для PDF.");
 
                 string documentName = System.IO.Path.GetFileNameWithoutExtension(Convert.ToString(document.FileName));
                 string job = Guid.NewGuid().ToString("N");
@@ -182,6 +185,7 @@ namespace VanyaTools.Native
                 // CorelDRAW 2026 even though its getter/type-library exist.
                 // ColorMode=pdfNative is the supported color-mode control.
                 Pair("OutputSpotColorsAs", 0), // pdfSpotAsSpot
+                Pair("Overprints", true), // retain the document's fill/outline overprint attributes
                 Pair("IncludeBleed", false), Pair("Bleed", 0),
                 Pair("CropMarks", false), Pair("RegistrationMarks", false),
                 Pair("DensitometerScales", false), Pair("FileInformation", false),

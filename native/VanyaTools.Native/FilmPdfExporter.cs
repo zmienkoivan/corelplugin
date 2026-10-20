@@ -200,7 +200,7 @@ namespace VanyaTools.Native
                 { "pdfVersion", 8 }, { "PublishRange", 1 }, { "UsePageBoundingBox", true }, { "BitmapCompression", 0 },
                 { "DownsampleColor", false }, { "DownsampleGray", false }, { "DownsampleMono", false },
                 { "TextAsCurves", true }, { "CompressText", false }, { "ComplexFillsAsBitmaps", false },
-                { "ColorMode", 3 }, { "OutputSpotColorsAs", 0 }, { "Overprints", false }, { "OverprintBlackLimit", 0 }, { "Halftones", false },
+                { "ColorMode", 3 }, { "OutputSpotColorsAs", 0 }, { "Overprints", true }, { "OverprintBlackLimit", 0 }, { "Halftones", false },
                 { "IncludeBleed", false }, { "CropMarks", false }, { "RegistrationMarks", false },
                 { "DensitometerScales", false }, { "FileInformation", false }, { "MaintainOPILinks", false },
                 { "EncryptType", 0 },
