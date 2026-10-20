@@ -39,14 +39,17 @@ namespace VanyaTools.Native
 
         private List<object> Find(IEnumerable<int> ids)
         {
-            dynamic page = Page(); var result = new List<object>();
-            foreach (int id in ids)
+            int[] requested = ids.ToArray();
+            var found = FilmShapeSearch.Find(Document(), requested);
+            int[] missing = requested.Where(id => !found.ContainsKey(id)).ToArray();
+            if (missing.Length > 0)
             {
-                object shape = page.FindShape(null, 0, id, true);
-                if (shape == null) throw new InvalidOperationException("Проверенный объект удалён или перегруппирован. Выделите фотовывод и проверьте заново.");
-                result.Add(shape);
+                Log.Info("Film color scope lookup: page=" + _page + "; missing=" + String.Join(",", missing) +
+                    "; selected=" + String.Join(",", Selected()));
+                throw new InvalidOperationException("Не удалось получить проверенные объекты #" + String.Join(", #", missing.Take(6)) +
+                    ". Выделите весь фотовывод и нажмите «Проверить новое выделение».");
             }
-            return result;
+            return requested.Select(id => found[id]).ToList();
         }
 
         internal List<object> Roots() => Find(_roots);

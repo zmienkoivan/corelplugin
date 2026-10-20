@@ -19,7 +19,7 @@ namespace VanyaTools.Native
         private FilmColorReport _report;
 
         internal FilmColorReview(Func<Func<Task>, Task> run, Action<string, bool> status,
-            Func<FilmColorScope, Task<FilmColorReport>> recheck)
+            Func<FilmColorScope, Task<FilmColorReport>> recheck, Func<Task> newCheck)
         {
             _run = run; _status = status; _recheck = recheck;
             var panel = new StackPanel();
@@ -55,12 +55,14 @@ namespace VanyaTools.Native
                 _status("Повторная проверка: ошибок " + report.Errors + ", предупреждений " + report.Warnings + ".", report.Errors > 0);
             });
             Add(panel, "Вернуть исходное выделение", () => { _scope.Restore(); _status("Выделен весь проверенный фотовывод.", false); return Task.CompletedTask; });
+            Add(panel, "Проверить новое выделение", newCheck);
             DockerHelp.Add(panel, "Выделить все ошибки — выбрать ошибочные объекты в Corel; предупреждения о полутонах в этот выбор не входят. " +
                 "Можно выбрать несколько строк через Ctrl/Shift и выделить только их. K100 заменяет только недопустимые цвета векторных заливок, " +
                 "обводок, букв и точек градиента. Белый, нейтральные полутона и геометрия сохраняются. Вся правка отменяется одним Ctrl+Z. " +
                 "Растры, сложные заливки, эффекты и ошибки чтения помечены «Вручную»; их можно выделить и исправить в Corel. " +
                 "Повторная проверка относится ко всему исходному выводу и возвращает его выделение. Перед экспортом выбор ошибок также заменяется " +
-                "исходным выводом, если вы не выбрали другие объекты самостоятельно. При смене CDR требуется новая проверка.");
+                "исходным выводом, если вы не выбрали другие объекты самостоятельно. «Проверить новое выделение» начинает новую проверку " +
+                "именно выбранных сейчас объектов и сбрасывает старый список. Используйте её после изменения состава или смены CDR.");
             _expander = new Expander { Header = "Ошибки и предупреждения цветов", Content = panel, Visibility = Visibility.Collapsed,
                 Margin = new Thickness(0, 4, 0, 5) }; Content = _expander;
         }

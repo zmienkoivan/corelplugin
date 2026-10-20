@@ -77,13 +77,8 @@ namespace VanyaTools.Native
                 "По умолчанию отступ от содержимого 20 мм и ширина полосы 0,3 мм. " +
                 "На плёнке 605 мм можно уменьшать только зазор (минимум 2 мм), сохраняя рисунок 1:1. " +
                 "Если места всё равно нет, действие останавливается с указанием ширины. Непечатаемые поля принтера учитывайте в доступной ширине.");
-            AddButton("Проверить цвета выделения", async () => {
-                List<FilmTarget> targets = Capture();
-                FilmColorReport report = await Check(targets);
-                Report(report.Errors > 0 ? "Найдены недопустимые цвета: " + report.Errors + "." :
-                    report.Warnings > 0 ? "Цветных ошибок нет; есть предупреждения о полутонах." : "Цвета допустимы для фотовывода.", report.Errors > 0);
-            });
-            _colorReview = new FilmColorReview(Run, Report, Recheck);
+            AddButton("Проверить цвета выделения", CheckSelection);
+            _colorReview = new FilmColorReview(Run, Report, Recheck, CheckSelection);
             _panel.Children.Add(_colorReview);
             DockerHelp.Add(_panel, "Допустимые векторные цвета: C0 M0 Y0 K100 и белый RGB 255/255/255 либо CMYK 0/0/0/0. " +
                 "RGB-чёрный, составной чёрный и цветные/плашечные цвета отмечаются как ошибки. " +
@@ -157,6 +152,17 @@ namespace VanyaTools.Native
         private async Task<FilmColorReport> Check(List<FilmTarget> targets)
         {
             return await Recheck(new FilmColorScope(targets));
+        }
+        private async Task CheckSelection()
+        {
+            // A new check must never require resolving the previous report first.
+            // In particular this is the recovery path after replacing/regrouping art.
+            _colorReview.Clear();
+            _report.Clear(); _progress.Text = "Проверяю текущее выделение…";
+            List<FilmTarget> targets = FilmOutputService.Capture(_mode.SelectedIndex == 1);
+            FilmColorReport report = await Check(targets);
+            Report(report.Errors > 0 ? "Найдены недопустимые цвета: " + report.Errors + "." :
+                report.Warnings > 0 ? "Цветных ошибок нет; есть предупреждения о полутонах." : "Цвета допустимы для фотовывода.", report.Errors > 0);
         }
         private async Task<FilmColorReport> Recheck(FilmColorScope scope)
         {

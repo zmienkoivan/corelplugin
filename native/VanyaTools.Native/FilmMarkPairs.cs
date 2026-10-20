@@ -209,8 +209,9 @@ namespace VanyaTools.Native
                 {
                     var selection = new List<object>();
                     ((dynamic)current.Page).Activate();
+                    var found = FilmShapeSearch.Find(current.Document, selected);
                     foreach (int id in selected)
-                    { object shape = ((dynamic)current.Page).FindShape(null, 0, id, true); if (shape != null) selection.Add(shape); }
+                    { if (found.TryGetValue(id, out object shape)) selection.Add(shape); }
                     ((dynamic)FilmOutputService.Range(selection)).CreateSelection();
                 }
                 catch (Exception error) { Log.Error("Could not restore selection after film caption edit.", error); }
