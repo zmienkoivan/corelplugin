@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace VanyaTools.Native
 {
@@ -16,6 +17,12 @@ namespace VanyaTools.Native
 
     internal static class FilmPdfExporter
     {
+        private sealed class RenderedFilm
+        {
+            internal string Path, Name;
+            internal double Width, Height;
+        }
+
         internal static string Folder(string yearFolder, string documentPath)
         {
             if (String.IsNullOrWhiteSpace(yearFolder) || !Path.IsPathRooted(yearFolder) || !Directory.Exists(yearFolder))
@@ -45,10 +52,9 @@ namespace VanyaTools.Native
             return Path.Combine(year, month, "фотовывод");
         }
 
-        internal static FilmExportResult Export(List<FilmTarget> targets, FilmOutputOptions options, string folder)
+        internal static async Task<FilmExportResult> Export(List<FilmTarget> targets, FilmOutputOptions options, string folder)
         {
             options.Validate();
-            if (String.IsNullOrWhiteSpace(options.PdfPreset)) throw new InvalidOperationException("Укажите имя заготовки PDF Corel, например filmgate.");
             dynamic app = CorelApp.Get(), source = targets[0].Document;
             int sourceUnit = Convert.ToInt32(source.Unit);
             bool sourceDirty = Convert.ToBoolean(source.Dirty), optimization = Convert.ToBoolean(app.Optimization);
@@ -58,6 +64,21 @@ namespace VanyaTools.Native
             dynamic output = null;
             var result = new FilmExportResult();
             var temporary = new List<string>(); var staging = new List<string>(); var destinations = new List<string>();
+            var rendered = new List<RenderedFilm>();
+            string jobId = Guid.NewGuid().ToString("N");
+            bool restored = false;
+            void RestoreCorel()
+            {
+                if (restored) return;
+                restored = true;
+                if (output != null) try { output.Dirty = false; output.Close(); } catch (Exception error) { Log.Error("Could not close temporary film document.", error); }
+                try { source.Activate(); ((dynamic)sourcePage).Activate(); ((dynamic)FilmOutputService.Range(selected)).CreateSelection(); }
+                catch (Exception error) { result.Notes.Add("Не удалось восстановить исходное выделение."); Log.Error("Could not restore film selection.", error); }
+                try { source.Unit = sourceUnit; source.Dirty = sourceDirty; }
+                catch (Exception error) { result.Notes.Add("Не удалось восстановить состояние исходного документа."); Log.Error("Could not restore film document state.", error); }
+                try { app.Optimization = optimization; }
+                catch (Exception error) { result.Notes.Add("Не удалось восстановить режим обновления Corel."); Log.Error("Could not restore Corel optimization.", error); }
+            }
             try
             {
                 source.Unit = CorelConstants.CdrMillimeter;
@@ -79,13 +100,9 @@ namespace VanyaTools.Native
                 output.Unit = CorelConstants.CdrMillimeter;
                 output.AssignColorContext(source.ColorContext);
                 object settings = output.PDFSettings;
-                if (!Convert.ToBoolean(((dynamic)settings).Load(options.PdfPreset.Trim())))
-                    throw new InvalidOperationException("В CorelDRAW не найдена заготовка PDF «" + options.PdfPreset +
-                        "». Сохраните параметры с ваших скриншотов под этим именем в диалоге PDF или укажите имя существующей заготовки.");
+                ((dynamic)settings).Reset();
                 Configure(settings);
-                Directory.CreateDirectory(folder);
                 app.Optimization = true;
-                string jobId = Guid.NewGuid().ToString("N");
                 for (int i = 0; i < targets.Count; i++)
                 {
                     source.Activate(); ((dynamic)sourcePage).Activate();
@@ -103,7 +120,8 @@ namespace VanyaTools.Native
                     double pageLeft = Convert.ToDouble(page.LeftX), pageBottom = Convert.ToDouble(page.BottomY);
                     // Clipboard placement can use a different origin. Move by
                     // the actual copied bbox while retaining the reserved caption bottom.
-                    FilmBounds originalRaw = FilmOutputService.Measure(range), copiedRaw = FilmOutputService.Measure((object)copied);
+                    FilmBounds originalRaw = FilmOutputService.Measure((object)source, range),
+                        copiedRaw = FilmOutputService.Measure((object)output, (object)copied);
                     copied.Move(pageLeft + extra - bounds[i].Left + originalRaw.Left - copiedRaw.Left,
                         pageBottom - bounds[i].Bottom + originalRaw.Bottom - copiedRaw.Bottom);
                     dynamic all = app.CreateShapeRange(); foreach (dynamic s in copied) all.Add(s);
@@ -120,9 +138,22 @@ namespace VanyaTools.Native
                         if (stream.Read(header, 0, 5) != 5 || Encoding.ASCII.GetString(header) != "%PDF-")
                             throw new InvalidDataException("CorelDRAW не создал корректный PDF.");
                     }
-                    string target = Available(folder, title + " - " + SafeName(targets[i].Caption.Text), destinations);
+                    rendered.Add(new RenderedFilm { Path = pdf, Width = width, Height = height,
+                        Name = title + " - " + SafeName(targets[i].Caption.Text) });
+                }
+                // Finish all COM work before yielding to the UI for PDF processing.
+                // Otherwise finally could reset Dirty after edits made during await.
+                RestoreCorel();
+                Directory.CreateDirectory(folder);
+                for (int i = 0; i < rendered.Count; i++)
+                {
+                    RenderedFilm film = rendered[i];
+                    string normalized = Path.Combine(Path.GetTempPath(), "Vanya-film-" + jobId + "-" + i + "-ready.pdf");
+                    temporary.Add(normalized);
+                    await FilmPdfNormalizer.Normalize(film.Path, normalized, film.Width, film.Height);
+                    string target = Available(folder, film.Name, destinations);
                     string stage = Path.Combine(folder, ".Vanya-film-" + jobId + "-" + i + ".partial"); staging.Add(stage);
-                    File.Copy(pdf, stage); destinations.Add(target);
+                    File.Copy(normalized, stage); destinations.Add(target);
                 }
                 // A hot folder receives finished PDFs only after all layers publish.
                 for (int i = 0; i < staging.Count; i++) { File.Move(staging[i], destinations[i]); result.Paths.Add(destinations[i]); }
@@ -137,13 +168,7 @@ namespace VanyaTools.Native
             }
             finally
             {
-                if (output != null) try { output.Dirty = false; output.Close(); } catch (Exception error) { Log.Error("Could not close temporary film document.", error); }
-                try { source.Activate(); ((dynamic)sourcePage).Activate(); ((dynamic)FilmOutputService.Range(selected)).CreateSelection(); }
-                catch (Exception error) { result.Notes.Add("Не удалось восстановить исходное выделение."); Log.Error("Could not restore film selection.", error); }
-                try { source.Unit = sourceUnit; source.Dirty = sourceDirty; }
-                catch (Exception error) { result.Notes.Add("Не удалось восстановить состояние исходного документа."); Log.Error("Could not restore film document state.", error); }
-                try { app.Optimization = optimization; }
-                catch (Exception error) { result.Notes.Add("Не удалось восстановить режим обновления Corel."); Log.Error("Could not restore Corel optimization.", error); }
+                RestoreCorel();
                 foreach (string path in temporary.Concat(staging))
                     try { if (File.Exists(path)) File.Delete(path); } catch (Exception error) { Log.Error("Could not remove temporary film PDF.", error); }
             }
@@ -151,14 +176,14 @@ namespace VanyaTools.Native
 
         private static void Configure(object settings)
         {
-            // Acrobat compatibility and ICC embedding come from the user's
-            // filmgate preset: the legacy UseColorProfile setter is E_NOTIMPL
-            // in Corel 2026 and cannot reproduce that checkbox reliably.
+            // Fully specified on the temporary document; no user preset is required.
+            // The legacy ICC setter is E_NOTIMPL. The bundled PDF tool replaces
+            // ICCBased spaces with device spaces without changing channel samples.
             var values = new Dictionary<string, object> {
-                { "PublishRange", 2 }, { "UsePageBoundingBox", false }, { "BitmapCompression", 0 },
+                { "pdfVersion", 8 }, { "PublishRange", 2 }, { "UsePageBoundingBox", false }, { "BitmapCompression", 0 },
                 { "DownsampleColor", false }, { "DownsampleGray", false }, { "DownsampleMono", false },
                 { "TextAsCurves", true }, { "CompressText", false }, { "ComplexFillsAsBitmaps", false },
-                { "ColorMode", 3 }, { "OutputSpotColorsAs", 0 }, { "Overprints", false }, { "Halftones", false },
+                { "ColorMode", 3 }, { "OutputSpotColorsAs", 0 }, { "Overprints", false }, { "OverprintBlackLimit", 0 }, { "Halftones", false },
                 { "IncludeBleed", false }, { "CropMarks", false }, { "RegistrationMarks", false },
                 { "DensitometerScales", false }, { "FileInformation", false }, { "MaintainOPILinks", false },
                 { "EncryptType", 0 },

@@ -9,7 +9,6 @@ namespace VanyaTools.Native
     {
         public double FilmWidth = 605, BandGap = 20, BandWidth = 0.3, MarkOffset = 25, MarkStroke = 0.15;
         public bool FitBands = true, ExportBands = true;
-        public string PdfPreset = "filmgate";
         internal void Validate()
         {
             if (!Valid(FilmWidth, 20, 2000) || !Valid(BandGap, 2, 100) || !Valid(BandWidth, .05, 2) ||
@@ -96,11 +95,12 @@ namespace VanyaTools.Native
                 caption.ObjectName = caption.Color + " · слой " + caption.Number;
             }
             if (String.IsNullOrWhiteSpace(caption.ObjectName)) caption.ObjectName = "Рисунок";
-            var artwork = existing == null ? shapes : Children(existing).Where(s => Name(s) == Art).ToList();
-            if (artwork.Count == 0) throw new InvalidOperationException("В комплекте фотовывода не найден исходный рисунок.");
-            if (existing != null && artwork.Count != 1) throw new InvalidOperationException("В комплекте несколько исходных групп рисунка. Разгруппируйте его и выберите нужный рисунок заново.");
+            // Single-object groups can be flattened by Corel or by color separation.
+            // Only our auxiliary objects are excluded; a named ART wrapper is optional.
+            var artwork = existing == null ? shapes : Artwork(Children(existing));
+            if (artwork.Count == 0) throw new InvalidOperationException("В выделении остались только метки и полосы. Добавьте к выделению сам рисунок или растр.");
             return new FilmTarget { Document = document, Existing = existing, Shapes = artwork,
-                Bounds = Measure(Range(artwork)), Caption = caption };
+                Bounds = Measure(document, Range(artwork)), Caption = caption };
         }
 
         internal static bool IsJob(object shape) => Convert.ToInt32(((dynamic)shape).Type) == CorelConstants.CdrGroupShape &&
@@ -118,7 +118,29 @@ namespace VanyaTools.Native
             foreach (object shape in shapes) range.Add(shape);
             return (object)range;
         }
-        internal static FilmBounds Measure(object shapeOrRange)
+        private static List<object> Artwork(IEnumerable<object> shapes) => shapes.Where(s =>
+            Name(s) != Marks && Name(s) != Caption && Name(s) != Bands).ToList();
+
+        private static object GroupArtwork(List<object> shapes)
+        {
+            dynamic art = shapes.Count == 1 ? shapes[0] : (object)((dynamic)Range(shapes)).Group();
+            art.Name = Art;
+            return (object)art;
+        }
+
+        internal static FilmBounds Measure(object document, object shapeOrRange)
+        {
+            // Every caller receives millimetres, including preflight outside Change().
+            // The source document is explicit because export also has a temporary document.
+            dynamic doc = document;
+            int unit = Convert.ToInt32(doc.Unit);
+            if (unit == CorelConstants.CdrMillimeter) return ReadBounds(shapeOrRange);
+            bool dirty = Convert.ToBoolean(doc.Dirty);
+            try { doc.Unit = CorelConstants.CdrMillimeter; return ReadBounds(shapeOrRange); }
+            finally { doc.Unit = unit; doc.Dirty = dirty; }
+        }
+
+        private static FilmBounds ReadBounds(object shapeOrRange)
         {
             double x, y, w, h;
             ((dynamic)shapeOrRange).GetBoundingBox(out x, out y, out w, out h, true);
@@ -131,7 +153,7 @@ namespace VanyaTools.Native
 
         internal static FilmBounds PrintBounds(FilmTarget target)
         {
-            FilmBounds bounds = Measure(Range(PrintShapes(target)));
+            FilmBounds bounds = Measure(target.Document, Range(PrintShapes(target)));
             if (target.Existing != null)
             {
                 object marks = Children(target.Existing).FirstOrDefault(s => Name(s) == Marks);
@@ -139,7 +161,7 @@ namespace VanyaTools.Native
                 {
                     // Reserve a fixed caption bottom, independent of the glyphs
                     // in each color name. Equal artwork retains equal PDF length.
-                    double bottom = Math.Min(bounds.Bottom, Measure(marks).Bottom - 5);
+                    double bottom = Math.Min(bounds.Bottom, Measure(target.Document, marks).Bottom - 5);
                     bounds.Height = bounds.Top - bottom; bounds.Bottom = bottom;
                 }
             }
@@ -159,20 +181,18 @@ namespace VanyaTools.Native
                     dynamic art;
                     object existingMarks = null;
                     bool preserveBands = false;
-                    var extras = new List<object>();
                     if (target.Existing != null)
                     {
                         var old = Children(target.Existing);
                         existingMarks = old.FirstOrDefault(s => Name(s) == Marks);
                         preserveBands = old.Any(s => Name(s) == Bands);
-                        extras = old.Where(s => Name(s) != Art && Name(s) != Marks && Name(s) != Caption && Name(s) != Bands).ToList();
                         ((dynamic)target.Existing).UngroupEx(); touched();
-                        art = old.First(s => Name(s) == Art);
+                        art = GroupArtwork(Artwork(old));
                         foreach (object child in old.Where(s => Name(s) == Caption || Name(s) == Bands)) ((dynamic)child).Delete();
                     }
-                    else { art = ((dynamic)Range(target.Shapes)).Group(); touched(); art.Name = Art; }
+                    else { touched(); art = GroupArtwork(target.Shapes); }
                     dynamic layer = art.Layer;
-                    FilmBounds bounds = Measure((object)art);
+                    FilmBounds bounds = Measure(target.Document, (object)art);
                     var markShapes = new List<object>();
                     if (existingMarks == null) foreach (double cy in new[] { bounds.Top + options.MarkOffset, bounds.Bottom - options.MarkOffset })
                     {
@@ -192,19 +212,18 @@ namespace VanyaTools.Native
                         }
                     }
                     dynamic marks = existingMarks ?? (object)((dynamic)Range(markShapes)).Group(); marks.Name = Marks;
-                    double captionX = Measure((object)marks).CenterX + 6;
+                    double captionX = Measure(target.Document, (object)marks).CenterX + 6;
                     double captionY = Children((object)marks).Min(s => {
-                        FilmBounds b = Measure(s); return b.Bottom + b.Height / 2;
+                        FilmBounds b = Measure(target.Document, s); return b.Bottom + b.Height / 2;
                     }) - 6;
                     dynamic label = layer.CreateArtisticTextWide(captionX, captionY, target.Caption.Text, 0, -1, "Arial", 6f);
                     label.Name = Caption; BlackFill((object)label);
                     label.Move(captionX - Convert.ToDouble(label.LeftX), captionY - Convert.ToDouble(label.TopY));
                     var parts = new List<object> { (object)art, (object)marks, (object)label };
-                    parts.AddRange(extras);
                     if (preserveBands)
                     {
-                        FilmBounds frame = Measure(Range(parts));
-                        double bottom = Math.Min(frame.Bottom, Measure((object)marks).Bottom - 5);
+                        FilmBounds frame = Measure(target.Document, Range(parts));
+                        double bottom = Math.Min(frame.Bottom, Measure(target.Document, (object)marks).Bottom - 5);
                         frame.Height = frame.Top - bottom; frame.Bottom = bottom;
                         parts.Add(CreateBands((object)layer, frame, BandGap(frame, options), options.BandWidth));
                     }
@@ -264,7 +283,7 @@ namespace VanyaTools.Native
                     }
                     else
                     {
-                        dynamic art = ((dynamic)Range(target.Shapes)).Group(); touched(); art.Name = Art;
+                        touched(); dynamic art = GroupArtwork(target.Shapes);
                         parts = new List<object> { (object)art };
                     }
                     parts.Add(CreateBands((object)((dynamic)parts[0]).Layer, bounds[i], gaps[i], options.BandWidth));

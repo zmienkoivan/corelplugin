@@ -25,6 +25,28 @@ if (-not (Test-Path -LiteralPath $dll)) {
 }
 
 $addonDir = Join-Path $repoRoot "addon\VanyaToolsNative"
+$filmProject = Join-Path $repoRoot "native\VanyaTools.FilmPdf\VanyaTools.FilmPdf.csproj"
+& $dotnet.Source build $filmProject --configuration $Configuration -p:Platform=x64 --no-incremental
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$filmBuild = Join-Path $repoRoot "native\VanyaTools.FilmPdf\bin\x64\$Configuration\net48"
+$filmTarget = Join-Path $addonDir "FilmPdf"
+New-Item -ItemType Directory -Path $filmTarget -Force | Out-Null
+Get-ChildItem -LiteralPath $filmBuild -File | Where-Object { $_.Extension -in '.dll', '.exe', '.config' } |
+    ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $filmTarget $_.Name) -Force }
+$filmNotices = [IO.File]::ReadAllText((Join-Path $repoRoot 'native\VanyaTools.FilmPdf\THIRD-PARTY-NOTICES.txt'))
+$filmAssets = Get-Content -LiteralPath (Join-Path $repoRoot 'native\VanyaTools.FilmPdf\obj\project.assets.json') -Raw | ConvertFrom-Json
+foreach ($dependency in $filmAssets.libraries.PSObject.Properties) {
+    if ($dependency.Value.type -ne 'package') { continue }
+    foreach ($packageRoot in $filmAssets.packageFolders.PSObject.Properties.Name) {
+        $dependencyRoot = Join-Path $packageRoot $dependency.Value.path
+        if (-not (Test-Path -LiteralPath $dependencyRoot -PathType Container)) { continue }
+        $filmNotices += "`r`n`r`n===== $($dependency.Name) =====`r`n"
+        Get-ChildItem -LiteralPath $dependencyRoot -File | Where-Object { $_.Name -match '^(LICENSE|THIRD-PARTY-NOTICES)(\..*)?$' } |
+            ForEach-Object { $filmNotices += [IO.File]::ReadAllText($_.FullName) + "`r`n" }
+        break
+    }
+}
+[IO.File]::WriteAllText((Join-Path $filmTarget 'THIRD-PARTY-NOTICES.txt'), $filmNotices)
 $addonDll = Join-Path $addonDir "VanyaTools.Native.dll"
 Copy-Item -LiteralPath $dll -Destination $addonDll -Force
 

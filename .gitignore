@@ -5,6 +5,7 @@
 *.suo
 addon/VanyaToolsNative/VanyaTools.Native.dll
 addon/VanyaToolsNative/VanyaTools.Native.pdb
+addon/VanyaToolsNative/FilmPdf/
 powershell/VanyaToolsNative/VanyaTools.Native.dll
 release/**
 preview-site/node_modules/

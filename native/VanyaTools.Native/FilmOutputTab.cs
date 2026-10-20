@@ -19,7 +19,7 @@ namespace VanyaTools.Native
         private readonly Action<string, bool> _status;
         private readonly StackPanel _panel;
         private readonly ComboBox _mode;
-        private readonly TextBox _filmWidth, _gap, _bandWidth, _markOffset, _markStroke, _preset, _report;
+        private readonly TextBox _filmWidth, _gap, _bandWidth, _markOffset, _markStroke, _report;
         private readonly CheckBox _fit, _exportBands;
         private readonly TextBlock _folder, _progress;
         private bool _busy;
@@ -97,12 +97,8 @@ namespace VanyaTools.Native
                 Margin = new Thickness(0, 4, 0, 4) });
             _exportBands = new CheckBox { Content = "Боковые полосы в PDF", IsChecked = saved.ExportBands,
                 Margin = new Thickness(0, 0, 0, 4) }; _panel.Children.Add(_exportBands);
-            _preset = new TextBox { Text = saved.PdfPreset, MinHeight = 26, VerticalContentAlignment = VerticalAlignment.Center };
-            _panel.Children.Add(DockerLayout.FieldRow("Заготовка PDF Corel", _preset, 120));
-            DockerHelp.Add(_panel, "Используется ваша заготовка «filmgate» из диалога PDF Corel. Она задаёт совместимость Acrobat DC, " +
-                "выключенные ICC-профили и остальные параметры, которые Corel не предоставляет полностью через API. " +
-                "Если заготовки нет на другом ПК, сохраните в Corel параметры с ваших скриншотов под этим именем. " +
-                "Экспорт дополнительно задаёт: выделение, размер по объектам, исходные цвета, без сжатия и субдискретизации, " +
+            DockerHelp.Add(_panel, "Настройки PDF встроены в плагин, заготовка filmgate на компьютере не требуется. " +
+                "PDF 1.7, совместимый с Acrobat DC: выделение, размер по объектам, исходные цвета, без ICC-профилей, сжатия и субдискретизации, " +
                 "текст кривыми, без типографских меток, полутоновых настроек и паролей. " +
                 "Вывод готовится во временном документе с цветовым контекстом исходника, затем закрывается. Буфер обмена используется для переноса копии.");
             _folder = new TextBlock { FontSize = 10, TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray,
@@ -117,7 +113,7 @@ namespace VanyaTools.Native
                 FilmColorReport colors = await Check(targets);
                 if (colors.Errors > 0) { Report("PDF не создан: исправьте ошибки проверки цветов.", true); return; }
                 _progress.Text = "Создаю PDF фотовывода…";
-                FilmExportResult result = FilmPdfExporter.Export(targets, options, folder);
+                FilmExportResult result = await FilmPdfExporter.Export(targets, options, folder);
                 _report.Text = colors + "\n" + String.Join("\n", result.Notes) + "\nPDF:\n" + String.Join("\n", result.Paths);
                 Report("Сохранено PDF: " + result.Paths.Count + (colors.Warnings > 0 ? ". Есть предупреждения о полутонах." : "."), false);
                 UpdateFolder();
@@ -167,7 +163,7 @@ namespace VanyaTools.Native
         {
             var options = new FilmOutputOptions { FilmWidth = Number(_filmWidth), BandGap = Number(_gap), BandWidth = Number(_bandWidth),
                 MarkOffset = Number(_markOffset), MarkStroke = Number(_markStroke), FitBands = _fit.IsChecked == true,
-                ExportBands = _exportBands.IsChecked == true, PdfPreset = _preset.Text.Trim() };
+                ExportBands = _exportBands.IsChecked == true };
             options.Validate(); Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
             File.WriteAllText(SettingsPath, new JavaScriptSerializer().Serialize(options)); return options;
         }

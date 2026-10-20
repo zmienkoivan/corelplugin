@@ -113,16 +113,20 @@ function Resolve-InstallPath {
 }
 
 $addonSource = Join-Path $PSScriptRoot "VanyaToolsNative"
-$requiredFiles = @("VanyaTools.Native.dll", "VanyaTools.CutPalette.xml", "config.xml", "AppUI.xslt", "UserUI.xslt", "Coreldrw.addon")
+$requiredFiles = @("VanyaTools.Native.dll", "VanyaTools.CutPalette.xml", "config.xml", "AppUI.xslt", "UserUI.xslt", "Coreldrw.addon", "FilmPdf")
 if (-not (Test-Path -LiteralPath $addonSource -PathType Container)) {
     Write-Host "Ошибка: рядом с установщиком не найдена папка VanyaToolsNative." -ForegroundColor Red
     exit 1
 }
 foreach ($file in $requiredFiles) {
-    if (-not (Test-Path -LiteralPath (Join-Path $addonSource $file) -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $addonSource $file))) {
         Write-Host "Ошибка: пакет неполный, отсутствует $file." -ForegroundColor Red
         exit 1
     }
+}
+if (-not (Test-Path -LiteralPath (Join-Path $addonSource 'FilmPdf\VanyaTools.FilmPdf.exe') -PathType Leaf)) {
+    Write-Host "Ошибка: пакет неполный, отсутствует модуль PDF фотовывода." -ForegroundColor Red
+    exit 1
 }
 
 try {
@@ -230,7 +234,16 @@ exit 1
         New-Item -ItemType Directory -Path $installPath -Force | Out-Null
     }
     foreach ($file in $requiredFiles) {
-        Copy-Item -LiteralPath (Join-Path $addonSource $file) -Destination (Join-Path $installPath $file) -Force
+        $sourceItem = Join-Path $addonSource $file
+        if (Test-Path -LiteralPath $sourceItem -PathType Container) {
+            $targetDirectory = Join-Path $installPath $file
+            New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
+            Get-ChildItem -LiteralPath $sourceItem -File | ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $targetDirectory $_.Name) -Force
+            }
+        } else {
+            Copy-Item -LiteralPath $sourceItem -Destination (Join-Path $installPath $file) -Force
+        }
     }
     Write-InstallLog "Copied add-on files to $installPath"
 
