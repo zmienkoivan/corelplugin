@@ -12,6 +12,9 @@ namespace VanyaTools.FilmPdf
     // the host's AppDomain. Only Corel's newly generated temporary PDF is read.
     internal static class Program
     {
+        private sealed class FilmSizeException : Exception
+        { internal FilmSizeException(string message) : base(message) { } }
+
         private static int Main(string[] args)
         {
             try
@@ -42,15 +45,32 @@ namespace VanyaTools.FilmPdf
                 }
                 return 0;
             }
+            catch (FilmSizeException error) { Console.Error.WriteLine(error.Message); return 2; }
             catch (Exception error) { Console.Error.WriteLine(error.Message); return 1; }
         }
 
         private static void CheckSize(PdfPage page, double width, double height)
         {
-            if (Math.Abs(page.MediaBox.Width - width) > .1 || Math.Abs(page.MediaBox.Height - height) > .1 ||
-                page.Elements.GetInteger("/Rotate") != 0 ||
-                (page.Elements.ContainsKey("/UserUnit") && page.Elements.GetReal("/UserUnit") != 1))
-                throw new InvalidDataException("PDF page dimensions do not match the film at 1:1.");
+            double unit = page.Elements.ContainsKey("/UserUnit") ? page.Elements.GetReal("/UserUnit") : 1;
+            int rotation = ((page.Rotate % 360) + 360) % 360;
+            bool swapped = rotation == 90 || rotation == 270;
+            double actualWidth = (swapped ? page.MediaBox.Height : page.MediaBox.Width) * unit;
+            double actualHeight = (swapped ? page.MediaBox.Width : page.MediaBox.Height) * unit;
+            double cropWidth = page.HasCropBox ? (swapped ? page.CropBox.Height : page.CropBox.Width) * unit : actualWidth;
+            double cropHeight = page.HasCropBox ? (swapped ? page.CropBox.Width : page.CropBox.Height) * unit : actualHeight;
+            // Compare physical dimensions after PDF rotation and UserUnit. Accept
+            // up to 0.2 mm of page-box rounding; never resize content to make it fit.
+            double tolerance = .2 * 72 / 25.4;
+            if (unit <= 0 || Double.IsNaN(unit) || Double.IsInfinity(unit) || rotation % 90 != 0 ||
+                Double.IsNaN(actualWidth + actualHeight + cropWidth + cropHeight) ||
+                Double.IsInfinity(actualWidth + actualHeight + cropWidth + cropHeight) ||
+                Math.Min(Math.Min(actualWidth, actualHeight), Math.Min(cropWidth, cropHeight)) <= 0 ||
+                Math.Abs(actualWidth - width) > tolerance || Math.Abs(actualHeight - height) > tolerance ||
+                Math.Abs(cropWidth - width) > tolerance || Math.Abs(cropHeight - height) > tolerance)
+                throw new FilmSizeException(String.Format(CultureInfo.InvariantCulture,
+                    "Expected {0:0.###} x {1:0.###} mm; PDF {2:0.###} x {3:0.###} mm; crop {4:0.###} x {5:0.###} mm; rotation {6}; UserUnit {7:0.######}.",
+                    width * 25.4 / 72, height * 25.4 / 72, actualWidth * 25.4 / 72, actualHeight * 25.4 / 72,
+                    cropWidth * 25.4 / 72, cropHeight * 25.4 / 72, rotation, unit));
         }
 
         private static PdfItem Value(PdfItem item) => item is PdfReference reference ? reference.Value : item;

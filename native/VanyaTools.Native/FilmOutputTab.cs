@@ -16,20 +16,21 @@ namespace VanyaTools.Native
     internal sealed class FilmOutputTab : UserControl
     {
         private readonly Func<string> _yearFolder;
+        private readonly FilmRipSettings _ripSettings;
         private readonly Action<string, bool> _status;
         private readonly StackPanel _panel;
         private readonly ComboBox _mode;
         private readonly TextBox _filmWidth, _gap, _bandWidth, _markOffset, _markStroke, _report;
         private readonly CheckBox _fit, _exportBands;
-        private readonly TextBlock _folder, _progress;
+        private readonly TextBlock _folder, _ripFolder, _progress;
         private readonly FilmMarksTable _marksTable;
         private bool _busy;
         private static readonly string SettingsPath = Path.Combine(Environment.GetFolderPath(
             Environment.SpecialFolder.LocalApplicationData), "VanyaTools", "film-output.json");
 
-        internal FilmOutputTab(Func<string> yearFolder, Action<string, bool> status)
+        internal FilmOutputTab(Func<string> yearFolder, FilmRipSettings ripSettings, Action<string, bool> status)
         {
-            _yearFolder = yearFolder; _status = status;
+            _yearFolder = yearFolder; _ripSettings = ripSettings; _status = status;
             FilmOutputOptions saved = Load();
             _panel = new StackPanel { Margin = new Thickness(6) };
             Content = new ScrollViewer { Content = _panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -110,28 +111,41 @@ namespace VanyaTools.Native
                 string path = Folder(); Directory.CreateDirectory(path); Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
                 return Task.CompletedTask;
             });
-            AddButton("Экспортировать выделение в PDF 1:1", async () => {
-                List<FilmTarget> targets = FilmOutputService.Capture(_mode.SelectedIndex == 1);
-                FilmOutputOptions options = ReadOptions(); string folder = Folder();
-                FilmColorReport colors = await Check(targets);
-                if (colors.Errors > 0) { Report("PDF не создан: исправьте ошибки проверки цветов.", true); return; }
-                _progress.Text = "Создаю PDF фотовывода…";
-                FilmExportResult result = await FilmPdfExporter.Export(targets, options, folder);
-                _report.Text = colors + "\n" + String.Join("\n", result.Notes) + "\nPDF:\n" + String.Join("\n", result.Paths);
-                Report("Сохранено PDF: " + result.Paths.Count + (colors.Warnings > 0 ? ". Есть предупреждения о полутонах." : "."), false);
-                UpdateFolder();
-            }, true);
+            AddButton("Экспортировать выделение в PDF 1:1", () => Output(false), true);
             DockerHelp.Add(_panel, "Папка: выбранная папка года → месяц → фотовывод. Для CDR заказа используется месяц из его пути; " +
                 "для остальных документов — текущий месяц. Папка года общая с сохранением CDR в «Настройках». " +
                 "Каждый готовый растр в пакетном режиме сохраняется отдельным PDF с цветом и номером слоя в имени. " +
                 "Файлы не перезаписываются. Полутона предупреждают, но не блокируют экспорт; недопустимые цвета блокируют. " +
                 "Печатайте 1:1, без вписывания в лист. Полосы обеспечивают непрерывную печатную область, но фактические проходы задаются RIP и принтером.");
+            _ripFolder = new TextBlock { FontSize = 10, TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray,
+                Margin = new Thickness(0, 5, 0, 3) }; _panel.Children.Add(_ripFolder);
+            AddButton("Отправить на печать в RIP", () => Output(true), true);
+            DockerHelp.Add(_panel, "Выделение, масштаб 1:1, полосы и проверка цветов такие же, как при экспорте. " +
+                "PDF передаётся прямо в hot folder из «Настройки → Фотовывод · печать в RIP». Папка архива для отправки не требуется. " +
+                "В режиме отдельных растров передаётся серия PDF. Успешный статус означает передачу в папку, а не завершение печати RIP.");
             _progress = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 3), FontSize = 11 };
             _panel.Children.Add(_progress);
             _report = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 230, MinHeight = 48,
                 FontSize = 10, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, BorderBrush = Brushes.LightGray };
             _panel.Children.Add(_report);
             Loaded += (_, __) => UpdateFolder();
+            _ripSettings.Changed += UpdateFolder;
+        }
+
+        private async Task Output(bool toRip)
+        {
+            List<FilmTarget> targets = FilmOutputService.Capture(_mode.SelectedIndex == 1);
+            FilmOutputOptions options = ReadOptions();
+            string folder = toRip ? FilmRipSettings.RequireFolder(_ripSettings.HotFolder) : Folder();
+            FilmColorReport colors = await Check(targets);
+            if (colors.Errors > 0)
+            { Report((toRip ? "В RIP не передано" : "PDF не создан") + ": исправьте ошибки проверки цветов.", true); return; }
+            _progress.Text = toRip ? "Готовлю PDF для папки RIP…" : "Создаю PDF фотовывода…";
+            FilmExportResult result = await FilmPdfExporter.Export(targets, options, folder, toRip);
+            _report.Text = colors + "\n" + String.Join("\n", result.Notes) + (toRip ? "\nПередано в RIP:\n" : "\nPDF:\n") + String.Join("\n", result.Paths);
+            Report((toRip ? "Передано в папку RIP, PDF: " : "Сохранено PDF: ") + result.Paths.Count +
+                (colors.Warnings > 0 ? ". Есть предупреждения о полутонах." : "."), false);
+            UpdateFolder();
         }
 
         private async Task<FilmColorReport> Check(List<FilmTarget> targets)
@@ -166,7 +180,11 @@ namespace VanyaTools.Native
             return FilmPdfExporter.Folder(_yearFolder(), path);
         }
         private void UpdateFolder()
-        { try { _folder.Text = Folder(); } catch (Exception error) { _folder.Text = error.Message; } }
+        {
+            try { _folder.Text = Folder(); } catch (Exception error) { _folder.Text = error.Message; }
+            _ripFolder.Text = String.IsNullOrWhiteSpace(_ripSettings.HotFolder)
+                ? "RIP: укажите hot folder в настройках." : "RIP: " + _ripSettings.HotFolder;
+        }
         private FilmOutputOptions ReadOptions()
         {
             var options = new FilmOutputOptions { FilmWidth = Number(_filmWidth), BandGap = Number(_gap), BandWidth = Number(_bandWidth),

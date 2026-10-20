@@ -52,9 +52,10 @@ namespace VanyaTools.Native
             return Path.Combine(year, month, "фотовывод");
         }
 
-        internal static async Task<FilmExportResult> Export(List<FilmTarget> targets, FilmOutputOptions options, string folder)
+        internal static async Task<FilmExportResult> Export(List<FilmTarget> targets, FilmOutputOptions options, string folder, bool toRip = false)
         {
             options.Validate();
+            if (toRip) folder = FilmRipSettings.RequireFolder(folder);
             dynamic app = CorelApp.Get(), source = targets[0].Document;
             int sourceUnit = Convert.ToInt32(source.Unit);
             bool sourceDirty = Convert.ToBoolean(source.Dirty), optimization = Convert.ToBoolean(app.Optimization);
@@ -99,9 +100,6 @@ namespace VanyaTools.Native
                 output = app.CreateDocument();
                 output.Unit = CorelConstants.CdrMillimeter;
                 output.AssignColorContext(source.ColorContext);
-                object settings = output.PDFSettings;
-                ((dynamic)settings).Reset();
-                Configure(settings);
                 app.Optimization = true;
                 for (int i = 0; i < targets.Count; i++)
                 {
@@ -119,6 +117,10 @@ namespace VanyaTools.Native
                     double extra = options.ExportBands ? gaps[i] + options.BandWidth : 0;
                     double width = bounds[i].Width + 2 * extra, height = bounds[i].Height;
                     page.SetSize(width, height);
+                    Log.Info("Film PDF page: requested=" + width.ToString("R", CultureInfo.InvariantCulture) + "x" +
+                        height.ToString("R", CultureInfo.InvariantCulture) + " mm; Corel page=" +
+                        Convert.ToDouble(page.SizeWidth).ToString("R", CultureInfo.InvariantCulture) + "x" +
+                        Convert.ToDouble(page.SizeHeight).ToString("R", CultureInfo.InvariantCulture) + " mm.");
                     double pageLeft = Convert.ToDouble(page.LeftX), pageBottom = Convert.ToDouble(page.BottomY);
                     // Clipboard placement can use a different origin. Move by
                     // the actual copied bbox while retaining the reserved caption bottom.
@@ -133,6 +135,11 @@ namespace VanyaTools.Native
                     frame.Fill.UniformColor.CMYKAssign(0, 0, 0, 0); frame.Outline.SetNoOutline(); frame.OrderToBack(); all.Add(frame);
                     all.CreateSelection();
                     string pdf = Path.Combine(Path.GetTempPath(), "Vanya-film-" + jobId + "-" + i + ".pdf"); temporary.Add(pdf);
+                    // Read/configure PDF settings after sizing this output page;
+                    // a fresh document initially has the default A4 page size.
+                    object settings = output.PDFSettings;
+                    ((dynamic)settings).Reset();
+                    Configure(settings);
                     output.PublishToPDF(pdf);
                     using (Stream stream = File.OpenRead(pdf))
                     {
@@ -146,14 +153,18 @@ namespace VanyaTools.Native
                 // Finish all COM work before yielding to the UI for PDF processing.
                 // Otherwise finally could reset Dirty after edits made during await.
                 RestoreCorel();
-                Directory.CreateDirectory(folder);
+                if (toRip) folder = FilmRipSettings.RequireFolder(folder);
+                else Directory.CreateDirectory(folder);
+                string ripSuffix = toRip ? " - " + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture) +
+                    "-" + jobId.Substring(0, 8) : "";
                 for (int i = 0; i < rendered.Count; i++)
                 {
                     RenderedFilm film = rendered[i];
                     string normalized = Path.Combine(Path.GetTempPath(), "Vanya-film-" + jobId + "-" + i + "-ready.pdf");
                     temporary.Add(normalized);
                     await FilmPdfNormalizer.Normalize(film.Path, normalized, film.Width, film.Height);
-                    string target = Available(folder, film.Name, destinations);
+                    string name = toRip && film.Name.Length > 150 ? film.Name.Substring(0, 150).TrimEnd() : film.Name;
+                    string target = Available(folder, name + ripSuffix, destinations);
                     string stage = Path.Combine(folder, ".Vanya-film-" + jobId + "-" + i + ".partial"); staging.Add(stage);
                     File.Copy(normalized, stage); destinations.Add(target);
                 }
@@ -164,7 +175,9 @@ namespace VanyaTools.Native
             catch (Exception error)
             {
                 if (result.Paths.Count > 0)
-                    throw new InvalidOperationException("Часть серии уже сохранена. Перед повтором проверьте эти PDF:\n" +
+                    throw new InvalidOperationException((toRip ?
+                        "Часть серии уже передана в RIP. Перед повторной отправкой проверьте очередь RIP для этих файлов:\n" :
+                        "Часть серии уже сохранена. Перед повтором проверьте эти PDF:\n") +
                         String.Join("\n", result.Paths) + "\nОшибка: " + error.GetBaseException().Message, error);
                 throw;
             }
@@ -182,7 +195,9 @@ namespace VanyaTools.Native
             // The legacy ICC setter is E_NOTIMPL. The bundled PDF tool replaces
             // ICCBased spaces with device spaces without changing channel samples.
             var values = new Dictionary<string, object> {
-                { "pdfVersion", 8 }, { "PublishRange", 2 }, { "UsePageBoundingBox", false }, { "BitmapCompression", 0 },
+                // This page contains only copies of the selected output. Use its
+                // explicit size instead of letting Corel recalculate selection bounds.
+                { "pdfVersion", 8 }, { "PublishRange", 1 }, { "UsePageBoundingBox", true }, { "BitmapCompression", 0 },
                 { "DownsampleColor", false }, { "DownsampleGray", false }, { "DownsampleMono", false },
                 { "TextAsCurves", true }, { "CompressText", false }, { "ComplexFillsAsBitmaps", false },
                 { "ColorMode", 3 }, { "OutputSpotColorsAs", 0 }, { "Overprints", false }, { "OverprintBlackLimit", 0 }, { "Halftones", false },

@@ -31,6 +31,21 @@ namespace VanyaTools.Native
                 if (process.ExitCode != 0 || !File.Exists(output))
                 {
                     Log.Info("Film PDF normalization failed: " + detail);
+                    if (process.ExitCode == 2)
+                    {
+                        string diagnostic = "";
+                        try
+                        {
+                            string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VanyaTools", "Diagnostics");
+                            Directory.CreateDirectory(directory);
+                            diagnostic = Path.Combine(directory, "FilmPdfSizeError.pdf");
+                            File.Copy(input, diagnostic, true);
+                            Log.Info("Film PDF size diagnostic: " + diagnostic);
+                        }
+                        catch (Exception errorCopy) { Log.Error("Could not retain film size diagnostic.", errorCopy); diagnostic = ""; }
+                        throw new InvalidOperationException("Размер страницы PDF не совпадает с фотовыводом 1:1. " + detail.Trim() +
+                            (diagnostic.Length == 0 ? "" : "\nPDF для диагностики: " + diagnostic));
+                    }
                     throw new InvalidOperationException("Не удалось подготовить PDF без ICC-профилей: " + detail.Trim());
                 }
             }
