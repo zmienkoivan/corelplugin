@@ -24,7 +24,7 @@ namespace VanyaTools.Native
         // Shared PDF publisher: ordinary CDRs need no sport markers or page names.
         // DTF/UV deliberately have no fallback from an empty selection to a whole page.
         internal static Result Export(string folder, int dpi, bool selectionOrPage,
-            bool selectionOnly, bool sportPage = false, string processName = "DTF")
+            bool selectionOnly, bool sportPage = false, string processName = "DTF", Func<string, bool> confirmPage = null)
         {
             if (dpi != 150 && dpi != 300)
                 throw new InvalidOperationException("Выберите качество экспорта 150 или 300 DPI.");
@@ -40,6 +40,18 @@ namespace VanyaTools.Native
             if (selectionOnly && !selected)
                 throw new InvalidOperationException("Для " + processName + " выделите объекты, которые нужно напечатать. Целая страница без выделения не отправляется.");
             string pageName = Convert.ToString(page.Name) ?? "";
+            if (selectionOrPage && !selected)
+            {
+                if (confirmPage == null)
+                    throw new InvalidOperationException("Для печати целого листа без выделения нужно подтверждение.");
+                string title = Convert.ToString(document.FileName) ?? "Документ";
+                string question = "Нет выделения. Печатаем активный лист?\n\n" + title + "\nЛист " +
+                    Convert.ToInt32(page.Index) + (String.IsNullOrWhiteSpace(pageName) ? "" : " · " + pageName);
+                if (!confirmPage(question)) throw new OperationCanceledException("Печать активного листа отменена.");
+                // Publish the page that was shown in the confirmation, even if
+                // Corel activates another document while closing the dialog.
+                document.Activate(); page.Activate();
+            }
             bool printPage = pageName.StartsWith("Спортформа · ", StringComparison.OrdinalIgnoreCase) ||
                 pageName.StartsWith("Допечатка · ", StringComparison.OrdinalIgnoreCase);
             int shapeCount = 0;

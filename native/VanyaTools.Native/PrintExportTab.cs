@@ -5,6 +5,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace VanyaTools.Native
 {
@@ -18,7 +19,9 @@ namespace VanyaTools.Native
         private readonly TextBlock[] _folders = new TextBlock[5];
         private readonly TextBlock _result;
         private readonly ComboBox _quality;
-        private bool _busy, _refreshing;
+        private readonly DispatcherTimer _selectionWatch = new DispatcherTimer(DispatcherPriority.Background) {
+            Interval = TimeSpan.FromMilliseconds(500) };
+        private bool _busy, _refreshing, _tabLoaded, _quickLoaded;
         internal FrameworkElement QuickButtons => _quickPanel;
 
         internal PrintExportTab(PrintExportSettings settings, Action<string, bool> status)
@@ -36,7 +39,7 @@ namespace VanyaTools.Native
             _panel.Children.Add(_quality);
             AddJob(0, "Экспортировать PDF для печати", null);
             DockerHelp.Add(_panel, "Если есть выделение, PDF включает только его и получает размер по его габаритам, включая обводки. " +
-                "Если выделения нет, экспортируется активная страница целиком, с её размером. Масштаб 1:1. " +
+                "Если выделения нет, перед экспортом активной страницы целиком появится подтверждение «Да / Нет». Масштаб 1:1. " +
                 "Работает с любыми документами CorelDRAW. Векторы сохраняются, текст выводится кривыми, растры сжимаются JPEG 95% и ограничиваются выбранным DPI.");
             _quickPanel = new StackPanel { Margin = new Thickness(0, 3, 0, 5) };
             var quick = DockerLayout.Cards(90, 5);
@@ -46,16 +49,23 @@ namespace VanyaTools.Native
             quick.Children.Add(CreateJobButton(3, "UV · зелёная", Color.FromRgb(34, 126, 72), true));
             quick.Children.Add(CreateJobButton(4, "UV · жёлтая", Color.FromRgb(242, 201, 76), true));
             _quickPanel.Children.Add(quick);
-            DockerHelp.Add(_quickPanel, "«Сублимация» экспортирует выделение, а если его нет — активную страницу любого CDR. " +
+            DockerHelp.Add(_quickPanel, "«Сублимация» экспортирует выделение, а если его нет — спрашивает, печатать ли активную страницу любого CDR. " +
                 "Используются папка обычной печати PDF и качество 150/300 DPI, выбранное во вкладке «Печать». " +
                 "Четыре цветные кнопки готовят PDF 1:1 только из выделения, каждая в свою папку. Красная и синяя — DTF, зелёная и жёлтая — UV. " +
-                "Надпись UV выделена маленькой пунктирной рамкой только в интерфейсе. Без выделения задание не отправляется. " +
+                "Надпись UV выделена маленькой пунктирной рамкой только в интерфейсе. Без выделения кнопки DTF и UV неактивны. " +
                 "Исходное разрешение растров сохраняется, используется ZIP без потерь. Страница целиком не растрируется, белый фон не добавляется. " +
                 "Исходные RGB/CMYK и прозрачность сохраняются; профиль материала, белый слой и зеркалирование настраиваются в RIP. " +
                 "Пять папок настраиваются в «Настройки → Печать PDF, DTF и UV». PDF появляется только после окончания записи.");
             _result = new TextBlock { FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
             _panel.Children.Add(_result);
             _settings.Changed += Refresh; Refresh();
+            _selectionWatch.Tick += (_, __) => UpdateAvailability();
+            Loaded += (_, __) => { _tabLoaded = true; UpdateSelectionWatch(); };
+            Unloaded += (_, __) => { _tabLoaded = false; UpdateSelectionWatch(); };
+            IsVisibleChanged += (_, __) => UpdateSelectionWatch();
+            _quickPanel.Loaded += (_, __) => { _quickLoaded = true; UpdateSelectionWatch(); };
+            _quickPanel.Unloaded += (_, __) => { _quickLoaded = false; UpdateSelectionWatch(); };
+            _quickPanel.IsVisibleChanged += (_, __) => UpdateSelectionWatch();
         }
 
         private static TextBlock Title(string text) => new TextBlock { Text = text, FontSize = 14,
@@ -79,7 +89,8 @@ namespace VanyaTools.Native
         private Button CreateJobButton(int index, string text, Color? color, bool compact = false)
         {
             var button = new Button { Content = compact && index > 0 ? index >= 3 ? "UV" : "DTF" : text,
-                MinHeight = 34, Margin = compact ? new Thickness(1) : new Thickness(0, 1, 0, 5) };
+                MinHeight = 34, IsEnabled = false, Margin = compact ? new Thickness(1) : new Thickness(0, 1, 0, 5) };
+            ToolTipService.SetShowOnDisabled(button, true);
             if (color.HasValue) DockerTheme.Accent(button, color.Value, index == 4);
             else if (!compact) DockerTheme.Primary(button);
             AutomationProperties.SetName(button, index == 0 ? text : text + " · экспорт выделения в папку");
@@ -117,12 +128,44 @@ namespace VanyaTools.Native
                     string[] names = { "Сублимация / печать PDF", "DTF · красная", "DTF · синяя", "UV · зелёная", "UV · жёлтая" };
                     string path = _settings.Folder(job.Key);
                     job.Value.ToolTip = new TextBlock { Text = names[job.Key] + "\n" +
-                        (job.Key == 0 ? "PDF 1:1: выделение или активная страница" : "PDF 1:1: только выделение") + "\n" +
+                        (job.Key == 0 ? "PDF 1:1: выделение или активная страница после подтверждения" :
+                            "PDF 1:1: только выделение. Выделите объекты в Corel, чтобы включить кнопку.") + "\n" +
                         (String.IsNullOrWhiteSpace(path) ? "Папка не выбрана. Откройте настройки печати." : path),
                         MaxWidth = 380, TextWrapping = TextWrapping.Wrap };
                 }
             }
             finally { _refreshing = false; }
+        }
+
+        private void UpdateSelectionWatch()
+        {
+            if ((_tabLoaded && IsVisible) || (_quickLoaded && _quickPanel.IsVisible))
+            {
+                UpdateAvailability(); _selectionWatch.Start();
+            }
+            else _selectionWatch.Stop();
+        }
+
+        private void UpdateAvailability()
+        {
+            if (_busy) return;
+            bool documentOpen = false, selected = false;
+            try
+            {
+                dynamic app = CorelApp.Get();
+                if (app.ActiveDocument != null)
+                {
+                    documentOpen = true;
+                    dynamic range = app.ActiveSelectionRange;
+                    selected = range != null && Convert.ToInt32(range.Count) > 0;
+                }
+            }
+            catch { documentOpen = selected = false; /* Corel can reject calls while a native dialog is open. */ }
+            foreach (var job in _jobs)
+            {
+                bool enabled = documentOpen && (job.Key == 0 || selected);
+                if (job.Value.IsEnabled != enabled) job.Value.IsEnabled = enabled;
+            }
         }
 
         private void Export(int index)
@@ -134,14 +177,17 @@ namespace VanyaTools.Native
                 string folder = PrintExportSettings.NormalizeFolder(_settings.Folder(index), true);
                 _status("Готовлю PDF для печати…", false);
                 var result = SportPrintExporter.Export(folder, _settings.PrintDpi == 150 ? 150 : 300, true, index != 0,
-                    processName: index >= 3 ? "UV" : "DTF");
+                    processName: index >= 3 ? "UV" : "DTF", confirmPage: question => MessageBox.Show(question,
+                        "Сублимация · печать активного листа", MessageBoxButton.YesNo, MessageBoxImage.Question,
+                        MessageBoxResult.No) == MessageBoxResult.Yes);
                 string text = "PDF 1:1 · " + result.WidthMm.ToString("0.##") + "×" + result.HeightMm.ToString("0.##") +
                     " мм · " + (result.Bytes / 1048576.0).ToString("0.##") + " МБ\n" + result.Path;
                 if (!String.IsNullOrEmpty(result.Warning)) text += "\n" + result.Warning;
                 _result.Text = text; _status("PDF отправлен в папку: " + result.Path, !String.IsNullOrEmpty(result.Warning));
             }
+            catch (OperationCanceledException) { _result.Text = "Печать активного листа отменена."; _status(_result.Text, false); }
             catch (Exception error) { Log.Error("Print PDF export failed.", error); _result.Text = error.Message; _status(error.Message, true); }
-            finally { _panel.IsEnabled = true; _quickPanel.IsEnabled = true; _busy = false; }
+            finally { _panel.IsEnabled = true; _quickPanel.IsEnabled = true; _busy = false; UpdateAvailability(); }
         }
 
         private void Safe(Action action)
