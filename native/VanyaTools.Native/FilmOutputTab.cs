@@ -24,6 +24,7 @@ namespace VanyaTools.Native
         private readonly CheckBox _fit, _exportBands;
         private readonly TextBlock _folder, _ripFolder, _progress;
         private readonly FilmMarksTable _marksTable;
+        private readonly FilmColorReview _colorReview;
         private bool _busy;
         private static readonly string SettingsPath = Path.Combine(Environment.GetFolderPath(
             Environment.SpecialFolder.LocalApplicationData), "VanyaTools", "film-output.json");
@@ -44,11 +45,12 @@ namespace VanyaTools.Native
                 MinHeight = 28, Margin = new Thickness(0, 5, 0, 4) };
             _panel.Children.Add(_mode);
             AddButton("Поставить / обновить метки и подпись…", () => {
-                List<FilmTarget> targets = FilmOutputService.Capture(_mode.SelectedIndex == 1);
+                List<FilmTarget> targets = Capture();
                 FilmOutputOptions options = ReadOptions();
                 if (Captions(targets))
                 {
                     FilmOutputService.Mark(targets, options);
+                    _colorReview.Clear();
                     Report("Метки и подписи поставлены: " + targets.Count + ".", false);
                 }
                 return Task.CompletedTask;
@@ -62,10 +64,11 @@ namespace VanyaTools.Native
             _marksTable = new FilmMarksTable(status);
             _panel.Children.Add(_marksTable);
             AddButton("Добавить / обновить боковые полосы", () => {
-                List<FilmTarget> targets = FilmOutputService.Capture(_mode.SelectedIndex == 1);
+                List<FilmTarget> targets = Capture();
                 FilmOutputOptions options = ReadOptions();
                 var gaps = targets.Select(t => FilmOutputService.BandGap(FilmOutputService.PrintBounds(t), options)).ToList();
                 FilmOutputService.AddBands(targets, options);
+                _colorReview.Clear();
                 Report("Полосы созданы: " + targets.Count + ". Зазор: " + String.Join(" / ", gaps.Select(g => g.ToString("0.##"))) + " мм.", false);
                 return Task.CompletedTask;
             });
@@ -75,16 +78,19 @@ namespace VanyaTools.Native
                 "На плёнке 605 мм можно уменьшать только зазор (минимум 2 мм), сохраняя рисунок 1:1. " +
                 "Если места всё равно нет, действие останавливается с указанием ширины. Непечатаемые поля принтера учитывайте в доступной ширине.");
             AddButton("Проверить цвета выделения", async () => {
-                List<FilmTarget> targets = FilmOutputService.Capture(_mode.SelectedIndex == 1);
+                List<FilmTarget> targets = Capture();
                 FilmColorReport report = await Check(targets);
                 Report(report.Errors > 0 ? "Найдены недопустимые цвета: " + report.Errors + "." :
                     report.Warnings > 0 ? "Цветных ошибок нет; есть предупреждения о полутонах." : "Цвета допустимы для фотовывода.", report.Errors > 0);
             });
+            _colorReview = new FilmColorReview(Run, Report, Recheck);
+            _panel.Children.Add(_colorReview);
             DockerHelp.Add(_panel, "Допустимые векторные цвета: C0 M0 Y0 K100 и белый RGB 255/255/255 либо CMYK 0/0/0/0. " +
                 "RGB-чёрный, составной чёрный и цветные/плашечные цвета отмечаются как ошибки. " +
                 "Нейтральные полутона, монохромные и нейтральные RGB-растры — предупреждения. " +
                 "Проверяются исходные пиксели без перевода цветовой модели; полностью прозрачные пиксели пропускаются. " +
-                "Неподдерживаемые заливки, эффекты и непрочитанные данные не считаются успешно проверенными. Цвета автоматически не меняются.");
+                "Неподдерживаемые заливки, эффекты и непрочитанные данные не считаются успешно проверенными. " +
+                "Список ошибок позволяет выделить объекты в Corel и по кнопке заменить недопустимые векторные цвета на K100.");
 
             var settings = new StackPanel { Margin = new Thickness(3) };
             _filmWidth = Field(settings, "Доступная ширина плёнки, мм", saved.FilmWidth);
@@ -134,12 +140,12 @@ namespace VanyaTools.Native
 
         private async Task Output(bool toRip)
         {
-            List<FilmTarget> targets = FilmOutputService.Capture(_mode.SelectedIndex == 1);
+            List<FilmTarget> targets = Capture();
             FilmOutputOptions options = ReadOptions();
             string folder = toRip ? FilmRipSettings.RequireFolder(_ripSettings.HotFolder) : Folder();
             FilmColorReport colors = await Check(targets);
             if (colors.Errors > 0)
-            { Report((toRip ? "В RIP не передано" : "PDF не создан") + ": исправьте ошибки проверки цветов.", true); return; }
+            { Report((toRip ? "В RIP не передано" : "PDF не создан") + ": откройте список ошибок цветов выше; объекты можно выделить и исправить.", true); return; }
             _progress.Text = toRip ? "Готовлю PDF для папки RIP…" : "Создаю PDF фотовывода…";
             FilmExportResult result = await FilmPdfExporter.Export(targets, options, folder, toRip);
             _report.Text = colors + "\n" + String.Join("\n", result.Notes) + (toRip ? "\nПередано в RIP:\n" : "\nPDF:\n") + String.Join("\n", result.Paths);
@@ -150,26 +156,37 @@ namespace VanyaTools.Native
 
         private async Task<FilmColorReport> Check(List<FilmTarget> targets)
         {
-            FilmColorReport result = await FilmColorValidator.Check(targets.SelectMany(FilmOutputService.PrintShapes),
+            return await Recheck(new FilmColorScope(targets));
+        }
+        private async Task<FilmColorReport> Recheck(FilmColorScope scope)
+        {
+            FilmColorReport result = await FilmColorValidator.Check(scope.Roots(),
                 text => _progress.Text = text);
-            _report.Text = result.ToString(); return result;
+            _report.Text = result.ToString(); _colorReview.Show(scope, result); return result;
+        }
+        private List<FilmTarget> Capture()
+        {
+            _colorReview?.RestoreIfHighlighted();
+            return FilmOutputService.Capture(_mode.SelectedIndex == 1);
         }
         private void AddButton(string text, Func<Task> action, bool primary = false)
         {
             var button = new Button { Content = text, Margin = new Thickness(0, 1, 0, 3) };
             if (primary) DockerTheme.Primary(button);
-            button.Click += async (_, __) => {
-                if (_busy) return;
-                try
-                {
-                    if (!_marksTable.CommitPending()) return;
-                    _busy = true; _panel.IsEnabled = false;
-                    await action();
-                }
-                catch (Exception error) { Log.Error("Film output action failed.", error); Report(error.Message, true); }
-                finally { _panel.IsEnabled = true; _busy = false; _marksTable.Refresh(); }
-            };
+            button.Click += async (_, __) => await Run(action);
             _panel.Children.Add(button);
+        }
+        private async Task Run(Func<Task> action)
+        {
+            if (_busy) return;
+            try
+            {
+                if (!_marksTable.CommitPending()) return;
+                _busy = true; _panel.IsEnabled = false;
+                await action();
+            }
+            catch (Exception error) { Log.Error("Film output action failed.", error); Report(error.Message, true); }
+            finally { _panel.IsEnabled = true; _busy = false; _marksTable.Refresh(); }
         }
         private void Report(string message, bool error)
         { _progress.Text = message; _progress.Foreground = error ? Brushes.Firebrick : Brushes.DarkSlateGray; _status(message, error); }
