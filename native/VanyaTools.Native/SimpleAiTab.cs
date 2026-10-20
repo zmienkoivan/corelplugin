@@ -90,7 +90,8 @@ namespace VanyaTools.Native
 
         public SimpleAiTab(Func<string> capture, Func<string> token,
             Func<string, string, string> import, Action<string, bool> status, SimpleAiMode mode,
-            Func<string, string, string> importDtf = null, DtfOutlineSettings outlineSettings = null)
+            Func<string, string, string> importDtf = null, DtfOutlineSettings outlineSettings = null,
+            FrameworkElement printButtons = null)
         {
             _capture = capture; _token = token; _import = import;
             _importDtf = importDtf ?? import; _status = status;
@@ -158,6 +159,7 @@ namespace VanyaTools.Native
                 panel.Children.Add(Label("Модель удаления фона", false));
                 panel.Children.Add(_backgroundModel);
                 panel.Children.Add(new Separator { Margin = new Thickness(0, 4, 0, 2) });
+                if (printButtons != null) panel.Children.Add(printButtons);
                 panel.Children.Add(Label("ДТФ", true));
             }
             _alphaButton = Button("Убрать полупрозрачность", async (_, __) => await RemoveSemiTransparent());

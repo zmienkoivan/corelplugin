@@ -108,6 +108,7 @@ namespace VanyaTools.Native
             var outlineSettings = DtfOutlineSettings.Load();
             var filmRipSettings = FilmRipSettings.Load();
             var printExportSettings = PrintExportSettings.Load();
+            var printExport = new PrintExportTab(printExportSettings, SetStatus);
             settings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
             settings.Children.Add(Button("Восстановить кнопки на панели Corel", (_, __) =>
             {
@@ -203,7 +204,7 @@ namespace VanyaTools.Native
             tabs.Items.Add(ThumbnailTabs.Create("Фотовывод", ThumbnailTabs.FilmOutput,
                 Color.FromRgb(35, 35, 35), new FilmOutputTab(() => orderCards.FilmOutputYearFolder, filmRipSettings, SetStatus)));
             tabs.Items.Add(ThumbnailTabs.Create("Печать", ThumbnailTabs.Print,
-                Color.FromRgb(56, 105, 145), new PrintExportTab(printExportSettings, SetStatus)));
+                Color.FromRgb(56, 105, 145), printExport));
             Func<SimpleAiMode, ScrollViewer> photoTools = mode =>
                 new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                     Content = new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
@@ -278,7 +279,8 @@ namespace VanyaTools.Native
 
             root.Children.Add(new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
                 () => aiTools.GetToken(), ImportAiResult,
-                (message, isError) => SetStatus(message, isError), SimpleAiMode.Raster, ImportDtfResult, outlineSettings));
+                (message, isError) => SetStatus(message, isError), SimpleAiMode.Raster, ImportDtfResult, outlineSettings,
+                printExport.QuickButtons));
 
             root = stickerTools;
             AddSectionTitle(root, "Подготовка стикерпака");

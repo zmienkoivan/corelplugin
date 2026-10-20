@@ -38,7 +38,7 @@ namespace VanyaTools.Native
             string path = (value ?? "").Trim().Trim('"');
             if (path.Length == 0)
             {
-                if (requireAvailable) throw new InvalidOperationException("Выберите папку этой кнопки: «Печать → Папка…» или «Настройки → Печать PDF, DTF и UV».");
+                if (requireAvailable) throw new InvalidOperationException("Укажите папку этой кнопки в «Настройки → Печать PDF, DTF и UV · папки».");
                 return "";
             }
             string root = Path.GetPathRoot(path) ?? "";
@@ -85,7 +85,7 @@ namespace VanyaTools.Native
         internal FrameworkElement CreateSettingsView(Action<string, bool> status)
         {
             var panel = new StackPanel { Margin = new Thickness(4) };
-            string[] titles = { "Печать PDF", "DTF · красная", "DTF · синяя", "UV · зелёная", "UV · жёлтая" };
+            string[] titles = { "Сублимация / печать PDF", "DTF · красная", "DTF · синяя", "UV · зелёная", "UV · жёлтая" };
             var fields = new TextBox[5];
             void Safe(Action action)
             {
@@ -116,7 +116,8 @@ namespace VanyaTools.Native
                 Commit(next); status("Папки PDF и четырёх кнопок DTF/UV сохранены на этом компьютере.", false);
             });
             panel.Children.Add(save);
-            DockerHelp.Add(panel, "Вкладка «Печать» работает с любым открытым CDR. У обычной печати своя папка; у четырёх цветных кнопок DTF/UV — ещё четыре отдельные папки. " +
+            DockerHelp.Add(panel, "На главной вкладке над корректировками находятся пять кнопок. «Сублимация» использует папку обычной печати PDF, " +
+                "сохранённую в 1.1.45; у четырёх цветных кнопок DTF/UV — ещё четыре отдельные папки. Все действия работают с любым открытым CDR. " +
                 "Можно указать папки приёма заданий RIP. Пустой путь отключает отправку этой кнопкой. Существующие PDF не заменяются. " +
                 "Эти настройки независимы от архива спортформы и hot folder фотовывода.");
             var expander = new Expander { Header = "Печать PDF, DTF и UV · папки", Content = panel, IsExpanded = false,
