@@ -34,6 +34,7 @@ namespace VanyaTools.Native
             public string NeckArtworkPath { get; set; }
             public string ModelPath { get; set; }
             public int? ArtworkMaxMegapixels { get; set; }
+            public bool RasterArtworkCapture { get; set; }
             public bool? RotateSleeves { get; set; }
             public bool? CutAllow180 { get; set; }
             public bool? CutSizeTags { get; set; }
@@ -91,7 +92,7 @@ namespace VanyaTools.Native
         private readonly TextBox _sheetWidth, _cutSheetWidth, _maxPageLength, _gap, _printFolder, _cutFolder;
         private readonly TextBox _tagWidth, _tagHeight, _tagBridge, _tagLetter, _tagFirstOffset, _tagSizeStep;
         private readonly ComboBox _nameSide, _frontCase, _batchSize, _printQuality;
-        private readonly ComboBox _artworkLimit;
+        private readonly ComboBox _artworkLimit, _artworkCapture;
         private readonly ComboBox _nestingMode, _groupingMode, _cutNestingMode, _cutGroupingMode;
         private readonly TextBlock _pdfProgress;
         // Kept only for older masters with rectangle zones; text samples use Corel attributes.
@@ -181,11 +182,23 @@ namespace VanyaTools.Native
             DockerHelp.Add(panel, "Выберите файл или выделите готовый рисунок в Corel и нажмите " +
                 "«Взять выделение» для нужной детали. На странице-макете рисунок " +
                 "лежит под контуром; выступающие края обрежутся при генерации. " +
-                "Выделение снимается в PNG 300 DPI; исходные объекты не меняются.");
+                "По умолчанию копируются сами объекты в CDR: текст, кривые, заливки и группы остаются редактируемыми. " +
+                "Встроенные растры сохраняются растрами; автоматической трассировки нет. Исходный рисунок не меняется.");
+            _artworkCapture = new ComboBox { MinHeight = 27, ItemsSource = new[] {
+                "Объекты Corel · редактируемые", "PNG · снимок 300 DPI" }, SelectedIndex = 0 };
+            panel.Children.Add(DockerLayout.FieldRow("Из выделения Corel", _artworkCapture, 0));
             _artworkLimit = new ComboBox { Width = 90, MinHeight = 27, FontSize = 12,
                 Margin = new Thickness(3, 0, 0, 0), ItemsSource = new[] { 100, 150, 200, 250 }, SelectedItem = 150 };
-            panel.Children.Add(DockerLayout.FieldRow("Предел захвата рисунка, Мп", _artworkLimit, 94));
-            DockerHelp.Add(panel, "По умолчанию 150 Мп. Для тяжёлых рисунков можно выбрать до 250 Мп. " +
+            var artworkLimitRow = DockerLayout.FieldRow("Предел захвата PNG, Мп", _artworkLimit, 94);
+            artworkLimitRow.Visibility = Visibility.Collapsed; panel.Children.Add(artworkLimitRow);
+            _artworkCapture.SelectionChanged += (_, __) => {
+                artworkLimitRow.Visibility = _artworkCapture.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
+                SaveDraft();
+            };
+            DockerHelp.Add(panel, "Режим объектов сохраняет выделение отдельным CDR в папке рисунков плагина и не зависит от DPI или лимита мегапикселей. " +
+                "Каждый размер получает независимую группу рисунка: выберите элемент внутри группы через Ctrl+щелчок и поправьте его. " +
+                "Сохраняйте внешнюю группу рисунка детали, чтобы этап 2 использовал ваши изменения. " +
+                "Для PNG по умолчанию 150 Мп. Для тяжёлых рисунков можно выбрать до 250 Мп. " +
                 "Перед захватом проверяется свободная ОЗУ и доступная память Windows; " +
                 "DPI автоматически не уменьшается. Предел относится к одному захвату, а не ко всей раскладке.");
             _frontArt = ArtworkField(panel, "Перед", "переда", SportLayoutPart.Front);
@@ -198,7 +211,10 @@ namespace VanyaTools.Native
                 "горловины", SportLayoutPart.Neck);
             DockerHelp.Add(panel, "Крестик убирает рисунок только у выбранной детали. " +
                 "Пустое поле оставляет деталь без печатного рисунка; на готовой обзорной " +
-                "странице рисунок убирается сразу.");
+                "странице рисунок убирается сразу. «Обновить в макетах» заменяет рисунок этой детали " +
+                "только в уже подготовленных размерах отмеченных игроков. Ручные правки заменяемого рисунка будут сброшены; " +
+                "лекала, текстовые образцы и подписи сохраняются. Замену можно отменить одним Ctrl+Z. " +
+                "Для старых PNG возьмите исходный вектор заново и нажмите эту кнопку; сам PNG вектором не становится.");
             _prepare = DockerTheme.Primary(Button("Этап 1 · Подготовить / добавить размеры", Prepare));
             panel.Children.Add(_prepare);
             DockerHelp.Add(panel, "Этап 1 берёт только размеры строк с галочкой «Печатать» в таблице игроков. " +
@@ -1012,9 +1028,30 @@ namespace VanyaTools.Native
             Grid.SetColumn(clear, 2);
             row.Children.Add(clear);
             panel.Children.Add(row);
-            panel.Children.Add(Button("Взять выделение из Corel", (_, __) =>
-                CaptureArtwork(field, partName)));
+            var actions = DockerLayout.Cards(165, 2);
+            actions.Children.Add(Button("Взять выделение из Corel", (_, __) => CaptureArtwork(field, partName)));
+            actions.Children.Add(Button("Обновить в макетах", (_, __) => ReplaceArtwork(field, partName, part)));
+            panel.Children.Add(actions);
             return field;
+        }
+
+        private void ReplaceArtwork(TextBox field, string partName, SportLayoutPart part)
+        {
+            if (_busy) return;
+            if (!_playerGrid.CommitEdit(DataGridEditingUnit.Cell, true) || !_playerGrid.CommitEdit(DataGridEditingUnit.Row, true) ||
+                !_templateGrid.CommitEdit(DataGridEditingUnit.Cell, true) || !_templateGrid.CommitEdit(DataGridEditingUnit.Row, true))
+            { _status("Закончите редактирование таблицы.", true); return; }
+            _busy = true; SetActionButtons(false);
+            try
+            {
+                var templates = SportLayoutService.RequestedTemplates(_templates, _players);
+                int changed = new SportLayoutService().ReplacePreparedArtwork(part, field.Text.Trim(), templates.Select(t => t.Size));
+                if (changed == 0) { _status("Нет готовых макетов выбранных размеров. Сначала выполните этап 1.", true); return; }
+                ClearCompletedSteps(3, 4);
+                _status("Рисунок " + partName + " обновлён в размерах: " + changed + ". Поправьте объекты и создайте печать заново.", false);
+            }
+            catch (Exception error) { Log.Error("Could not replace prepared sport artwork.", error); _status(error.Message, true); }
+            finally { _busy = false; SetActionButtons(true); }
         }
 
         private void ClearArtwork(TextBox field, string partName, SportLayoutPart part)
@@ -1040,7 +1077,7 @@ namespace VanyaTools.Native
         private static void BrowseArtwork(TextBox field)
         {
             var dialog = new OpenFileDialog { Filter =
-                "Изображения (*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp)|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp|Все файлы (*.*)|*.*",
+                "Рисунки CDR и изображения|*.cdr;*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp|CorelDRAW (*.cdr)|*.cdr|Изображения|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp|Все файлы (*.*)|*.*",
                 CheckFileExists = true };
             if (dialog.ShowDialog() == true) field.Text = dialog.FileName;
         }
@@ -1052,6 +1089,12 @@ namespace VanyaTools.Native
             _busy = true; SetActionButtons(false);
             try
             {
+                if (_artworkCapture.SelectedIndex != 1)
+                {
+                    field.Text = SportArtworkCapture.CaptureObjects();
+                    _status("Рисунок " + partName + " взят объектами CDR. После этапа 1 его можно редактировать отдельно в каждом размере.", false);
+                    return;
+                }
                 int megapixels = _artworkLimit.SelectedItem is int value ? value : 150;
                 temporary = AiSelectionCapture.CaptureForArtwork(300, checked(megapixels * 1000000));
                 string folder = Path.Combine(Environment.GetFolderPath(
@@ -1191,6 +1234,7 @@ namespace VanyaTools.Native
             _tagSamples.IsEnabled = enabled;
             _expandPlayers.IsEnabled = enabled;
             _artworkLimit.IsEnabled = enabled;
+            _artworkCapture.IsEnabled = enabled;
         }
 
         private async void CreateTagSamples(object sender, RoutedEventArgs e)
@@ -1509,7 +1553,7 @@ namespace VanyaTools.Native
                 _leftSleeveArt == null || _rightSleeveArt == null ||
                 _neckArt == null || _modelPath == null || _rotateSleeves == null ||
                 _sheetWidth == null || _cutSheetWidth == null || _maxPageLength == null || _gap == null || _nameSide == null || _frontCase == null ||
-                _printFolder == null || _cutFolder == null || _printQuality == null || _artworkLimit == null ||
+                _printFolder == null || _cutFolder == null || _printQuality == null || _artworkLimit == null || _artworkCapture == null ||
                 _keepGuides == null || _cutAllow180 == null || _cutSizeTags == null ||
                 _tagWidth == null || _tagHeight == null || _tagBridge == null || _tagLetter == null ||
                 _tagFirstOffset == null || _tagSizeStep == null ||
@@ -1527,6 +1571,7 @@ namespace VanyaTools.Native
                     RightSleeveArtworkPath = _rightSleeveArt.Text,
                     NeckArtworkPath = _neckArt.Text, ModelPath = _modelPath.Text,
                     ArtworkMaxMegapixels = _artworkLimit.SelectedItem is int value ? value : 150,
+                    RasterArtworkCapture = _artworkCapture.SelectedIndex == 1,
                     RotateSleeves = _rotateSleeves.IsChecked == true,
                     CutAllow180 = _cutAllow180.IsChecked == true,
                     CutSizeTags = _cutSizeTags.IsChecked == true,
@@ -1580,6 +1625,7 @@ namespace VanyaTools.Native
                         _modelPath.Text = draft.ModelPath ?? "";
                         int artworkLimit = draft.ArtworkMaxMegapixels ?? 150;
                         _artworkLimit.SelectedItem = new[] { 100, 150, 200, 250 }.Contains(artworkLimit) ? artworkLimit : 150;
+                        _artworkCapture.SelectedIndex = draft.RasterArtworkCapture ? 1 : 0;
                         _rotateSleeves.IsChecked = draft.RotateSleeves ?? true;
                         _cutAllow180.IsChecked = draft.CutAllow180 ?? true;
                         _cutSizeTags.IsChecked = draft.CutSizeTags ?? true;

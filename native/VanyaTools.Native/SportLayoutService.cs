@@ -193,6 +193,18 @@ namespace VanyaTools.Native
         }
 
         public int ClearPreparedArtwork(SportLayoutPart part)
+            => UpdatePreparedArtwork(part, null, null);
+
+        public int ReplacePreparedArtwork(SportLayoutPart part, string path, IEnumerable<string> sizes)
+        {
+            if (String.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                throw new InvalidOperationException("Сначала возьмите рисунок из Corel или выберите существующий файл.");
+            var requested = new HashSet<string>(sizes.Select(NormalizeSize), StringComparer.OrdinalIgnoreCase);
+            if (requested.Count == 0) throw new InvalidOperationException("Выберите размеры в таблице игроков.");
+            return UpdatePreparedArtwork(part, path, requested);
+        }
+
+        private int UpdatePreparedArtwork(SportLayoutPart part, string path, HashSet<string> requested)
         {
             dynamic app = CorelApp.Get();
             dynamic document = app.ActiveDocument;
@@ -206,20 +218,22 @@ namespace VanyaTools.Native
             dynamic previousPage = document.ActivePage;
             int previousUnit = Convert.ToInt32(document.Unit);
             int changed = 0;
-            bool commandStarted = false;
+            bool commandStarted = false, touched = false, succeeded = false;
+            var destinations = new List<Tuple<object, object, object, HashSet<int>>>();
+            var replacements = new List<object>();
             try
             {
                 document.Unit = CorelConstants.CdrMillimeter;
-                document.BeginCommandGroup("Vanya Tools - убрать рисунок " + key);
-                commandStarted = true;
-                overview.Activate();
                 foreach (dynamic layer in overview.Layers)
                 {
-                    if (!Convert.ToString(layer.Name).StartsWith(SizeLayerPrefix,
-                        StringComparison.OrdinalIgnoreCase)) continue;
+                    string layerName = Convert.ToString(layer.Name);
+                    if (!layerName.StartsWith(SizeLayerPrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (requested != null && !requested.Contains(NormalizeSize(layerName.Substring(SizeLayerPrefix.Length)))) continue;
                     dynamic contour = null, artwork = null;
+                    var ids = new HashSet<int>();
                     foreach (dynamic shape in layer.Shapes)
                     {
+                        ids.Add(Convert.ToInt32(shape.StaticID));
                         string name = Convert.ToString(shape.Name);
                         if (String.Equals(name, "VT_SPORT_CONTOUR_" + key,
                             StringComparison.OrdinalIgnoreCase)) contour = shape;
@@ -227,16 +241,46 @@ namespace VanyaTools.Native
                             StringComparison.OrdinalIgnoreCase)) artwork = shape;
                     }
                     if (contour == null) continue;
-                    if (artwork != null) artwork.Delete();
-                    AddMasterArtwork(app, layer, null, Describe(contour), key);
+                    destinations.Add(Tuple.Create((object)layer, (object)contour, (object)artwork, ids));
+                }
+                if (destinations.Count == 0) return 0;
+                document.BeginCommandGroup("Vanya Tools - " + (path == null ? "убрать" : "обновить") + " рисунок " + key);
+                commandStarted = true; overview.Activate();
+                foreach (var destination in destinations)
+                {
+                    Piece replacement = AddMasterArtwork(app, (dynamic)destination.Item1, path, Describe((dynamic)destination.Item2), key);
+                    touched = true;
+                    replacements.Add((object)replacement.Shape);
+                    if (destination.Item3 != null) ((dynamic)destination.Item3).Delete();
                     changed++;
                 }
+                if (path != null)
+                {
+                    dynamic selected = app.CreateShapeRange(); foreach (object shape in replacements) selected.Add(shape);
+                    selected.CreateSelection();
+                }
+                succeeded = true;
+            }
+            catch
+            {
+                // If the very first import/grouping failed partway through,
+                // only undo when the target actually contains a new object.
+                if (!touched)
+                    foreach (var destination in destinations)
+                        foreach (dynamic shape in ((dynamic)destination.Item1).Shapes)
+                            if (!destination.Item4.Contains(Convert.ToInt32(shape.StaticID))) touched = true;
+                if (commandStarted)
+                {
+                    document.EndCommandGroup(); commandStarted = false;
+                    if (touched) document.Undo();
+                }
+                throw;
             }
             finally
             {
                 try { if (commandStarted) document.EndCommandGroup(); } catch { }
                 try { document.Unit = previousUnit; } catch { }
-                try { previousPage.Activate(); } catch { }
+                try { if (path != null && succeeded) overview.Activate(); else previousPage.Activate(); } catch { }
             }
             return changed;
         }
@@ -1663,8 +1707,8 @@ namespace VanyaTools.Native
         private static Piece AddOrCopyMasterArtwork(dynamic app, dynamic layer,
             string path, Piece part, string key, IDictionary<string, Piece> cache)
         {
-            // Import each large bitmap once per part. Subsequent sizes copy the
-            // prepared group within the same CDR instead of importing the PNG.
+            // Import each artwork source once per part. Subsequent sizes get
+            // independent copies of the editable group within this CDR.
             if (cache.TryGetValue(key, out Piece source))
             {
                 dynamic copy = source.Shape.CopyToLayer(layer);
@@ -2246,13 +2290,34 @@ namespace VanyaTools.Native
         {
             object targetLayer = layer;
             object importOptions = app.CreateStructImportOptions();
-            dynamic import = targetLayer.GetType().InvokeMember("ImportEx", BindingFlags.InvokeMethod,
-                null, targetLayer, new object[] { new BStrWrapper(System.IO.Path.GetFullPath(path)), 0, importOptions });
-            import.Finish();
-            dynamic image = app.ActiveShape;
-            if (image == null || Convert.ToInt32(image.Type) != CorelConstants.CdrBitmapShape)
-                throw new InvalidOperationException("CorelDRAW не импортировал рисунок как растр.");
-            return image;
+            bool native = String.Equals(System.IO.Path.GetExtension(path), ".cdr", StringComparison.OrdinalIgnoreCase);
+            var before = new HashSet<int>();
+            foreach (dynamic shape in layer.Shapes) before.Add(Convert.ToInt32(shape.StaticID));
+            try
+            {
+                importOptions.GetType().InvokeMember("MaintainLayers", BindingFlags.SetProperty,
+                    null, importOptions, new object[] { false });
+                dynamic import = targetLayer.GetType().InvokeMember("ImportEx", BindingFlags.InvokeMethod,
+                    null, targetLayer, new object[] { new BStrWrapper(System.IO.Path.GetFullPath(path)), 0, importOptions });
+                import.Finish();
+                dynamic added = app.CreateShapeRange();
+                foreach (dynamic shape in layer.Shapes)
+                    if (!before.Contains(Convert.ToInt32(shape.StaticID))) added.Add(shape);
+                int count = Convert.ToInt32(added.Count);
+                if (count == 0) throw new InvalidOperationException("CorelDRAW не импортировал объекты рисунка на слой размера.");
+                dynamic artwork = count == 1 ? added[1] : added.Group();
+                if (!native && Convert.ToInt32(artwork.Type) != CorelConstants.CdrBitmapShape)
+                    throw new InvalidOperationException("Выберите CDR с редактируемыми объектами или растровый рисунок PNG/JPG/TIFF/BMP.");
+                return artwork;
+            }
+            catch
+            {
+                var added = new List<object>();
+                foreach (dynamic shape in layer.Shapes)
+                    if (!before.Contains(Convert.ToInt32(shape.StaticID))) added.Add((object)shape);
+                foreach (dynamic shape in added) shape.Delete();
+                throw;
+            }
         }
 
         private static void PositionPattern(dynamic image, Piece piece)
