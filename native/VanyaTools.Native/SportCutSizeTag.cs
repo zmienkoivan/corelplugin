@@ -17,7 +17,7 @@ namespace VanyaTools.Native
             height * (.6 + Math.Max(0, text.Length - 1) * (5.0 / 6));
 
         internal static double WidthFor(string size, SportCutTagSettings settings) =>
-            Math.Max(settings.WidthMm, Math.Max(TextWidth(Label(size), settings.LetterHeightMm) + 4,
+            Math.Max(settings.WidthMm, Math.Max((settings.CutLabel ? TextWidth(Label(size), settings.LetterHeightMm) + 4 : 0),
                 4 * settings.BridgeMm + 4));
 
         private sealed class Segment
@@ -79,8 +79,8 @@ namespace VanyaTools.Native
         {
             settings.Validate();
             dynamic app = application, silhouette = silhouetteObject;
-            string label = Label(size);
-            double textWidth = TextWidth(label, settings.LetterHeightMm);
+            string label = settings.CutLabel ? Label(size) : (size ?? "").Trim();
+            double textWidth = settings.CutLabel ? TextWidth(label, settings.LetterHeightMm) : 0;
             double width = WidthFor(size, settings);
             if (Convert.ToInt32(silhouette.Type) != CorelConstants.CdrCurveShape) silhouette.ConvertToCurves();
             long silhouetteId = Convert.ToInt64(silhouette.StaticID);
@@ -208,8 +208,9 @@ namespace VanyaTools.Native
                 PointOnRun(location.Run, location.Origin, location.Along, x0 + width) });
             double textLeft = x0 + (width - textWidth) / 2;
             double baseline = (settings.HeightMm + settings.LetterHeightMm) / 2;
-            AppendLabel((object)curve, label, settings.LetterHeightMm,
-                (x, y) => location.World(textLeft + x, baseline - y));
+            if (settings.CutLabel)
+                AppendLabel((object)curve, label, settings.LetterHeightMm,
+                    (x, y) => location.World(textLeft + x, baseline - y));
             silhouette.Curve.CopyAssign(curve);
             GC.KeepAlive(sourceCurve);
             silhouette.Fill.ApplyNoFill();
@@ -218,7 +219,7 @@ namespace VanyaTools.Native
                 " mm, angle=" + (Math.Atan2(location.Along.Y, location.Along.X) * 180 / Math.PI)
                     .ToString("0.###", CultureInfo.InvariantCulture) +
                 ", tab=" + width.ToString("0.###", CultureInfo.InvariantCulture) + "x" + settings.HeightMm +
-                ", letter=" + settings.LetterHeightMm + ", bridges=" + settings.BridgeMm +
+                ", letter=" + (settings.CutLabel ? settings.LetterHeightMm.ToString(CultureInfo.InvariantCulture) : "none") + ", bridges=" + settings.BridgeMm +
                 ", left offset=" + leftOffsetMm + ", attachment edge left=" + edgeLeft + " mm.");
         }
 

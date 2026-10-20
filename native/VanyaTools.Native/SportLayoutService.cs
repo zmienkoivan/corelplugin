@@ -13,6 +13,7 @@ namespace VanyaTools.Native
     internal sealed class SportLayoutPlayer : INotifyPropertyChanged
     {
         private bool _printEnabled = true;
+        private bool _front = true, _back = true, _leftSleeve = true, _rightSleeve = true, _neck = true;
         public bool PrintEnabled
         {
             get => _printEnabled;
@@ -24,6 +25,42 @@ namespace VanyaTools.Native
         public string Name { get; set; }
         public string Number { get; set; }
         public int Quantity { get; set; }
+        public bool PrintFront { get => _front; set => Set(ref _front, value, nameof(PrintFront)); }
+        public bool PrintBack { get => _back; set => Set(ref _back, value, nameof(PrintBack)); }
+        public bool PrintLeftSleeve { get => _leftSleeve; set => Set(ref _leftSleeve, value, nameof(PrintLeftSleeve)); }
+        public bool PrintRightSleeve { get => _rightSleeve; set => Set(ref _rightSleeve, value, nameof(PrintRightSleeve)); }
+        public bool PrintNeck { get => _neck; set => Set(ref _neck, value, nameof(PrintNeck)); }
+        internal bool HasPrintedParts => PrintFront || PrintBack || PrintLeftSleeve || PrintRightSleeve || PrintNeck;
+        private void Set(ref bool field, bool value, string property)
+        {
+            if (field == value) return;
+            field = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
+        }
+        internal bool Prints(SportLayoutPart part)
+        {
+            switch (part)
+            {
+                case SportLayoutPart.Front: return PrintFront;
+                case SportLayoutPart.Back: return PrintBack;
+                case SportLayoutPart.LeftSleeve: return PrintLeftSleeve;
+                case SportLayoutPart.RightSleeve: return PrintRightSleeve;
+                case SportLayoutPart.Neck: return PrintNeck;
+                default: throw new ArgumentOutOfRangeException(nameof(part));
+            }
+        }
+        internal void SetPrinted(SportLayoutPart part, bool value)
+        {
+            switch (part)
+            {
+                case SportLayoutPart.Front: PrintFront = value; break;
+                case SportLayoutPart.Back: PrintBack = value; break;
+                case SportLayoutPart.LeftSleeve: PrintLeftSleeve = value; break;
+                case SportLayoutPart.RightSleeve: PrintRightSleeve = value; break;
+                case SportLayoutPart.Neck: PrintNeck = value; break;
+                default: throw new ArgumentOutOfRangeException(nameof(part));
+            }
+        }
+        internal static string PrintProperty(SportLayoutPart part) => "Print" + part;
     }
 
     internal sealed class SportLayoutTemplate
@@ -984,6 +1021,11 @@ namespace VanyaTools.Native
         {
             if (rows == null || rows.Count == 0)
                 throw new InvalidOperationException("Добавьте игроков в таблицу.");
+            if (!cutting && !selectedPart.HasValue)
+            {
+                rows = rows.Where(row => row != null && row.HasPrintedParts).ToList();
+                if (rows.Count == 0) throw new InvalidOperationException("В таблице не выбраны детали для печати. Галочки деталей не ограничивают резку.");
+            }
             if (templates == null || templates.Count == 0)
                 throw new InvalidOperationException("Добавьте CDR-шаблоны для размеров.");
             if (options == null || options.SheetWidthMm < 300 || options.SheetWidthMm > 4000)
@@ -1096,11 +1138,12 @@ namespace VanyaTools.Native
                                 cutPrepared);
                         else
                         {
-                            Garment garment = CopyGarment(source, outputLayer, selectedPart);
+                            Garment garment = CopyGarment(source, outputLayer, selectedPart, row);
                             Log.Info("Sport layout: garment copied, item " + (complete + 1));
                             kit = BuildNestedPieces(app, outputLayer, garment, row, size,
                                 complete + 1, options, scale, selectedPart, printPrepared);
                         }
+                        if (kit.Count == 0) continue;
                         foreach (var piece in kit) piece.GarmentIndex = complete + 1;
                         nested.AddRange(kit);
                         Log.Info("Sport layout: pieces built, item " + (complete + 1));
@@ -1109,6 +1152,8 @@ namespace VanyaTools.Native
                     }
                 }
 
+                if (nested.Count == 0)
+                    throw new InvalidOperationException("Нет выбранных деталей печати, присутствующих в макете. Проверьте галочки в таблице игроков.");
                 Log.Info("Sport layout: nesting " + nested.Count + " pieces");
                 var inputs = nested.Select(p => new SportSheetNesting.Item { Width = p.Width, Height = p.Height,
                     SmallPart = p.SmallPart, Allow90 = !cutting && p.CanRotate,
@@ -1409,13 +1454,13 @@ namespace VanyaTools.Native
         }
 
         private static Garment CopyGarment(Garment source, dynamic layer,
-            SportLayoutPart? selectedPart = null)
+            SportLayoutPart? selectedPart = null, SportLayoutPlayer printRow = null)
         {
-            bool front = !selectedPart.HasValue || selectedPart == SportLayoutPart.Front;
-            bool back = !selectedPart.HasValue || selectedPart == SportLayoutPart.Back;
-            bool left = !selectedPart.HasValue || selectedPart == SportLayoutPart.LeftSleeve;
-            bool right = !selectedPart.HasValue || selectedPart == SportLayoutPart.RightSleeve;
-            bool neck = !selectedPart.HasValue || selectedPart == SportLayoutPart.Neck;
+            bool front = selectedPart.HasValue ? selectedPart == SportLayoutPart.Front : printRow?.PrintFront ?? true;
+            bool back = selectedPart.HasValue ? selectedPart == SportLayoutPart.Back : printRow?.PrintBack ?? true;
+            bool left = selectedPart.HasValue ? selectedPart == SportLayoutPart.LeftSleeve : printRow?.PrintLeftSleeve ?? true;
+            bool right = selectedPart.HasValue ? selectedPart == SportLayoutPart.RightSleeve : printRow?.PrintRightSleeve ?? true;
+            bool neck = source.Neck != null && (selectedPart.HasValue ? selectedPart == SportLayoutPart.Neck : printRow?.PrintNeck ?? true);
             return new Garment {
                 Front = CopyOptional(front ? source.Front : null, layer),
                 Back = CopyOptional(back ? source.Back : null, layer),
@@ -2062,7 +2107,7 @@ namespace VanyaTools.Native
             IDictionary<string, SportPrintFootprint.Body> printPrepared)
         {
             var pieces = new List<NestedPiece>();
-            if (!selectedPart.HasValue || selectedPart == SportLayoutPart.Front)
+            if (garment.Front != null && (!selectedPart.HasValue || selectedPart == SportLayoutPart.Front))
             {
                 Piece frontName = options.FrontNameOnRight ? garment.FrontRight : garment.FrontLeft;
                 Piece extra = options.FrontNameOnRight ? garment.FrontLeft : garment.FrontRight;
@@ -2071,14 +2116,14 @@ namespace VanyaTools.Native
                     index, options, scale, frontName, null, null,
                     garment.FrontCaption, garment.CaptionReferences, printPrepared));
             }
-            if (!selectedPart.HasValue || selectedPart == SportLayoutPart.Back)
+            if (garment.Back != null && (!selectedPart.HasValue || selectedPart == SportLayoutPart.Back))
                 pieces.Add(BuildNestedPart(app, layer, garment.Back,
                     garment.BackNumber == null ? new[] { garment.BackText } :
                         new[] { garment.BackText, garment.BackNumber },
                     garment.BackArtwork, "СПИНА", row, size,
                     index, options, scale, null, garment.BackText, garment.BackNumber,
                     garment.BackCaption, garment.CaptionReferences, printPrepared));
-            if (!selectedPart.HasValue || selectedPart == SportLayoutPart.LeftSleeve)
+            if (garment.LeftSleeve != null && (!selectedPart.HasValue || selectedPart == SportLayoutPart.LeftSleeve))
             {
                 var sleeve = BuildNestedPart(app, layer, garment.LeftSleeve,
                     new[] { garment.LeftSleeveFrame }, garment.LeftSleeveArtwork,
@@ -2089,7 +2134,7 @@ namespace VanyaTools.Native
                 sleeve.SmallPart = true;
                 pieces.Add(sleeve);
             }
-            if (!selectedPart.HasValue || selectedPart == SportLayoutPart.RightSleeve)
+            if (garment.RightSleeve != null && (!selectedPart.HasValue || selectedPart == SportLayoutPart.RightSleeve))
             {
                 var sleeve = BuildNestedPart(app, layer, garment.RightSleeve,
                     new[] { garment.RightSleeveFrame }, garment.RightSleeveArtwork,

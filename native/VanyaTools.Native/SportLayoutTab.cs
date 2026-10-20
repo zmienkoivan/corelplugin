@@ -42,6 +42,7 @@ namespace VanyaTools.Native
             public string TagHeight { get; set; }
             public string TagBridge { get; set; }
             public string TagLetter { get; set; }
+            public bool? CutTagLetter { get; set; }
             public string TagFirstOffset { get; set; }
             public string TagSizeStep { get; set; }
             public string SheetWidth { get; set; }
@@ -86,6 +87,7 @@ namespace VanyaTools.Native
             new ObservableCollection<string>();
         private readonly ObservableCollection<SportLayoutPlayer> _players =
             new ObservableCollection<SportLayoutPlayer>();
+        private readonly Dictionary<SportLayoutPart, CheckBox> _partHeaderChecks = new Dictionary<SportLayoutPart, CheckBox>();
         private readonly DataGrid _templateGrid, _playerGrid;
         private readonly TextBox _frontArt, _backArt, _leftSleeveArt, _rightSleeveArt,
             _neckArt, _modelPath;
@@ -100,7 +102,7 @@ namespace VanyaTools.Native
         private SportTextStyle _legacyNumberStyle = LegacyStyle("Arial", 150, false);
         private bool _legacyTwoLines, _whiteCaptions;
         private double _legacyLineSpacing = 100;
-        private readonly CheckBox _keepGuides, _rotateSleeves, _cutAllow180, _cutSizeTags;
+        private readonly CheckBox _keepGuides, _rotateSleeves, _cutAllow180, _cutSizeTags, _tagCutLetter;
         private readonly TextBlock _count, _progress;
         private readonly Button _prepare, _generate, _generateCut, _saveCut, _exportPrint, _choosePrintFolder;
         private readonly Button _exportCut, _chooseCutFolder;
@@ -283,6 +285,10 @@ namespace VanyaTools.Native
             _playerGrid.Columns.Add(PartColumn("Прав. рук.", SportLayoutPart.RightSleeve));
             _playerGrid.Columns.Add(PartColumn("Горловина", SportLayoutPart.Neck));
             _playerEditor.Children.Add(_playerGrid);
+            DockerHelp.Add(playerControls, "Галочки в столбцах деталей задают только печать этой детали. " +
+                "Снятые детали остаются в полном комплекте резки. Галочка в заголовке меняет эту деталь сразу у всех строк; " +
+                "в ячейке — только у одного игрока. Общая галочка «Печатать» выбирает строку заказа для печати и резки. " +
+                "Кнопка ↗ создаёт отдельную деталь для допечатки по вашему запросу, независимо от галочки детали.");
             var playerButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 3) };
             playerButtons.Children.Add(Button("Добавить строку", (_, __) =>
             {
@@ -429,28 +435,42 @@ namespace VanyaTools.Native
             _cutAllow180 = new CheckBox { Content = "Разрешить поворот деталей резки на 180°",
                 FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
             panel.Children.Add(_cutAllow180);
-            _cutSizeTags = new CheckBox { Content = "Съёмный язычок с прорезным размером на каждой детали",
+            _cutSizeTags = new CheckBox { Content = "Съёмный язычок на каждой детали",
                 FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
             panel.Children.Add(_cutSizeTags);
             _tagWidth = TagField(panel, "Ширина язычка, мм", "24");
             _tagHeight = TagField(panel, "Высота язычка, мм (не меньше 12)", "12");
             _tagBridge = TagField(panel, "Длина каждого мостика, мм", "2");
             _tagLetter = TagField(panel, "Высота буквы, мм", "8");
+            _tagCutLetter = new CheckBox { Content = "Прорезать размер внутри язычка", IsChecked = true,
+                FontSize = 11, Margin = new Thickness(0, 1, 0, 4) };
+            panel.Children.Add(_tagCutLetter);
+            var largerTag = Button("Пресет 30×20 мм · мостики 4 мм", (_, __) => {
+                if (_busy) return;
+                bool wasLoading = _loading; _loading = true;
+                try { _tagWidth.Text = "30"; _tagHeight.Text = "20"; _tagBridge.Text = "4"; _tagLetter.Text = "8"; }
+                finally { _loading = wasLoading; }
+                SaveDraft();
+                _status("Выбран пробный язычок 30×20 мм, мостики по 4 мм. Проверьте его на листе образцов.", false);
+            });
+            panel.Children.Add(largerTag);
             _tagFirstOffset = TagField(panel, "Отступ первого размера слева, мм", "10");
             _tagSizeStep = TagField(panel, "Шаг следующих размеров, мм", "20");
             DockerHelp.Add(panel, "П-образный язычок без ножек; два непрорезанных мостика на линии детали. " +
                 "Надпись — однолинейные чертёжные знаки с трафаретными разрывами. " +
-                "Для длинного размера ширина увеличивается, высота букв сохраняется.");
+                "Для длинного размера ширина увеличивается, высота букв сохраняется. " +
+                "Без прорезной буквы площадка остаётся цельной; размер определяется положением язычка. " +
+                "Пресет 30×20 мм с мостиками 4 мм — кандидат для пробной резки, а не проверенный для любой ткани режим.");
             DockerHelp.Add(panel, "Левый угол крепления: 10, 30, 50 мм и далее от начала прямого нижнего края " +
                 "до поворота в раскладке. Порядок размеров — от меньшей площади силуэта переда к большей " +
                 "только среди размеров отмеченных игроков текущей резки. Отступ и шаг можно изменить. " +
                 "Если на заданном месте нет свободного прямого нижнего края, появится сообщение с размером и деталью.");
             _tagSamples = Button("Лист язычков для пробной резки", CreateTagSamples);
             panel.Children.Add(_tagSamples);
-            DockerHelp.Add(panel, "Новый лист: три ширины (текущая и ±4 мм), мостики 1 / 1,5 / 2 / 2,5 / 3 мм " +
-                "и заданная длина; ниже — примеры размеров S, XS, XL, XXL, 116, 128, 152. " +
-                "Код 24X12/B2 означает язычок 24×12 мм, два мостика по 2 мм. " +
-                "Все линии, включая код, — сквозная резка. Сохраните лист кнопкой CDR ниже.");
+            DockerHelp.Add(panel, "Сравнительный лист: 24×12 мм с мостиками 2 мм, 30×20 и 40×25 мм с мостиками 3 и 4 мм, " +
+                "пары с буквой M высотой 8 мм и без буквы; также текущие настройки и примеры S, XS, XL, XXL, 116, 128, 152. " +
+                "На самих образцах нет мелкого прорезного кода. Отдельная страница-памятка показывает размеры и положение образцов " +
+                "в той же сетке. Сохраняйте порядок образцов при разборе. В DXF отправляется только страница резки, памятка остаётся в CDR.");
             _generateCut = Button("Создать раскладку резки", GenerateCutting);
             panel.Children.Add(_generateCut);
             _saveCut = Button("Сохранить страницу резки в отдельный CDR…", SaveCutting);
@@ -514,6 +534,8 @@ namespace VanyaTools.Native
             _cutAllow180.Unchecked += (_, __) => SaveDraft();
             _cutSizeTags.Checked += (_, __) => SaveDraft();
             _cutSizeTags.Unchecked += (_, __) => SaveDraft();
+            _tagCutLetter.Checked += (_, __) => { _tagLetter.IsEnabled = true; SaveDraft(); };
+            _tagCutLetter.Unchecked += (_, __) => { _tagLetter.IsEnabled = false; SaveDraft(); };
             foreach (var field in new[] { _tagWidth, _tagHeight, _tagBridge, _tagLetter, _tagFirstOffset, _tagSizeStep })
                 field.TextChanged += (_, __) => SaveDraft();
             LoadDraft();
@@ -613,11 +635,14 @@ namespace VanyaTools.Native
             string players = json.Serialize(selected.Select(player => new {
                 Size = SportLayoutService.NormalizeSize(player.Size), Name = player.Name ?? "",
                 Number = player.Number ?? "", player.Quantity }).ToArray());
+            string printPlayers = json.Serialize(selected.Select(player => new {
+                Size = SportLayoutService.NormalizeSize(player.Size), Name = player.Name ?? "", Number = player.Number ?? "",
+                player.Quantity, player.PrintFront, player.PrintBack, player.PrintLeftSleeve, player.PrintRightSleeve, player.PrintNeck }).ToArray());
             string preparation = json.Serialize(new { Models = models,
                 Sizes = selected.Select(player => SportLayoutService.NormalizeSize(player.Size))
                     .Distinct().OrderBy(size => size, StringComparer.Ordinal).ToArray(),
                 Art = new[] { _frontArt.Text, _backArt.Text, _leftSleeveArt.Text, _rightSleeveArt.Text, _neckArt.Text } });
-            string printing = json.Serialize(new { Preparation = preparation, Players = players,
+            string printing = json.Serialize(new { Preparation = preparation, Players = printPlayers,
                 Width = _sheetWidth.Text, Gap = _gap.Text, Length = _maxPageLength.Text,
                 Rotate = _rotateSleeves.IsChecked, Guides = _keepGuides.IsChecked,
                 NameSide = _nameSide.SelectedIndex, NameCase = _frontCase.SelectedIndex,
@@ -626,6 +651,7 @@ namespace VanyaTools.Native
             string cutting = json.Serialize(new { Models = models, Players = players,
                 Width = _cutSheetWidth.Text, Gap = _gap.Text, Length = _maxPageLength.Text,
                 Rotate = _cutAllow180.IsChecked, Tags = _cutSizeTags.IsChecked,
+                CutTagLetter = _tagCutLetter.IsChecked,
                 Density = _cutNestingMode.SelectedIndex, Grouping = _cutGroupingMode.SelectedIndex,
                 Tag = new[] { _tagWidth.Text, _tagHeight.Text, _tagBridge.Text, _tagLetter.Text,
                     _tagFirstOffset.Text, _tagSizeStep.Text } });
@@ -896,7 +922,9 @@ namespace VanyaTools.Native
                 var row = previous == null ? new SportLayoutPlayer {
                     Size = namesOnly ? "" : defaultSize, Quantity = 1 } :
                     new SportLayoutPlayer { Size = previous.Size, Name = previous.Name,
-                        Number = previous.Number, Quantity = previous.Quantity, PrintEnabled = previous.PrintEnabled };
+                        Number = previous.Number, Quantity = previous.Quantity, PrintEnabled = previous.PrintEnabled,
+                        PrintFront = previous.PrintFront, PrintBack = previous.PrintBack, PrintLeftSleeve = previous.PrintLeftSleeve,
+                        PrintRightSleeve = previous.PrintRightSleeve, PrintNeck = previous.PrintNeck };
                 try
                 {
                     if (cells.TryGetValue(0, out string size)) row.Size = ResolvePastedSize(size, defaultSize);
@@ -1248,8 +1276,8 @@ namespace VanyaTools.Native
                 _progress.Text = "Создаю лист язычков для пробной резки…";
                 await Dispatcher.Yield(DispatcherPriority.Render);
                 int count = SportCutTagSamples.Create(settings);
-                _progress.Text = "Готово: " + count + " образца, высота буквы " + settings.LetterHeightMm + " мм.";
-                _status("Лист пробной резки язычков создан.", false);
+                _progress.Text = "Готово: " + count + " образцов и отдельная страница-памятка. Пары с буквой и без неё.";
+                _status("Сравнительный лист язычков и памятка созданы. Активен лист резки.", false);
             }
             catch (Exception error)
             {
@@ -1266,7 +1294,8 @@ namespace VanyaTools.Native
                 WidthMm = ParseMillimeters(_tagWidth.Text, 12, 150, "Ширина язычка"),
                 HeightMm = ParseMillimeters(_tagHeight.Text, 12, 50, "Высота язычка"),
                 BridgeMm = ParseMillimeters(_tagBridge.Text, .3, 5, "Длина каждого мостика"),
-                LetterHeightMm = ParseMillimeters(_tagLetter.Text, 3, 40, "Высота буквы"),
+                LetterHeightMm = _tagCutLetter.IsChecked == true ? ParseMillimeters(_tagLetter.Text, 3, 40, "Высота буквы") : 8,
+                CutLabel = _tagCutLetter.IsChecked == true,
                 FirstOffsetMm = ParseMillimeters(_tagFirstOffset.Text, 0, 500, "Отступ первого размера"),
                 SizeStepMm = ParseMillimeters(_tagSizeStep.Text, 0, 100, "Шаг следующих размеров")
             };
@@ -1404,6 +1433,9 @@ namespace VanyaTools.Native
             try
             {
                 var players = _players.Where(row => row.PrintEnabled).ToList();
+                if (!cutting) players = players.Where(row => row.HasPrintedParts).ToList();
+                if (players.Count == 0)
+                    throw new InvalidOperationException(cutting ? "Отметьте строку заказа галочкой «Печатать»." : "Выберите строки заказа и детали для печати.");
                 var templates = SportLayoutService.RequestedTemplates(_templates, players);
                 if (players.Count == 0)
                     throw new InvalidOperationException("Отметьте галочкой «Печатать» хотя бы одного игрока.");
@@ -1473,8 +1505,15 @@ namespace VanyaTools.Native
         private void UpdateCount()
         {
             _count.Text = _players.Count + " строк · отмечено " + _players.Count(row => row.PrintEnabled) +
-                " · к печати " + _players.Where(row => row.PrintEnabled)
-                    .Sum(row => Math.Max(0L, (long)row.Quantity)) + " комплектов";
+                " · к печати " + _players.Where(row => row.PrintEnabled && row.HasPrintedParts)
+                    .Sum(row => Math.Max(0L, (long)row.Quantity)) + " · к резке " +
+                _players.Where(row => row.PrintEnabled).Sum(row => Math.Max(0L, (long)row.Quantity)) + " комплектов";
+            foreach (var item in _partHeaderChecks)
+            {
+                int enabled = _players.Count(row => row.Prints(item.Key));
+                item.Value.IsChecked = enabled == 0 ? false : enabled == _players.Count ? true : (bool?)null;
+                item.Value.IsEnabled = _players.Count > 0;
+            }
         }
 
         private void PlayerChanged(object sender, PropertyChangedEventArgs e)
@@ -1554,7 +1593,7 @@ namespace VanyaTools.Native
                 _neckArt == null || _modelPath == null || _rotateSleeves == null ||
                 _sheetWidth == null || _cutSheetWidth == null || _maxPageLength == null || _gap == null || _nameSide == null || _frontCase == null ||
                 _printFolder == null || _cutFolder == null || _printQuality == null || _artworkLimit == null || _artworkCapture == null ||
-                _keepGuides == null || _cutAllow180 == null || _cutSizeTags == null ||
+                _keepGuides == null || _cutAllow180 == null || _cutSizeTags == null || _tagCutLetter == null ||
                 _tagWidth == null || _tagHeight == null || _tagBridge == null || _tagLetter == null ||
                 _tagFirstOffset == null || _tagSizeStep == null ||
                 _templateGrid == null || _playerGrid == null) return;
@@ -1577,6 +1616,7 @@ namespace VanyaTools.Native
                     CutSizeTags = _cutSizeTags.IsChecked == true,
                     TagWidth = _tagWidth.Text, TagHeight = _tagHeight.Text,
                     TagBridge = _tagBridge.Text, TagLetter = _tagLetter.Text,
+                    CutTagLetter = _tagCutLetter.IsChecked == true,
                     TagFirstOffset = _tagFirstOffset.Text, TagSizeStep = _tagSizeStep.Text,
                     SheetWidth = _sheetWidth.Text, Gap = _gap.Text,
                     CutSheetWidth = _cutSheetWidth.Text,
@@ -1633,6 +1673,7 @@ namespace VanyaTools.Native
                         _tagHeight.Text = draft.TagHeight ?? "12";
                         _tagBridge.Text = draft.TagBridge ?? "2";
                         _tagLetter.Text = draft.TagLetter ?? "8";
+                        _tagCutLetter.IsChecked = draft.CutTagLetter ?? true;
                         _tagFirstOffset.Text = draft.TagFirstOffset ?? "10";
                         _tagSizeStep.Text = draft.TagSizeStep ?? "20";
                         _sheetWidth.Text = draft.SheetWidth ?? "1500";
@@ -1696,17 +1737,43 @@ namespace VanyaTools.Native
 
         private DataGridTemplateColumn PartColumn(string header, SportLayoutPart part)
         {
+            var heading = new StackPanel { Orientation = Orientation.Horizontal };
+            var all = new CheckBox { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 3, 0),
+                ToolTip = "Печатать деталь «" + header + "» у всех строк. На резку не влияет." };
+            _partHeaderChecks.Add(part, all);
+            all.Click += (_, __) => {
+                if (_busy) return;
+                bool enabled = all.IsChecked == true;
+                if (!_playerGrid.CommitEdit(DataGridEditingUnit.Cell, true) || !_playerGrid.CommitEdit(DataGridEditingUnit.Row, true))
+                { UpdateCount(); return; }
+                bool wasLoading = _loading; _loading = true;
+                try { foreach (var row in _players) row.SetPrinted(part, enabled); }
+                finally { _loading = wasLoading; }
+                UpdateCount(); SaveDraft();
+            };
+            heading.Children.Add(all); heading.Children.Add(new TextBlock { Text = header, VerticalAlignment = VerticalAlignment.Center });
+            var cell = new FrameworkElementFactory(typeof(StackPanel));
+            cell.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
+            cell.SetValue(StackPanel.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            var check = new FrameworkElementFactory(typeof(CheckBox));
+            check.SetValue(CheckBox.VerticalAlignmentProperty, VerticalAlignment.Center);
+            check.SetValue(CheckBox.MarginProperty, new Thickness(2, 0, 4, 0));
+            check.SetValue(CheckBox.ToolTipProperty, "Печатать деталь «" + header + "». На резку не влияет.");
+            check.SetBinding(CheckBox.IsCheckedProperty, new Binding(SportLayoutPlayer.PrintProperty(part)) {
+                Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
+            cell.AppendChild(check);
             var button = new FrameworkElementFactory(typeof(System.Windows.Controls.Button));
             button.SetValue(System.Windows.Controls.Button.ContentProperty, "↗");
             button.SetValue(System.Windows.Controls.Button.ToolTipProperty,
-                "Создать одну деталь: " + header);
+                "Создать одну деталь для допечатки независимо от галочки: " + header);
             button.SetValue(System.Windows.Controls.Button.MinHeightProperty, 23.0);
             button.SetValue(System.Windows.Controls.Button.PaddingProperty,
                 new Thickness(4, 0, 4, 0));
             button.AddHandler(System.Windows.Controls.Button.ClickEvent,
                 new RoutedEventHandler((sender, e) => GenerateReplacement(sender, e, part)));
-            return new DataGridTemplateColumn { Header = header,
-                CellTemplate = new DataTemplate { VisualTree = button },
+            cell.AppendChild(button);
+            return new DataGridTemplateColumn { Header = heading,
+                CellTemplate = new DataTemplate { VisualTree = cell },
                 Width = new DataGridLength(80) };
         }
 

@@ -10,6 +10,7 @@ namespace VanyaTools.Native
         public double LetterHeightMm = 8;
         public double FirstOffsetMm = 10;
         public double SizeStepMm = 20;
+        public bool CutLabel = true;
 
         public void Validate()
         {
@@ -19,7 +20,7 @@ namespace VanyaTools.Native
             Check(LetterHeightMm, 3, 40, "Высота буквы");
             Check(FirstOffsetMm, 0, 500, "Отступ первого размера");
             Check(SizeStepMm, 0, 100, "Шаг следующих размеров");
-            if (LetterHeightMm > HeightMm - 2)
+            if (CutLabel && LetterHeightMm > HeightMm - 2)
                 throw new InvalidOperationException("Высота язычка должна быть хотя бы на 2 мм больше высоты буквы.");
         }
 
