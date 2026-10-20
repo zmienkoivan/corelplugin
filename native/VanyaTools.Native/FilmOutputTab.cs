@@ -22,6 +22,7 @@ namespace VanyaTools.Native
         private readonly TextBox _filmWidth, _gap, _bandWidth, _markOffset, _markStroke, _report;
         private readonly CheckBox _fit, _exportBands;
         private readonly TextBlock _folder, _progress;
+        private readonly FilmMarksTable _marksTable;
         private bool _busy;
         private static readonly string SettingsPath = Path.Combine(Environment.GetFolderPath(
             Environment.SpecialFolder.LocalApplicationData), "VanyaTools", "film-output.json");
@@ -57,6 +58,8 @@ namespace VanyaTools.Native
                 "У готового комплекта обновляется подпись, а позиции существующих меток сохраняются — это важно после разделения эталона по цветам. " +
                 "Разметку можно ставить на цветной эталон: проверка цветов при этом не запускается. " +
                 "Растры одинакового размера получают одинаковые позиции меток относительно изображения.");
+            _marksTable = new FilmMarksTable(status);
+            _panel.Children.Add(_marksTable);
             AddButton("Добавить / обновить боковые полосы", () => {
                 List<FilmTarget> targets = FilmOutputService.Capture(_mode.SelectedIndex == 1);
                 FilmOutputOptions options = ReadOptions();
@@ -142,10 +145,15 @@ namespace VanyaTools.Native
             var button = new Button { Content = text, Margin = new Thickness(0, 1, 0, 3) };
             if (primary) DockerTheme.Primary(button);
             button.Click += async (_, __) => {
-                if (_busy) return; _busy = true; _panel.IsEnabled = false;
-                try { await action(); }
+                if (_busy) return;
+                try
+                {
+                    if (!_marksTable.CommitPending()) return;
+                    _busy = true; _panel.IsEnabled = false;
+                    await action();
+                }
                 catch (Exception error) { Log.Error("Film output action failed.", error); Report(error.Message, true); }
-                finally { _panel.IsEnabled = true; _busy = false; }
+                finally { _panel.IsEnabled = true; _busy = false; _marksTable.Refresh(); }
             };
             _panel.Children.Add(button);
         }

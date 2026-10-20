@@ -112,7 +112,9 @@ namespace VanyaTools.Native
                     dynamic page = output.ActivePage, layer = output.ActiveLayer;
                     if (Convert.ToInt32(layer.Shapes.Count) > 0) layer.Shapes.All().Delete();
                     CorelClipboardTransfer.WaitAvailable("фотовывод");
-                    dynamic copied = layer.Paste();
+                    // Paste() returns one Shape (possibly a group), not a ShapeRange.
+                    // PasteEx returns a range for both single and multi-object input.
+                    dynamic copied = layer.PasteEx(app.CreateStructPasteOptions());
                     if (copied == null || Convert.ToInt32(copied.Count) == 0) throw new InvalidOperationException("Не удалось перенести фотовывод во временный документ.");
                     double extra = options.ExportBands ? gaps[i] + options.BandWidth : 0;
                     double width = bounds[i].Width + 2 * extra, height = bounds[i].Height;

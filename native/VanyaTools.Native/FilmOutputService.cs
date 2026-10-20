@@ -41,6 +41,7 @@ namespace VanyaTools.Native
         internal List<object> Shapes;
         internal FilmBounds Bounds;
         internal FilmCaption Caption;
+        internal bool HasCaption;
     }
 
     internal static class FilmOutputService
@@ -73,7 +74,7 @@ namespace VanyaTools.Native
                 }
                 else targets.Add(Target((object)doc, selected));
                 for (int i = 0; i < targets.Count; i++)
-                    if (targets[i].Existing == null) targets[i].Caption.Number = i + 1;
+                    if (!targets[i].HasCaption) targets[i].Caption.Number = i + 1;
                 return targets;
             }
             finally { doc.Unit = unit; doc.Dirty = dirty; }
@@ -95,12 +96,19 @@ namespace VanyaTools.Native
                 caption.ObjectName = caption.Color + " · слой " + caption.Number;
             }
             if (String.IsNullOrWhiteSpace(caption.ObjectName)) caption.ObjectName = "Рисунок";
+            var selectedPairs = existing == null ? shapes.Where(FilmMarkPairs.IsPair).ToList() : new List<object>();
+            if (selectedPairs.Count == 1)
+            {
+                string objectName = caption.ObjectName;
+                caption = FilmMarkPairs.ReadCaption(selectedPairs[0], Children(selectedPairs[0]).FirstOrDefault(s => Name(s) == Caption));
+                caption.ObjectName = objectName;
+            }
             // Single-object groups can be flattened by Corel or by color separation.
             // Only our auxiliary objects are excluded; a named ART wrapper is optional.
             var artwork = existing == null ? shapes : Artwork(Children(existing));
             if (artwork.Count == 0) throw new InvalidOperationException("В выделении остались только метки и полосы. Добавьте к выделению сам рисунок или растр.");
             return new FilmTarget { Document = document, Existing = existing, Shapes = artwork,
-                Bounds = Measure(document, Range(artwork)), Caption = caption };
+                Bounds = Measure(document, Range(artwork)), Caption = caption, HasCaption = existing != null || selectedPairs.Count == 1 };
         }
 
         internal static bool IsJob(object shape) => Convert.ToInt32(((dynamic)shape).Type) == CorelConstants.CdrGroupShape &&
@@ -119,7 +127,7 @@ namespace VanyaTools.Native
             return (object)range;
         }
         private static List<object> Artwork(IEnumerable<object> shapes) => shapes.Where(s =>
-            Name(s) != Marks && Name(s) != Caption && Name(s) != Bands).ToList();
+            Name(s) != Marks && !FilmMarkPairs.IsPair(s) && Name(s) != Caption && Name(s) != Bands).ToList();
 
         private static object GroupArtwork(List<object> shapes)
         {
@@ -148,22 +156,21 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Не удалось определить габариты фотовывода.");
             return new FilmBounds { Left = x, Bottom = y, Width = w, Height = h };
         }
+        // Read-only polling only needs relative ordering. Do not switch document
+        // units or Dirty on a timer while the operator is working in Corel.
+        internal static FilmBounds BoundsForSorting(object shapeOrRange) => ReadBounds(shapeOrRange);
         internal static List<object> PrintShapes(FilmTarget target) => target.Existing == null ? target.Shapes :
             Children(target.Existing).Where(s => Name(s) != Bands).ToList();
 
         internal static FilmBounds PrintBounds(FilmTarget target)
         {
             FilmBounds bounds = Measure(target.Document, Range(PrintShapes(target)));
-            if (target.Existing != null)
+            foreach (object marks in FilmMarkPairs.Geometries(PrintShapes(target)))
             {
-                object marks = Children(target.Existing).FirstOrDefault(s => Name(s) == Marks);
-                if (marks != null)
-                {
-                    // Reserve a fixed caption bottom, independent of the glyphs
-                    // in each color name. Equal artwork retains equal PDF length.
-                    double bottom = Math.Min(bounds.Bottom, Measure(target.Document, marks).Bottom - 5);
-                    bounds.Height = bounds.Top - bottom; bounds.Bottom = bottom;
-                }
+                // Reserve a fixed caption bottom, independent of the glyphs
+                // in each color name. Equal artwork retains equal PDF length.
+                double bottom = Math.Min(bounds.Bottom, Measure(target.Document, marks).Bottom - 5);
+                bounds.Height = bounds.Top - bottom; bounds.Bottom = bottom;
             }
             return bounds;
         }
@@ -172,8 +179,14 @@ namespace VanyaTools.Native
         {
             options.Validate();
             foreach (FilmTarget target in targets)
+            {
                 if (target.Caption.Number < 1 || target.Caption.Number > 9999 || String.IsNullOrWhiteSpace(target.Caption.Color))
                     throw new InvalidOperationException("Укажите цвет и номер слоя от 1 до 9999 для каждой подписи.");
+                if (target.Existing != null && Children(target.Existing).Count(s => Name(s) == Marks || FilmMarkPairs.IsPair(s)) > 1)
+                    throw new InvalidOperationException("В комплекте несколько пар меток. Меняйте их подписи в таблице пар.");
+                if (target.Existing == null && FilmMarkPairs.Geometries(target.Shapes).Count > 0)
+                    throw new InvalidOperationException("В выделении уже есть пара меток. Измените её подпись в таблице пар или выделите только рисунок для новой разметки.");
+            }
             return Change(targets, "Vanya Tools — метки фотовывода", touched => {
                 var jobs = new List<object>();
                 foreach (FilmTarget target in targets)
@@ -184,11 +197,20 @@ namespace VanyaTools.Native
                     if (target.Existing != null)
                     {
                         var old = Children(target.Existing);
-                        existingMarks = old.FirstOrDefault(s => Name(s) == Marks);
+                        var artwork = Artwork(old);
+                        var obsolete = old.Where(s => Name(s) == Caption || Name(s) == Bands).ToList();
+                        object existingPair = old.FirstOrDefault(FilmMarkPairs.IsPair);
+                        existingMarks = existingPair == null ? old.FirstOrDefault(s => Name(s) == Marks) : FilmMarkPairs.Geometry(existingPair);
                         preserveBands = old.Any(s => Name(s) == Bands);
                         ((dynamic)target.Existing).UngroupEx(); touched();
-                        art = GroupArtwork(Artwork(old));
-                        foreach (object child in old.Where(s => Name(s) == Caption || Name(s) == Bands)) ((dynamic)child).Delete();
+                        if (existingPair != null)
+                        {
+                            var pairParts = Children(existingPair);
+                            ((dynamic)existingPair).UngroupEx();
+                            foreach (object label in pairParts.Where(s => Name(s) == Caption)) ((dynamic)label).Delete();
+                        }
+                        art = GroupArtwork(artwork);
+                        foreach (object child in obsolete) ((dynamic)child).Delete();
                     }
                     else { touched(); art = GroupArtwork(target.Shapes); }
                     dynamic layer = art.Layer;
@@ -212,14 +234,9 @@ namespace VanyaTools.Native
                         }
                     }
                     dynamic marks = existingMarks ?? (object)((dynamic)Range(markShapes)).Group(); marks.Name = Marks;
-                    double captionX = Measure(target.Document, (object)marks).CenterX + 6;
-                    double captionY = Children((object)marks).Min(s => {
-                        FilmBounds b = Measure(target.Document, s); return b.Bottom + b.Height / 2;
-                    }) - 6;
-                    dynamic label = layer.CreateArtisticTextWide(captionX, captionY, target.Caption.Text, 0, -1, "Arial", 6f);
-                    label.Name = Caption; BlackFill((object)label);
-                    label.Move(captionX - Convert.ToDouble(label.LeftX), captionY - Convert.ToDouble(label.TopY));
-                    var parts = new List<object> { (object)art, (object)marks, (object)label };
+                    object labelShape = FilmMarkPairs.CreateLabel(target.Document, (object)marks, target.Caption);
+                    object markPair = FilmMarkPairs.Wrap((object)marks, labelShape, target.Caption);
+                    var parts = new List<object> { (object)art, markPair };
                     if (preserveBands)
                     {
                         FilmBounds frame = Measure(target.Document, Range(parts));
