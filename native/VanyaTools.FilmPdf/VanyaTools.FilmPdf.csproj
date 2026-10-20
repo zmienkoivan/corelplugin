@@ -10,6 +10,7 @@
     <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\VanyaTools.Native\IccProfileFile.cs" Link="IccProfileFile.cs" />
     <PackageReference Include="PDFsharp-GDI" Version="6.2.4" />
   </ItemGroup>
 </Project>

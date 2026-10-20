@@ -55,10 +55,12 @@ namespace VanyaTools.Native
                 "SUB экспортирует выделение, а если его нет — спрашивает, печатать ли активную страницу любого CDR. " +
                 "Используются папка обычной печати PDF и качество 150/300 DPI, выбранное во вкладке «Печать». " +
                 "Четыре цветные кнопки готовят PDF 1:1 только из выделения, каждая в свою папку. Красная и синяя — DTF, зелёная и жёлтая — UV. " +
-                "Надпись UV выделена маленькой пунктирной рамкой только в интерфейсе. Без выделения кнопки DTF и UV неактивны. " +
+                "Пунктирная мини-рамка есть только у жёлтой UV. Без выделения кнопки DTF и UV неактивны. " +
                 "Исходное разрешение растров сохраняется, используется ZIP без потерь. Страница целиком не растрируется, белый фон не добавляется. " +
                 "Исходные RGB/CMYK и прозрачность сохраняются; профиль материала, белый слой и зеркалирование настраиваются в RIP. " +
-                "Пять папок настраиваются в «Настройки → Печать PDF, DTF и UV». PDF появляется только после окончания записи.");
+                "Пять папок и отдельный режим ICC для каждой кнопки настраиваются в «Настройки → Печать PDF, DTF и UV». " +
+                "По умолчанию ICC остаётся как в Corel; можно удалить профили либо прикрепить входной ICC без пересчёта каналов. " +
+                "PDF появляется в папке печати только после окончания обработки.");
             _result = new TextBlock { FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
             _panel.Children.Add(_result);
             _settings.Changed += Refresh; Refresh();
@@ -105,7 +107,7 @@ namespace VanyaTools.Native
             else if (!compact) DockerTheme.Primary(button);
             AutomationProperties.SetName(button, index == 0 ? text : text + " · экспорт выделения в папку");
             button.ToolTip = index == 0 ? "PDF 1:1: выделение, а без него — активная страница" : "Отправить выделение в PDF 1:1 в папку этой кнопки";
-            if (index >= 3)
+            if (index == 4)
             {
                 var badge = new Grid { Width = 30, Height = 21, HorizontalAlignment = HorizontalAlignment.Center };
                 var frame = new System.Windows.Shapes.Rectangle { StrokeThickness = 1,
@@ -143,7 +145,8 @@ namespace VanyaTools.Native
                     job.Value.ToolTip = new TextBlock { Text = names[job.Key] + "\n" +
                         (job.Key == 0 ? "PDF 1:1: выделение или активная страница после подтверждения" :
                             "PDF 1:1: только выделение. Выделите объекты в Corel, чтобы включить кнопку.") + "\n" +
-                        (String.IsNullOrWhiteSpace(path) ? "Папка не выбрана. Откройте настройки печати." : path),
+                        (String.IsNullOrWhiteSpace(path) ? "Папка не выбрана. Откройте настройки печати." : path) + "\n" +
+                        _settings.IccFor(job.Key).Description,
                         MaxWidth = 380, TextWrapping = TextWrapping.Wrap };
                 }
             }
@@ -181,7 +184,7 @@ namespace VanyaTools.Native
             }
         }
 
-        private void Export(int index)
+        private async void Export(int index)
         {
             if (_busy) return;
             _busy = true; _panel.IsEnabled = false; _quickPanel.IsEnabled = false;
@@ -189,8 +192,8 @@ namespace VanyaTools.Native
             {
                 string folder = PrintExportSettings.NormalizeFolder(_settings.Folder(index), true);
                 _status("Готовлю PDF для печати…", false);
-                var result = SportPrintExporter.Export(folder, _settings.PrintDpi == 150 ? 150 : 300, true, index != 0,
-                    processName: index >= 3 ? "UV" : "DTF", confirmPage: question => MessageBox.Show(question,
+                var result = await PrintJobExporter.Export(folder, _settings.PrintDpi == 150 ? 150 : 300, index,
+                    _settings.IccFor(index), question => MessageBox.Show(question,
                         "Сублимация · печать активного листа", MessageBoxButton.YesNo, MessageBoxImage.Question,
                         MessageBoxResult.No) == MessageBoxResult.Yes);
                 string text = "PDF 1:1 · " + result.WidthMm.ToString("0.##") + "×" + result.HeightMm.ToString("0.##") +

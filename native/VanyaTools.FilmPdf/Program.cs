@@ -5,6 +5,7 @@ using System.IO;
 using PdfSharp.Pdf;
 using PdfSharp.Pdf.Advanced;
 using PdfSharp.Pdf.IO;
+using VanyaTools.Printing;
 
 namespace VanyaTools.FilmPdf
 {
@@ -19,7 +20,12 @@ namespace VanyaTools.FilmPdf
         {
             try
             {
-                if (args.Length != 4) throw new ArgumentException("Expected input PDF, output PDF, width and height in mm.");
+                Console.OutputEncoding = System.Text.Encoding.UTF8;
+                bool printJob = args.Length == 6;
+                if (args.Length != 4 && !printJob) throw new ArgumentException("Expected input PDF, output PDF, width and height in mm, optionally ICC mode and profile.");
+                string mode = printJob ? args[4] : "remove";
+                if (mode != "remove" && mode != "assign") throw new ArgumentException("Unsupported ICC mode.");
+                IccProfileFile selected = mode == "assign" ? IccProfileFile.Read(args[5]) : null;
                 string input = Path.GetFullPath(args[0]), output = Path.GetFullPath(args[1]);
                 if (String.Equals(input, output, StringComparison.OrdinalIgnoreCase) || File.Exists(output))
                     throw new IOException("The output must be a new file distinct from the input.");
@@ -29,19 +35,27 @@ namespace VanyaTools.FilmPdf
                 {
                     if (document.PageCount != 1) throw new InvalidDataException("Expected one film page.");
                     CheckSize(document.Pages[0], width, height);
-                    var visited = new HashSet<PdfObject>();
-                    foreach (PdfObject item in document.Internals.GetAllObjects()) Rewrite(item, visited);
+                    if (selected != null) ProfileAttachment.Apply(document, selected);
+                    else
+                    {
+                        var visited = new HashSet<PdfObject>();
+                        foreach (PdfObject item in document.Internals.GetAllObjects()) Rewrite(item, visited);
+                    }
                     document.Version = 17;
-                    document.Options.CompressContentStreams = false;
+                    document.Options.CompressContentStreams = printJob;
                     document.Save(output);
                 }
                 // Read back the finished graph, not the discarded ICC stream bytes.
-                using (PdfDocument document = PdfReader.Open(output, PdfDocumentOpenMode.Import))
+                using (PdfDocument document = PdfReader.Open(output, printJob ? PdfDocumentOpenMode.Modify : PdfDocumentOpenMode.Import))
                 {
                     if (document.PageCount != 1) throw new InvalidDataException("Film page count changed.");
                     CheckSize(document.Pages[0], width, height);
-                    var visited = new HashSet<PdfObject>();
-                    foreach (PdfObject item in document.Internals.GetAllObjects()) Check(item, visited);
+                    if (selected != null) ProfileAttachment.Check(document, selected);
+                    else
+                    {
+                        var visited = new HashSet<PdfObject>();
+                        foreach (PdfObject item in document.Internals.GetAllObjects()) Check(item, visited);
+                    }
                 }
                 return 0;
             }

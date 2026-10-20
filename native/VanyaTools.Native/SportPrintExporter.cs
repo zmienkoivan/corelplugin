@@ -130,10 +130,11 @@ namespace VanyaTools.Native
                 // Native publishing happens outside the watched print folder.
                 // Copy with a non-PDF extension, then rename on the destination
                 // volume only when complete (also works for network folders).
+                long bytes = new FileInfo(temporary).Length;
                 File.Copy(temporary, staging);
                 File.Move(staging, target);
                 result.Path = target;
-                result.Bytes = new FileInfo(target).Length;
+                result.Bytes = bytes;
                 Log.Info("Sport print export complete: " + System.IO.Path.GetFileName(target) +
                     ", bytes=" + result.Bytes);
                 return result;
