@@ -42,6 +42,7 @@ namespace VanyaTools.Native
             public string TagHeight { get; set; }
             public string TagBridge { get; set; }
             public string TagLetter { get; set; }
+            public string TagLabelHex { get; set; }
             public bool? CutTagLetter { get; set; }
             public string TagFirstOffset { get; set; }
             public string TagSizeStep { get; set; }
@@ -92,7 +93,8 @@ namespace VanyaTools.Native
         private readonly TextBox _frontArt, _backArt, _leftSleeveArt, _rightSleeveArt,
             _neckArt, _modelPath;
         private readonly TextBox _sheetWidth, _cutSheetWidth, _maxPageLength, _gap, _printFolder, _cutFolder;
-        private readonly TextBox _tagWidth, _tagHeight, _tagBridge, _tagLetter, _tagFirstOffset, _tagSizeStep;
+        private readonly TextBox _tagWidth, _tagHeight, _tagBridge, _tagLetter, _tagFirstOffset, _tagSizeStep, _tagLabelHex;
+        private readonly Button _tagLabelColor;
         private readonly ComboBox _nameSide, _frontCase, _batchSize, _printQuality;
         private readonly ComboBox _artworkLimit, _artworkCapture;
         private readonly ComboBox _nestingMode, _groupingMode, _cutNestingMode, _cutGroupingMode;
@@ -463,6 +465,16 @@ namespace VanyaTools.Native
             _tagCutLetter = new CheckBox { Content = "Прорезать размер внутри язычка", IsChecked = true,
                 FontSize = 11, Margin = new Thickness(0, 1, 0, 4) };
             panel.Children.Add(_tagCutLetter);
+            _tagLabelHex = new TextBox { Text = "#000000", FontSize = 11, MinHeight = 26,
+                VerticalContentAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) };
+            _tagLabelColor = new Button { Content = new Border { Width = 22, Height = 18,
+                Background = Brushes.Black, BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1) },
+                Padding = new Thickness(4), ToolTip = "Выбрать цвет подписи язычка" };
+            _tagLabelColor.Click += (_, __) => ChooseTagLabelColor();
+            panel.Children.Add(DockerLayout.FieldRow("Цвет подписи язычка",
+                DockerLayout.Trailing(_tagLabelHex, _tagLabelColor), 142));
+            DockerHelp.Add(panel, "Подпись имеет отдельный цвет для назначения мощности в программе лазера. " +
+                "Выберите цвет, отличающийся от контура детали. Используется в новой раскладке и на листе пробной резки.");
             var largerTag = Button("Пресет 30×20 мм · мостики 4 мм", (_, __) => {
                 if (_busy) return;
                 bool wasLoading = _loading; _loading = true;
@@ -552,11 +564,13 @@ namespace VanyaTools.Native
             _cutAllow180.Unchecked += (_, __) => SaveDraft();
             _cutSizeTags.Checked += (_, __) => SaveDraft();
             _cutSizeTags.Unchecked += (_, __) => SaveDraft();
-            _tagCutLetter.Checked += (_, __) => { _tagLetter.IsEnabled = true; SaveDraft(); };
-            _tagCutLetter.Unchecked += (_, __) => { _tagLetter.IsEnabled = false; SaveDraft(); };
+            _tagCutLetter.Checked += (_, __) => { UpdateTagLabelColor(); SaveDraft(); };
+            _tagCutLetter.Unchecked += (_, __) => { UpdateTagLabelColor(); SaveDraft(); };
+            _tagLabelHex.TextChanged += (_, __) => { UpdateTagLabelColor(); SaveDraft(); };
             foreach (var field in new[] { _tagWidth, _tagHeight, _tagBridge, _tagLetter, _tagFirstOffset, _tagSizeStep })
                 field.TextChanged += (_, __) => SaveDraft();
             LoadDraft();
+            UpdateTagLabelColor();
             RefreshSizes();
             UpdateCount();
             RefreshWorkflow();
@@ -670,6 +684,7 @@ namespace VanyaTools.Native
                 Width = _cutSheetWidth.Text, Gap = _gap.Text, Length = _maxPageLength.Text,
                 Rotate = _cutAllow180.IsChecked, Tags = _cutSizeTags.IsChecked,
                 CutTagLetter = _tagCutLetter.IsChecked,
+                TagLabelHex = _tagLabelHex.Text,
                 Density = _cutNestingMode.SelectedIndex, Grouping = _cutGroupingMode.SelectedIndex,
                 Tag = new[] { _tagWidth.Text, _tagHeight.Text, _tagBridge.Text, _tagLetter.Text,
                     _tagFirstOffset.Text, _tagSizeStep.Text } });
@@ -1315,11 +1330,40 @@ namespace VanyaTools.Native
                 BridgeMm = ParseMillimeters(_tagBridge.Text, .3, 5, "Длина каждого мостика"),
                 LetterHeightMm = _tagCutLetter.IsChecked == true ? ParseMillimeters(_tagLetter.Text, 3, 40, "Высота буквы") : 8,
                 CutLabel = _tagCutLetter.IsChecked == true,
+                LabelHex = _tagLabelHex.Text.Trim(),
                 FirstOffsetMm = ParseMillimeters(_tagFirstOffset.Text, 0, 500, "Отступ первого размера"),
                 SizeStepMm = ParseMillimeters(_tagSizeStep.Text, 0, 100, "Шаг следующих размеров")
             };
             settings.Validate();
             return settings;
+        }
+
+        private void UpdateTagLabelColor()
+        {
+            bool enabled = _tagCutLetter.IsChecked == true;
+            _tagLetter.IsEnabled = _tagLabelHex.IsEnabled = _tagLabelColor.IsEnabled = enabled;
+            var swatch = (Border)_tagLabelColor.Content;
+            swatch.Background = SportCutTagSettings.TryLabelColor(_tagLabelHex.Text, out Color color)
+                ? new SolidColorBrush(color) : Brushes.Transparent;
+        }
+
+        private void ChooseTagLabelColor()
+        {
+            if (_busy) return;
+            try
+            {
+                SportCutTagSettings.TryLabelColor(_tagLabelHex.Text, out Color current);
+                var source = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
+                Color? picked = WindowsColorPicker.Pick(source == null ? IntPtr.Zero : source.Handle, current);
+                if (picked.HasValue)
+                    _tagLabelHex.Text = String.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}",
+                        picked.Value.R, picked.Value.G, picked.Value.B);
+            }
+            catch (Exception error)
+            {
+                Log.Error("Could not choose cutting tab label color.", error);
+                _status("Не удалось выбрать цвет подписи: " + error.GetBaseException().Message, true);
+            }
         }
 
         private void ChoosePrintFolder(object sender, RoutedEventArgs e)
@@ -1614,7 +1658,7 @@ namespace VanyaTools.Native
                 _printFolder == null || _cutFolder == null || _printQuality == null || _artworkLimit == null || _artworkCapture == null ||
                 _keepGuides == null || _cutAllow180 == null || _cutSizeTags == null || _tagCutLetter == null ||
                 _tagWidth == null || _tagHeight == null || _tagBridge == null || _tagLetter == null ||
-                _tagFirstOffset == null || _tagSizeStep == null ||
+                _tagFirstOffset == null || _tagSizeStep == null || _tagLabelHex == null ||
                 _templateGrid == null || _playerGrid == null) return;
             try
             {
@@ -1636,6 +1680,7 @@ namespace VanyaTools.Native
                     TagWidth = _tagWidth.Text, TagHeight = _tagHeight.Text,
                     TagBridge = _tagBridge.Text, TagLetter = _tagLetter.Text,
                     CutTagLetter = _tagCutLetter.IsChecked == true,
+                    TagLabelHex = _tagLabelHex.Text,
                     TagFirstOffset = _tagFirstOffset.Text, TagSizeStep = _tagSizeStep.Text,
                     SheetWidth = _sheetWidth.Text, Gap = _gap.Text,
                     CutSheetWidth = _cutSheetWidth.Text,
@@ -1693,6 +1738,7 @@ namespace VanyaTools.Native
                         _tagBridge.Text = draft.TagBridge ?? "2";
                         _tagLetter.Text = draft.TagLetter ?? "8";
                         _tagCutLetter.IsChecked = draft.CutTagLetter ?? true;
+                        _tagLabelHex.Text = draft.TagLabelHex ?? "#000000";
                         _tagFirstOffset.Text = draft.TagFirstOffset ?? "10";
                         _tagSizeStep.Text = draft.TagSizeStep ?? "20";
                         _sheetWidth.Text = draft.SheetWidth ?? "1500";

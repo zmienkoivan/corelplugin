@@ -22,6 +22,7 @@ namespace VanyaTools.Native
             var seen = new HashSet<string>();
             void Add(string label, SportCutTagSettings value)
             {
+                value.LabelHex = settings.LabelHex;
                 value.Validate();
                 string key = label + "|" + value.WidthMm.ToString("R", CultureInfo.InvariantCulture) + "|" +
                     value.HeightMm.ToString("R", CultureInfo.InvariantCulture) + "|" + value.BridgeMm.ToString("R", CultureInfo.InvariantCulture) +
@@ -87,7 +88,7 @@ namespace VanyaTools.Native
                     shape.Fill.ApplyNoFill();
                     shape.Outline.Width = .1;
                     shape.Outline.Color.RGBAssign(0, 160, 80);
-                    SportCutSizeTag.Add((object)app, (object)shape, new List<object> { (object)shape },
+                    shape = SportCutSizeTag.Add((object)app, (object)shape, (object)shape, new List<object> { (object)shape },
                         sample.Label, "образец " + (i + 1), sample.Settings, 10);
                     shape.Name = "VT_TAG_SAMPLE_" + sample.Code + "_" + sample.Label + "_" + Description(sample);
                     sample.Shape = (object)shape;
@@ -101,7 +102,7 @@ namespace VanyaTools.Native
                 dynamic legendLayer = document.ActiveLayer; legendLayer.Name = "Памятка · не для резки";
                 double legendLeft = Convert.ToDouble(legend.LeftX), legendTop = Convert.ToDouble(legend.TopY);
                 Text((object)legendLayer, legendLeft + margin, legendTop - margin,
-                    "Проба язычков · памятка\nСетка соответствует листу резки. Сохраняйте порядок образцов.", 10);
+                    "Проба язычков · памятка\nЦвет подписи " + settings.LabelHex + ". Сетка соответствует листу резки.", 10);
                 for (int i = 0; i < samples.Count; i++)
                 {
                     Sample sample = samples[i];
@@ -111,7 +112,6 @@ namespace VanyaTools.Native
                         (sample.Settings.CutLabel ? sample.Label + " · буква " + Number(sample.Settings.LetterHeightMm) + " мм" : "Без прорезной буквы"), 8);
                     dynamic diagram = ((dynamic)sample.Shape).CopyToLayer(legendLayer);
                     diagram.Move(left - Convert.ToDouble(diagram.LeftX), top - captionHeight - Convert.ToDouble(diagram.TopY));
-                    diagram.Outline.Color.CMYKAssign(0, 0, 0, 100);
                 }
                 page.Activate();
                 Log.Info("Sport cutting: created " + samples.Count + " tab samples, " + pageWidth + "x" + pageHeight + " mm.");

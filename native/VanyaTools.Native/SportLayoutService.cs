@@ -2120,7 +2120,7 @@ namespace VanyaTools.Native
                     {
                         var copiedCurves = new List<object>();
                         CollectCutCurves((object)copy, copiedCurves);
-                        SportCutSizeTag.Add((object)app, (object)FindSilhouette(Describe(copy)), copiedCurves,
+                        copy = SportCutSizeTag.Add((object)app, (object)copy, (object)FindSilhouette(Describe(copy)), copiedCurves,
                             size, titles[i], options.CutTag, tagOffsetMm);
                         copiedCurves.Clear();
                         CollectCutCurves((object)copy, copiedCurves);

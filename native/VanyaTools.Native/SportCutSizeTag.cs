@@ -74,7 +74,7 @@ namespace VanyaTools.Native
             }
         }
 
-        public static void Add(object application, object silhouetteObject, IList<object> cutShapes,
+        public static object Add(object application, object pieceObject, object silhouetteObject, IList<object> cutShapes,
             string size, string part, SportCutTagSettings settings, double leftOffsetMm)
         {
             settings.Validate();
@@ -208,19 +208,45 @@ namespace VanyaTools.Native
                 PointOnRun(location.Run, location.Origin, location.Along, x0 + width) });
             double textLeft = x0 + (width - textWidth) / 2;
             double baseline = (settings.HeightMm + settings.LetterHeightMm) / 2;
-            if (settings.CutLabel)
-                AppendLabel((object)curve, label, settings.LetterHeightMm,
-                    (x, y) => location.World(textLeft + x, baseline - y));
             silhouette.Curve.CopyAssign(curve);
             GC.KeepAlive(sourceCurve);
             silhouette.Fill.ApplyNoFill();
+            object result = pieceObject;
+            if (settings.CutLabel)
+            {
+                // A separate curve carries the marking colour. Group the whole
+                // piece with it so nesting, rotation and copies move both together.
+                dynamic labelCurve = app.ActiveDocument.CreateCurve();
+                AppendLabel((object)labelCurve, label, settings.LetterHeightMm,
+                    (x, y) => location.World(textLeft + x, baseline - y));
+                dynamic lettering = null;
+                try
+                {
+                    lettering = silhouette.Layer.CreateCurve(labelCurve);
+                    lettering.Name = "VT_CUT_TAG_LABEL_" + label;
+                    lettering.Fill.ApplyNoFill();
+                    lettering.Outline.Width = .1;
+                    var color = settings.LabelColor();
+                    lettering.Outline.Color.RGBAssign((int)color.R, (int)color.G, (int)color.B);
+                    dynamic group = app.CreateShapeRange();
+                    group.Add(pieceObject); group.Add((object)lettering);
+                    result = (object)group.Group();
+                }
+                catch
+                {
+                    if (lettering != null) try { lettering.Delete(); } catch { }
+                    throw;
+                }
+            }
             Log.Info("Sport cutting: size tab " + label + ", part=" + part +
                 ", run=" + location.Run.Length.ToString("0.###", CultureInfo.InvariantCulture) +
                 " mm, angle=" + (Math.Atan2(location.Along.Y, location.Along.X) * 180 / Math.PI)
                     .ToString("0.###", CultureInfo.InvariantCulture) +
                 ", tab=" + width.ToString("0.###", CultureInfo.InvariantCulture) + "x" + settings.HeightMm +
                 ", letter=" + (settings.CutLabel ? settings.LetterHeightMm.ToString(CultureInfo.InvariantCulture) : "none") + ", bridges=" + settings.BridgeMm +
+                ", label color=" + (settings.CutLabel ? settings.LabelHex : "none") +
                 ", left offset=" + leftOffsetMm + ", attachment edge left=" + edgeLeft + " mm.");
+            return result;
         }
 
         private static List<Run> StraightRuns(IList<Path> paths)
