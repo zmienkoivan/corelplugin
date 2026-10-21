@@ -22,6 +22,9 @@ namespace VanyaTools.Native
         private sealed class CurveCopy
         {
             internal object Curve;
+            internal object Color;
+            internal long PartId;
+            internal string Name, PartName;
             internal double OutlineWidth, Left, Bottom, Width, Height;
         }
 
@@ -60,7 +63,6 @@ namespace VanyaTools.Native
                 staging = System.IO.Path.Combine(folder, ".Vanya-cut-" + job + ".partial");
 
                 object exportDocument = (object)document;
-                if (singleColor.HasValue)
                 {
                     // Snapshot vector paths in millimetres. Only the temporary
                     // document is recoloured; source objects and colours stay intact.
@@ -70,7 +72,11 @@ namespace VanyaTools.Native
                     {
                         if (!ExportVisible(original)) continue;
                         dynamic shape = original;
+                        dynamic part = SportCutPiece.Root(original);
                         copies.Add(new CurveCopy { Curve = (object)shape.DisplayCurve.GetCopy(),
+                            Color = (object)shape.Outline.Color.GetCopy(),
+                            PartId = Convert.ToInt64(part.StaticID), PartName = Convert.ToString(part.Name) ?? "",
+                            Name = Convert.ToString(shape.Name) ?? "",
                             OutlineWidth = Math.Max(.001, Convert.ToDouble(shape.Outline.Width)),
                             Left = Convert.ToDouble(shape.LeftX), Bottom = Convert.ToDouble(shape.BottomY),
                             Width = Convert.ToDouble(shape.SizeWidth), Height = Convert.ToDouble(shape.SizeHeight) });
@@ -82,12 +88,23 @@ namespace VanyaTools.Native
                     application.Optimization = true;
                     colorDocument = application.CreateDocument();
                     colorDocument.Unit = CorelConstants.CdrMillimeter;
-                    dynamic colorPage = colorDocument.ActivePage, colorLayer = colorDocument.ActiveLayer;
+                    colorDocument.AssignColorContext(document.ColorContext);
+                    dynamic colorPage = colorDocument.ActivePage;
                     colorPage.SetSize(result.WidthMm, result.HeightMm);
                     double dx = Convert.ToDouble(colorPage.LeftX) - left, dy = Convert.ToDouble(colorPage.BottomY) - bottom;
-                    Color color = singleColor.Value;
+                    var layers = new Dictionary<long, object>();
+                    var groups = new Dictionary<long, object>();
+                    var names = new Dictionary<long, string>();
                     foreach (CurveCopy copy in copies)
                     {
+                        if (!layers.TryGetValue(copy.PartId, out object partLayer))
+                        {
+                            partLayer = (object)colorPage.CreateLayer("VT_PART_" + (layers.Count + 1).ToString("00000", CultureInfo.InvariantCulture));
+                            layers.Add(copy.PartId, partLayer);
+                            groups.Add(copy.PartId, (object)application.CreateShapeRange());
+                            names.Add(copy.PartId, copy.PartName);
+                        }
+                        dynamic colorLayer = partLayer;
                         dynamic shape = colorLayer.CreateCurve(copy.Curve);
                         if (shape == null || Math.Abs(Convert.ToDouble(shape.SizeWidth) - copy.Width) > .01 ||
                             Math.Abs(Convert.ToDouble(shape.SizeHeight) - copy.Height) > .01)
@@ -95,7 +112,21 @@ namespace VanyaTools.Native
                         shape.Move(copy.Left + dx - Convert.ToDouble(shape.LeftX),
                             copy.Bottom + dy - Convert.ToDouble(shape.BottomY));
                         shape.Fill.ApplyNoFill(); shape.Outline.Width = copy.OutlineWidth;
-                        shape.Outline.Color.RGBAssign((int)color.R, (int)color.G, (int)color.B);
+                        shape.Name = copy.Name;
+                        if (singleColor.HasValue)
+                        {
+                            Color color = singleColor.Value;
+                            shape.Outline.Color.RGBAssign((int)color.R, (int)color.G, (int)color.B);
+                        }
+                        else shape.Outline.Color.CopyAssign(copy.Color);
+                        ((dynamic)groups[copy.PartId]).Add((object)shape);
+                    }
+                    foreach (var entry in groups)
+                    {
+                        dynamic range = entry.Value;
+                        object piece = Convert.ToInt32(range.Count) == 1 ? (object)range[1] : (object)range.Group();
+                        piece = SportCutPiece.Combine((object)application, piece);
+                        ((dynamic)piece).Name = names[entry.Key];
                     }
                     result.CurveCount = copies.Count;
                     exportDocument = (object)colorDocument;

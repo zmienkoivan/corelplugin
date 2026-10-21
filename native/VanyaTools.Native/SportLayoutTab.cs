@@ -112,7 +112,7 @@ namespace VanyaTools.Native
         private readonly CheckBox _keepGuides, _rotateSleeves, _cutAllow180, _cutSizeTags, _tagCutLetter;
         private readonly TextBlock _count, _progress;
         private readonly Button _prepare, _generate, _generateCut, _saveCut, _exportPrint, _choosePrintFolder;
-        private readonly Button _exportCut, _chooseCutFolder;
+        private readonly Button _exportCut, _chooseCutFolder, _combineCut;
         private readonly CheckBox _cutDxfSingleColor;
         private readonly TextBox _cutDxfColorHex;
         private readonly Button _cutDxfColor;
@@ -514,6 +514,10 @@ namespace VanyaTools.Native
                 "в той же сетке. Сохраняйте порядок образцов при разборе. В DXF отправляется только страница резки, памятка остаётся в CDR.");
             _generateCut = Button("Создать раскладку резки", GenerateCutting);
             panel.Children.Add(_generateCut);
+            _combineCut = Button("Объединить контуры готового листа", CombineCutting);
+            panel.Children.Add(_combineCut);
+            DockerHelp.Add(panel, "Контур, язычок и надсечки каждой детали становятся одним объектом-кривой. " +
+                "Буква остаётся отдельной внутри группы детали. Положение деталей не меняется; операция отменяется одним Undo.");
             _saveCut = Button("Сохранить страницу резки в отдельный CDR…", SaveCutting);
             panel.Children.Add(_saveCut);
             DockerHelp.Add(panel, "Раскладка резки создаётся на отдельной странице текущего CDR. " +
@@ -1323,6 +1327,7 @@ namespace VanyaTools.Native
             _prepare.IsEnabled = _generate.IsEnabled = _generateCut.IsEnabled = _saveCut.IsEnabled = enabled;
             _exportPrint.IsEnabled = _choosePrintFolder.IsEnabled = _printQuality.IsEnabled = enabled;
             _exportCut.IsEnabled = _chooseCutFolder.IsEnabled = enabled;
+            _combineCut.IsEnabled = enabled;
             _tagSamples.IsEnabled = enabled;
             _expandPlayers.IsEnabled = enabled;
             _artworkLimit.IsEnabled = enabled;
@@ -1514,6 +1519,26 @@ namespace VanyaTools.Native
                 ClearCompletedSteps(5);
                 _progress.Text = "DXF резки не сохранён.";
                 _status("DXF резки не сохранён: " + error.Message, true);
+            }
+            finally { _busy = false; SetActionButtons(true); }
+        }
+
+        private async void CombineCutting(object sender, RoutedEventArgs e)
+        {
+            if (_busy) return;
+            _busy = true; SetActionButtons(false);
+            try
+            {
+                _progress.Text = "Объединяю контуры деталей готового листа…";
+                await Dispatcher.Yield(DispatcherPriority.Render);
+                int count = SportCutPiece.CombineCurrentPage();
+                _progress.Text = count == 0 ? "Контуры уже объединены." : "Объединены контуры деталей: " + count + ".";
+                _status(_progress.Text, false);
+            }
+            catch (Exception error)
+            {
+                Log.Error("Could not combine cutting contours.", error);
+                _status("Не удалось объединить весь лист: " + error.GetBaseException().Message, true);
             }
             finally { _busy = false; SetActionButtons(true); }
         }

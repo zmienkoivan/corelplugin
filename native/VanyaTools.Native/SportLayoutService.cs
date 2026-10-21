@@ -2123,12 +2123,12 @@ namespace VanyaTools.Native
                         CollectCutCurves((object)copy, copiedCurves);
                         copy = SportCutSizeTag.Add((object)app, (object)copy, (object)FindSilhouette(Describe(copy)), copiedCurves,
                             size, titles[i], options.CutTag, tagOffsetMm);
-                        copiedCurves.Clear();
-                        CollectCutCurves((object)copy, copiedCurves);
-                        bands = options.NestingMode == SportNestingMode.Rectangles ? null :
-                            ReadCutGeometry(Describe(copy), copiedCurves, 1);
                     }
-                    else bands = options.NestingMode == SportNestingMode.Rectangles ? null : ReadCutGeometry(original, curves, scale);
+                    copy = SportCutPiece.Combine((object)app, (object)copy);
+                    var combinedCurves = new List<object>();
+                    CollectCutCurves((object)copy, combinedCurves);
+                    bands = options.NestingMode == SportNestingMode.Rectangles ? null :
+                        ReadCutGeometry(Describe(copy), combinedCurves, 1);
                     width = Convert.ToDouble(copy.SizeWidth); height = Convert.ToDouble(copy.SizeHeight);
                 }
                 copy.Name = "VT_CUT_" + index.ToString("000", CultureInfo.InvariantCulture) +
