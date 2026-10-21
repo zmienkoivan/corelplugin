@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Windows.Media;
 
 namespace VanyaTools.Native
 {
@@ -17,18 +19,28 @@ namespace VanyaTools.Native
             public long Bytes;
         }
 
-        public static Result ExportCurrentPage(string folder)
+        private sealed class CurveCopy
+        {
+            internal object Curve;
+            internal double OutlineWidth, Left, Bottom, Width, Height;
+        }
+
+        public static Result ExportCurrentPage(string folder, Color? singleColor = null)
         {
             if (String.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
                 throw new InvalidOperationException("Выберите доступную папку для листов резки.");
             folder = System.IO.Path.GetFullPath(folder);
-            dynamic document = CorelApp.Get().ActiveDocument;
+            dynamic application = CorelApp.Get(), document = application.ActiveDocument;
             if (document == null) throw new InvalidOperationException("Откройте CDR со страницей раскладки резки.");
             dynamic page = document.ActivePage;
-            var result = new Result { CurveCount = SportLayoutService.ValidateCuttingPage((object)page) };
+            IList<object> cuttingCurves = SportLayoutService.CuttingPageCurves((object)page);
+            var result = new Result { CurveCount = cuttingCurves.Count };
             int oldUnit = Convert.ToInt32(document.Unit);
             bool oldDirty = Convert.ToBoolean(document.Dirty);
             string temporary = null, staging = null;
+            dynamic colorDocument = null;
+            List<object> selection = null;
+            bool? oldOptimization = null;
             try
             {
                 document.Unit = CorelConstants.CdrMillimeter;
@@ -47,14 +59,54 @@ namespace VanyaTools.Native
                 temporary = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Vanya-cut-" + job + ".dxf");
                 staging = System.IO.Path.Combine(folder, ".Vanya-cut-" + job + ".partial");
 
+                object exportDocument = (object)document;
+                if (singleColor.HasValue)
+                {
+                    // Snapshot vector paths in millimetres. Only the temporary
+                    // document is recoloured; source objects and colours stay intact.
+                    double left = Convert.ToDouble(page.LeftX), bottom = Convert.ToDouble(page.BottomY);
+                    var copies = new List<CurveCopy>();
+                    foreach (object original in cuttingCurves)
+                    {
+                        if (!ExportVisible(original)) continue;
+                        dynamic shape = original;
+                        copies.Add(new CurveCopy { Curve = (object)shape.DisplayCurve.GetCopy(),
+                            OutlineWidth = Math.Max(.001, Convert.ToDouble(shape.Outline.Width)),
+                            Left = Convert.ToDouble(shape.LeftX), Bottom = Convert.ToDouble(shape.BottomY),
+                            Width = Convert.ToDouble(shape.SizeWidth), Height = Convert.ToDouble(shape.SizeHeight) });
+                    }
+                    if (copies.Count == 0) throw new InvalidOperationException("На листе нет видимых контуров для экспорта.");
+                    selection = new List<object>();
+                    foreach (dynamic shape in application.ActiveSelectionRange) selection.Add((object)shape);
+                    oldOptimization = Convert.ToBoolean(application.Optimization);
+                    application.Optimization = true;
+                    colorDocument = application.CreateDocument();
+                    colorDocument.Unit = CorelConstants.CdrMillimeter;
+                    dynamic colorPage = colorDocument.ActivePage, colorLayer = colorDocument.ActiveLayer;
+                    colorPage.SetSize(result.WidthMm, result.HeightMm);
+                    double dx = Convert.ToDouble(colorPage.LeftX) - left, dy = Convert.ToDouble(colorPage.BottomY) - bottom;
+                    Color color = singleColor.Value;
+                    foreach (CurveCopy copy in copies)
+                    {
+                        dynamic shape = colorLayer.CreateCurve(copy.Curve);
+                        if (shape == null || Math.Abs(Convert.ToDouble(shape.SizeWidth) - copy.Width) > .01 ||
+                            Math.Abs(Convert.ToDouble(shape.SizeHeight) - copy.Height) > .01)
+                            throw new InvalidOperationException("Не удалось сохранить размер контура 1:1 во временном документе DXF.");
+                        shape.Move(copy.Left + dx - Convert.ToDouble(shape.LeftX),
+                            copy.Bottom + dy - Convert.ToDouble(shape.BottomY));
+                        shape.Fill.ApplyNoFill(); shape.Outline.Width = copy.OutlineWidth;
+                        shape.Outline.Color.RGBAssign((int)color.R, (int)color.G, (int)color.B);
+                    }
+                    result.CurveCount = copies.Count;
+                    exportDocument = (object)colorDocument;
+                }
+
                 // Native vector export: current page, independent of selection.
                 // Values verified against Corel 2026 FilterDXF.tlb. No dialog,
                 // rasterisation, curve simplification or fit-to-page scaling.
                 // The dynamic COM binder can reject ExportEx's first argument
                 // on Corel 27. Use explicit Automation string marshaling, as in
                 // our ImportEx path, and supply real optional options objects.
-                object exportDocument = (object)document;
-                dynamic application = CorelApp.Get();
                 object exportOptions = application.CreateStructExportOptions();
                 object paletteOptions = application.CreateStructPaletteOptions();
                 object filter;
@@ -76,7 +128,8 @@ namespace VanyaTools.Native
                 Set(filter, "TextAsCurves", true);
                 Set(filter, "FillUnmapped", false);
                 Log.Info("Sport DXF export: page=" + page.Index + ", " + result.WidthMm + "x" +
-                    result.HeightMm + " mm, curves=" + result.CurveCount + ", AutoCAD 2000, millimeters.");
+                    result.HeightMm + " mm, curves=" + result.CurveCount + ", singleColor=" + singleColor.HasValue +
+                    ", AutoCAD 2000, millimeters.");
                 try { filter.GetType().InvokeMember("Finish", BindingFlags.InvokeMethod, null, filter, null); }
                 catch (Exception error)
                 {
@@ -94,15 +147,51 @@ namespace VanyaTools.Native
             }
             finally
             {
+                if (colorDocument != null)
+                    try { colorDocument.Dirty = false; colorDocument.Close(); }
+                    catch (Exception error)
+                    {
+                        result.Warning = "DXF сохранён, но временный документ Corel не удалось закрыть.";
+                        Log.Error("Could not close single-color DXF document.", error);
+                    }
+                if (selection != null)
+                    try
+                    {
+                        document.Activate(); page.Activate();
+                        if (selection.Count == 0) document.ClearSelection();
+                        else
+                        {
+                            dynamic range = application.CreateShapeRange();
+                            foreach (object shape in selection) range.Add(shape);
+                            range.CreateSelection();
+                        }
+                    }
+                    catch (Exception error)
+                    {
+                        result.Warning = "DXF сохранён, но прежнее выделение Corel не удалось восстановить.";
+                        Log.Error("Could not restore selection after single-color DXF export.", error);
+                    }
                 try { document.Unit = oldUnit; document.Dirty = oldDirty; }
                 catch (Exception error)
                 {
                     result.Warning = "DXF сохранён, но прежние единицы документа Corel не удалось восстановить.";
                     Log.Error("Could not restore document state after DXF export.", error);
                 }
+                if (oldOptimization.HasValue)
+                    try { application.Optimization = oldOptimization.Value; }
+                    catch (Exception error) { Log.Error("Could not restore Corel optimization after DXF export.", error); }
                 DeleteTemporary(temporary);
                 DeleteTemporary(staging);
             }
+        }
+
+        private static bool ExportVisible(object original)
+        {
+            dynamic shape = original, layer = shape.Layer;
+            if (!Convert.ToBoolean(layer.Visible) || !Convert.ToBoolean(layer.Printable)) return false;
+            for (int depth = 0; shape != null && depth <= 12; depth++, shape = shape.ParentGroup)
+                if (!Convert.ToBoolean(shape.Visible)) return false;
+            return true;
         }
 
         private static void Set(object filter, string name, object value)

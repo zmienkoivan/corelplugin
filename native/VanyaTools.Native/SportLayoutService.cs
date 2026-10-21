@@ -1035,22 +1035,23 @@ namespace VanyaTools.Native
         }
 
         internal static int ValidateCuttingPage(object pageObject)
+            => CuttingPageCurves(pageObject).Count;
+
+        internal static IList<object> CuttingPageCurves(object pageObject)
         {
             dynamic page = pageObject;
             if (page == null || !(Convert.ToString(page.Name) ?? "")
                 .StartsWith(CuttingPagePrefix, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Откройте страницу раскладки резки.");
-            int count = 0;
+            var curves = new List<object>();
             foreach (dynamic layer in page.Layers)
                 foreach (dynamic shape in layer.Shapes)
                 {
                     // Also reject accidental bitmaps/text from master layers.
-                    var curves = new List<dynamic>();
-                    CollectCutCurves(shape, curves);
-                    count += curves.Count;
+                    CollectCutCurves((object)shape, curves);
                 }
-            if (count == 0) throw new InvalidOperationException("Страница резки пуста.");
-            return count;
+            if (curves.Count == 0) throw new InvalidOperationException("Страница резки пуста.");
+            return curves;
         }
 
         public SportLayoutResult GenerateReplacementPiece(SportLayoutPlayer row,

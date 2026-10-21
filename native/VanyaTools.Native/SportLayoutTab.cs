@@ -54,6 +54,8 @@ namespace VanyaTools.Native
             public string CutGap { get; set; }
             public string PrintFolder { get; set; }
             public string CutFolder { get; set; }
+            public bool CutDxfSingleColor { get; set; }
+            public string CutDxfColorHex { get; set; }
             public int PrintDpi { get; set; }
             public string FontName { get; set; }
             public bool FrontNameOnRight { get; set; }
@@ -111,6 +113,9 @@ namespace VanyaTools.Native
         private readonly TextBlock _count, _progress;
         private readonly Button _prepare, _generate, _generateCut, _saveCut, _exportPrint, _choosePrintFolder;
         private readonly Button _exportCut, _chooseCutFolder;
+        private readonly CheckBox _cutDxfSingleColor;
+        private readonly TextBox _cutDxfColorHex;
+        private readonly Button _cutDxfColor;
         private readonly Button _tagSamples;
         private readonly Button _expandPlayers;
         private readonly Grid _playerEditor;
@@ -525,6 +530,19 @@ namespace VanyaTools.Native
             _chooseCutFolder = Button("Папка резки…", ChooseCutFolder);
             Grid.SetColumn(_chooseCutFolder, 1); cutFolderRow.Children.Add(_chooseCutFolder);
             panel.Children.Add(cutFolderRow);
+            _cutDxfSingleColor = new CheckBox { Content = "Один цвет для всех контуров",
+                IsChecked = false, FontSize = 11, Margin = new Thickness(0, 2, 0, 4) };
+            panel.Children.Add(_cutDxfSingleColor);
+            _cutDxfColorHex = new TextBox { Text = "#000000", FontSize = 11, MinHeight = 26,
+                VerticalContentAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) };
+            _cutDxfColor = new Button { Content = new Border { Width = 22, Height = 18,
+                Background = Brushes.Black, BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1) },
+                Padding = new Thickness(4), ToolTip = "Выбрать единый цвет контуров DXF" };
+            _cutDxfColor.Click += (_, __) => ChooseCutDxfColor();
+            panel.Children.Add(DockerLayout.FieldRow("Цвет контуров DXF",
+                DockerLayout.Trailing(_cutDxfColorHex, _cutDxfColor), 142));
+            DockerHelp.Add(panel, "Единый цвет применяется только в DXF ко всем контурам, включая подписи язычков. " +
+                "Цвета исходного CDR сохраняются. Без галочки экспортируются прежние цвета.");
             _exportCut = Button("Экспортировать активный лист резки в DXF", ExportCut);
             panel.Children.Add(_exportCut);
             DockerHelp.Add(panel, "DXF AutoCAD 2000 · миллиметры · масштаб 1:1. Экспортируется активный лист резки " +
@@ -560,6 +578,9 @@ namespace VanyaTools.Native
             _cutGap.TextChanged += (_, __) => SaveDraft();
             _printFolder.TextChanged += (_, __) => SaveDraft();
             _cutFolder.TextChanged += (_, __) => SaveDraft();
+            _cutDxfSingleColor.Checked += (_, __) => { UpdateCutDxfColor(); SaveDraft(); };
+            _cutDxfSingleColor.Unchecked += (_, __) => { UpdateCutDxfColor(); SaveDraft(); };
+            _cutDxfColorHex.TextChanged += (_, __) => { UpdateCutDxfColor(); SaveDraft(); };
             _printQuality.SelectionChanged += (_, __) => SaveDraft();
             _gap.TextChanged += (_, __) => SaveDraft();
             _nameSide.SelectionChanged += (_, __) => SaveDraft();
@@ -578,6 +599,7 @@ namespace VanyaTools.Native
             foreach (var field in new[] { _tagWidth, _tagHeight, _tagBridge, _tagLetter, _tagFirstOffset, _tagSizeStep })
                 field.TextChanged += (_, __) => SaveDraft();
             LoadDraft();
+            UpdateCutDxfColor();
             UpdateTagLabelColor();
             RefreshSizes();
             UpdateCount();
@@ -1374,6 +1396,32 @@ namespace VanyaTools.Native
             }
         }
 
+        private void UpdateCutDxfColor()
+        {
+            _cutDxfColorHex.IsEnabled = _cutDxfColor.IsEnabled = _cutDxfSingleColor.IsChecked == true;
+            ((Border)_cutDxfColor.Content).Background = SportCutTagSettings.TryLabelColor(_cutDxfColorHex.Text, out Color color)
+                ? new SolidColorBrush(color) : Brushes.Transparent;
+        }
+
+        private void ChooseCutDxfColor()
+        {
+            if (_busy) return;
+            try
+            {
+                SportCutTagSettings.TryLabelColor(_cutDxfColorHex.Text, out Color current);
+                var source = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
+                Color? picked = WindowsColorPicker.Pick(source == null ? IntPtr.Zero : source.Handle, current);
+                if (picked.HasValue)
+                    _cutDxfColorHex.Text = String.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}",
+                        picked.Value.R, picked.Value.G, picked.Value.B);
+            }
+            catch (Exception error)
+            {
+                Log.Error("Could not choose single DXF outline color.", error);
+                _status("Не удалось выбрать цвет DXF: " + error.GetBaseException().Message, true);
+            }
+        }
+
         private void ChoosePrintFolder(object sender, RoutedEventArgs e)
         {
             if (_busy) return;
@@ -1444,8 +1492,15 @@ namespace VanyaTools.Native
             try
             {
                 _progress.Text = "Экспортирую активный лист резки в DXF…";
+                Color? singleColor = null;
+                if (_cutDxfSingleColor.IsChecked == true)
+                {
+                    if (!SportCutTagSettings.TryLabelColor(_cutDxfColorHex.Text, out Color color))
+                        throw new InvalidOperationException("Цвет контуров DXF должен быть в формате #RRGGBB.");
+                    singleColor = color;
+                }
                 await Dispatcher.Yield(DispatcherPriority.Render);
-                SportCutDxfExporter.Result result = SportCutDxfExporter.ExportCurrentPage(folder);
+                SportCutDxfExporter.Result result = SportCutDxfExporter.ExportCurrentPage(folder, singleColor);
                 CompleteStep(5, "активный лист резки сохранён в DXF");
                 _progress.Text = "DXF готов: " + result.WidthMm.ToString("0.#") + " × " +
                     result.HeightMm.ToString("0.#") + " мм · 1:1 · " +
@@ -1670,6 +1725,7 @@ namespace VanyaTools.Native
                 _keepGuides == null || _cutAllow180 == null || _cutSizeTags == null || _tagCutLetter == null ||
                 _tagWidth == null || _tagHeight == null || _tagBridge == null || _tagLetter == null ||
                 _tagFirstOffset == null || _tagSizeStep == null || _tagLabelHex == null ||
+                _cutDxfSingleColor == null || _cutDxfColorHex == null ||
                 _templateGrid == null || _playerGrid == null) return;
             try
             {
@@ -1699,6 +1755,8 @@ namespace VanyaTools.Native
                     CutMaxPageLength = _cutMaxPageLength.Text, CutGap = _cutGap.Text,
                     PrintFolder = _printFolder.Text,
                     CutFolder = _cutFolder.Text,
+                    CutDxfSingleColor = _cutDxfSingleColor.IsChecked == true,
+                    CutDxfColorHex = _cutDxfColorHex.Text,
                     PrintDpi = _printQuality.SelectedIndex == 1 ? 300 : 150,
                     NameStyle = _legacyNameStyle,
                     NumberStyle = _legacyNumberStyle,
@@ -1761,6 +1819,8 @@ namespace VanyaTools.Native
                         _cutGap.Text = draft.CutGap ?? draft.Gap ?? "10";
                         _printFolder.Text = draft.PrintFolder ?? "";
                         _cutFolder.Text = draft.CutFolder ?? "";
+                        _cutDxfSingleColor.IsChecked = draft.CutDxfSingleColor;
+                        _cutDxfColorHex.Text = draft.CutDxfColorHex ?? "#000000";
                         _printQuality.SelectedIndex = draft.PrintDpi == 300 ? 1 : 0;
                         _legacyNameStyle = draft.NameStyle ?? LegacyStyle(draft.FontName, 72, draft.WhiteText);
                         _legacyNumberStyle = draft.NumberStyle ?? LegacyStyle(draft.FontName, 150, draft.WhiteText);
