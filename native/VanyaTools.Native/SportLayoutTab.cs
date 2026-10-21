@@ -49,7 +49,9 @@ namespace VanyaTools.Native
             public string SheetWidth { get; set; }
             public string CutSheetWidth { get; set; }
             public string MaxPageLength { get; set; }
+            public string CutMaxPageLength { get; set; }
             public string Gap { get; set; }
+            public string CutGap { get; set; }
             public string PrintFolder { get; set; }
             public string CutFolder { get; set; }
             public int PrintDpi { get; set; }
@@ -92,7 +94,8 @@ namespace VanyaTools.Native
         private readonly DataGrid _templateGrid, _playerGrid;
         private readonly TextBox _frontArt, _backArt, _leftSleeveArt, _rightSleeveArt,
             _neckArt, _modelPath;
-        private readonly TextBox _sheetWidth, _cutSheetWidth, _maxPageLength, _gap, _printFolder, _cutFolder;
+        private readonly TextBox _sheetWidth, _cutSheetWidth, _maxPageLength, _gap,
+            _cutMaxPageLength, _cutGap, _printFolder, _cutFolder;
         private readonly TextBox _tagWidth, _tagHeight, _tagBridge, _tagLetter, _tagFirstOffset, _tagSizeStep, _tagLabelHex;
         private readonly Button _tagLabelColor;
         private readonly ComboBox _nameSide, _frontCase, _batchSize, _printQuality;
@@ -368,7 +371,7 @@ namespace VanyaTools.Native
                 _groupingMode.Items.Add(label);
             _groupingMode.SelectedIndex = 0; panel.Children.Add(_groupingMode);
             DockerHelp.Add(panel, "Парами: перед и спина одного комплекта укладываются единым блоком; " +
-                "после всех пар идут рукава и горловины, начиная с остатка последнего листа. " +
+                "рукава и горловины заполняют свободные места на всех листах, не раздвигая пары. " +
                 "Комплектом: все имеющиеся детали одного комплекта остаются одним блоком на одном листе. " +
                 "Смежные блоки могут сближаться по контуру. Группировка может увеличить расход материала. " +
                 "Если целый блок не помещается, увеличьте лист или выберите свободную раскладку.");
@@ -441,17 +444,20 @@ namespace VanyaTools.Native
             panel.Children.Add(Title("Раскладка резки"));
             _cutSheetWidth = Field("1500"); _cutSheetWidth.Width = 72;
             panel.Children.Add(DockerLayout.FieldRow("Ширина ткани для резки, мм", _cutSheetWidth));
+            _cutMaxPageLength = Field("4"); _cutMaxPageLength.Width = 72;
+            panel.Children.Add(DockerLayout.FieldRow("Макс. длина листа резки, м", _cutMaxPageLength));
+            _cutGap = Field("10"); _cutGap.Width = 60;
+            panel.Children.Add(DockerLayout.FieldRow("Между деталями резки, мм", _cutGap));
             panel.Children.Add(Label("Плотность раскладки резки"));
             _cutNestingMode = CopyChoice(_nestingMode); panel.Children.Add(_cutNestingMode);
             panel.Children.Add(Label("Как держать детали заказа при резке"));
             _cutGroupingMode = CopyChoice(_groupingMode); panel.Children.Add(_cutGroupingMode);
-            DockerHelp.Add(panel, "Плотность и группировка резки выбираются независимо от печати. " +
+            DockerHelp.Add(panel, "Размер листа, расстояние между деталями, плотность и группировка резки задаются независимо от печати. " +
                 "Изменение этих настроек снимает только отметку резки; готовая печать и PDF сохраняют свои отметки.");
             DockerHelp.Add(panel, "В каждой группе детали нужен замкнутый контур silhouette. " +
                 "Для печати она расширяется наружу на 6 мм; для резки берутся все исходные " +
                 "кривые группы, включая silhouette и надсечки. Рисунки и надписи не добавляются. " +
-                "Размеры и количество — из таблицы игроков. Ширина ткани задаётся отдельно от ширины печати; " +
-                "зазор и максимальная длина страницы — из общих настроек полотна.");
+                "Размеры и количество — из таблицы игроков. Ширина ткани, длина листа и зазор задаются на этой вкладке.");
             _cutAllow180 = new CheckBox { Content = "Разрешить поворот деталей резки на 180°",
                 FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
             panel.Children.Add(_cutAllow180);
@@ -550,6 +556,8 @@ namespace VanyaTools.Native
             _sheetWidth.TextChanged += (_, __) => SaveDraft();
             _cutSheetWidth.TextChanged += (_, __) => SaveDraft();
             _maxPageLength.TextChanged += (_, __) => SaveDraft();
+            _cutMaxPageLength.TextChanged += (_, __) => SaveDraft();
+            _cutGap.TextChanged += (_, __) => SaveDraft();
             _printFolder.TextChanged += (_, __) => SaveDraft();
             _cutFolder.TextChanged += (_, __) => SaveDraft();
             _printQuality.SelectionChanged += (_, __) => SaveDraft();
@@ -681,7 +689,7 @@ namespace VanyaTools.Native
                 Density = _nestingMode.SelectedIndex, Grouping = _groupingMode.SelectedIndex });
             string pdf = json.Serialize(new { Print = printing, Folder = _printFolder.Text, Quality = _printQuality.SelectedIndex });
             string cutting = json.Serialize(new { Models = models, Players = players,
-                Width = _cutSheetWidth.Text, Gap = _gap.Text, Length = _maxPageLength.Text,
+                Width = _cutSheetWidth.Text, Gap = _cutGap.Text, Length = _cutMaxPageLength.Text,
                 Rotate = _cutAllow180.IsChecked, Tags = _cutSizeTags.IsChecked,
                 CutTagLetter = _tagCutLetter.IsChecked,
                 TagLabelHex = _tagLabelHex.Text,
@@ -1546,8 +1554,10 @@ namespace VanyaTools.Native
                 SheetWidthMm = cutting
                     ? ParseMillimeters(_cutSheetWidth.Text, 300, 4000, "Ширина ткани для резки")
                     : ParseMillimeters(_sheetWidth.Text, 300, 4000, "Ширина печати"),
-                MaxPageLengthMm = ParseMillimeters(_maxPageLength.Text, 0.5, 45, "Максимальная длина страницы, м") * 1000,
-                GapMm = ParseMillimeters(_gap.Text, 0, 100, "Расстояние между деталями"),
+                MaxPageLengthMm = ParseMillimeters((cutting ? _cutMaxPageLength : _maxPageLength).Text, 0.5, 45,
+                    cutting ? "Максимальная длина листа резки, м" : "Максимальная длина листа печати, м") * 1000,
+                GapMm = ParseMillimeters((cutting ? _cutGap : _gap).Text, 0, 100,
+                    cutting ? "Расстояние между деталями резки" : "Расстояние между деталями печати"),
                 RotateSleeves = _rotateSleeves.IsChecked == true,
                 NestingMode = (SportNestingMode)(cutting ? _cutNestingMode : _nestingMode).SelectedIndex,
                 GroupingMode = (SportGroupingMode)(cutting ? _cutGroupingMode : _groupingMode).SelectedIndex,
@@ -1654,7 +1664,8 @@ namespace VanyaTools.Native
             if (_loading || _frontArt == null || _backArt == null ||
                 _leftSleeveArt == null || _rightSleeveArt == null ||
                 _neckArt == null || _modelPath == null || _rotateSleeves == null ||
-                _sheetWidth == null || _cutSheetWidth == null || _maxPageLength == null || _gap == null || _nameSide == null || _frontCase == null ||
+                _sheetWidth == null || _cutSheetWidth == null || _maxPageLength == null || _gap == null ||
+                _cutMaxPageLength == null || _cutGap == null || _nameSide == null || _frontCase == null ||
                 _printFolder == null || _cutFolder == null || _printQuality == null || _artworkLimit == null || _artworkCapture == null ||
                 _keepGuides == null || _cutAllow180 == null || _cutSizeTags == null || _tagCutLetter == null ||
                 _tagWidth == null || _tagHeight == null || _tagBridge == null || _tagLetter == null ||
@@ -1685,6 +1696,7 @@ namespace VanyaTools.Native
                     SheetWidth = _sheetWidth.Text, Gap = _gap.Text,
                     CutSheetWidth = _cutSheetWidth.Text,
                     MaxPageLength = _maxPageLength.Text,
+                    CutMaxPageLength = _cutMaxPageLength.Text, CutGap = _cutGap.Text,
                     PrintFolder = _printFolder.Text,
                     CutFolder = _cutFolder.Text,
                     PrintDpi = _printQuality.SelectedIndex == 1 ? 300 : 150,
@@ -1745,6 +1757,8 @@ namespace VanyaTools.Native
                         _cutSheetWidth.Text = draft.CutSheetWidth ?? draft.SheetWidth ?? "1500";
                         _maxPageLength.Text = draft.MaxPageLength ?? "4";
                         _gap.Text = draft.Gap ?? "10";
+                        _cutMaxPageLength.Text = draft.CutMaxPageLength ?? draft.MaxPageLength ?? "4";
+                        _cutGap.Text = draft.CutGap ?? draft.Gap ?? "10";
                         _printFolder.Text = draft.PrintFolder ?? "";
                         _cutFolder.Text = draft.CutFolder ?? "";
                         _printQuality.SelectedIndex = draft.PrintDpi == 300 ? 1 : 0;

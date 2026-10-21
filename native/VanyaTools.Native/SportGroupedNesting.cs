@@ -20,6 +20,7 @@ namespace VanyaTools.Native
                 return SportSheetNesting.Place(items, width, limit, gap, density);
             var indexed = Enumerable.Range(0, items.Count).ToList();
             var units = new List<Unit>();
+            double step = SportSheetNesting.GridStep(width, density);
             foreach (var garment in indexed.Where(index => grouping == SportGroupingMode.Garment || items[index].Part < 2)
                 .GroupBy(index => items[index].Garment))
             {
@@ -30,7 +31,6 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException((grouping == SportGroupingMode.Garment ? "Комплект №" : "Пара перед/спина №") +
                         garment.Key + " не помещается целиком на один лист. Увеличьте ширину/длину страницы или выберите свободную раскладку.");
                 var bands = new List<SportContourNesting.Band>();
-                double step = SportSheetNesting.GridStep(width, density);
                 foreach (var placed in inside.Placements)
                 {
                     placed.Index = indices[placed.Index];
@@ -51,34 +51,16 @@ namespace VanyaTools.Native
                 foreach (var member in units[block.Index].Members)
                     result.Placements.Add(new SportSheetNesting.Placement { Index = member.Index, Page = block.Page,
                         Left = block.Left + member.Left, Top = block.Top + member.Top,
+                        Column = (int)Math.Round((block.Left + member.Left) / step),
                         Width = member.Width, Height = member.Height, Rotation = member.Rotation, Profile = member.Profile });
 
             if (grouping == SportGroupingMode.FrontBackPairs)
             {
-                // Finish every torso pair first. Sleeves/neck start below the
-                // pairs, using the last page's remaining length before new pages.
-                var rest = indexed.Where(index => items[index].Part >= 2).ToList();
-                if (rest.Count > 0)
-                {
-                    int previousPages = result.PageHeights.Count;
-                    double top = result.PageHeights[previousPages - 1] + gap;
-                    double remaining = limit - top;
-                    bool append = remaining >= 10;
-                    var tail = SportSheetNesting.Place(rest.Select(index => items[index]).ToList(),
-                        width, limit, gap, density, true, append ? (double?)remaining : null);
-                    if (append)
-                    {
-                        bool firstUsed = tail.Placements.Any(part => part.Page == 0);
-                        if (firstUsed) result.PageHeights[previousPages - 1] = top + tail.PageHeights[0];
-                        foreach (double height in tail.PageHeights.Skip(1)) result.PageHeights.Add(height);
-                    }
-                    else foreach (double height in tail.PageHeights) result.PageHeights.Add(height);
-                    foreach (var part in tail.Placements)
-                        result.Placements.Add(new SportSheetNesting.Placement { Index = rest[part.Index],
-                            Page = append ? previousPages - 1 + part.Page : previousPages + part.Page,
-                            Left = part.Left, Top = part.Top + (append && part.Page == 0 ? top : 0),
-                            Width = part.Width, Height = part.Height, Rotation = part.Rotation, Profile = part.Profile });
-                }
+                // Keep torso pairs pinned, but use each actual member contour
+                // as an obstacle. Sleeves/neck can fill pockets on every page,
+                // including spaces hidden by a pair's combined envelope.
+                if (indexed.Any(index => items[index].Part >= 2))
+                    result = SportSheetNesting.Place(items, width, limit, gap, density, fixedLayout: result);
             }
             if (result.Placements.Count != items.Count || result.Placements.Select(part => part.Index).Distinct().Count() != items.Count ||
                 result.PageHeights.Any(height => height > limit + 0.001) || result.Placements.Any(part =>

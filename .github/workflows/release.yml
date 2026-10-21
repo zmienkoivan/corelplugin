@@ -21,6 +21,10 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Check nesting geometry
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.NestingChecks/VanyaTools.NestingChecks.csproj --configuration Release
+
       - name: Build installer package
         shell: pwsh
         run: .\package-native.ps1

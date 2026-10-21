@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../native/VanyaTools.Native/SportContourNesting.cs" Link="SportContourNesting.cs" />
+    <Compile Include="../../native/VanyaTools.Native/SportSheetNesting.cs" Link="SportSheetNesting.cs" />
+    <Compile Include="../../native/VanyaTools.Native/SportGroupedNesting.cs" Link="SportGroupedNesting.cs" />
+  </ItemGroup>
+</Project>

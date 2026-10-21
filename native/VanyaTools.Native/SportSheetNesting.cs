@@ -37,7 +37,7 @@ namespace VanyaTools.Native
         private sealed class Variant
         {
             public double Width, Height, Rotation;
-            public bool Rectangular;
+            public bool Rectangular, DenseSearch;
             public SportContourNesting.Profile Profile;
         }
 
@@ -61,7 +61,8 @@ namespace VanyaTools.Native
         }
 
         internal static Result Place(IList<Item> items, double width, double limit, double gap,
-            SportNestingMode mode = SportNestingMode.FullContour, bool improve = true, double? firstPageLimit = null)
+            SportNestingMode mode = SportNestingMode.FullContour, bool improve = true, double? firstPageLimit = null,
+            Result fixedLayout = null)
         {
             if (!Enum.IsDefined(typeof(SportNestingMode), mode)) throw new ArgumentOutOfRangeException(nameof(mode));
             if (width <= 0 || limit <= 0 || gap < 0 || Double.IsNaN(width + limit + gap) ||
@@ -112,12 +113,27 @@ namespace VanyaTools.Native
                 if (variants[i].Count == 0)
                     throw new InvalidOperationException("Деталь " + item.Width.ToString("0.#") + " × " +
                         item.Height.ToString("0.#") + " мм не помещается на страницу. Увеличьте её максимальную длину или ширину.");
+                foreach (Variant variant in variants[i])
+                    variant.DenseSearch = mode == SportNestingMode.FullContour && item.SmallPart;
             }
 
+            var fixedIndices = new HashSet<int>();
+            if (fixedLayout != null)
+            {
+                if (firstPageLimit.HasValue)
+                    throw new InvalidOperationException("Нельзя совмещать готовую раскладку с остатком первого листа.");
+                foreach (Placement placed in fixedLayout.Placements)
+                    if (placed.Index < 0 || placed.Index >= items.Count || !fixedIndices.Add(placed.Index) ||
+                        placed.Page < 0 || placed.Page >= fixedLayout.PageHeights.Count || placed.Profile == null ||
+                        placed.Column < 0 || placed.Column + placed.Profile.Top.Length > columns ||
+                        Math.Abs(placed.Left - placed.Column * step) > .001 || placed.Top < -.001 ||
+                        placed.Top + placed.Height > limit + .001)
+                        throw new InvalidOperationException("Некорректная закреплённая деталь раскладки.");
+            }
             Result best = null;
             for (int strategy = 0; strategy < 3; strategy++)
             {
-                IEnumerable<int> order = Enumerable.Range(0, items.Count);
+                IEnumerable<int> order = Enumerable.Range(0, items.Count).Where(i => !fixedIndices.Contains(i));
                 if (strategy == 0) order = order.OrderBy(i => items[i].SmallPart)
                     .ThenByDescending(i => items[i].Height).ThenByDescending(i => items[i].Width);
                 else if (strategy == 1) order = order.OrderBy(i => items[i].SmallPart)
@@ -125,6 +141,10 @@ namespace VanyaTools.Native
                 else order = order.OrderByDescending(i => items[i].Width * items[i].Height)
                     .ThenByDescending(i => Math.Max(items[i].Width, items[i].Height));
                 var pages = new List<Page>();
+                if (fixedLayout != null)
+                    for (int pageIndex = 0; pageIndex < fixedLayout.PageHeights.Count; pageIndex++)
+                        pages.Add(RebuildPage(fixedLayout.Placements.Where(p => p.Page == pageIndex),
+                            columns, limit, gap, gapColumns));
                 if (firstPageLimit.HasValue)
                     pages.Add(new Page(columns, Math.Max(0, Math.Min(limit, firstPageLimit.Value))));
                 foreach (int index in order)
@@ -157,9 +177,12 @@ namespace VanyaTools.Native
                     PageHeights = pages.Select(p => Math.Max(10, p.Height)).ToList(), Roughness = roughness };
                 if (Better(result, best)) best = result;
             }
-            if (improve && !firstPageLimit.HasValue && mode != SportNestingMode.Rectangles && items.Any(item => item.Bands != null))
+            // Permutation search and bottom alignment must never split pinned
+            // torso pairs. Remaining pieces were fitted against their members.
+            if (improve && fixedLayout == null && !firstPageLimit.HasValue &&
+                mode != SportNestingMode.Rectangles && items.Any(item => item.Bands != null))
                 best = ImproveContours(best, items, variants, columns, step, limit, gap, gapColumns);
-            AlignBottomRow(best, gap, gapColumns);
+            AlignBottomRow(best, gap, gapColumns, fixedIndices);
             if (best.Placements.Count != items.Count || best.Placements.Select(p => p.Index).Distinct().Count() != items.Count ||
                 best.PageHeights.Any(height => height > limit + 0.001))
                 throw new InvalidOperationException("Нестинг вернул некорректное число деталей или длину страницы.");
@@ -372,7 +395,7 @@ namespace VanyaTools.Native
                 var candidates = new SortedSet<int> { 0, last };
                 // Regular anchors explore contour interlocks; exact previous
                 // edges keep narrow side strips and internal gaps discoverable.
-                int stride = Math.Max(1, (int)Math.Floor((dense ? 2 : 8) / step));
+                int stride = Math.Max(1, (int)Math.Floor((dense || variant.DenseSearch ? 2 : 8) / step));
                 for (int column = 0; column <= last; column += stride) candidates.Add(column);
                 foreach (Placement placed in page.Placed)
                     foreach (int anchor in new[] { placed.Column, placed.Column + placed.Profile.Top.Length + gapColumns,
@@ -472,10 +495,11 @@ namespace VanyaTools.Native
             cell.Insert(index, interval);
         }
 
-        private static void AlignBottomRow(Result result, double gap, int gapColumns)
+        private static void AlignBottomRow(Result result, double gap, int gapColumns, ISet<int> fixedIndices)
         {
             foreach (Placement placed in result.Placements.OrderByDescending(p => p.Top + p.Height))
             {
+                if (fixedIndices.Contains(placed.Index)) continue;
                 double bottom = result.PageHeights[placed.Page];
                 double proposed = bottom - placed.Height;
                 if (proposed <= placed.Top + 0.001 || bottom - placed.Top - placed.Height > placed.Height) continue;
