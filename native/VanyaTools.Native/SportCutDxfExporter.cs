@@ -15,7 +15,7 @@ namespace VanyaTools.Native
         {
             public string Path, Warning;
             public double WidthMm, HeightMm;
-            public int CurveCount;
+            public int CurveCount, PartCount;
             public long Bytes;
         }
 
@@ -40,7 +40,7 @@ namespace VanyaTools.Native
             var result = new Result { CurveCount = cuttingCurves.Count };
             int oldUnit = Convert.ToInt32(document.Unit);
             bool oldDirty = Convert.ToBoolean(document.Dirty);
-            string temporary = null, staging = null;
+            string temporary = null, groupedTemporary = null, staging = null;
             dynamic colorDocument = null;
             List<object> selection = null;
             bool? oldOptimization = null;
@@ -60,9 +60,11 @@ namespace VanyaTools.Native
                 string target = AvailablePath(folder, prefix);
                 string job = Guid.NewGuid().ToString("N");
                 temporary = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Vanya-cut-" + job + ".dxf");
+                groupedTemporary = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Vanya-cut-blocks-" + job + ".dxf");
                 staging = System.IO.Path.Combine(folder, ".Vanya-cut-" + job + ".partial");
 
                 object exportDocument = (object)document;
+                var partLayers = new List<string>();
                 {
                     // Snapshot vector paths in millimetres. Only the temporary
                     // document is recoloured; source objects and colours stay intact.
@@ -99,7 +101,9 @@ namespace VanyaTools.Native
                     {
                         if (!layers.TryGetValue(copy.PartId, out object partLayer))
                         {
-                            partLayer = (object)colorPage.CreateLayer("VT_PART_" + (layers.Count + 1).ToString("00000", CultureInfo.InvariantCulture));
+                            string layerName = "VT_PART_" + (layers.Count + 1).ToString("00000", CultureInfo.InvariantCulture);
+                            partLayer = (object)colorPage.CreateLayer(layerName);
+                            partLayers.Add(layerName);
                             layers.Add(copy.PartId, partLayer);
                             groups.Add(copy.PartId, (object)application.CreateShapeRange());
                             names.Add(copy.PartId, copy.PartName);
@@ -113,7 +117,9 @@ namespace VanyaTools.Native
                             copy.Bottom + dy - Convert.ToDouble(shape.BottomY));
                         shape.Fill.ApplyNoFill(); shape.Outline.Width = copy.OutlineWidth;
                         shape.Name = copy.Name;
-                        if (singleColor.HasValue)
+                        // The label has its own laser power/color. A unified
+                        // cutting color applies only to the body and notches.
+                        if (singleColor.HasValue && !copy.Name.StartsWith(SportCutPiece.LabelPrefix, StringComparison.Ordinal))
                         {
                             Color color = singleColor.Value;
                             shape.Outline.Color.RGBAssign((int)color.R, (int)color.G, (int)color.B);
@@ -168,12 +174,15 @@ namespace VanyaTools.Native
                         error.GetBaseException().Message, error);
                 }
                 ValidateFile(temporary);
-                long bytes = new FileInfo(temporary).Length;
-                File.Copy(temporary, staging);
+                result.PartCount = SportCutDxfBlocks.Write(temporary, groupedTemporary, partLayers);
+                ValidateFile(groupedTemporary);
+                long bytes = new FileInfo(groupedTemporary).Length;
+                File.Copy(groupedTemporary, staging);
                 File.Move(staging, target);
                 result.Path = target;
                 result.Bytes = bytes;
-                Log.Info("Sport DXF export complete: " + System.IO.Path.GetFileName(target) + ", bytes=" + result.Bytes);
+                Log.Info("Sport DXF export complete: " + System.IO.Path.GetFileName(target) +
+                    ", parts/blocks=" + result.PartCount + ", bytes=" + result.Bytes);
                 return result;
             }
             finally
@@ -212,6 +221,7 @@ namespace VanyaTools.Native
                     try { application.Optimization = oldOptimization.Value; }
                     catch (Exception error) { Log.Error("Could not restore Corel optimization after DXF export.", error); }
                 DeleteTemporary(temporary);
+                DeleteTemporary(groupedTemporary);
                 DeleteTemporary(staging);
             }
         }

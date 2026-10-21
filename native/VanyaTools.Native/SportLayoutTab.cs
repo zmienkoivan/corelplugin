@@ -534,7 +534,7 @@ namespace VanyaTools.Native
             _chooseCutFolder = Button("Папка резки…", ChooseCutFolder);
             Grid.SetColumn(_chooseCutFolder, 1); cutFolderRow.Children.Add(_chooseCutFolder);
             panel.Children.Add(cutFolderRow);
-            _cutDxfSingleColor = new CheckBox { Content = "Один цвет для всех контуров",
+            _cutDxfSingleColor = new CheckBox { Content = "Один цвет для контуров резки",
                 IsChecked = false, FontSize = 11, Margin = new Thickness(0, 2, 0, 4) };
             panel.Children.Add(_cutDxfSingleColor);
             _cutDxfColorHex = new TextBox { Text = "#000000", FontSize = 11, MinHeight = 26,
@@ -545,12 +545,14 @@ namespace VanyaTools.Native
             _cutDxfColor.Click += (_, __) => ChooseCutDxfColor();
             panel.Children.Add(DockerLayout.FieldRow("Цвет контуров DXF",
                 DockerLayout.Trailing(_cutDxfColorHex, _cutDxfColor), 142));
-            DockerHelp.Add(panel, "Единый цвет применяется только в DXF ко всем контурам, включая подписи язычков. " +
+            DockerHelp.Add(panel, "Единый цвет применяется в DXF к контурам деталей, язычков и надсечкам. " +
+                "Буквы на язычках сохраняют свой отдельный цвет подписи. " +
                 "Цвета исходного CDR сохраняются. Без галочки экспортируются прежние цвета.");
             _exportCut = Button("Экспортировать активный лист резки в DXF", ExportCut);
             panel.Children.Add(_exportCut);
             DockerHelp.Add(panel, "DXF AutoCAD 2000 · миллиметры · масштаб 1:1. Экспортируется активный лист резки " +
-                "целиком, с надсечками, язычками и прорезными буквами. Папка запоминается; каждый экспорт создаёт новый файл. " +
+                "целиком; каждая деталь с надсечками, язычком и буквой записывается одним блоком DXF. " +
+                "Цвет буквы сохраняется отдельно. Папка запоминается; каждый экспорт создаёт новый файл. " +
                 "При нескольких листах откройте нужный и повторите экспорт.");
             _progress = Note("");
             var progressView = new ScrollViewer { Content = _progress, MaxHeight = 100,
@@ -1509,6 +1511,7 @@ namespace VanyaTools.Native
                 CompleteStep(5, "активный лист резки сохранён в DXF");
                 _progress.Text = "DXF готов: " + result.WidthMm.ToString("0.#") + " × " +
                     result.HeightMm.ToString("0.#") + " мм · 1:1 · " +
+                    result.PartCount + " деталей блоками · " +
                     (result.Bytes / 1048576.0).ToString("0.#") + " МБ.\n" + result.Path;
                 _status(result.Warning ?? "Лист резки сохранён в DXF: " + result.Path,
                     !String.IsNullOrEmpty(result.Warning));
