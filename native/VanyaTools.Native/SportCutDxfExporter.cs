@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace VanyaTools.Native
@@ -49,8 +50,26 @@ namespace VanyaTools.Native
                 // Native vector export: current page, independent of selection.
                 // Values verified against Corel 2026 FilterDXF.tlb. No dialog,
                 // rasterisation, curve simplification or fit-to-page scaling.
-                object filter = document.ExportEx(temporary, CorelConstants.CdrDxf,
-                    CorelConstants.CdrCurrentPage);
+                // The dynamic COM binder can reject ExportEx's first argument
+                // on Corel 27. Use explicit Automation string marshaling, as in
+                // our ImportEx path, and supply real optional options objects.
+                object exportDocument = (object)document;
+                dynamic application = CorelApp.Get();
+                object exportOptions = application.CreateStructExportOptions();
+                object paletteOptions = application.CreateStructPaletteOptions();
+                object filter;
+                try
+                {
+                    filter = exportDocument.GetType().InvokeMember("ExportEx", BindingFlags.InvokeMethod,
+                        null, exportDocument, new object[] { new BStrWrapper(System.IO.Path.GetFullPath(temporary)),
+                            CorelConstants.CdrDxf, CorelConstants.CdrCurrentPage, exportOptions, paletteOptions });
+                }
+                catch (Exception error)
+                {
+                    Log.Error("Could not start DXF ExportEx with explicit Automation arguments.", error);
+                    throw new InvalidOperationException("Не удалось начать экспорт DXF: " +
+                        error.GetBaseException().Message, error);
+                }
                 if (filter == null) throw new InvalidOperationException("CorelDRAW не открыл фильтр экспорта DXF.");
                 Set(filter, "Version", 1); // dxfVersion2000
                 Set(filter, "Units", 3); // dxfMillimeters
@@ -65,10 +84,11 @@ namespace VanyaTools.Native
                         error.GetBaseException().Message, error);
                 }
                 ValidateFile(temporary);
+                long bytes = new FileInfo(temporary).Length;
                 File.Copy(temporary, staging);
                 File.Move(staging, target);
                 result.Path = target;
-                result.Bytes = new FileInfo(target).Length;
+                result.Bytes = bytes;
                 Log.Info("Sport DXF export complete: " + System.IO.Path.GetFileName(target) + ", bytes=" + result.Bytes);
                 return result;
             }
