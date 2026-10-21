@@ -158,6 +158,34 @@ namespace VanyaTools.Native
             finally { _refreshNetworkPrinters.IsEnabled = !_busy; }
         }
 
+        internal async Task<ConnectionStatus> LabelPrinterStatus()
+        {
+            string server = _server.Text.Trim(), key = _key.Password.Trim();
+            string id = Convert.ToString(_printFormat.SelectedValue) == "mini" ? _miniPrinterId : _fullPrinterId;
+            if (server.Length == 0 || key.Length == 0) return new ConnectionStatus { Message = "Этикетки: адрес или ключ сервера не задан" };
+            if (String.IsNullOrWhiteSpace(id)) return new ConnectionStatus { Message = "Этикетки: принтер выбранного формата не назначен в настройках" };
+            try
+            {
+                var catalog = await OrderServerClient.NetworkPrintersQuick(server, key);
+                foreach (object raw in catalog.TryGetValue("stations", out object stations) ? stations as IEnumerable ?? new object[0] : new object[0])
+                {
+                    var station = raw as Dictionary<string, object>;
+                    if (station == null) continue;
+                    bool online = station.TryGetValue("online", out object flag) && Convert.ToBoolean(flag);
+                    foreach (object item in station.TryGetValue("printers", out object printers) ? printers as IEnumerable ?? new object[0] : new object[0])
+                    {
+                        var printer = item as Dictionary<string, object>;
+                        if (printer == null || PrintValue(station, "id") + "/" + PrintValue(printer, "id") != id) continue;
+                        if (printer.TryGetValue("online", out object printerFlag)) online &= Convert.ToBoolean(printerFlag);
+                        return new ConnectionStatus { Available = online, Message = "Этикетки: " + PrintValue(printer, "name") +
+                            (online ? " · модуль печати в сети" : " · нет связи с модулем печати") };
+                    }
+                }
+                return new ConnectionStatus { Message = "Этикетки: выбранный принтер отсутствует в списке сервера" };
+            }
+            catch (Exception error) { return new ConnectionStatus { Message = "Этикетки: " + error.GetBaseException().Message }; }
+        }
+
         private void UpdateLabelPrinting()
         {
             if (_printLabelButton == null) return;

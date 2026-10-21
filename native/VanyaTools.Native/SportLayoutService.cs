@@ -2521,10 +2521,9 @@ namespace VanyaTools.Native
             double left = bottomLeft + 10;
             double allowed = Math.Max(1, bottomRight - bottomLeft - 20);
             dynamic text = layer.CreateArtisticTextWide(left,
-                hemBottom + 4, caption, 0, -1, "Arial", 20);
+                hemBottom + 4, caption, 0, -1, "Arial", 10);
             text.Name = "VT_CAPTION_" + part.Replace(' ', '_');
-            if (white) text.Fill.UniformColor.RGBAssign(255, 255, 255);
-            else text.Fill.UniformColor.RGBAssign(0, 0, 0);
+            text.Fill.UniformColor.RGBAssign(192, 192, 192);
             text.Outline.SetNoOutline();
             double width = Convert.ToDouble(text.SizeWidth);
             if (width > allowed)

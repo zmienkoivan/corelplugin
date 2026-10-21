@@ -41,6 +41,8 @@ namespace VanyaTools.Native
             int oldUnit = Convert.ToInt32(document.Unit);
             bool oldDirty = Convert.ToBoolean(document.Dirty);
             string temporary = null, groupedTemporary = null, staging = null;
+            string stage = "подготовка страницы резки";
+            bool keepNativeDiagnostic = false;
             dynamic colorDocument = null;
             List<object> selection = null;
             bool? oldOptimization = null;
@@ -88,6 +90,7 @@ namespace VanyaTools.Native
                     foreach (dynamic shape in application.ActiveSelectionRange) selection.Add((object)shape);
                     oldOptimization = Convert.ToBoolean(application.Optimization);
                     application.Optimization = true;
+                    stage = "создание временного документа";
                     colorDocument = application.CreateDocument();
                     colorDocument.Unit = CorelConstants.CdrMillimeter;
                     colorDocument.AssignColorContext(document.ColorContext);
@@ -102,12 +105,14 @@ namespace VanyaTools.Native
                         if (!layers.TryGetValue(copy.PartId, out object partLayer))
                         {
                             string layerName = "VT_PART_" + (layers.Count + 1).ToString("00000", CultureInfo.InvariantCulture);
-                            partLayer = (object)colorPage.CreateLayer(layerName);
+                            stage = "создание слоя " + layerName;
+                            partLayer = CreatePartLayer((object)colorPage, layerName);
                             partLayers.Add(layerName);
                             layers.Add(copy.PartId, partLayer);
                             groups.Add(copy.PartId, (object)application.CreateShapeRange());
                             names.Add(copy.PartId, copy.PartName);
                         }
+                        stage = "копирование контуров детали";
                         dynamic colorLayer = partLayer;
                         dynamic shape = colorLayer.CreateCurve(copy.Curve);
                         if (shape == null || Math.Abs(Convert.ToDouble(shape.SizeWidth) - copy.Width) > .01 ||
@@ -129,9 +134,16 @@ namespace VanyaTools.Native
                     }
                     foreach (var entry in groups)
                     {
+                        dynamic partLayer = layers[entry.Key];
+                        stage = "группировка на слое " + Convert.ToString(partLayer.Name);
+                        // Group() uses the active layer. Merely creating each
+                        // curve on its part layer does not pin the final group.
+                        partLayer.Activate();
                         dynamic range = entry.Value;
                         object piece = Convert.ToInt32(range.Count) == 1 ? (object)range[1] : (object)range.Group();
+                        KeepPartLayer(piece, (object)partLayer);
                         piece = SportCutPiece.Combine((object)application, piece);
+                        KeepPartLayer(piece, (object)partLayer);
                         ((dynamic)piece).Name = names[entry.Key];
                     }
                     result.CurveCount = copies.Count;
@@ -147,6 +159,7 @@ namespace VanyaTools.Native
                 object exportOptions = application.CreateStructExportOptions();
                 object paletteOptions = application.CreateStructPaletteOptions();
                 object filter;
+                stage = "запуск фильтра DXF";
                 try
                 {
                     filter = exportDocument.GetType().InvokeMember("ExportEx", BindingFlags.InvokeMethod,
@@ -174,9 +187,15 @@ namespace VanyaTools.Native
                         error.GetBaseException().Message, error);
                 }
                 ValidateFile(temporary);
-                result.PartCount = SportCutDxfBlocks.Write(temporary, groupedTemporary, partLayers);
-                ValidateFile(groupedTemporary);
+                stage = "сборка блоков из DXF";
+                try
+                {
+                    result.PartCount = SportCutDxfBlocks.Write(temporary, groupedTemporary, partLayers);
+                    ValidateFile(groupedTemporary);
+                }
+                catch { keepNativeDiagnostic = true; throw; }
                 long bytes = new FileInfo(groupedTemporary).Length;
+                stage = "сохранение готового DXF";
                 File.Copy(groupedTemporary, staging);
                 File.Move(staging, target);
                 result.Path = target;
@@ -184,6 +203,12 @@ namespace VanyaTools.Native
                 Log.Info("Sport DXF export complete: " + System.IO.Path.GetFileName(target) +
                     ", parts/blocks=" + result.PartCount + ", bytes=" + result.Bytes);
                 return result;
+            }
+            catch (Exception error)
+            {
+                Log.Error("Sport DXF failed during " + stage + ".", error);
+                string diagnostic = keepNativeDiagnostic ? "\nШтатный DXF для диагностики: " + temporary : "";
+                throw new InvalidOperationException("Этап «" + stage + "»: " + error.GetBaseException().Message + diagnostic, error);
             }
             finally
             {
@@ -220,10 +245,43 @@ namespace VanyaTools.Native
                 if (oldOptimization.HasValue)
                     try { application.Optimization = oldOptimization.Value; }
                     catch (Exception error) { Log.Error("Could not restore Corel optimization after DXF export.", error); }
-                DeleteTemporary(temporary);
+                if (!keepNativeDiagnostic) DeleteTemporary(temporary);
                 DeleteTemporary(groupedTemporary);
                 DeleteTemporary(staging);
             }
+        }
+
+        private static object CreatePartLayer(object page, string name)
+        {
+            // Use the method explicitly, without any COM default-property or
+            // named-item lookup. Names travel as Automation strings.
+            object layer = page.GetType().InvokeMember("CreateLayer", BindingFlags.InvokeMethod,
+                null, page, new object[] { new BStrWrapper(name) });
+            if (layer == null) throw new InvalidOperationException("CorelDRAW не создал временный слой «" + name + "».");
+            dynamic created = layer;
+            if (!String.Equals(Convert.ToString(created.Name), name, StringComparison.Ordinal))
+                throw new InvalidOperationException("CorelDRAW изменил имя временного слоя «" + name + "».");
+            created.Visible = true; created.Printable = true;
+            return layer;
+        }
+
+        private static void KeepPartLayer(object piece, object targetLayer)
+        {
+            dynamic shape = piece, layer = targetLayer;
+            string expected = Convert.ToString(layer.Name);
+            if (!String.Equals(Convert.ToString(shape.Layer.Name), expected, StringComparison.Ordinal))
+                shape.MoveToLayer(targetLayer);
+            VerifyPartLayer(piece, expected);
+        }
+
+        private static void VerifyPartLayer(object piece, string expected, int depth = 0)
+        {
+            if (depth > 12) throw new InvalidOperationException("Слишком глубокая группа детали резки.");
+            dynamic shape = piece;
+            if (!String.Equals(Convert.ToString(shape.Layer.Name), expected, StringComparison.Ordinal))
+                throw new InvalidOperationException("CorelDRAW не сохранил контуры на слое детали «" + expected + "».");
+            if (Convert.ToInt32(shape.Type) == CorelConstants.CdrGroupShape)
+                foreach (dynamic child in shape.Shapes) VerifyPartLayer((object)child, expected, depth + 1);
         }
 
         private static bool ExportVisible(object original)

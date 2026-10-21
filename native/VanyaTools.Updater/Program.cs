@@ -19,6 +19,8 @@ namespace VanyaTools.Updater
 
         private static int Main(string[] args)
         {
+            if (args != null && args.Length == 1 && args[0] == "--connectivity-worker")
+                return ConnectivityWorker.Run();
             if (args != null && args.Length == 1 && args[0] == "--replicate-worker")
                 return RunReplicateWorker();
             if (args != null && args.Length == 1 && args[0] == "--openai-image-worker")

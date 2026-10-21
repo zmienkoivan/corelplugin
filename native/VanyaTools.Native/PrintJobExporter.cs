@@ -14,39 +14,47 @@ namespace VanyaTools.Native
         internal static async Task<SportPrintExporter.Result> Export(string folder, int dpi, int button,
             PrintIccOptions options, Func<string, bool> confirmPage)
         {
-            folder = PrintExportSettings.NormalizeFolder(folder, true);
-            options = (options ?? new PrintIccOptions()).Copy(); options.Validate();
+            folder = PrintExportSettings.NormalizeFolder(folder);
+            if (String.IsNullOrWhiteSpace(folder)) throw new InvalidOperationException("Укажите папку этой кнопки в настройках печати.");
+            options = (options ?? new PrintIccOptions()).Copy();
             string process = button >= 3 ? "UV" : "DTF";
-            if (options.Mode == PrintIccMode.Preserve)
-                return SportPrintExporter.Export(folder, dpi, true, button != 0, processName: process, confirmPage: confirmPage);
 
             string job = Guid.NewGuid().ToString("N");
             string workspace = Path.Combine(Path.GetTempPath(), "Vanya-print-icc-" + job);
             string ready = Path.Combine(workspace, "ready.pdf"), profile = Path.Combine(workspace, "input.icc");
-            string staging = Path.Combine(folder, ".Vanya-print-icc-" + job + ".partial");
             SportPrintExporter.Result result = null;
             Directory.CreateDirectory(workspace);
             try
             {
-                if (options.Mode == PrintIccMode.Assign)
-                    File.WriteAllBytes(profile, IccProfileFile.Read(options.ProfilePath).Data);
                 // The native publisher restores the source CDR before this
-                // method first yields. Only this job's temporary PDF is edited.
+                // method first yields. All modes prepare locally, so no network
+                // folder operation can block Corel's dispatcher.
                 result = SportPrintExporter.Export(workspace, dpi, true, button != 0, processName: process, confirmPage: confirmPage);
-                await ProcessPdf(result.Path, ready, result.WidthMm, result.HeightMm, options.Mode, profile);
-                string target = Path.Combine(folder, Path.GetFileName(result.Path));
-                long bytes = new FileInfo(ready).Length;
-                File.Copy(ready, staging); File.Move(staging, target);
+                string prepared = result.Path;
+                if (options.Mode != PrintIccMode.Preserve)
+                {
+                    await Task.Run(() => {
+                        options.Validate();
+                        if (options.Mode == PrintIccMode.Assign) File.WriteAllBytes(profile, IccProfileFile.Read(options.ProfilePath).Data);
+                    });
+                    await ProcessPdf(result.Path, ready, result.WidthMm, result.HeightMm, options.Mode, profile);
+                    prepared = ready;
+                }
+                // Keep the exported filename even when the ICC tool used ready.pdf.
+                string delivery = Path.Combine(workspace, Path.GetFileName(result.Path));
+                if (prepared != delivery) File.Copy(prepared, delivery, true);
+                ConnectionStatus sent = await ConnectivityClient.Deliver(delivery, folder);
+                if (!sent.Available) throw new IOException(sent.Message);
                 string original = result.Path;
-                result.Path = target; result.Bytes = bytes;
+                result.Path = sent.Path; result.Bytes = sent.Bytes;
                 TryDelete(original);
-                Log.Info("Print ICC complete: mode=" + options.Mode + ", file=" + Path.GetFileName(target));
+                Log.Info("Print delivery complete: mode=" + options.Mode + ", file=" + Path.GetFileName(result.Path));
                 return result;
             }
             finally
             {
                 if (result != null && String.Equals(Path.GetDirectoryName(result.Path), workspace, StringComparison.OrdinalIgnoreCase)) TryDelete(result.Path);
-                TryDelete(ready); TryDelete(profile); TryDelete(staging);
+                TryDelete(ready); TryDelete(profile);
                 try { Directory.Delete(workspace, false); }
                 catch (Exception error) { Log.Error("Could not remove print ICC workspace.", error); }
             }

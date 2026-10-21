@@ -507,9 +507,27 @@ namespace VanyaTools.Native
             _dueDate.SelectedDateChanged += (_, __) => FormChanged();
             QuickDocumentFields = CreateQuickDocumentFields();
             _documentWatcher = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-            _documentWatcher.Tick += (_, __) => RefreshDocument();
+            _documentWatcher.Tick += (_, __) => {
+                if (IsVisible || QuickDocumentFields.IsVisible) RefreshDocument();
+                else _documentWatcher.Stop();
+            };
             _serverWatcher = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-            _serverWatcher.Tick += async (_, __) => await LoadOrders(true);
+            _serverWatcher.Tick += async (_, __) => {
+                if (OrdersView.IsVisible) await LoadOrders(true);
+                else _serverWatcher.Stop();
+            };
+            IsVisibleChanged += (_, __) => {
+                if (IsLoaded && IsVisible) { _documentWatcher.Start(); RefreshDocument(); }
+                else if (!QuickDocumentFields.IsVisible) _documentWatcher.Stop();
+            };
+            QuickDocumentFields.IsVisibleChanged += (_, __) => {
+                if (QuickDocumentFields.IsLoaded && QuickDocumentFields.IsVisible) { _documentWatcher.Start(); RefreshDocument(); }
+                else if (!IsVisible) _documentWatcher.Stop();
+            };
+            OrdersView.IsVisibleChanged += async (_, __) => {
+                if (OrdersView.IsLoaded && OrdersView.IsVisible) { _serverWatcher.Start(); await LoadOrders(true); }
+                else _serverWatcher.Stop();
+            };
             Loaded += (_, __) => { _documentWatcher.Start(); RefreshDocument(); };
             Unloaded += (_, __) => { if (!QuickDocumentFields.IsLoaded) _documentWatcher.Stop();
                 if (!OrdersView.IsLoaded) _serverWatcher.Stop(); };
@@ -761,7 +779,8 @@ namespace VanyaTools.Native
                 if (String.IsNullOrWhiteSpace(_data.DesignName)) _data.DesignName = pathDesign;
             }
             _documentPath = String.IsNullOrWhiteSpace(path) ? null : path;
-            MirrorFrameSnapshots(_documentPath);
+            // Loading a CDR must not copy its photos to a possibly unavailable
+            // network share on the UI thread. Explicit saving mirrors them.
             _documentIdentity = (object)doc;
             _failedDocumentIdentity = null;
             _failedDocumentPath = null;
@@ -1075,13 +1094,14 @@ namespace VanyaTools.Native
         {
             if (String.IsNullOrWhiteSpace(frame.SnapshotId) ||
                 String.IsNullOrWhiteSpace(_data.FrameStoreId)) return null;
+            string local = SnapshotPath(_data.FrameStoreId, frame.SnapshotId, null);
+            if (File.Exists(local)) return File.ReadAllBytes(local);
             if (!String.IsNullOrWhiteSpace(_documentPath))
             {
                 string shared = SnapshotPath(_data.FrameStoreId, frame.SnapshotId, _documentPath);
                 if (File.Exists(shared)) return File.ReadAllBytes(shared);
             }
-            string local = SnapshotPath(_data.FrameStoreId, frame.SnapshotId, null);
-            return File.Exists(local) ? File.ReadAllBytes(local) : null;
+            return null;
         }
 
         private bool MirrorFrameSnapshots(string documentPath)

@@ -57,7 +57,20 @@ namespace VanyaTools.Native
                     dynamic label = ((dynamic)item).CopyToLayer(layer);
                     created.Add((object)label); range.Add((object)label);
                 }
-                result = labels.Count == 0 ? (object)contour : (object)range.Group();
+                if (labels.Count == 0) result = (object)contour;
+                else
+                {
+                    dynamic previousLayer = app.ActiveLayer;
+                    try
+                    {
+                        layer.Activate();
+                        result = (object)range.Group();
+                        dynamic grouped = result;
+                        if (!String.Equals(Convert.ToString(grouped.Layer.Name), Convert.ToString(layer.Name), StringComparison.Ordinal))
+                            grouped.MoveToLayer((object)layer);
+                    }
+                    finally { previousLayer.Activate(); }
+                }
                 dynamic combined = result;
                 if (Math.Abs(Convert.ToDouble(combined.SizeWidth) - width) > .01 ||
                     Math.Abs(Convert.ToDouble(combined.SizeHeight) - height) > .01 ||

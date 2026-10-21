@@ -181,7 +181,7 @@ namespace VanyaTools.Native
             _busy = true; _panel.IsEnabled = false; _quickPanel.IsEnabled = false;
             try
             {
-                string folder = PrintExportSettings.NormalizeFolder(_settings.Folder(index), true);
+                string folder = PrintExportSettings.NormalizeFolder(_settings.Folder(index));
                 _status("Готовлю PDF для печати…", false);
                 var result = await PrintJobExporter.Export(folder, _settings.PrintDpi == 150 ? 150 : 300, index,
                     _settings.IccFor(index), question => MessageBox.Show(question,

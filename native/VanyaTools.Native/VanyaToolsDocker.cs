@@ -38,6 +38,7 @@ namespace VanyaTools.Native
         private readonly System.Windows.Controls.RadioButton _rotatePackClockwise;
         private readonly System.Windows.Controls.RadioButton _rotatePackCounterClockwise;
         private readonly CorelHotkeyManager _hotkeys;
+        private readonly DockerUiWatchdog _uiWatchdog;
         private static WeakReference<VanyaToolsDocker> _toolbarTarget;
         private PrintFrameAnchor _printFrameAnchor = PrintFrameAnchor.TopCenter;
         private static readonly string TabsPlacementPath = Path.Combine(
@@ -54,6 +55,9 @@ namespace VanyaTools.Native
             CorelApp.SetHostApplication(app);
             _toolbarTarget = new WeakReference<VanyaToolsDocker>(this);
             Log.Info("VanyaToolsDocker constructor started.");
+            _uiWatchdog = new DockerUiWatchdog(Dispatcher);
+            Loaded += (_, __) => _uiWatchdog.Start();
+            Unloaded += (_, __) => _uiWatchdog.Stop();
 
             var outer = new Grid
             {
@@ -73,7 +77,9 @@ namespace VanyaTools.Native
                 FontWeight = FontWeights.SemiBold,
                 Margin = new Thickness(0, 0, 0, 3)
             };
-            outer.Children.Add(heading);
+            var headingRow = new DockPanel();
+            headingRow.Children.Add(heading);
+            outer.Children.Add(headingRow);
 
             _status = new TextBlock
             {
@@ -97,6 +103,9 @@ namespace VanyaTools.Native
             var aiTools = new AiPrintTab(ImportAiResult,
                 (message, isError) => SetStatus(message, isError), CaptureAiSelection);
             var orderCards = new OrderCardTab((message, isError) => SetStatus(message, isError));
+            var connectionIndicators = new ConnectionIndicators(() => aiTools.GetToken(), orderCards.LabelPrinterStatus);
+            DockPanel.SetDock(connectionIndicators, Dock.Right);
+            headingRow.Children.Insert(0, connectionIndicators);
             var standardPage = new DockPanel();
             DockPanel.SetDock(orderCards.QuickDocumentFields, Dock.Bottom);
             standardPage.Children.Add(orderCards.QuickDocumentFields);
@@ -701,6 +710,7 @@ namespace VanyaTools.Native
 
         private void SetStatus(string text, bool isError)
         {
+            _uiWatchdog?.Note(text);
             _status.Text = text;
             _status.Foreground = isError
                 ? new SolidColorBrush(Color.FromRgb(138, 31, 17))

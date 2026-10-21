@@ -132,6 +132,9 @@ namespace VanyaTools.Native
         private readonly DispatcherTimer _documentWatch = new DispatcherTimer {
             Interval = TimeSpan.FromSeconds(1) };
         private string _workflowDocument, _workflowSession, _workflowId, _savedWorkflow;
+        private object _playersDocument;
+        private string _playersDocumentKey, _savedProjectPlayers;
+        private bool _switchingPlayers, _playersEverBound;
 
         public SportLayoutTab(Action<string, bool> status)
         {
@@ -328,6 +331,13 @@ namespace VanyaTools.Native
             playerButtons.Children.Add(Button("Добавить из Excel / Google Таблиц", PastePlayers));
             playerButtons.Children.Add(Button("Убрать строки", RemovePlayers));
             playerControls.Children.Add(playerButtons);
+            var playerFiles = new WrapPanel();
+            playerFiles.Children.Add(Button("Сохранить список CSV…", SavePlayersFile));
+            playerFiles.Children.Add(Button("Загрузить список CSV…", LoadPlayersFile));
+            playerControls.Children.Add(playerFiles);
+            DockerHelp.Add(playerControls, "Список игроков и все галочки сохраняются внутри текущего CDR. " +
+                "При переключении проектов загружается их собственная таблица. Сохраните CDR, чтобы перенести список на другой ПК. " +
+                "CSV — отдельная копия списка для Блокнота или Excel.");
             var printButtons = new WrapPanel();
             printButtons.Children.Add(Button("Печатать всех", (_, __) => SetPlayersEnabled(true)));
             printButtons.Children.Add(Button("Снять все", (_, __) => SetPlayersEnabled(false)));
@@ -612,6 +622,17 @@ namespace VanyaTools.Native
             RefreshWorkflow();
             _steps.SelectionChanged += (_, e) => { if (e.Source == _steps) SaveDraft(); };
             _documentWatch.Tick += (_, __) => { if (!_busy) RefreshWorkflowDocument(); };
+            PreviewMouseDown += (_, __) => { if (!_busy && !_loading) RefreshWorkflowDocument(); };
+            _playerGrid.BeginningEdit += (_, e) => {
+                try
+                {
+                    object document = (object)CorelApp.Get().ActiveDocument;
+                    if (SportProjectPlayers.SameDocument(document, _playersDocument)) return;
+                    e.Cancel = true;
+                    Dispatcher.BeginInvoke(new Action(RefreshWorkflowDocument), DispatcherPriority.Background);
+                }
+                catch { e.Cancel = true; }
+            };
             IsVisibleChanged += (_, __) => UpdateDocumentWatch();
             Loaded += (_, __) => UpdateDocumentWatch();
             Unloaded += (_, __) => _documentWatch.Stop();
@@ -762,6 +783,7 @@ namespace VanyaTools.Native
 
         private void RefreshWorkflowDocument()
         {
+            if (_switchingPlayers) return;
             try
             {
                 dynamic app = CorelApp.Get();
@@ -769,10 +791,12 @@ namespace VanyaTools.Native
                 if (document == null)
                 {
                     if (Convert.ToInt32(app.Documents.Count) != 0) return;
+                    BindProjectPlayers(null);
                     _workflowDocument = _workflowSession = _workflowId = _savedWorkflow = null;
                     ClearCompletedSteps(1, 3, 4, 5);
                     return;
                 }
+                BindProjectPlayers(document);
                 string session = SportWorkflowProgress.SessionKey(document);
                 SportWorkflowProgress stored = SportWorkflowProgress.Read(document);
                 // A missing property during a native transition or Undo must
@@ -820,6 +844,111 @@ namespace VanyaTools.Native
                 _documentWatch.Start();
             }
             else _documentWatch.Stop();
+        }
+
+        private void BindProjectPlayers(object document)
+        {
+            if (_switchingPlayers || _loading) return;
+            string key = PlayersDocumentKey(document);
+            if (SportProjectPlayers.SameDocument(document, _playersDocument)) { _playersDocumentKey = key; return; }
+            _switchingPlayers = true;
+            bool previousLoading = _loading;
+            try
+            {
+                _loading = true;
+                if (!_playerGrid.CommitEdit(DataGridEditingUnit.Cell, true) || !_playerGrid.CommitEdit(DataGridEditingUnit.Row, true))
+                    throw new InvalidOperationException("Закончите редактирование ячейки списка перед сменой проекта.");
+                PersistProjectPlayers();
+                SportProjectPlayers stored = document == null ? null : SportProjectPlayers.Read(document);
+                bool migrateLegacy = document != null && !_playersEverBound && stored == null;
+                _loading = true;
+                if (!migrateLegacy)
+                {
+                    EnsurePlayerSizes(stored?.Players ?? new List<SportLayoutPlayer>());
+                    _players.Clear();
+                    foreach (SportLayoutPlayer row in stored?.Players ?? new List<SportLayoutPlayer>()) _players.Add(row);
+                }
+                _playersDocument = document; _playersDocumentKey = key;
+                _workflowDocument = _workflowSession = _workflowId = _savedWorkflow = null;
+                _stepInputs = null;
+                Array.Clear(_completedSteps, 0, _completedSteps.Length);
+                Array.Clear(_stepDetails, 0, _stepDetails.Length);
+                _savedProjectPlayers = stored == null ? null : SportProjectPlayers.Json(_players);
+                if (document != null) _playersEverBound = true;
+                RefreshSizes(); _playerGrid.Items.Refresh(); UpdateCount();
+                // Only the first document may adopt the pre-upgrade global list.
+                // A new project never inherits another order's players.
+                if (migrateLegacy && _players.Count > 0) PersistProjectPlayers();
+                else if (stored == null) _savedProjectPlayers = SportProjectPlayers.Json(_players);
+            }
+            finally { _loading = previousLoading; _switchingPlayers = false; }
+        }
+
+        private static string PlayersDocumentKey(object document)
+        {
+            if (document == null) return null;
+            string key = Convert.ToString(((dynamic)document).CodeName);
+            return String.IsNullOrEmpty(key) ? SportWorkflowProgress.SessionKey(document) : key;
+        }
+
+        private void PersistProjectPlayers()
+        {
+            if (_playersDocument == null) return;
+            string json = SportProjectPlayers.Json(_players);
+            if (json == _savedProjectPlayers) return;
+            SportProjectPlayers.Write(_playersDocument, json);
+            _savedProjectPlayers = json;
+        }
+
+        private async void SavePlayersFile(object sender, RoutedEventArgs e)
+        {
+            if (_busy) return;
+            try
+            {
+                RefreshWorkflowDocument();
+                if (_playersDocument == null) throw new InvalidOperationException("Откройте CDR проекта.");
+                if (!_playerGrid.CommitEdit(DataGridEditingUnit.Cell, true) || !_playerGrid.CommitEdit(DataGridEditingUnit.Row, true))
+                    throw new InvalidOperationException("Закончите редактирование ячейки.");
+                SaveDraft();
+                var dialog = new SaveFileDialog { Filter = "Список игроков CSV (*.csv)|*.csv", DefaultExt = ".csv",
+                    FileName = Path.GetFileNameWithoutExtension(Convert.ToString(((dynamic)_playersDocument).FileName)) + " - игроки.csv" };
+                if (dialog.ShowDialog() != true) return;
+                string csv = SportProjectPlayers.Csv(_players), path = dialog.FileName;
+                await System.Threading.Tasks.Task.Run(() => File.WriteAllText(path, csv, new UTF8Encoding(true)));
+                _status("Список игроков сохранён: " + path, false);
+            }
+            catch (Exception error) { Log.Error("Could not save project players CSV.", error); _status(error.GetBaseException().Message, true); }
+        }
+
+        private async void LoadPlayersFile(object sender, RoutedEventArgs e)
+        {
+            if (_busy) return;
+            try
+            {
+                RefreshWorkflowDocument();
+                if (_playersDocument == null) throw new InvalidOperationException("Откройте CDR проекта.");
+                object project = _playersDocument;
+                var dialog = new OpenFileDialog { Filter = "Список игроков CSV (*.csv)|*.csv", CheckFileExists = true };
+                if (dialog.ShowDialog() != true) return;
+                string path = dialog.FileName;
+                var rows = await System.Threading.Tasks.Task.Run(() => {
+                    string csv;
+                    try { csv = File.ReadAllText(path, new UTF8Encoding(false, true)); }
+                    catch (DecoderFallbackException) { csv = File.ReadAllText(path, Encoding.GetEncoding(1251)); }
+                    return SportProjectPlayers.ParseCsv(csv);
+                });
+                RefreshWorkflowDocument();
+                if (!SportProjectPlayers.SameDocument(project, _playersDocument))
+                    throw new InvalidOperationException("Проект сменился. Повторите загрузку для нужного CDR.");
+                if (_players.Count > 0 && MessageBox.Show("Заменить текущий список игроков списком из CSV?", "Список игроков",
+                    MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+                _loading = true;
+                try { EnsurePlayerSizes(rows); _players.Clear(); foreach (SportLayoutPlayer row in rows) _players.Add(row); RefreshSizes(); }
+                finally { _loading = false; }
+                _playerGrid.Items.Refresh(); UpdateCount(); SaveDraft();
+                _status("Загружено игроков: " + rows.Count + ". Список привязан к текущему CDR.", false);
+            }
+            catch (Exception error) { Log.Error("Could not load project players CSV.", error); _status(error.GetBaseException().Message, true); }
         }
 
         private void AddTemplate(object sender, RoutedEventArgs e)
@@ -882,10 +1011,19 @@ namespace VanyaTools.Native
         {
             if (_sizeOptions == null) return;
             string[] sizes = _templates.Select(x => x.Size?.Trim())
+                .Concat(_players.Select(row => row.Size))
                 .Where(x => !String.IsNullOrWhiteSpace(x))
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            _sizeOptions.Clear();
-            foreach (string size in sizes) _sizeOptions.Add(size);
+                .Distinct(StringComparer.Ordinal).ToArray();
+            // Do not reset SelectedItem bindings to null while rebuilding the list.
+            foreach (string size in sizes) if (!_sizeOptions.Contains(size)) _sizeOptions.Add(size);
+            for (int i = _sizeOptions.Count - 1; i >= 0; i--)
+                if (!sizes.Contains(_sizeOptions[i], StringComparer.Ordinal)) _sizeOptions.RemoveAt(i);
+        }
+
+        private void EnsurePlayerSizes(IEnumerable<SportLayoutPlayer> players)
+        {
+            foreach (SportLayoutPlayer row in players)
+                if (!String.IsNullOrWhiteSpace(row.Size) && !_sizeOptions.Contains(row.Size)) _sizeOptions.Add(row.Size);
         }
 
         private void AddApproximateSizes(object sender, RoutedEventArgs e)
@@ -1248,8 +1386,8 @@ namespace VanyaTools.Native
             SetActionButtons(false);
             try
             {
-                var templates = SportLayoutService.RequestedTemplates(_templates, _players);
                 SportLayoutOptions options = ReadOptions();
+                var templates = SportLayoutService.RequestedTemplates(_templates, _players);
                 SaveDraft();
                 var service = new SportLayoutService();
                 _progress.Text = "Проверяю и добавляю выбранные размеры: " +
@@ -1628,6 +1766,7 @@ namespace VanyaTools.Native
 
         private SportLayoutOptions ReadOptions(bool cutting = false)
         {
+            BindProjectPlayers((object)CorelApp.Get().ActiveDocument);
             return new SportLayoutOptions {
                 FrontArtworkPath = _frontArt.Text.Trim(),
                 BackArtworkPath = _backArt.Text.Trim(),
@@ -1744,7 +1883,7 @@ namespace VanyaTools.Native
 
         private void SaveDraft()
         {
-            if (_loading || _frontArt == null || _backArt == null ||
+            if (_loading || _switchingPlayers || _frontArt == null || _backArt == null ||
                 _leftSleeveArt == null || _rightSleeveArt == null ||
                 _neckArt == null || _modelPath == null || _rotateSleeves == null ||
                 _sheetWidth == null || _cutSheetWidth == null || _maxPageLength == null || _gap == null ||
@@ -1757,8 +1896,10 @@ namespace VanyaTools.Native
                 _templateGrid == null || _playerGrid == null) return;
             try
             {
+                PersistProjectPlayers();
                 if (IsLoaded && !_busy) RefreshWorkflowDocument();
                 RefreshWorkflow();
+                PersistProjectPlayers();
                 PersistWorkflow(false);
                 Directory.CreateDirectory(Path.GetDirectoryName(DraftPath));
                 var draft = new Draft {

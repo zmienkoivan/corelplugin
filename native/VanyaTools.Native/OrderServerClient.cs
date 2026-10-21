@@ -85,6 +85,9 @@ namespace VanyaTools.Native
         internal static Task<Dictionary<string, object>> NetworkPrinters(string server, string key) =>
             Task.Run(() => RunWorker("print-printers", server, key, 0, null, null));
 
+        internal static Task<Dictionary<string, object>> NetworkPrintersQuick(string server, string key) =>
+            Task.Run(() => RunWorker("print-printers", server, key, 0, null, null, timeoutMs: 8000));
+
         internal static Task<Dictionary<string, object>> SubmitPrint(string server, string key, Dictionary<string, object> job) =>
             Task.Run(() => RunWorker("print-submit", server, key, 0, null, new JavaScriptSerializer().Serialize(job)));
 
@@ -92,7 +95,7 @@ namespace VanyaTools.Native
             Task.Run(() => RunWorker("print-status", server, key, 0, clientKey, null));
 
         private static Dictionary<string, object> RunWorker(string action, string server, string key,
-            int orderId, string number, string details, IList<byte[]> photos = null)
+            int orderId, string number, string details, IList<byte[]> photos = null, int? timeoutMs = null)
         {
             string exe = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "VanyaTools", "VanyaTools.ReplicateWorker.exe");
@@ -133,11 +136,12 @@ namespace VanyaTools.Native
                         Encoding.UTF8.GetBytes(serializer.Serialize(job))));
                     process.StandardInput.Close();
                     bool printing = action.StartsWith("print-", StringComparison.Ordinal);
-                    if (!process.WaitForExit(printing ? 60 * 1000 : action == "photo" || action == "photo-full"
-                        ? 90 * 1000 : 8 * 60 * 1000))
+                    if (!process.WaitForExit(timeoutMs ?? (printing ? 60 * 1000 : action == "photo" || action == "photo-full"
+                        ? 90 * 1000 : 8 * 60 * 1000)))
                     {
                         try { process.Kill(); } catch { }
-                        throw new TimeoutException(printing ? "Очередь печати не ответила за минуту. Повторная кнопка проверит то же задание." : "Сервер заказов не ответил за 8 минут. Проверьте канал перед повтором.");
+                        throw new TimeoutException(timeoutMs.HasValue ? "Сервер принтера не ответил за 8 секунд." :
+                            printing ? "Очередь печати не ответила за минуту. Повторная кнопка проверит то же задание." : "Сервер заказов не ответил за 8 минут. Проверьте канал перед повтором.");
                     }
                     Dictionary<string, object> reply;
                     try
