@@ -86,6 +86,7 @@ namespace VanyaTools.Native
                 Bottom = Enumerable.Repeat(Double.NegativeInfinity, width).ToArray() };
             foreach (Band band in item.Bands)
             {
+                SportNestingCancellation.Check();
                 // Corel's positive 90 degrees is counterclockwise. These
                 // bands use a downward Y axis, measured from the top left.
                 double left = angle == 90 ? band.Top : angle == 180 ? item.Width - band.Right : band.Left;

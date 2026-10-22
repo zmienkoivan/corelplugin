@@ -13,17 +13,18 @@ namespace VanyaTools.Native
         }
 
         internal static SportSheetNesting.Result Place(IList<SportSheetNesting.Item> items, double width,
-            double limit, double gap, SportNestingMode density, SportGroupingMode grouping)
+            double limit, double gap, SportNestingMode density, SportGroupingMode grouping, bool improve = true)
         {
             if (!Enum.IsDefined(typeof(SportGroupingMode), grouping)) throw new ArgumentOutOfRangeException(nameof(grouping));
             if (grouping == SportGroupingMode.Free)
-                return SportSheetNesting.Place(items, width, limit, gap, density);
+                return SportSheetNesting.Place(items, width, limit, gap, density, improve);
             var indexed = Enumerable.Range(0, items.Count).ToList();
             var units = new List<Unit>();
             double step = SportSheetNesting.GridStep(width, density);
             foreach (var garment in indexed.Where(index => grouping == SportGroupingMode.Garment || items[index].Part < 2)
                 .GroupBy(index => items[index].Garment))
             {
+                SportNestingCancellation.Check();
                 var indices = garment.OrderBy(index => items[index].Part).ToList();
                 var inside = SportSheetNesting.Place(indices.Select(index => items[index]).ToList(),
                     width, limit, gap, density, false);
@@ -43,8 +44,8 @@ namespace VanyaTools.Native
                     Item = new SportSheetNesting.Item { Width = inside.Placements.Max(part => part.Left + part.Width),
                         Height = inside.PageHeights[0], Bands = bands } });
             }
-            if (units.Count == 0) return SportSheetNesting.Place(items, width, limit, gap, density);
-            var outside = SportSheetNesting.Place(units.Select(unit => unit.Item).ToList(), width, limit, gap, density);
+            if (units.Count == 0) return SportSheetNesting.Place(items, width, limit, gap, density, improve);
+            var outside = SportSheetNesting.Place(units.Select(unit => unit.Item).ToList(), width, limit, gap, density, improve);
             var result = new SportSheetNesting.Result { PageHeights = outside.PageHeights.ToList(),
                 Placements = new List<SportSheetNesting.Placement>() };
             foreach (var block in outside.Placements)

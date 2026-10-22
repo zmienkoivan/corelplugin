@@ -2,11 +2,23 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 
 namespace VanyaTools.Native
 {
     internal enum SportNestingMode { Rectangles, Simplified, FullContour }
     internal enum SportGroupingMode { Free, FrontBackPairs, Garment }
+    internal static class SportNestingCancellation
+    {
+        [ThreadStatic] private static CancellationToken _token;
+        internal static void Check() => _token.ThrowIfCancellationRequested();
+        internal static T Run<T>(CancellationToken token, Func<T> work)
+        {
+            var previous = _token; _token = token;
+            try { Check(); return work(); }
+            finally { _token = previous; }
+        }
+    }
     // Bounded pages retain every occupied interval, including gaps above the
     // lowest placed pieces. Search never calls the Corel object model.
     internal static class SportSheetNesting
@@ -75,6 +87,7 @@ namespace VanyaTools.Native
             var variants = new List<Variant>[items.Count];
             for (int i = 0; i < items.Count; i++)
             {
+                SportNestingCancellation.Check();
                 Item item = items[i];
                 if (item.Width <= 0 || item.Height <= 0 || Double.IsNaN(item.Width + item.Height) ||
                     Double.IsInfinity(item.Width + item.Height))
@@ -133,6 +146,7 @@ namespace VanyaTools.Native
             Result best = null;
             for (int strategy = 0; strategy < 3; strategy++)
             {
+                SportNestingCancellation.Check();
                 IEnumerable<int> order = Enumerable.Range(0, items.Count).Where(i => !fixedIndices.Contains(i));
                 if (strategy == 0) order = order.OrderBy(i => items[i].SmallPart)
                     .ThenByDescending(i => items[i].Height).ThenByDescending(i => items[i].Width);
@@ -149,6 +163,7 @@ namespace VanyaTools.Native
                     pages.Add(new Page(columns, Math.Max(0, Math.Min(limit, firstPageLimit.Value))));
                 foreach (int index in order)
                 {
+                    SportNestingCancellation.Check();
                     Placement selected = null;
                     int pageIndex = 0;
                     for (; pageIndex < pages.Count; pageIndex++)
@@ -231,7 +246,11 @@ namespace VanyaTools.Native
             (candidate.Height < current.Height - 0.001 ||
             (Math.Abs(candidate.Height - current.Height) <= 0.001 && Roughness(candidate, gap) < Roughness(current, gap) - 0.001));
 
-        private static bool Expired(long deadline) => deadline != 0 && Stopwatch.GetTimestamp() >= deadline;
+        private static bool Expired(long deadline)
+        {
+            SportNestingCancellation.Check();
+            return deadline != 0 && Stopwatch.GetTimestamp() >= deadline;
+        }
 
         private static Page RebuildPage(IEnumerable<Placement> placements, int columns, double limit, double gap, int gapColumns)
         {
@@ -459,6 +478,7 @@ namespace VanyaTools.Native
         {
             for (int j = 0; j < placed.Profile.Top.Length; j++)
             {
+                SportNestingCancellation.Check();
                 var interval = new Interval { Top = placed.Top + placed.Profile.Top[j] - gap,
                     Bottom = placed.Top + placed.Profile.Bottom[j] + gap };
                 for (int column = Math.Max(0, placed.Column + j - gapColumns);

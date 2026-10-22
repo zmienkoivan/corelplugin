@@ -72,6 +72,12 @@ namespace VanyaTools.Native
             public int? GroupingMode { get; set; }
             public int? CutNestingMode { get; set; }
             public int? CutGroupingMode { get; set; }
+            public int PressMode { get; set; }
+            public double? PressLeftMm { get; set; }
+            public double? PressRightMm { get; set; }
+            public double? PressTopMm { get; set; }
+            public double? PressBottomMm { get; set; }
+            public bool? PressBorders { get; set; }
         }
 
         private static SportTextStyle LegacyStyle(string font, float points, bool white)
@@ -109,6 +115,9 @@ namespace VanyaTools.Native
         private SportTextStyle _legacyNumberStyle = LegacyStyle("Arial", 150, false);
         private bool _legacyTwoLines, _whiteCaptions;
         private double _legacyLineSpacing = 100;
+        private int _pressMode;
+        private double _pressLeftMm = 20, _pressRightMm = 20, _pressTopMm = 20, _pressBottomMm = 20;
+        private bool _pressBorders = true;
         private readonly CheckBox _keepGuides, _rotateSleeves, _cutAllow180, _cutSizeTags, _tagCutLetter;
         private readonly TextBlock _count, _progress;
         private readonly Button _prepare, _generate, _generateCut, _saveCut, _exportPrint, _choosePrintFolder;
@@ -431,7 +440,7 @@ namespace VanyaTools.Native
             DockerHelp.Add(panel, "Свободная зона переда и зоны рукавов сохраняются как именованные " +
                 "фреймы для дополнительной графики. Подписи каждой детали находятся в нижнем припуске.");
 
-            _generate = DockerTheme.Primary(Button("Этап 2 · Создать комплекты и раскладку", Generate));
+            _generate = DockerTheme.Primary(Button("Подобрать раскладку печати…", Generate));
             _generate.Margin = new Thickness(0, 7, 0, 4);
             panel.Children.Add(_generate);
             panel.Children.Add(Title("Экспорт печати в PDF"));
@@ -522,7 +531,7 @@ namespace VanyaTools.Native
                 "пары с буквой M высотой 8 мм и без буквы; также текущие настройки и примеры S, XS, XL, XXL, 116, 128, 152. " +
                 "На самих образцах нет мелкого прорезного кода. Отдельная страница-памятка показывает размеры и положение образцов " +
                 "в той же сетке. Сохраняйте порядок образцов при разборе. В DXF отправляется только страница резки, памятка остаётся в CDR.");
-            _generateCut = Button("Создать раскладку резки", GenerateCutting);
+            _generateCut = Button("Подобрать раскладку резки…", GenerateCutting);
             panel.Children.Add(_generateCut);
             _combineCut = Button("Объединить контуры готового листа", CombineCutting);
             panel.Children.Add(_combineCut);
@@ -735,7 +744,9 @@ namespace VanyaTools.Native
                 Width = _sheetWidth.Text, Gap = _gap.Text, Length = _maxPageLength.Text,
                 Rotate = _rotateSleeves.IsChecked, Guides = _keepGuides.IsChecked,
                 NameSide = _nameSide.SelectedIndex, NameCase = _frontCase.SelectedIndex,
-                Density = _nestingMode.SelectedIndex, Grouping = _groupingMode.SelectedIndex });
+                Density = _nestingMode.SelectedIndex, Grouping = _groupingMode.SelectedIndex,
+                Press = _pressMode, PressLeft = _pressLeftMm, PressRight = _pressRightMm,
+                PressTop = _pressTopMm, PressBottom = _pressBottomMm, PressBorders = _pressBorders });
             string pdf = json.Serialize(new { Print = printing, Folder = _printFolder.Text, Quality = _printQuality.SelectedIndex });
             string cutting = json.Serialize(new { Models = models, Players = players,
                 Width = _cutSheetWidth.Text, Gap = _cutGap.Text, Length = _cutMaxPageLength.Text,
@@ -1737,14 +1748,28 @@ namespace VanyaTools.Native
                 if (totalLong > 300)
                     throw new InvalidOperationException("За один запуск можно подготовить не более 300 комплектов.");
                 var options = ReadOptions(cutting);
-                _progress.Text = "Готовлю новую страницу текущего CDR…";
+                _progress.Text = "Один раз готовлю детали для окна подбора…";
                 await Dispatcher.Yield(DispatcherPriority.Background);
                 var service = new SportLayoutService();
                 Action<int, int, string> progress = (done, total, label) =>
                     _progress.Text = "Подготовлено " + done + " из " + total + ": " + label;
+                Func<IList<SportSheetNesting.Item>, IList<string>, SportNestingChoice> preview = (items, labels) =>
+                {
+                    var window = new SportNestingWindow(items, labels, options, cutting);
+                    Window owner = Window.GetWindow(this);
+                    if (owner != null) window.Owner = owner;
+                    else
+                    {
+                        var source = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
+                        if (source != null) new System.Windows.Interop.WindowInteropHelper(window).Owner = source.Handle;
+                    }
+                    _progress.Text = "Подготовка завершена. Подберите вариант в окне раскладки.";
+                    return window.ShowDialog() == true ? window.Choice : null;
+                };
                 SportLayoutResult result = cutting
-                    ? service.GenerateCuttingInCurrentDocument(players, templates, options, progress)
-                    : service.GenerateInCurrentDocument(players, templates, options, progress);
+                    ? service.GenerateCuttingInCurrentDocument(players, templates, options, progress, preview)
+                    : service.GenerateInCurrentDocument(players, templates, options, progress, preview);
+                ApplyNestingOptions(options, cutting);
                 if (!cutting) ClearCompletedSteps(4);
                 CompleteStep(cutting ? 5 : 3, cutting ? "раскладка резки создана" : "печатная раскладка создана");
                 _progress.Text = "Готово: " + result.GarmentCount + " комплектов, " +
@@ -1752,6 +1777,11 @@ namespace VanyaTools.Native
                     ", общая длина " + (result.SheetHeightMm / 1000).ToString("0.###") + " м.";
                 _status(cutting ? "Раскладка резки создана. Сохраните отдельный CDR кнопкой ниже." :
                     "Раскладка добавлена в текущий CDR. Сохраните документ.", false);
+            }
+            catch (OperationCanceledException)
+            {
+                _progress.Text = "Подбор закрыт. Новые страницы не созданы.";
+                _status(_progress.Text, false);
             }
             catch (Exception error)
             {
@@ -1763,6 +1793,32 @@ namespace VanyaTools.Native
             }
             finally { _busy = false; SetActionButtons(true); }
         }
+
+        private void ApplyNestingOptions(SportLayoutOptions options, bool cutting)
+        {
+            bool loading = _loading; _loading = true;
+            try
+            {
+                (cutting ? _cutSheetWidth : _sheetWidth).Text = options.SheetWidthMm.ToString("0.###");
+                (cutting ? _cutMaxPageLength : _maxPageLength).Text = (options.MaxPageLengthMm / 1000).ToString("0.###");
+                (cutting ? _cutGap : _gap).Text = options.GapMm.ToString("0.###");
+                (cutting ? _cutNestingMode : _nestingMode).SelectedIndex = (int)options.NestingMode;
+                (cutting ? _cutGroupingMode : _groupingMode).SelectedIndex = (int)options.GroupingMode;
+                if (cutting) _cutAllow180.IsChecked = options.CutAllow180;
+                else
+                {
+                    _rotateSleeves.IsChecked = options.RotateSleeves; _pressMode = options.PressMode;
+                    _pressLeftMm = options.PressLeftMm; _pressRightMm = options.PressRightMm;
+                    _pressTopMm = options.PressTopMm; _pressBottomMm = options.PressBottomMm;
+                    _pressBorders = options.PressBorders;
+                }
+            }
+            finally { _loading = loading; }
+            SaveDraft(); RefreshWorkflow();
+        }
+
+        private static double ValidPressMargin(double? value) => value.HasValue &&
+            !Double.IsNaN(value.Value) && !Double.IsInfinity(value.Value) && value >= 0 && value <= 200 ? value.Value : 20;
 
         private SportLayoutOptions ReadOptions(bool cutting = false)
         {
@@ -1784,6 +1840,8 @@ namespace VanyaTools.Native
                 NestingMode = (SportNestingMode)(cutting ? _cutNestingMode : _nestingMode).SelectedIndex,
                 GroupingMode = (SportGroupingMode)(cutting ? _cutGroupingMode : _groupingMode).SelectedIndex,
                 CutAllow180 = _cutAllow180.IsChecked == true,
+                PressMode = cutting ? 0 : _pressMode, PressLeftMm = _pressLeftMm, PressRightMm = _pressRightMm,
+                PressTopMm = _pressTopMm, PressBottomMm = _pressBottomMm, PressBorders = _pressBorders,
                 CutSizeTags = cutting && _cutSizeTags.IsChecked == true,
                 CutTag = cutting && _cutSizeTags.IsChecked == true ? ReadTagSettings() : new SportCutTagSettings(),
                 NameStyle = cutting ? null : _legacyNameStyle,
@@ -1937,7 +1995,9 @@ namespace VanyaTools.Native
                     KeepGuides = _keepGuides.IsChecked == true,
                     WorkflowTab = _steps.SelectedIndex, WorkflowUiVersion = 2,
                     NestingMode = _nestingMode.SelectedIndex, GroupingMode = _groupingMode.SelectedIndex,
-                    CutNestingMode = _cutNestingMode.SelectedIndex, CutGroupingMode = _cutGroupingMode.SelectedIndex
+                    CutNestingMode = _cutNestingMode.SelectedIndex, CutGroupingMode = _cutGroupingMode.SelectedIndex,
+                    PressMode = _pressMode, PressLeftMm = _pressLeftMm, PressRightMm = _pressRightMm,
+                    PressTopMm = _pressTopMm, PressBottomMm = _pressBottomMm, PressBorders = _pressBorders
                 };
                 File.WriteAllText(DraftPath, new JavaScriptSerializer().Serialize(draft),
                     new UTF8Encoding(false));
@@ -2012,6 +2072,12 @@ namespace VanyaTools.Native
                             ? draft.CutNestingMode.Value : _nestingMode.SelectedIndex;
                         _cutGroupingMode.SelectedIndex = draft.CutGroupingMode >= 0 && draft.CutGroupingMode <= 2
                             ? draft.CutGroupingMode.Value : _groupingMode.SelectedIndex;
+                        _pressMode = draft.PressMode >= 0 && draft.PressMode <= 2 ? draft.PressMode : 0;
+                        _pressLeftMm = ValidPressMargin(draft.PressLeftMm);
+                        _pressRightMm = ValidPressMargin(draft.PressRightMm);
+                        _pressTopMm = ValidPressMargin(draft.PressTopMm);
+                        _pressBottomMm = ValidPressMargin(draft.PressBottomMm);
+                        _pressBorders = draft.PressBorders ?? true;
                     }
                 }
                 if (_templates.Count == 0)

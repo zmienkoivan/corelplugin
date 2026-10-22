@@ -95,6 +95,10 @@ namespace VanyaTools.Native
         public NamesGridLetterCase FrontNameCase;
         public bool FrontNameTwoLines;
         public double FrontLineSpacingPercent;
+        public int PressMode;
+        public double PressLeftMm = 20, PressRightMm = 20, PressTopMm = 20, PressBottomMm = 20;
+        public bool PressBorders = true;
+        internal SportLayoutOptions Copy() => (SportLayoutOptions)MemberwiseClone();
     }
 
     internal sealed class SportTextStyle
@@ -1014,16 +1018,18 @@ namespace VanyaTools.Native
 
         public SportLayoutResult GenerateInCurrentDocument(IList<SportLayoutPlayer> rows,
             IList<SportLayoutTemplate> templates, SportLayoutOptions options,
-            Action<int, int, string> progress)
+            Action<int, int, string> progress,
+            Func<IList<SportSheetNesting.Item>, IList<string>, SportNestingChoice> preview = null)
         {
-            return Generate(rows, templates, options, progress, null, false);
+            return Generate(rows, templates, options, progress, null, false, preview);
         }
 
         public SportLayoutResult GenerateCuttingInCurrentDocument(IList<SportLayoutPlayer> rows,
             IList<SportLayoutTemplate> templates, SportLayoutOptions options,
-            Action<int, int, string> progress)
+            Action<int, int, string> progress,
+            Func<IList<SportSheetNesting.Item>, IList<string>, SportNestingChoice> preview = null)
         {
-            return Generate(rows, templates, options, progress, null, true);
+            return Generate(rows, templates, options, progress, null, true, preview);
         }
 
         public void SaveCurrentCuttingPage(string path)
@@ -1066,7 +1072,8 @@ namespace VanyaTools.Native
 
         private SportLayoutResult Generate(IList<SportLayoutPlayer> rows,
             IList<SportLayoutTemplate> templates, SportLayoutOptions options,
-            Action<int, int, string> progress, SportLayoutPart? selectedPart, bool cutting)
+            Action<int, int, string> progress, SportLayoutPart? selectedPart, bool cutting,
+            Func<IList<SportSheetNesting.Item>, IList<string>, SportNestingChoice> preview = null)
         {
             if (rows == null || rows.Count == 0)
                 throw new InvalidOperationException("Добавьте игроков в таблицу.");
@@ -1130,12 +1137,17 @@ namespace VanyaTools.Native
             dynamic previousPage = target.ActivePage;
             int previousUnit = Convert.ToInt32(target.Unit);
             dynamic outputPage = null;
+            dynamic stagingLayer = null;
+            object previousLayer = (object)target.ActiveLayer;
+            bool previousDirty = Convert.ToBoolean(target.Dirty), succeeded = false;
             var outputPages = new List<object>();
             bool commandStarted = false;
             var nested = new List<NestedPiece>();
             var cutPrepared = new Dictionary<string, NestedPiece>();
             var printPrepared = new Dictionary<string, SportPrintFootprint.Body>();
             int complete = 0;
+            SportLayoutOptions buildOptions = options.Copy();
+            if (preview != null) buildOptions.NestingMode = SportNestingMode.FullContour;
             try
             {
                 Log.Info("Sport layout: start, cutting=" + cutting + ", garments=" + total);
@@ -1154,12 +1166,25 @@ namespace VanyaTools.Native
                         if (!tagRanks.ContainsKey(size))
                             throw new InvalidOperationException("Подготовьте размер " + size + " на этапе 1 перед резкой с язычками.");
                 }
-                outputPage = target.AddPages(1);
-                outputPages.Add((object)outputPage);
-                outputPage.Activate();
-                outputPage.SizeWidth = options.SheetWidthMm;
-                outputPage.SizeHeight = 1000.0;
-                dynamic outputLayer = target.ActiveLayer;
+                dynamic outputLayer;
+                if (preview == null)
+                {
+                    outputPage = target.AddPages(1);
+                    outputPages.Add((object)outputPage);
+                    outputPage.Activate();
+                    outputPage.SizeWidth = options.SheetWidthMm;
+                    outputPage.SizeHeight = 1000.0;
+                    outputLayer = target.ActiveLayer;
+                }
+                else
+                {
+                    // CopyToLayer is reliable inside one CDR. Keep the one-time
+                    // preparation hidden, without adding any output pages yet.
+                    outputPage = previousPage;
+                    stagingLayer = previousPage.CreateLayer("VT_NEST_PREVIEW_" + Guid.NewGuid().ToString("N"));
+                    stagingLayer.Printable = false;
+                    outputLayer = stagingLayer;
+                }
 
                 foreach (var row in rows)
                 {
@@ -1179,10 +1204,11 @@ namespace VanyaTools.Native
                     {
                         target.Activate();
                         outputPage.Activate();
+                        outputLayer.Activate();
                         IList<NestedPiece> kit;
                         if (cutting)
                             kit = BuildCuttingPieces(app, outputLayer, source, row, size,
-                                complete + 1, options, scale, tagRanks == null ? 0 :
+                                complete + 1, buildOptions, scale, tagRanks == null ? 0 :
                                     options.CutTag.FirstOffsetMm + tagRanks[size] * options.CutTag.SizeStepMm,
                                 cutPrepared);
                         else
@@ -1190,9 +1216,11 @@ namespace VanyaTools.Native
                             Garment garment = CopyGarment(source, outputLayer, selectedPart, row);
                             Log.Info("Sport layout: garment copied, item " + (complete + 1));
                             kit = BuildNestedPieces(app, outputLayer, garment, row, size,
-                                complete + 1, options, scale, selectedPart, printPrepared);
+                                complete + 1, buildOptions, scale, selectedPart, printPrepared);
                         }
                         if (kit.Count == 0) continue;
+                        if (preview != null)
+                            foreach (var piece in kit) piece.Shape.MoveToLayer((object)outputLayer);
                         foreach (var piece in kit) piece.GarmentIndex = complete + 1;
                         nested.AddRange(kit);
                         Log.Info("Sport layout: pieces built, item " + (complete + 1));
@@ -1205,12 +1233,32 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Нет выбранных деталей печати, присутствующих в макете. Проверьте галочки в таблице игроков.");
                 Log.Info("Sport layout: nesting " + nested.Count + " pieces");
                 var inputs = nested.Select(p => new SportSheetNesting.Item { Width = p.Width, Height = p.Height,
-                    SmallPart = p.SmallPart, Allow90 = !cutting && p.CanRotate,
-                    Allow180 = cutting && p.ContourLayout.Allow180,
+                    SmallPart = p.SmallPart, Allow90 = !cutting && (preview != null ? p.SmallPart : p.CanRotate),
+                    Allow180 = cutting && (preview != null || p.ContourLayout.Allow180),
                     Bands = p.ContourLayout.Bands, Garment = p.GarmentIndex, Part = p.PartIndex }).ToList();
-                SportSheetNesting.Result layout = SportGroupedNesting.Place(inputs, options.SheetWidthMm,
-                    options.MaxPageLengthMm, options.GapMm, options.NestingMode,
-                    selectedPart.HasValue ? SportGroupingMode.Free : options.GroupingMode);
+                SportNestingChoice choice = null;
+                SportSheetNesting.Result layout;
+                if (preview == null)
+                    layout = SportGroupedNesting.Place(inputs, options.SheetWidthMm,
+                        options.MaxPageLengthMm, options.GapMm, options.NestingMode,
+                        selectedPart.HasValue ? SportGroupingMode.Free : options.GroupingMode);
+                else
+                {
+                    stagingLayer.Visible = false;
+                    ((dynamic)previousLayer).Activate();
+                    target.Unit = previousUnit;
+                    app.Optimization = previousOptimization;
+                    choice = preview(inputs, nested.Select(p => (string)Convert.ToString(p.Shape.Name)).ToList());
+                    if (choice == null) throw new OperationCanceledException();
+                    SportNestingPreview.Validate(choice, nested.Count);
+                    choice.Settings.Apply(options, cutting);
+                    layout = choice.Layout;
+                    target.Activate(); target.Unit = CorelConstants.CdrMillimeter;
+                    app.Optimization = true;
+                    outputPage = target.AddPages(1); outputPages.Add((object)outputPage);
+                    outputPage.Activate();
+                    outputLayer = outputPage.CreateLayer(cutting ? "Лекала резки" : "Детали печати");
+                }
                 var outputLayers = new List<object> { (object)outputLayer };
                 for (int i = 1; i < layout.PageHeights.Count; i++)
                 {
@@ -1235,7 +1283,7 @@ namespace VanyaTools.Native
                     NestedPiece item = nested[placed.Index];
                     dynamic page = outputPages[placed.Page];
                     page.Activate();
-                    if (placed.Page != 0) item.Shape.MoveToLayer(outputLayers[placed.Page]);
+                    if (preview != null || placed.Page != 0) item.Shape.MoveToLayer(outputLayers[placed.Page]);
                     double rotation = placed.Rotation;
                     if (cutting)
                     {
@@ -1259,7 +1307,21 @@ namespace VanyaTools.Native
                             Convert.ToDouble(page.TopY) - placed.Top - placed.Height - ink.Bottom);
                     }
                 }
+                if (choice != null && choice.Settings.Borders)
+                    foreach (var panel in choice.Panels)
+                    {
+                        dynamic page = outputPages[panel.Page]; page.Activate();
+                        dynamic layer = outputLayers[panel.Page];
+                        // Inset by half the stroke so the PDF bounds stay inside the page.
+                        dynamic border = layer.CreateRectangle2(Convert.ToDouble(page.LeftX) + panel.Left + .05,
+                            Convert.ToDouble(page.TopY) - panel.Top - panel.Height + .05,
+                            panel.Width - .1, panel.Height - .1);
+                        border.Name = "VT_PRESS_SHEET"; border.Fill.ApplyNoFill();
+                        border.Outline.Width = .1; border.Outline.Color.RGBAssign(190, 190, 190);
+                    }
+                if (stagingLayer != null) { stagingLayer.Delete(); stagingLayer = null; }
                 outputPage.Activate();
+                succeeded = true;
                 Log.Info("Sport layout: complete, pages=" + outputPages.Count + ", max length=" + options.MaxPageLengthMm);
                 return new SportLayoutResult { GarmentCount = complete,
                     PieceCount = nested.Count, PageCount = outputPages.Count, SheetHeightMm = layout.PageHeights.Sum() };
@@ -1274,19 +1336,34 @@ namespace VanyaTools.Native
                         dynamic page = outputPages[i];
                         target.DeletePages(Convert.ToInt32(page.Index));
                     }
+                    outputPages.Clear();
                     previousPage.Activate();
                 }
                 catch (Exception rollbackError)
                 {
                     Log.Error("Could not remove failed sport layout page.", rollbackError);
                 }
+                if (error is OperationCanceledException) throw;
                 throw new InvalidOperationException("Раскладка не завершена: " + error.Message, error);
             }
             finally
             {
                 try { target.Activate(); } catch { }
+                try { if (stagingLayer != null) { stagingLayer.Delete(); stagingLayer = null; } }
+                catch (Exception error) { Log.Error("Could not remove nesting preview staging layer.", error); }
                 try { target.Unit = previousUnit; } catch { }
                 try { if (commandStarted) target.EndCommandGroup(); } catch { }
+                if (!succeeded)
+                {
+                    try { ((dynamic)previousLayer).Activate(); } catch { }
+                    // All created pages and the temporary layer have been removed.
+                    // Do not clear Dirty if cleanup left anything behind.
+                    try
+                    {
+                        if (stagingLayer == null && outputPages.Count == 0) target.Dirty = previousDirty;
+                    }
+                    catch { }
+                }
                 try { app.Optimization = previousOptimization; } catch { }
             }
         }
@@ -1979,6 +2056,7 @@ namespace VanyaTools.Native
             var named = new Dictionary<string, Piece>(StringComparer.OrdinalIgnoreCase);
             foreach (dynamic layer in page.Layers)
             {
+                if ((Convert.ToString(layer.Name) ?? "").StartsWith("VT_NEST_PREVIEW_", StringComparison.Ordinal)) continue;
                 if (IsOverviewName(Convert.ToString(page.Name)) &&
                     !String.Equals(Convert.ToString(layer.Name), SizeLayerPrefix + size,
                         StringComparison.OrdinalIgnoreCase)) continue;
