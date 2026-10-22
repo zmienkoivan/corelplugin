@@ -74,6 +74,7 @@ namespace VanyaTools.Native
         private readonly LinkedList<string> _photoOriginalOrder = new LinkedList<string>();
         private long _photoOriginalBytes;
         private string _sourceValue = "";
+        private string _loadedYearFolder = "";
 
         internal FrameworkElement SettingsView { get; }
         internal FrameworkElement OrdersView { get; }
@@ -1036,6 +1037,12 @@ namespace VanyaTools.Native
                     button.Padding = new Thickness(0);
                     button.Margin = new Thickness(1);
                     button.ToolTip = action.Item2;
+                    if (action.Item1 == "⌖" && (_data.Frames[i].Shapes?.Count ?? 0) == 0)
+                    {
+                        button.IsEnabled = false;
+                        button.ToolTip = "Фото карточки: нажмите миниатюру для просмотра.";
+                        ToolTipService.SetShowOnDisabled(button, true);
+                    }
                     System.Windows.Automation.AutomationProperties.SetName(button, action.Item2);
                     if (action.Item1 == "↑") button.IsEnabled = i > 0;
                     if (action.Item1 == "↓") button.IsEnabled = i + 1 < _data.Frames.Count;
@@ -2157,19 +2164,7 @@ namespace VanyaTools.Native
         {
             try
             {
-                string configured = configuredFolder ?? _yearFolder.Text.Trim();
-                if (!Path.IsPathRooted(configured)) return null;
-                string root = Path.GetFullPath(configured).TrimEnd(Path.DirectorySeparatorChar,
-                    Path.AltDirectorySeparatorChar);
-                string year = (period ?? "").Split('-')[0];
-                if (year.Length == 4 && Int32.TryParse(year, out int yearNumber) &&
-                    yearNumber >= 2000 && yearNumber <= 2100 &&
-                    !String.Equals(Path.GetFileName(root), year, StringComparison.OrdinalIgnoreCase))
-                {
-                    string parent = Path.GetDirectoryName(root);
-                    if (!String.IsNullOrEmpty(parent)) root = Path.Combine(parent, year);
-                }
-                return Directory.Exists(root) ? root : null;
+                return OrderCdrFolders.YearFolder(configuredFolder ?? _yearFolder.Text.Trim(), period);
             }
             catch (Exception error) { Log.Error("Order year folder unavailable", error); return null; }
         }
@@ -2202,15 +2197,9 @@ namespace VanyaTools.Native
             if (yearRoot == null) return null;
             try
             {
-                if (!DateTime.TryParseExact(selected.Period + "-01", "yyyy-MM-dd",
-                    CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime date)) return yearRoot;
-                string month = date.Month.ToString("00", CultureInfo.InvariantCulture) +
-                    new CultureInfo("ru-RU").DateTimeFormat.GetMonthName(date.Month) +
-                    date.Year.ToString(CultureInfo.InvariantCulture);
-                string folder = Path.Combine(yearRoot, month, SafePathPart(selected.Customer ?? ""));
-                return Directory.Exists(folder) ? folder : yearRoot;
+                return OrderCdrFolders.Suggested(yearRoot, selected.Period, selected.Customer);
             }
-            catch { return yearRoot; }
+            catch (Exception error) { Log.Error("Order customer folder could not be resolved", error); return yearRoot; }
         }
 
         private async Task OpenSelectedOrderFile(OrderListItem selected)
@@ -2222,18 +2211,20 @@ namespace VanyaTools.Native
             {
                 string configured = _yearFolder.Text.Trim(), server = _server.Text.Trim(),
                     key = _key.Password.Trim();
+                if (String.Equals(configured, _loadedYearFolder, StringComparison.OrdinalIgnoreCase))
+                    configured = await Task.Run(() => ReadSavedYearFolder(configured));
                 string yearRoot = await Task.Run(() => YearFolderForOrder(selected.Period, configured));
                 string path = await Task.Run(() => OrderCdrPathIndex.Find(server, selected.Id, yearRoot));
                 if (path == null)
                 {
-                    var picker = new Microsoft.Win32.OpenFileDialog {
-                        Title = "Выберите CDR для заказа №" + selected.Number,
-                        Filter = "CorelDRAW (*.cdr)|*.cdr", CheckFileExists = true,
-                        Multiselect = false };
-                    string folder = SuggestedOrderFolder(selected, yearRoot);
-                    if (folder != null) picker.InitialDirectory = folder;
-                    if (picker.ShowDialog(Window.GetWindow(this)) != true) return;
-                    path = picker.FileName;
+                    _status("Поиск папки заказчика для заказа №" + selected.Number + "…", false);
+                    string folder = await Task.Run(() => SuggestedOrderFolder(selected, yearRoot));
+                    Log.Info("Order CDR picker: order=" + selected.Id + ", folder=" + (folder ?? "(not found)") + ".");
+                    var view = OrdersView.IsVisible ? OrdersView : this;
+                    var source = PresentationSource.FromVisual(view) as System.Windows.Interop.HwndSource;
+                    path = WindowsFolderPicker.PickCdr(source?.Handle ?? IntPtr.Zero, folder,
+                        "Выберите CDR для заказа №" + selected.Number);
+                    if (path == null) return;
                 }
                 dynamic app = CorelApp.Get();
                 bool alreadyOpen = false;
@@ -2257,7 +2248,7 @@ namespace VanyaTools.Native
                 {
                     string question = "Файл «" + Path.GetFileName(path) +
                         "» ещё не привязан к заказу.\nПривязать его к заказу №" +
-                        selected.Number + " и сохранить CDR?\nПоля и фотографии будут загружены из карточки заказа.";
+                        selected.Number + " и сохранить CDR?\nПоля загрузятся в карточку, фотографии — в блок «Кадры».";
                     if (MessageBox.Show(question, "Vanya Tools", MessageBoxButton.YesNo,
                         MessageBoxImage.Question) != MessageBoxResult.Yes)
                     {
@@ -2286,8 +2277,8 @@ namespace VanyaTools.Native
                     !String.Equals(_data.ClientKey, clientKey, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Этот CDR связан с другой карточкой заказа.");
 
-                // Order fields belong to the selected server card. Artwork, frames and
-                // the design name belong to the CDR and remain in the opened document.
+                // Load order fields and photo frames from the selected server card.
+                // The design name and artwork belong to the opened CDR.
                 LoadServerFields(result);
                 ReadForm();
                 ApplyServerResult(result);
@@ -3254,6 +3245,7 @@ namespace VanyaTools.Native
             Directory.CreateDirectory(Path.GetDirectoryName(FileSettingsPath));
             File.WriteAllText(FileSettingsPath, json, Encoding.UTF8);
             _yearFolder.Text = path;
+            _loadedYearFolder = path;
             _status("Папка года сохранена.", false);
         }
 
@@ -3265,9 +3257,25 @@ namespace VanyaTools.Native
                 var settings = new JavaScriptSerializer().Deserialize<Dictionary<string, string>>(
                     File.ReadAllText(FileSettingsPath, Encoding.UTF8));
                 if (settings != null && settings.TryGetValue("yearFolder", out string path))
-                    _yearFolder.Text = path;
+                {
+                    _yearFolder.Text = path ?? "";
+                    _loadedYearFolder = _yearFolder.Text.Trim();
+                }
             }
             catch { _status("Не удалось прочитать папку года. Укажите её повторно.", true); }
+        }
+
+        private static string ReadSavedYearFolder(string fallback)
+        {
+            try
+            {
+                if (!File.Exists(FileSettingsPath)) return fallback;
+                var settings = new JavaScriptSerializer().Deserialize<Dictionary<string, string>>(
+                    File.ReadAllText(FileSettingsPath, Encoding.UTF8));
+                return settings != null && settings.TryGetValue("yearFolder", out string path) &&
+                    !String.IsNullOrWhiteSpace(path) ? path.Trim() : fallback;
+            }
+            catch (Exception error) { Log.Error("Saved year folder could not be refreshed", error); return fallback; }
         }
 
         private void Safe(Action action)

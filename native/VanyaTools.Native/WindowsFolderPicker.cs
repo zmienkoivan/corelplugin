@@ -50,6 +50,55 @@ namespace VanyaTools.Native
             }
         }
 
+        internal static string PickCdr(IntPtr owner, string initialFolder, string title)
+        {
+            IFileOpenDialog dialog = (IFileOpenDialog)new FileOpenDialogCom();
+            IShellItem initial = null, result = null;
+            try
+            {
+                dialog.GetOptions(out uint options);
+                dialog.SetOptions((options & ~PickFolders & ~0x200u) | ForceFileSystem |
+                    PathMustExist | 0x1000u | 0x8u); // FileMustExist, NoChangeDir; one file.
+                dialog.SetTitle(title);
+                dialog.SetFileTypes(1, new[] { new FilterSpec { Name = "CorelDRAW (*.cdr)", Pattern = "*.cdr" } });
+                dialog.SetFileTypeIndex(1);
+                dialog.SetOkButtonLabel("Открыть");
+                if (!String.IsNullOrWhiteSpace(initialFolder))
+                {
+                    Guid shellItemId = typeof(IShellItem).GUID;
+                    Marshal.ThrowExceptionForHR(SHCreateItemFromParsingName(initialFolder, IntPtr.Zero,
+                        ref shellItemId, out initial));
+                    // SetFolder overrides the last visited location, unlike a default folder.
+                    dialog.SetFolder(initial);
+                }
+                int status = dialog.Show(owner);
+                if (status == Cancelled) return null;
+                Marshal.ThrowExceptionForHR(status);
+                dialog.GetResult(out result);
+                if (result == null) throw new InvalidOperationException("Файл CDR не выбран.");
+                result.GetDisplayName(FileSystemPath, out IntPtr pointer);
+                string path;
+                try { path = Marshal.PtrToStringUni(pointer); }
+                finally { if (pointer != IntPtr.Zero) Marshal.FreeCoTaskMem(pointer); }
+                if (!String.Equals(Path.GetExtension(path), ".cdr", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Выберите файл CorelDRAW с расширением .cdr.");
+                return path;
+            }
+            finally
+            {
+                if (result != null) Marshal.ReleaseComObject(result);
+                if (initial != null) Marshal.ReleaseComObject(initial);
+                Marshal.ReleaseComObject(dialog);
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct FilterSpec
+        {
+            [MarshalAs(UnmanagedType.LPWStr)] public string Name;
+            [MarshalAs(UnmanagedType.LPWStr)] public string Pattern;
+        }
+
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         private static extern int SHCreateItemFromParsingName(string path, IntPtr bindContext,
             ref Guid shellItemId, out IShellItem item);
@@ -62,7 +111,8 @@ namespace VanyaTools.Native
         private interface IFileOpenDialog
         {
             [PreserveSig] int Show(IntPtr owner);
-            void SetFileTypes(uint count, IntPtr filterSpecs);
+            void SetFileTypes(uint count,
+                [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 0)] FilterSpec[] filterSpecs);
             void SetFileTypeIndex(uint index);
             void GetFileTypeIndex(out uint index);
             void Advise(IntPtr events, out uint cookie);

@@ -54,8 +54,8 @@ namespace VanyaTools.Native
                 if (!replacementConfirmed && before.Any(frame => String.IsNullOrEmpty(frame.ServerPhotoKey) ||
                     !keys.Contains(frame.ServerPhotoKey, StringComparer.Ordinal)))
                 {
-                    if (MessageBox.Show("Загрузить фотографии из карточки заказа вместо кадров текущего CDR?\n" +
-                        "Объекты на холсте останутся на месте.", "Vanya Tools · кадры заказа",
+                    if (MessageBox.Show("Загрузить фотографии заказа в блок «Кадры», заменив текущие кадры карточки?",
+                        "Vanya Tools · кадры заказа",
                         MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return null;
                 }
 
@@ -67,7 +67,7 @@ namespace VanyaTools.Native
                 {
                     if (!IsFrameLoadCurrent(document, card, before))
                         throw new OperationCanceledException("Документ или кадры изменились. Повторите загрузку карточки.");
-                    _status("Загрузка кадра " + (index + 1) + " из " + keys.Length + "…", false);
+                    _status("Фото " + (index + 1) + " из " + keys.Length + " → кадры карточки…", false);
                     string photoKey = keys[index];
                     var previous = before.FirstOrDefault(frame => String.Equals(frame.ServerPhotoKey,
                         photoKey, StringComparison.Ordinal));
@@ -95,9 +95,8 @@ namespace VanyaTools.Native
                     var frame = new OrderCardFrame {
                         ServerPhotoKey = photoKey,
                         SnapshotId = fromSnapshot ? previous.SnapshotId : null,
-                        Shapes = previous?.Shapes == null ? new List<OrderCardShape>() :
-                            new List<OrderCardShape>(previous.Shapes),
-                        ObjectCount = previous?.ObjectCount ?? 0
+                        Shapes = new List<OrderCardShape>(),
+                        ObjectCount = 0
                     };
                     byte[] original = bytes;
                     shared &= await Task.Run(() => {
