@@ -22,9 +22,10 @@ namespace VanyaTools.Native
                 new JavaScriptSerializer().Serialize(details), photos));
         }
 
-        internal static Task<Dictionary<string, object>> Get(string server, string key, int orderId)
+        internal static Task<Dictionary<string, object>> Get(string server, string key, int orderId,
+            int? timeoutMs = null)
         {
-            return Task.Run(() => RunWorker("get", server, key, orderId, null, null));
+            return Task.Run(() => RunWorker("get", server, key, orderId, null, null, timeoutMs: timeoutMs));
         }
 
         internal static Task<Dictionary<string, object>> GetByNumber(string server, string key, string number) =>
@@ -140,7 +141,8 @@ namespace VanyaTools.Native
                         ? 90 * 1000 : 8 * 60 * 1000)))
                     {
                         try { process.Kill(); } catch { }
-                        throw new TimeoutException(timeoutMs.HasValue ? "Сервер принтера не ответил за 8 секунд." :
+                        throw new TimeoutException(timeoutMs.HasValue ? "Сервер не ответил за " +
+                            (timeoutMs.Value / 1000) + " секунд. Проверьте соединение." :
                             printing ? "Очередь печати не ответила за минуту. Повторная кнопка проверит то же задание." : "Сервер заказов не ответил за 8 минут. Проверьте канал перед повтором.");
                     }
                     Dictionary<string, object> reply;
