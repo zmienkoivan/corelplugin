@@ -19,7 +19,7 @@ namespace VanyaTools.Native
     }
     internal sealed partial class OrderCardTab
     {
-        private Button _printLabelButton, _refreshNetworkPrinters;
+        private Button _printLabelButton, _printCustomerLabelButton, _refreshNetworkPrinters;
         private ComboBox _printFormat, _fullNetworkPrinter, _miniNetworkPrinter;
         private TextBlock _printLabelResult, _networkPrinterStatus;
         private bool _loadingPrinterSettings;
@@ -39,10 +39,23 @@ namespace VanyaTools.Native
 
         private void AddLabelPrinting(StackPanel editor)
         {
-            _printLabelButton = Button("Печать этикетки", async (_, __) => await PrintCardLabel());
+            editor.Children.Add(Label("Печать этикетки"));
+            var halves = new Grid();
+            halves.ColumnDefinitions.Add(new ColumnDefinition());
+            halves.ColumnDefinitions.Add(new ColumnDefinition());
+            _printLabelButton = Button("Производство", async (_, __) => await PrintCardLabel("detailed"));
+            _printCustomerLabelButton = Button("Заказчик", async (_, __) => await PrintCardLabel("customer"));
+            _printLabelButton.MinWidth = _printCustomerLabelButton.MinWidth = 0;
+            _printLabelButton.Margin = new Thickness(0, 1, 0, 3);
+            _printCustomerLabelButton.Margin = new Thickness(0, 1, 0, 3);
+            System.Windows.Automation.AutomationProperties.SetName(_printLabelButton, "Печать этикетки для производства");
+            System.Windows.Automation.AutomationProperties.SetName(_printCustomerLabelButton, "Печать этикетки для заказчика");
+            Grid.SetColumn(_printCustomerLabelButton, 1);
+            halves.Children.Add(_printLabelButton);
+            halves.Children.Add(_printCustomerLabelButton);
             _printLabelResult = Note("");
             _printLabelResult.TextWrapping = TextWrapping.Wrap;
-            editor.Children.Add(_printLabelButton);
+            editor.Children.Add(halves);
             editor.Children.Add(_printLabelResult);
         }
 
@@ -190,31 +203,41 @@ namespace VanyaTools.Native
         {
             if (_printLabelButton == null) return;
             _printLabelButton.IsEnabled = !_busy && _data.ServerOrderId > 0;
-            _printLabelButton.ToolTip = _data.ServerOrderId > 0 ? "Напечатать сохранённые на сервере данные этой карточки на выбранном сетевом принтере." : "Сначала опубликуйте карточку или присвойте номер с приёмки.";
+            _printCustomerLabelButton.IsEnabled = _printLabelButton.IsEnabled;
+            _printLabelButton.ToolTip = _data.ServerOrderId > 0 ? "Этикетка для производства. Формат и принтер — из настроек." : "Сначала опубликуйте карточку или присвойте номер с приёмки.";
+            _printCustomerLabelButton.ToolTip = _data.ServerOrderId > 0 ? "Этикетка для заказчика. Используется принтер полной этикетки." : _printLabelButton.ToolTip;
             ToolTipService.SetShowOnDisabled(_printLabelButton, true);
+            ToolTipService.SetShowOnDisabled(_printCustomerLabelButton, true);
             if (_printFormat != null) _printFormat.IsEnabled = !_busy;
             if (_fullNetworkPrinter != null) _fullNetworkPrinter.IsEnabled = !_busy;
             if (_miniNetworkPrinter != null) _miniNetworkPrinter.IsEnabled = !_busy;
             if (_refreshNetworkPrinters != null) _refreshNetworkPrinters.IsEnabled = !_busy;
         }
 
-        private async Task PrintCardLabel()
+        private async Task PrintCardLabel(string labelVariant)
         {
             if (_busy || _data.ServerOrderId < 1) return;
             FileStream printLock;
             try { Directory.CreateDirectory(Path.GetDirectoryName(PendingLabelPath)); printLock = new FileStream(PendingLabelPath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
             catch (IOException) { _status("Другая отправка этикетки ещё выполняется. Дождитесь результата.", true); return; }
             string server = _server.Text.Trim().TrimEnd('/'), key = _key.Password.Trim();
-            string format = Convert.ToString(_printFormat.SelectedValue) == "mini" ? "mini" : "full";
+            string format = labelVariant == "customer" ? "full" :
+                Convert.ToString(_printFormat.SelectedValue) == "mini" ? "mini" : "full";
             int id = _data.ServerOrderId;
-            _busy = true; UpdateActions(); _printLabelButton.Content = "Отправка этикетки…";
+            var pressed = labelVariant == "customer" ? _printCustomerLabelButton : _printLabelButton;
+            _busy = true; UpdateActions(); pressed.Content = "Отправка…";
             _printLabelResult.Text = "Подготовка печати…"; _printLabelResult.ClearValue(TextBlock.ForegroundProperty);
             try
             {
                 Dictionary<string, object> job = null;
                 if (File.Exists(PendingLabelPath)) job = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(PendingLabelPath, Encoding.UTF8));
-                if (job != null && (PrintValue(job, "server") != server || Convert.ToInt32(job["orderId"]) != id || PrintValue(job, "format") != format))
-                    throw new InvalidOperationException("Осталось непроверенное задание заказа №" + PrintValue(job, "orderNumber") + ". Откройте его и повторите кнопку с прежним форматом: результат проверится без повторной отправки.");
+                string pendingVariant = PrintValue(job, "labelVariant");
+                if (String.IsNullOrEmpty(pendingVariant)) pendingVariant = "detailed";
+                if (job != null && (PrintValue(job, "server") != server || Convert.ToInt32(job["orderId"]) != id ||
+                    PrintValue(job, "format") != format || pendingVariant != labelVariant))
+                    throw new InvalidOperationException("Осталось непроверенное задание заказа №" + PrintValue(job, "orderNumber") +
+                        ". Повторите " + (pendingVariant == "customer" ? "правую кнопку «Заказчик»" : "левую кнопку «Производство»") +
+                        " этого заказа с прежним форматом: результат проверится без повторной отправки.");
                 if (job == null)
                 {
                     if (!await LoadNetworkPrinters()) throw new InvalidOperationException(_networkPrinterStatus.Text);
@@ -224,7 +247,8 @@ namespace VanyaTools.Native
                     if (!printer.Online) throw new InvalidOperationException("ПК с принтером не в сети: " + printer.Name + ". Запустите на нём модуль печати.");
                     var destination = selected.Split('/');
                     job = new Dictionary<string, object> { ["server"] = server, ["clientKey"] = Guid.NewGuid().ToString(), ["orderId"] = id, ["orderNumber"] = _data.ServerOrderNumber,
-                        ["format"] = format, ["stationId"] = destination[0], ["printerId"] = destination[1] };
+                        ["format"] = format, ["labelVariant"] = labelVariant,
+                        ["stationId"] = destination[0], ["printerId"] = destination[1] };
                     WritePrintJson(PendingLabelPath, job);
                 }
                 string clientKey = PrintValue(job, "clientKey");
@@ -245,7 +269,8 @@ namespace VanyaTools.Native
                 else _printLabelResult.Text = "Задание обрабатывается. Повторная кнопка проверит результат без повторной печати.";
             }
             catch (Exception error) { _printLabelResult.Text = "Печать: " + error.Message; _printLabelResult.Foreground = Brushes.Firebrick; _status(_printLabelResult.Text, true); }
-            finally { printLock.Dispose(); _busy = false; _printLabelButton.Content = "Печать этикетки"; UpdateActions(); }
+            finally { printLock.Dispose(); _busy = false; _printLabelButton.Content = "Производство";
+                _printCustomerLabelButton.Content = "Заказчик"; UpdateActions(); }
         }
     }
 }

@@ -553,7 +553,8 @@ namespace VanyaTools.Native
                 }
                 else
                 {
-                    if (!SameDocument(_documentIdentity, (object)doc) || _documentPath != null)
+                    if (!SameDocument(_documentIdentity, (object)doc) || _documentPath != null ||
+                        (loadIfChanged && DocumentCardVersion((object)doc) != _documentCardVersion))
                     {
                         LoadUnsavedDocument(doc);
                         if (loadIfChanged) LoadDocument(false);
@@ -562,7 +563,8 @@ namespace VanyaTools.Native
                 }
             }
             if (loadIfChanged && (!SameDocument(_documentIdentity, (object)doc) ||
-                !String.Equals(path, _documentPath, StringComparison.OrdinalIgnoreCase)))
+                !String.Equals(path, _documentPath, StringComparison.OrdinalIgnoreCase) ||
+                DocumentCardVersion((object)doc) != _documentCardVersion))
                 LoadDocument(false);
             return doc;
         }
@@ -580,14 +582,16 @@ namespace VanyaTools.Native
                 if (doc == null) { ClearDocumentView(); return; }
                 if (String.IsNullOrWhiteSpace(path))
                 {
-                    if (!SameDocument(_documentIdentity, candidate) || _documentPath != null)
+                    if (!SameDocument(_documentIdentity, candidate) || _documentPath != null ||
+                        DocumentCardVersion(candidate) != _documentCardVersion)
                         LoadDocument(false);
                     return;
                 }
                 if (SameDocument(_failedDocumentIdentity, candidate) &&
                     String.Equals(path, _failedDocumentPath, StringComparison.OrdinalIgnoreCase)) return;
                 if (!SameDocument(_documentIdentity, (object)doc) ||
-                    !String.Equals(path, _documentPath, StringComparison.OrdinalIgnoreCase))
+                    !String.Equals(path, _documentPath, StringComparison.OrdinalIgnoreCase) ||
+                    DocumentCardVersion((object)doc) != _documentCardVersion)
                     LoadDocument(false);
             }
             catch (Exception error)
@@ -608,6 +612,7 @@ namespace VanyaTools.Native
             _documentIdentity = null;
             _documentPath = null;
             _lastWrittenJson = null;
+            _documentCardVersion = 0;
             _failedDocumentIdentity = null;
             _failedDocumentPath = null;
             _data = new OrderCardData();
@@ -633,6 +638,7 @@ namespace VanyaTools.Native
             ClearDocumentView();
             _documentIdentity = (object)doc;
             _documentPath = null;
+            _documentCardVersion = DocumentCardVersion((object)doc);
             _failedDocumentIdentity = null;
             _failedDocumentPath = null;
             _editor.IsEnabled = true;
@@ -776,6 +782,7 @@ namespace VanyaTools.Native
             _failedDocumentIdentity = null;
             _failedDocumentPath = null;
             _lastWrittenJson = storedJson;
+            _documentCardVersion = DocumentCardVersion((object)doc);
             _loadingForm = true;
             try
             {
@@ -920,6 +927,9 @@ namespace VanyaTools.Native
 
         private void WriteData(dynamic doc)
         {
+            if (SameDocument(_documentIdentity, (object)doc) &&
+                DocumentCardVersion((object)doc) != _documentCardVersion)
+                throw new InvalidOperationException("Карточка обновлена в другой панели. Загрузите её повторно перед сохранением.");
             _data.SchemaVersion = 6;
             string json = new JavaScriptSerializer().Serialize(_data);
             if (!String.Equals(json, _lastWrittenJson, StringComparison.Ordinal))
@@ -928,6 +938,7 @@ namespace VanyaTools.Native
                 properties.GetType().InvokeMember("Item", BindingFlags.SetProperty,
                     null, properties, new object[] { PropertyOwner, 1, json });
                 _lastWrittenJson = json;
+                _documentCardVersion = DocumentCardVersion((object)doc, true);
             }
         }
 
@@ -1003,7 +1014,8 @@ namespace VanyaTools.Native
                 row.Children.Add(thumbnail);
                 int count = _data.Frames[i].ObjectCount > 0 ? _data.Frames[i].ObjectCount
                     : _data.Frames[i].Shapes.Count;
-                var label = new TextBlock { Text = (i + 1) + ". Кадр · " + count + " объект(ов)",
+                var label = new TextBlock { Text = (i + 1) + (count > 0 ? ". Кадр · " + count + " объект(ов)" :
+                    String.IsNullOrEmpty(_data.Frames[i].ServerPhotoKey) ? ". Растровый кадр" : ". Фото из карточки"),
                     FontSize = 11, Margin = new Thickness(1, 0, 1, 1),
                     TextTrimming = TextTrimming.CharacterEllipsis };
                 Grid.SetColumn(label, 1);
@@ -1056,7 +1068,9 @@ namespace VanyaTools.Native
         {
             var bytes = ReadFrameSnapshot(_data.Frames[index]);
             if (bytes == null)
-                throw new InvalidOperationException("Растровый кадр недоступен. Выделите макет и нажмите «Переснять».");
+                throw new InvalidOperationException(String.IsNullOrEmpty(_data.Frames[index].ServerPhotoKey)
+                    ? "Растровый кадр недоступен. Выделите макет и нажмите «Переснять»."
+                    : "Файл кадра недоступен. Нажмите «Загрузить карточку с сервера» для восстановления фотографий.");
             var image = new Image { Source = DecodePhoto(bytes, 4096), Stretch = Stretch.Uniform };
             var window = new Window { Title = "Кадр " + (index + 1), Width = 950, Height = 720,
                 MinWidth = 400, MinHeight = 300, Content = image,
@@ -1094,18 +1108,25 @@ namespace VanyaTools.Native
         {
             if (String.IsNullOrEmpty(_data.FrameStoreId))
                 _data.FrameStoreId = Guid.NewGuid().ToString("N");
-            frame.SnapshotId = Guid.NewGuid().ToString("N");
-            string local = SnapshotPath(_data.FrameStoreId, frame.SnapshotId, null);
+            return StoreFrameSnapshot(frame, _data.FrameStoreId, _documentPath, photo);
+        }
+
+        private static bool StoreFrameSnapshot(OrderCardFrame frame, string storeId, string documentPath, byte[] photo,
+            bool preserveSnapshotId = false)
+        {
+            if (!preserveSnapshotId || String.IsNullOrEmpty(frame.SnapshotId))
+                frame.SnapshotId = Guid.NewGuid().ToString("N");
+            string local = SnapshotPath(storeId, frame.SnapshotId, null);
             Directory.CreateDirectory(Path.GetDirectoryName(local));
-            File.WriteAllBytes(local, photo);
+            if (!preserveSnapshotId || !File.Exists(local)) File.WriteAllBytes(local, photo);
             bool sharedCopy = true;
-            if (!String.IsNullOrWhiteSpace(_documentPath))
+            if (!String.IsNullOrWhiteSpace(documentPath))
             {
                 try
                 {
-                    string shared = SnapshotPath(_data.FrameStoreId, frame.SnapshotId, _documentPath);
+                    string shared = SnapshotPath(storeId, frame.SnapshotId, documentPath);
                     Directory.CreateDirectory(Path.GetDirectoryName(shared));
-                    File.Copy(local, shared, true);
+                    if (!preserveSnapshotId || !File.Exists(shared)) File.Copy(local, shared, true);
                 }
                 catch (Exception error)
                 {
@@ -1119,13 +1140,18 @@ namespace VanyaTools.Native
 
         private byte[] ReadFrameSnapshot(OrderCardFrame frame)
         {
+            return ReadFrameSnapshot(frame, _data.FrameStoreId, _documentPath);
+        }
+
+        private static byte[] ReadFrameSnapshot(OrderCardFrame frame, string storeId, string documentPath)
+        {
             if (String.IsNullOrWhiteSpace(frame.SnapshotId) ||
-                String.IsNullOrWhiteSpace(_data.FrameStoreId)) return null;
-            string local = SnapshotPath(_data.FrameStoreId, frame.SnapshotId, null);
+                String.IsNullOrWhiteSpace(storeId)) return null;
+            string local = SnapshotPath(storeId, frame.SnapshotId, null);
             if (File.Exists(local)) return File.ReadAllBytes(local);
-            if (!String.IsNullOrWhiteSpace(_documentPath))
+            if (!String.IsNullOrWhiteSpace(documentPath))
             {
-                string shared = SnapshotPath(_data.FrameStoreId, frame.SnapshotId, _documentPath);
+                string shared = SnapshotPath(storeId, frame.SnapshotId, documentPath);
                 if (File.Exists(shared)) return File.ReadAllBytes(shared);
             }
             return null;
@@ -1161,7 +1187,9 @@ namespace VanyaTools.Native
         {
             if (!String.IsNullOrWhiteSpace(frame.SnapshotId))
                 return ReadFrameSnapshot(frame) ?? throw new InvalidOperationException(
-                    "Растровый кадр не найден. Выделите макет и переснимите кадр.");
+                    String.IsNullOrEmpty(frame.ServerPhotoKey)
+                        ? "Растровый кадр не найден. Выделите макет и переснимите кадр."
+                        : "Файл кадра не найден. Нажмите «Загрузить карточку с сервера» для восстановления фотографий.");
             // Older CDRs contain only Corel shape references. Freeze the frame on first use.
             byte[] photo = CapturePhoto(doc, frame, useCurrentSelection);
             SaveFrameSnapshot(frame, photo);
@@ -2229,7 +2257,7 @@ namespace VanyaTools.Native
                 {
                     string question = "Файл «" + Path.GetFileName(path) +
                         "» ещё не привязан к заказу.\nПривязать его к заказу №" +
-                        selected.Number + " и сохранить CDR?";
+                        selected.Number + " и сохранить CDR?\nПоля и фотографии будут загружены из карточки заказа.";
                     if (MessageBox.Show(question, "Vanya Tools", MessageBoxButton.YesNo,
                         MessageBoxImage.Question) != MessageBoxResult.Yes)
                     {
@@ -2263,6 +2291,11 @@ namespace VanyaTools.Native
                 LoadServerFields(result);
                 ReadForm();
                 ApplyServerResult(result);
+                string framesWarning = await LoadServerFrames(result, openedDocument, newlyLinked);
+                if (!SameDocument(openedDocument, (object)CorelApp.Get().ActiveDocument) ||
+                    !ReferenceEquals(openedCard, _data))
+                    throw new OperationCanceledException("Вернитесь в выбранный CDR и повторите загрузку карточки.");
+                ReadForm();
                 SaveData();
                 if (newlyLinked)
                 {
@@ -2273,7 +2306,8 @@ namespace VanyaTools.Native
                 Log.Info("Order card fields loaded from server on CDR open: " + selected.Id + ".");
                 await Task.Run(() => OrderCdrPathIndex.Remember(server, selected.Id, path, yearRoot));
                 _status("CDR заказа №" + selected.Number + " открыт. Поля загружены из карточки заказа." +
-                    (newlyLinked ? " CDR сохранён." : " Сохраните CDR, чтобы записать обновлённые поля в файл."), false);
+                    (newlyLinked ? " CDR сохранён." : " Сохраните CDR, чтобы записать обновлённую карточку в файл.") +
+                    (framesWarning == null ? "" : " " + framesWarning), framesWarning != null);
             }
             catch (Exception error)
             {
@@ -2345,7 +2379,12 @@ namespace VanyaTools.Native
                     StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Сервер связал заказ с другой карточкой. Загрузка отменена.");
                 LoadServerFields(result);
-                ReadForm(); ApplyServerResult(result); _data.PendingIntakeId = 0; SaveData();
+                ReadForm(); ApplyServerResult(result); _data.PendingIntakeId = 0;
+                string framesWarning = await LoadServerFrames(result, (object)doc);
+                if (!SameDocument((object)doc, (object)CorelApp.Get().ActiveDocument) ||
+                    !ReferenceEquals(assignedCard, _data))
+                    throw new OperationCanceledException("Вернитесь в исходный CDR и повторите загрузку карточки.");
+                ReadForm(); SaveData();
                 UpdateCaption();
                 linked = true;
                 string saveWarning = null;
@@ -2360,7 +2399,8 @@ namespace VanyaTools.Native
                         " привязан, но CDR не сохранён: " + saveWarning, true);
                 else _status("Заказ №" + _data.ServerOrderNumber +
                     (saveCdr ? " связан с CDR. Добавьте кадры и опубликуйте фото."
-                        : " привязан. CDR не сохранён; добавьте кадры и опубликуйте фото."), false);
+                        : " привязан. CDR не сохранён; добавьте кадры и опубликуйте фото.") +
+                    (framesWarning == null ? "" : " " + framesWarning), framesWarning != null);
             }
             catch (Exception error)
             {
@@ -2611,6 +2651,7 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Вернитесь в исходный CDR и загрузите заказ с сервера.");
                 _data.PublishedAtUtc = DateTime.UtcNow.ToString("o");
                 ApplyServerResult(result);
+                if (includePhotos && photos.Count > 0) MarkPublishedFrames(result);
                 refreshOrders = true;
                 string deadlineWarning = null;
                 string urgencyWarning = null;
@@ -2754,10 +2795,10 @@ namespace VanyaTools.Native
                 var result = await OrderServerClient.Get(_server.Text.Trim(), _key.Password.Trim(), _data.ServerOrderId);
                 if (!SameDocument(doc, (object)CorelApp.Get().ActiveDocument))
                     throw new InvalidOperationException("Вернитесь в исходный CDR и повторите загрузку.");
-                if (ServerTextDiffers(result) && MessageBox.Show(
-                    "Текстовые поля в CDR отличаются от данных на сервере. " +
-                    "Заменить заказчика, срок, источник, технологию, описание и изделия серверными данными? " +
-                    "Кадры макета останутся в CDR.",
+                if ((ServerTextDiffers(result) || (_data.Frames.Count > 0 && ServerFramesDiffer(result))) && MessageBox.Show(
+                    "Карточка CDR отличается от данных на сервере. " +
+                    "Загрузить заказчика, срок, источник, технологии, описание, изделия и фотографии из карточки заказа? " +
+                    "Если у заказа есть фотографии, они заменят кадры; объекты на холсте останутся на месте.",
                     "Vanya Tools · загрузка карточки", MessageBoxButton.YesNo,
                     MessageBoxImage.Warning) != MessageBoxResult.Yes)
                 {
@@ -2765,9 +2806,15 @@ namespace VanyaTools.Native
                     return;
                 }
                 LoadServerFields(result);
-                ReadForm(); ApplyServerResult(result); SaveData(); UpdateCaption(); UpdateActions();
+                ReadForm(); ApplyServerResult(result);
+                var loadedCard = _data;
+                string framesWarning = await LoadServerFrames(result, doc, true);
+                if (!SameDocument(doc, (object)CorelApp.Get().ActiveDocument) || !ReferenceEquals(loadedCard, _data))
+                    throw new OperationCanceledException("Вернитесь в исходный CDR и повторите загрузку карточки.");
+                ReadForm(); SaveData(); UpdateCaption(); UpdateActions();
                 CorelDocumentSaver.Save(CorelApp.Get().ActiveDocument);
-                _status("Заказ №" + _data.ServerOrderNumber + " загружен с сервера. CDR сохранён.", false);
+                _status("Заказ №" + _data.ServerOrderNumber + " загружен с сервера. CDR сохранён." +
+                    (framesWarning == null ? "" : " " + framesWarning), framesWarning != null);
             }
             catch (Exception error) { _status("Загрузка заказа: " + error.Message, true); }
             finally { _busy = false; _refreshServer.IsEnabled = true; }
@@ -2823,9 +2870,15 @@ namespace VanyaTools.Native
                 if (_data.ServerOrderId != Convert.ToInt32(result["id"]))
                     _data = new OrderCardData { ClientKey = Convert.ToString(result["clientKey"]) };
                 LoadServerFields(result);
-                ReadForm(); ApplyServerResult(result); SaveData(); RenderFrames(); UpdateCaption(); UpdateActions();
+                ReadForm(); ApplyServerResult(result);
+                var loadedCard = _data;
+                string framesWarning = await LoadServerFrames(result, (object)doc, true);
+                if (!SameDocument((object)doc, (object)CorelApp.Get().ActiveDocument) || !ReferenceEquals(loadedCard, _data))
+                    throw new OperationCanceledException("Вернитесь в исходный CDR и повторите загрузку карточки.");
+                ReadForm(); SaveData(); RenderFrames(); UpdateCaption(); UpdateActions();
                 CorelDocumentSaver.Save(doc);
-                _status("Заказ №" + number + " открыт в CDR.", false);
+                _status("Заказ №" + number + " открыт в CDR." +
+                    (framesWarning == null ? "" : " " + framesWarning), framesWarning != null);
             }
             catch (Exception error) { _status("Открытие заказа: " + error.Message, true); }
             finally { _busy = false; UpdateActions(); }
@@ -3326,6 +3379,7 @@ namespace VanyaTools.Native
         public List<OrderCardShape> Shapes { get; set; } = new List<OrderCardShape>();
         public string Thumbnail { get; set; }
         public string SnapshotId { get; set; }
+        public string ServerPhotoKey { get; set; }
         public int ObjectCount { get; set; }
     }
     public sealed class OrderCardShape
