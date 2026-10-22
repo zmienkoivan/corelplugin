@@ -239,6 +239,7 @@ namespace VanyaTools.Native
                 new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = settings }));
             tabs.Items.Add(ThumbnailTabs.Create("Экспериментальное", ThumbnailTabs.Experiment,
                 Color.FromRgb(120, 92, 139), new TabControl { Items = {
+                    new TabItem { Header = "Рулетка", Content = new CurveMeasureTab(SetStatus) },
                     new TabItem { Header = "Шум ДТФ", Content = new DtfNoiseTab(ImportDtfResult, SetStatus) },
                     new TabItem { Header = "Шрифт", Content = new FontSearchTab(aiTools.FontToolsView, SetStatus) },
                     new TabItem { Header = "Восстановление принта", Content = aiTools }
