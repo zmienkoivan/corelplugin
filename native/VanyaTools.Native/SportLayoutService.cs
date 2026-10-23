@@ -111,6 +111,8 @@ namespace VanyaTools.Native
         public bool FrontNameTwoLines;
         public double FrontLineSpacingPercent;
         public int PressMode;
+        public int PressGrouping, PressOrientation = 1;
+        public double PressSheetWidthMm = 750;
         public double PressLeftMm = 20, PressRightMm = 20, PressTopMm = 20, PressBottomMm = 20;
         public bool PressBorders = true;
         internal SportLayoutOptions Copy() => (SportLayoutOptions)MemberwiseClone();
@@ -359,7 +361,7 @@ namespace VanyaTools.Native
             public bool SmallPart { get; set; }
             public SportContourNesting.Item ContourLayout;
             public IList<object> PrintInkShapes;
-            public string Label;
+            public string Label, Size;
         }
 
         public string AssignSelectedTextBox(string zoneName, out bool prepared)
@@ -1239,6 +1241,7 @@ namespace VanyaTools.Native
                         foreach (var piece in kit)
                         {
                             piece.GarmentIndex = complete + 1;
+                            piece.Size = size;
                             piece.Label = "Размер «" + size + "», " +
                                 new[] { "перед", "спина", "левый рукав", "правый рукав", "горловина" }[piece.PartIndex] +
                                 ", комплект №" + (complete + 1);
@@ -1256,7 +1259,8 @@ namespace VanyaTools.Native
                 var inputs = nested.Select(p => new SportSheetNesting.Item { Width = p.Width, Height = p.Height,
                     SmallPart = p.SmallPart, Allow90 = !cutting && (preview != null ? p.SmallPart : p.CanRotate),
                     Allow180 = cutting && (preview != null || p.ContourLayout.Allow180),
-                    Bands = p.ContourLayout.Bands, Garment = p.GarmentIndex, Part = p.PartIndex, Label = p.Label }).ToList();
+                    Bands = p.ContourLayout.Bands, Garment = p.GarmentIndex, Part = p.PartIndex,
+                    Label = p.Label, Size = p.Size }).ToList();
                 SportNestingChoice choice = null;
                 SportSheetNesting.Result layout;
                 if (preview == null)

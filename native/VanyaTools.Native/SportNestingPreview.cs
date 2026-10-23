@@ -12,6 +12,8 @@ namespace VanyaTools.Native
         internal SportGroupingMode Grouping;
         internal bool Rotate, Improve, Borders = true;
         internal int Press;
+        internal int PressGrouping, PressOrientation = 1;
+        internal double PressSheetWidth = 750;
         internal double Left = 20, Right = 20, Top = 20, Bottom = 20;
 
         internal static SportNestingSettings From(SportLayoutOptions options, bool cutting) =>
@@ -20,7 +22,8 @@ namespace VanyaTools.Native
                 Rotate = cutting ? options.CutAllow180 : options.RotateSleeves,
                 Press = cutting ? 0 : options.PressMode, Left = options.PressLeftMm,
                 Right = options.PressRightMm, Top = options.PressTopMm, Bottom = options.PressBottomMm,
-                Borders = options.PressBorders };
+                Borders = options.PressBorders, PressGrouping = options.PressGrouping,
+                PressOrientation = options.PressOrientation, PressSheetWidth = options.PressSheetWidthMm };
 
         internal void Apply(SportLayoutOptions options, bool cutting)
         {
@@ -32,6 +35,8 @@ namespace VanyaTools.Native
                 options.RotateSleeves = Rotate; options.PressMode = Press;
                 options.PressLeftMm = Left; options.PressRightMm = Right;
                 options.PressTopMm = Top; options.PressBottomMm = Bottom; options.PressBorders = Borders;
+                options.PressGrouping = PressGrouping; options.PressOrientation = PressOrientation;
+                options.PressSheetWidthMm = PressSheetWidth;
             }
         }
     }
@@ -51,7 +56,8 @@ namespace VanyaTools.Native
         public override string ToString() => Layout.PageHeights.Count + " стр. · " +
             (Layout.PageHeights.Sum() / 1000).ToString("0.###") + " м · " +
             new[] { "Прямоугольники", "Упрощённые", "Полный контур" }[(int)Settings.Density] +
-            " · " + new[] { "свободно", "пары", "комплект" }[(int)Settings.Grouping] +
+            " · " + (Settings.Press == 0 ? new[] { "свободно", "пары", "комплект" }[(int)Settings.Grouping] :
+                new[] { "комплект → пары", "пары + рукава", "по размерам" }[Settings.PressGrouping]) +
             (Settings.Improve ? " · уплотнение" : " · быстро") +
             (Settings.Press == 0 ? "" : " · " + Panels.Count + " листов пресса");
     }
@@ -62,7 +68,7 @@ namespace VanyaTools.Native
             SportNestingSettings settings)
         {
             var items = source.Select(item => new SportSheetNesting.Item { Width = item.Width, Height = item.Height,
-                Label = item.Label,
+                Label = item.Label, Size = item.Size,
                 Bands = item.Bands, Garment = item.Garment, Part = item.Part, SmallPart = item.SmallPart,
                 Allow90 = item.Allow90 && settings.Rotate, Allow180 = item.Allow180 && settings.Rotate }).ToList();
             if (settings.Press == 0)
@@ -71,20 +77,22 @@ namespace VanyaTools.Native
 
             SportNestingChoice best = null;
             Exception failure = null;
-            // Both orientations of the physical press sheet are considered, without rotating whole garments.
-            foreach (bool landscape in new[] { true, false })
+            // Sheet orientation does not rotate the printed artwork.
+            foreach (bool landscape in settings.PressOrientation == 1 ? new[] { false } :
+                settings.PressOrientation == 2 ? new[] { true } : new[] { true, false })
             {
                 SportNestingCancellation.Check();
                 try
                 {
                     double pressWidth = landscape ? 1200 : settings.Press == 1 ? 800 : 1000;
                     double pressHeight = landscape ? settings.Press == 1 ? 800 : 1000 : 1200;
-                    double innerWidth = Math.Min(settings.Width, pressWidth) - settings.Left - settings.Right;
+                    double sheetWidth = Math.Min(settings.Width, pressWidth);
+                    if (settings.PressSheetWidth > 0) sheetWidth = Math.Min(sheetWidth, settings.PressSheetWidth);
+                    double innerWidth = sheetWidth - settings.Left - settings.Right;
                     double innerHeight = Math.Min(settings.Length, pressHeight) - settings.Top - settings.Bottom;
                     if (innerWidth <= 0 || innerHeight <= 0)
                         throw new InvalidOperationException("Поля не оставляют рабочей зоны для деталей.");
-                    var inside = SportGroupedNesting.Place(items, innerWidth, innerHeight, settings.Gap,
-                        settings.Density, settings.Grouping, settings.Improve);
+                    var inside = SportPressNesting.Place(items, innerWidth, innerHeight, settings);
                     var members = Enumerable.Range(0, inside.PageHeights.Count)
                         .Select(page => inside.Placements.Where(p => p.Page == page).ToList()).ToList();
                     var blocks = members.Select((parts, index) => new SportSheetNesting.Item {
@@ -119,7 +127,7 @@ namespace VanyaTools.Native
                 catch (InvalidOperationException error) { failure = error; }
             }
             return best ?? throw new InvalidOperationException("Не удалось уложить детали в полезную зону пресса. " +
-                "Попробуйте свободную группировку или уменьшите поля. " + failure?.Message, failure);
+                "Увеличьте ширину листа, смените ориентацию или уменьшите поля. " + failure?.Message, failure);
         }
 
         internal static void Validate(SportNestingChoice choice, int count)

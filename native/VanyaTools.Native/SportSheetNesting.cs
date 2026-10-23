@@ -26,7 +26,7 @@ namespace VanyaTools.Native
     {
         internal sealed class Item
         {
-            public string Label;
+            public string Label, Size;
             public double Width, Height;
             public bool SmallPart, Allow90, Allow180;
             public int Garment, Part;
@@ -76,7 +76,7 @@ namespace VanyaTools.Native
 
         internal static Result Place(IList<Item> items, double width, double limit, double gap,
             SportNestingMode mode = SportNestingMode.FullContour, bool improve = true, double? firstPageLimit = null,
-            Result fixedLayout = null)
+            Result fixedLayout = null, bool preferGarmentPages = false)
         {
             if (!Enum.IsDefined(typeof(SportNestingMode), mode)) throw new ArgumentOutOfRangeException(nameof(mode));
             if (width <= 0 || limit <= 0 || gap < 0 || Double.IsNaN(width + limit + gap) ||
@@ -169,11 +169,15 @@ namespace VanyaTools.Native
                 {
                     SportNestingCancellation.Check();
                     Placement selected = null;
-                    int pageIndex = 0;
-                    for (; pageIndex < pages.Count; pageIndex++)
+                    int pageIndex = pages.Count;
+                    IEnumerable<int> candidates = Enumerable.Range(0, pages.Count);
+                    if (preferGarmentPages)
+                        candidates = candidates.OrderByDescending(page => pages[page].Placed.Any(
+                            placed => items[placed.Index].Garment == items[index].Garment));
+                    foreach (int candidate in candidates)
                     {
-                        selected = Find(pages[pageIndex], variants[index], columns, step, pages[pageIndex].Limit, gapColumns);
-                        if (selected != null) break; // Fill earlier pages before creating another.
+                        selected = Find(pages[candidate], variants[index], columns, step, pages[candidate].Limit, gapColumns);
+                        if (selected != null) { pageIndex = candidate; break; }
                     }
                     if (selected == null)
                     {

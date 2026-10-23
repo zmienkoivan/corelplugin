@@ -74,6 +74,9 @@ namespace VanyaTools.Native
             public int? CutNestingMode { get; set; }
             public int? CutGroupingMode { get; set; }
             public int PressMode { get; set; }
+            public int? PressGrouping { get; set; }
+            public int? PressOrientation { get; set; }
+            public double? PressSheetWidthMm { get; set; }
             public double? PressLeftMm { get; set; }
             public double? PressRightMm { get; set; }
             public double? PressTopMm { get; set; }
@@ -117,6 +120,8 @@ namespace VanyaTools.Native
         private bool _legacyTwoLines, _whiteCaptions;
         private double _legacyLineSpacing = 100;
         private int _pressMode;
+        private int _pressGrouping, _pressOrientation = 1;
+        private double _pressSheetWidthMm = 750;
         private double _pressLeftMm = 20, _pressRightMm = 20, _pressTopMm = 20, _pressBottomMm = 20;
         private bool _pressBorders = true;
         private readonly CheckBox _keepGuides, _rotateSleeves, _cutAllow180, _cutSizeTags, _tagCutLetter;
@@ -742,6 +747,7 @@ namespace VanyaTools.Native
                 NameSide = _nameSide.SelectedIndex, NameCase = _frontCase.SelectedIndex,
                 Density = _nestingMode.SelectedIndex, Grouping = _groupingMode.SelectedIndex,
                 Press = _pressMode, PressLeft = _pressLeftMm, PressRight = _pressRightMm,
+                PressGrouping = _pressGrouping, PressOrientation = _pressOrientation, PressWidth = _pressSheetWidthMm,
                 PressTop = _pressTopMm, PressBottom = _pressBottomMm, PressBorders = _pressBorders });
             string pdf = json.Serialize(new { Print = printing, Folder = _printFolder.Text, Quality = _printQuality.SelectedIndex });
             string cutting = json.Serialize(new { Models = models, Players = players,
@@ -1200,6 +1206,16 @@ namespace VanyaTools.Native
         {
             panel.Children.Add(Label(title));
             TextBox field = Field("");
+            field.MinWidth = 0;
+            field.SetBinding(ToolTipProperty, new Binding("Text") { Source = field });
+            var preview = new SportArtworkThumbnail(field, title);
+            field.Tag = preview;
+            var block = new Grid();
+            block.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            block.ColumnDefinitions.Add(new ColumnDefinition());
+            block.Children.Add(preview);
+            var editors = new StackPanel();
+            Grid.SetColumn(editors, 1); block.Children.Add(editors);
             var row = new Grid { Margin = new Thickness(0, 2, 0, 5) };
             row.ColumnDefinitions.Add(new ColumnDefinition {
                 Width = new GridLength(1, GridUnitType.Star) });
@@ -1215,11 +1231,12 @@ namespace VanyaTools.Native
             clear.Padding = new Thickness(0);
             Grid.SetColumn(clear, 2);
             row.Children.Add(clear);
-            panel.Children.Add(row);
-            var actions = DockerLayout.Cards(165, 2);
+            editors.Children.Add(row);
+            var actions = DockerLayout.Cards(150, 2);
             actions.Children.Add(Button("Взять выделение из Corel", (_, __) => CaptureArtwork(field, partName)));
             actions.Children.Add(Button("Обновить в макетах", (_, __) => ReplaceArtwork(field, partName, part)));
-            panel.Children.Add(actions);
+            editors.Children.Add(actions);
+            panel.Children.Add(block);
             return field;
         }
 
@@ -1267,7 +1284,11 @@ namespace VanyaTools.Native
             var dialog = new OpenFileDialog { Filter =
                 "Рисунки CDR и изображения|*.cdr;*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp|CorelDRAW (*.cdr)|*.cdr|Изображения|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp|Все файлы (*.*)|*.*",
                 CheckFileExists = true };
-            if (dialog.ShowDialog() == true) field.Text = dialog.FileName;
+            if (dialog.ShowDialog() == true)
+            {
+                field.Text = dialog.FileName;
+                (field.Tag as SportArtworkThumbnail)?.Refresh();
+            }
         }
 
         private void CaptureArtwork(TextBox field, string partName)
@@ -1750,6 +1771,8 @@ namespace VanyaTools.Native
                 else
                 {
                     _rotateSleeves.IsChecked = options.RotateSleeves; _pressMode = options.PressMode;
+                    _pressGrouping = options.PressGrouping; _pressOrientation = options.PressOrientation;
+                    _pressSheetWidthMm = options.PressSheetWidthMm;
                     _pressLeftMm = options.PressLeftMm; _pressRightMm = options.PressRightMm;
                     _pressTopMm = options.PressTopMm; _pressBottomMm = options.PressBottomMm;
                     _pressBorders = options.PressBorders;
@@ -1783,6 +1806,7 @@ namespace VanyaTools.Native
                 GroupingMode = (SportGroupingMode)(cutting ? _cutGroupingMode : _groupingMode).SelectedIndex,
                 CutAllow180 = _cutAllow180.IsChecked == true,
                 PressMode = cutting ? 0 : _pressMode, PressLeftMm = _pressLeftMm, PressRightMm = _pressRightMm,
+                PressGrouping = _pressGrouping, PressOrientation = _pressOrientation, PressSheetWidthMm = _pressSheetWidthMm,
                 PressTopMm = _pressTopMm, PressBottomMm = _pressBottomMm, PressBorders = _pressBorders,
                 CutSizeTags = cutting && _cutSizeTags.IsChecked == true,
                 CutTag = cutting && _cutSizeTags.IsChecked == true ? ReadTagSettings() : new SportCutTagSettings(),
@@ -1945,6 +1969,7 @@ namespace VanyaTools.Native
                 NestingMode = _nestingMode.SelectedIndex, GroupingMode = _groupingMode.SelectedIndex,
                 CutNestingMode = _cutNestingMode.SelectedIndex, CutGroupingMode = _cutGroupingMode.SelectedIndex,
                 PressMode = _pressMode, PressLeftMm = _pressLeftMm, PressRightMm = _pressRightMm,
+                PressGrouping = _pressGrouping, PressOrientation = _pressOrientation, PressSheetWidthMm = _pressSheetWidthMm,
                 PressTopMm = _pressTopMm, PressBottomMm = _pressBottomMm, PressBorders = _pressBorders
             };
         }
@@ -2012,6 +2037,11 @@ namespace VanyaTools.Native
                 _cutGroupingMode.SelectedIndex = draft.CutGroupingMode >= 0 && draft.CutGroupingMode <= 2
                     ? draft.CutGroupingMode.Value : _groupingMode.SelectedIndex;
                 _pressMode = draft.PressMode >= 0 && draft.PressMode <= 2 ? draft.PressMode : 0;
+                _pressGrouping = draft.PressGrouping >= 0 && draft.PressGrouping <= 2 ? draft.PressGrouping.Value : 0;
+                _pressOrientation = draft.PressOrientation >= 0 && draft.PressOrientation <= 2 ? draft.PressOrientation.Value : 1;
+                _pressSheetWidthMm = draft.PressSheetWidthMm.HasValue && !Double.IsNaN(draft.PressSheetWidthMm.Value) &&
+                    !Double.IsInfinity(draft.PressSheetWidthMm.Value) && draft.PressSheetWidthMm >= 0 &&
+                    draft.PressSheetWidthMm <= 1200 ? draft.PressSheetWidthMm.Value : 750;
                 _pressLeftMm = ValidPressMargin(draft.PressLeftMm);
                 _pressRightMm = ValidPressMargin(draft.PressRightMm);
                 _pressTopMm = ValidPressMargin(draft.PressTopMm);

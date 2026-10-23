@@ -28,6 +28,7 @@ namespace VanyaTools.Native
                     (object)document, new object[] { path, options });
                 if (!File.Exists(path) || new FileInfo(path).Length == 0)
                     throw new InvalidOperationException("Corel не сохранил выделенные объекты в CDR.");
+                SportArtworkPreview.CaptureSelection((object)app, (object)document, path);
                 return path;
             }
             catch

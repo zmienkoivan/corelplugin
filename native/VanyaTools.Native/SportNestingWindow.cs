@@ -17,8 +17,9 @@ namespace VanyaTools.Native
         private readonly IList<SportSheetNesting.Item> _items;
         private readonly IList<string> _labels;
         private readonly bool _cutting;
-        private readonly TextBox _width, _length, _gap, _left, _right, _top, _bottom;
-        private readonly ComboBox _density, _grouping, _search, _press, _zoom;
+        private readonly TextBox _width, _length, _gap, _left, _right, _top, _bottom, _pressWidth;
+        private readonly ComboBox _density, _grouping, _search, _press, _zoom, _pressGrouping, _orientation;
+        private readonly Panel _groupingFields;
         private readonly CheckBox _rotate, _borders;
         private readonly StackPanel _pressFields;
         private readonly ListBox _history;
@@ -65,12 +66,17 @@ namespace VanyaTools.Native
                 "Для листового пресса задайте поля с каждой стороны. Листы уменьшаются по заполнению, " +
                 "располагаются прямоугольными блоками на рулоне и не превышают полезную зону стола. " +
                 "Из двух ориентаций листа выбирается вариант с меньшим числом прижимов, затем меньшим расходом бумаги. " +
+                "Для пресса размеры не смешиваются. Автоматическая группировка сначала пробует комплект, " +
+                "затем перед со спинкой, затем отдельные корпуса. Рукава того же размера заполняют остатки " +
+                "этих листов и дополнительные листы. Можно сразу выбрать пары с общими рукавами либо группировку по размерам. " +
+                "Ширина отрезного листа включает поля; 0 означает всю доступную ширину. " +
                 "Серые границы в окне показывают место разрезания; их печать включается отдельно.");
             _width = Field(settings, "Ширина рулона, мм");
             _length = Field(settings, "Макс. длина страницы, м");
             _gap = Field(settings, "Между деталями, мм");
             _density = ChoiceBox(settings, "Геометрия", "Прямоугольники", "Упрощённые фигуры", "Полный контур");
-            _grouping = ChoiceBox(settings, "Держать рядом", "Свободно", "Перед и спина парами", "Все детали комплектом");
+            _groupingFields = new StackPanel(); settings.Children.Add(_groupingFields);
+            _grouping = ChoiceBox(_groupingFields, "Держать рядом", "Свободно", "Перед и спина парами", "Все детали комплектом");
             _rotate = new CheckBox { Content = cutting ? "Разрешить 180°" : "Поворачивать рукава и горловину на 90°",
                 Margin = new Thickness(0, 5, 0, 8) }; settings.Children.Add(_rotate);
             _search = ChoiceBox(settings, "Поиск", "Быстрый", "С дополнительным уплотнением");
@@ -78,6 +84,10 @@ namespace VanyaTools.Native
             _press = ChoiceBox(pressSection, "Способ переноса", "Каландр · рулон", "Пресс 120 × 80 см", "Пресс 120 × 100 см");
             if (cutting) pressSection.Visibility = Visibility.Collapsed;
             _pressFields = new StackPanel(); settings.Children.Add(_pressFields);
+            _pressGrouping = ChoiceBox(_pressFields, "Собирать листы", "Комплект → пара → корпус с рукавами",
+                "Перед/спина + общие рукава", "Все детали по размерам");
+            _orientation = ChoiceBox(_pressFields, "Ориентация листа", "Автоматически", "Вертикально", "Горизонтально");
+            _pressWidth = Field(_pressFields, "Макс. ширина листа, мм · 0 = авто");
             _left = Field(_pressFields, "Поле слева, мм"); _right = Field(_pressFields, "Поле справа, мм");
             _top = Field(_pressFields, "Поле сверху, мм"); _bottom = Field(_pressFields, "Поле снизу, мм");
             _zone = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 5) };
@@ -128,9 +138,9 @@ namespace VanyaTools.Native
             _viewport.SizeChanged += (_, __) => ResizeImage(); _zoom.SelectionChanged += (_, __) => ResizeImage();
             _debounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
             _debounce.Tick += (_, __) => { _debounce.Stop(); Compute(); };
-            foreach (var box in new[] { _width, _length, _gap, _left, _right, _top, _bottom })
+            foreach (var box in new[] { _width, _length, _gap, _left, _right, _top, _bottom, _pressWidth })
                 box.TextChanged += (_, __) => Changed();
-            foreach (var combo in new[] { _density, _grouping, _search, _press })
+            foreach (var combo in new[] { _density, _grouping, _search, _press, _pressGrouping, _orientation })
                 combo.SelectionChanged += (_, __) => Changed();
             _rotate.Click += (_, __) => Changed(); _borders.Click += (_, __) => Changed();
             LoadSettings(SportNestingSettings.From(options, cutting));
@@ -164,6 +174,8 @@ namespace VanyaTools.Native
             Gap = Read(_gap, 0, 100, "Зазор"), Density = (SportNestingMode)_density.SelectedIndex,
             Grouping = (SportGroupingMode)_grouping.SelectedIndex, Rotate = _rotate.IsChecked == true,
             Improve = _search.SelectedIndex == 1, Press = _cutting ? 0 : _press.SelectedIndex,
+            PressGrouping = _pressGrouping.SelectedIndex, PressOrientation = _orientation.SelectedIndex,
+            PressSheetWidth = Read(_pressWidth, 0, 1200, "Ширина листа"),
             Left = Read(_left, 0, 200, "Левое поле"), Right = Read(_right, 0, 200, "Правое поле"),
             Top = Read(_top, 0, 200, "Верхнее поле"), Bottom = Read(_bottom, 0, 200, "Нижнее поле"),
             Borders = _borders.IsChecked == true };
@@ -174,16 +186,28 @@ namespace VanyaTools.Native
             _gap.Text = value.Gap.ToString("0.###"); _density.SelectedIndex = (int)value.Density;
             _grouping.SelectedIndex = (int)value.Grouping; _rotate.IsChecked = value.Rotate;
             _search.SelectedIndex = value.Improve ? 1 : 0; _press.SelectedIndex = value.Press;
+            _pressGrouping.SelectedIndex = value.PressGrouping; _orientation.SelectedIndex = value.PressOrientation;
+            _pressWidth.Text = value.PressSheetWidth.ToString("0.###");
             _left.Text = value.Left.ToString("0.###"); _right.Text = value.Right.ToString("0.###");
             _top.Text = value.Top.ToString("0.###"); _bottom.Text = value.Bottom.ToString("0.###");
             _borders.IsChecked = value.Borders;
             _pressFields.Visibility = value.Press == 0 ? Visibility.Collapsed : Visibility.Visible;
+            _groupingFields.Visibility = value.Press == 0 ? Visibility.Visible : Visibility.Collapsed;
             _loading = false; UpdateZone(value);
         }
         private void UpdateZone(SportNestingSettings s)
         {
-            if (s.Press != 0) _zone.Text = "Полезная зона: " + (1200 - s.Left - s.Right).ToString("0.#") + " × " +
-                ((s.Press == 1 ? 800 : 1000) - s.Top - s.Bottom).ToString("0.#") + " мм. Листы — по заполнению.";
+            if (s.Press == 0) return;
+            double shortSide = s.Press == 1 ? 800 : 1000;
+            double pressWidth = s.PressOrientation == 1 ? shortSide : 1200;
+            double pressHeight = s.PressOrientation == 1 ? 1200 : shortSide;
+            double sheetWidth = Math.Min(s.Width, pressWidth);
+            if (s.PressSheetWidth > 0) sheetWidth = Math.Min(sheetWidth, s.PressSheetWidth);
+            _zone.Text = (s.PressOrientation == 0 ? "Автовыбор ориентации. " : "") +
+                "Внутри полей: до " + (sheetWidth - s.Left - s.Right).ToString("0.#") + " × " +
+                (Math.Min(s.Length, pressHeight) - s.Top - s.Bottom).ToString("0.#") +
+                " мм" + (s.PressOrientation == 0 ? " в горизонтальном варианте" : "") +
+                ". Листы уменьшаются по заполнению; разные размеры не смешиваются.";
         }
         private void Changed()
         {
@@ -191,6 +215,7 @@ namespace VanyaTools.Native
             _revision++; _cancellation?.Cancel(); Choice = null; _apply.IsEnabled = false;
             _history.SelectedItem = null;
             _pressFields.Visibility = !_cutting && _press.SelectedIndex != 0 ? Visibility.Visible : Visibility.Collapsed;
+            _groupingFields.Visibility = _pressFields.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
             _message.Text = "Параметры изменены. Рассчитываю новый вариант…";
             _debounce.Stop(); _debounce.Start();
         }
