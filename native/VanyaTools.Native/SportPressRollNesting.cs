@@ -4,15 +4,15 @@ using System.Linq;
 
 namespace VanyaTools.Native
 {
-    // Move template sheets intact. Only the explicitly permitted large sleeves
-    // and free fallback pieces may form new batches in the roll's side strips.
-    internal static class SportPressRollNesting
+    // Torso sheets are placed first. Template sleeves fill the remaining
+    // rectangles as single-column stacks; free mode retains its own search.
+    internal static partial class SportPressRollNesting
     {
         private sealed class Sheet
         {
             internal IList<SportSheetNesting.Placement> Members;
             internal double Width, Height;
-            internal bool Locked, SleeveRows;
+            internal bool Locked, SleeveRows, SleeveStack;
         }
 
         internal static SportNestingChoice Place(IList<SportSheetNesting.Item> items,
@@ -25,6 +25,7 @@ namespace VanyaTools.Native
                 sheet.Locked = plan.LockedPages.Contains(page); sheet.SleeveRows = plan.SleeveRowPages.Contains(page);
                 return sheet;
             }).ToList();
+            if (settings.PressGrouping != 2) return PlaceBodyFirst(original, items, settings, plan);
             SportNestingChoice best = Arrange(original, items, settings, plan);
             double originalLength = best.Layout.PageHeights.Sum();
             double gap = Math.Max(1, settings.Gap);
@@ -145,11 +146,11 @@ namespace VanyaTools.Native
         }
 
         private static SportNestingChoice Arrange(IList<Sheet> sheets, IList<SportSheetNesting.Item> items,
-            SportNestingSettings settings, SportPressPlan plan)
+            SportNestingSettings settings, SportPressPlan plan, SportSheetNesting.Result fixedOutside = null)
         {
             var blocks = sheets.Select((sheet, index) => new SportSheetNesting.Item {
                 Label = "Лист для пресса №" + (index + 1), Width = sheet.Width, Height = sheet.Height }).ToList();
-            var outside = SportSheetNesting.Place(blocks, settings.Width, settings.Length,
+            var outside = fixedOutside ?? SportSheetNesting.Place(blocks, settings.Width, settings.Length,
                 Math.Max(1, settings.Gap), SportNestingMode.Rectangles, false,
                 placementOrder: plan.LockedPages.Count == 0 ? null : Enumerable.Range(0, sheets.Count).ToList());
             var choice = new SportNestingChoice { Settings = settings, PairedGarments = plan.PairedGarments,
@@ -178,7 +179,22 @@ namespace VanyaTools.Native
                         if (left != null && right != null && left.Left + left.Width + settings.Gap > right.Left + .01)
                             throw new InvalidOperationException("Левый и правый рукава поменялись колонками.");
                     }
-                if (!sheet.SleeveRows && sheet.Members.Select(p => items[p.Index].Size).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 1)
+                if (sheet.SleeveStack)
+                {
+                    var stack = sheet.Members.OrderBy(p => p.Top).ToList();
+                    if (stack.Count > 4 || stack.Any(p => items[p.Index].Part != 2 && items[p.Index].Part != 3) ||
+                        stack.Select(p => items[p.Index].Part).Distinct().Count() != 1 ||
+                        stack.Max(p => p.Left) - stack.Min(p => p.Left) > .01 ||
+                        stack.Select(p => p.Rotation).Distinct().Count() != 1 ||
+                        !stack.Select(p => items[p.Index].Garment).SequenceEqual(stack.Select(p => items[p.Index].Garment).OrderBy(i => i)) ||
+                        stack.Any(p => p.Rotation != 0 && (!settings.Rotate || !items[p.Index].Allow90)))
+                        throw new InvalidOperationException("Нарушена стопка рукавов для пресса.");
+                    for (int i = 1; i < stack.Count; i++)
+                        if (stack[i - 1].Top + stack[i - 1].Height + settings.Gap > stack[i].Top + .01)
+                            throw new InvalidOperationException("Рукава в стопке пересекаются.");
+                }
+                if (!sheet.SleeveRows && !sheet.SleeveStack &&
+                    sheet.Members.Select(p => items[p.Index].Size).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 1)
                     throw new InvalidOperationException("В отрезной лист попали разные размеры.");
                 choice.Panels.Add(new SportPressPanel { Page = block.Page, Left = block.Left,
                     Top = block.Top, Width = block.Width, Height = block.Height });
@@ -193,6 +209,18 @@ namespace VanyaTools.Native
                     placed.Page = block.Page;
                     choice.Layout.Placements.Add(placed);
                 }
+            }
+            for (int i = 0; i < choice.Panels.Count; i++)
+            {
+                var panel = choice.Panels[i];
+                if (panel.Page < 0 || panel.Page >= choice.Layout.PageHeights.Count || panel.Left < -.01 || panel.Top < -.01 ||
+                    panel.Left + panel.Width > settings.Width + .01 ||
+                    panel.Top + panel.Height > choice.Layout.PageHeights[panel.Page] + .01)
+                    throw new InvalidOperationException("Отрезной лист вышел за границы рулона.");
+                foreach (var previous in choice.Panels.Take(i).Where(p => p.Page == panel.Page))
+                    if (!Separated(panel.Left, panel.Top, panel.Width, panel.Height,
+                        previous.Left, previous.Top, previous.Width, previous.Height, Math.Max(1, settings.Gap)))
+                        throw new InvalidOperationException("Отрезные листы пересекаются или нарушен зазор между ними.");
             }
             SportNestingPreview.Validate(choice, items.Count);
             return choice;

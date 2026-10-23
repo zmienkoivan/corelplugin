@@ -4,8 +4,8 @@ using System.Linq;
 
 namespace VanyaTools.Native
 {
-    // Template sheets are immutable. Free fallback sheets retain one size;
-    // the explicit sleeve template may combine sizes in separate garment rows.
+    // Build torso/neck sheets. Template sleeves deliberately bypass this
+    // stage; their columns are fitted after the torso sheets on the roll.
     internal static class SportPressNesting
     {
         internal static SportPressPlan Place(IList<SportSheetNesting.Item> items,
@@ -18,12 +18,14 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Некорректные габариты детали для листа пресса.");
             var plan = SportPressTemplates.Create(items, settings);
             var used = new HashSet<int>(plan.Layout.Placements.Select(p => p.Index));
-            var remaining = Enumerable.Range(0, items.Count).Where(index => !used.Contains(index)).ToList();
+            var expected = Enumerable.Range(0, items.Count).Where(index => settings.PressGrouping == 2 ||
+                (items[index].Part != 2 && items[index].Part != 3)).ToList();
+            var remaining = expected.Where(index => !used.Contains(index)).ToList();
             if (remaining.Count > 0)
                 Append(plan.Layout, PlaceFree(items: remaining.Select(index => items[index]).ToList(),
                     width: width, height: height, settings: settings), remaining);
-            if (plan.Layout.Placements.Count != items.Count ||
-                plan.Layout.Placements.Select(p => p.Index).Distinct().Count() != items.Count)
+            if (plan.Layout.Placements.Count != expected.Count ||
+                !new HashSet<int>(plan.Layout.Placements.Select(p => p.Index)).SetEquals(expected))
                 throw new InvalidOperationException("Шаблон листов не сохранил все детали заказа.");
             return plan;
         }
