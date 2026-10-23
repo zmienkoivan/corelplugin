@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
+using System.Globalization;
 
 namespace VanyaTools.Native
 {
@@ -25,6 +26,7 @@ namespace VanyaTools.Native
     {
         internal sealed class Item
         {
+            public string Label;
             public double Width, Height;
             public bool SmallPart, Allow90, Allow180;
             public int Garment, Part;
@@ -91,7 +93,9 @@ namespace VanyaTools.Native
                 Item item = items[i];
                 if (item.Width <= 0 || item.Height <= 0 || Double.IsNaN(item.Width + item.Height) ||
                     Double.IsInfinity(item.Width + item.Height))
-                    throw new InvalidOperationException("У детали некорректный размер.");
+                    throw new InvalidOperationException((String.IsNullOrWhiteSpace(item.Label) ? "Деталь №" + (i + 1) : item.Label) +
+                        ": некорректные габариты " + item.Width.ToString("R", CultureInfo.InvariantCulture) + " × " +
+                        item.Height.ToString("R", CultureInfo.InvariantCulture) + " мм.");
                 variants[i] = new List<Variant>();
                 if (item.Bands != null && mode != SportNestingMode.Rectangles)
                 {
@@ -124,7 +128,7 @@ namespace VanyaTools.Native
                 }
                 variants[i].RemoveAll(v => v.Profile.Top.Length > columns || v.Height > limit + 0.000001);
                 if (variants[i].Count == 0)
-                    throw new InvalidOperationException("Деталь " + item.Width.ToString("0.#") + " × " +
+                    throw new InvalidOperationException((item.Label ?? "Деталь") + " · " + item.Width.ToString("0.#") + " × " +
                         item.Height.ToString("0.#") + " мм не помещается на страницу. Увеличьте её максимальную длину или ширину.");
                 foreach (Variant variant in variants[i])
                     variant.DenseSearch = mode == SportNestingMode.FullContour && item.SmallPart;

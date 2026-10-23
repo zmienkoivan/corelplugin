@@ -42,6 +42,7 @@ namespace VanyaTools.Native
                 }
                 units.Add(new Unit { Members = inside.Placements,
                     Item = new SportSheetNesting.Item { Width = inside.Placements.Max(part => part.Left + part.Width),
+                        Label = (grouping == SportGroupingMode.Garment ? "Комплект №" : "Пара перед/спина №") + garment.Key,
                         Height = inside.PageHeights[0], Bands = bands } });
             }
             if (units.Count == 0) return SportSheetNesting.Place(items, width, limit, gap, density, improve);

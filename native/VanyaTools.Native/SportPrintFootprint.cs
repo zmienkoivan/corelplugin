@@ -60,25 +60,49 @@ namespace VanyaTools.Native
             public void Clear() => throw new NotSupportedException();
         }
 
+        internal static Bounds Measure(IList<object> shapes, bool outline = true)
+        {
+            if (shapes == null || shapes.Count == 0)
+                throw new InvalidOperationException("В печатной детали не осталось объектов для измерения.");
+            // Corel ranges can change membership after Group/MoveToLayer. Keep
+            // explicit shape references and measure their current document bounds.
+            Bounds result = Measure(shapes[0], outline);
+            for (int index = 1; index < shapes.Count; index++)
+            {
+                Bounds next = Measure(shapes[index], outline);
+                double left = Math.Min(result.Left, next.Left), bottom = Math.Min(result.Bottom, next.Bottom),
+                    right = Math.Max(result.Right, next.Right), top = Math.Max(result.Top, next.Top);
+                result = new Bounds { Left = left, Bottom = bottom, Width = right - left, Height = top - bottom };
+            }
+            if (result.Width <= 0 || result.Height <= 0)
+                throw new InvalidOperationException("Нулевые габариты печатной детали: " +
+                    result.Width.ToString("R") + " × " + result.Height.ToString("R") + " мм.");
+            return result;
+        }
+
         internal static Bounds Measure(object target, bool outline = true)
         {
             dynamic shape = target;
-            double left, bottom, width, height;
-            shape.GetBoundingBox(out left, out bottom, out width, out height, outline);
+            double left = Double.NaN, bottom = Double.NaN, width = Double.NaN, height = Double.NaN;
+            shape.GetBoundingBox(ref left, ref bottom, ref width, ref height, outline);
             if (!Finite(left) || !Finite(bottom) || !Finite(width) || !Finite(height) || width < 0 || height < 0)
-                throw new InvalidOperationException("Corel вернул некорректные габариты печатной детали.");
+                throw new InvalidOperationException("Corel вернул некорректные габариты объекта: " +
+                    width.ToString("R") + " × " + height.ToString("R") + " мм.");
             return new Bounds { Left = left, Bottom = bottom, Width = width, Height = height };
         }
 
-        internal static SportContourNesting.Item Build(object container, IList<object> extras, object inkRange,
+        internal static SportContourNesting.Item Build(object container, IList<object> extras, IList<object> inkShapes,
             IDictionary<string, Body> cache, string key, bool readContour = true)
         {
             if (!readContour)
             {
-                Bounds rectangle = Measure(inkRange);
+                Bounds rectangle = Measure(inkShapes);
                 return new SportContourNesting.Item { Width = rectangle.Width, Height = rectangle.Height };
             }
-            Bounds geometry = Measure(container, false), bodyBounds = Measure(container), ink = Measure(inkRange);
+            Bounds geometry = Measure(container, false), bodyBounds = Measure(container), ink = Measure(inkShapes);
+            if (geometry.Width <= 0 || geometry.Height <= 0 || bodyBounds.Width <= 0 || bodyBounds.Height <= 0)
+                throw new InvalidOperationException("Нулевые габариты основного контура: " +
+                    geometry.Width.ToString("R") + " × " + geometry.Height.ToString("R") + " мм.");
             if (!cache.TryGetValue(key, out Body body) ||
                 !Same(body.GeometryWidth, geometry.Width) || !Same(body.GeometryHeight, geometry.Height) ||
                 !Same(body.Width, bodyBounds.Width) || !Same(body.Height, bodyBounds.Height))

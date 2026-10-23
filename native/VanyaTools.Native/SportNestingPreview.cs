@@ -62,6 +62,7 @@ namespace VanyaTools.Native
             SportNestingSettings settings)
         {
             var items = source.Select(item => new SportSheetNesting.Item { Width = item.Width, Height = item.Height,
+                Label = item.Label,
                 Bands = item.Bands, Garment = item.Garment, Part = item.Part, SmallPart = item.SmallPart,
                 Allow90 = item.Allow90 && settings.Rotate, Allow180 = item.Allow180 && settings.Rotate }).ToList();
             if (settings.Press == 0)
@@ -86,7 +87,8 @@ namespace VanyaTools.Native
                         settings.Density, settings.Grouping, settings.Improve);
                     var members = Enumerable.Range(0, inside.PageHeights.Count)
                         .Select(page => inside.Placements.Where(p => p.Page == page).ToList()).ToList();
-                    var blocks = members.Select(parts => new SportSheetNesting.Item {
+                    var blocks = members.Select((parts, index) => new SportSheetNesting.Item {
+                        Label = "Лист для пресса №" + (index + 1),
                         Width = parts.Max(p => p.Left + p.Width) + settings.Left + settings.Right,
                         Height = parts.Max(p => p.Top + p.Height) + settings.Top + settings.Bottom }).ToList();
                     // Complete rectangular sheets can share a roll row but never interlock.

@@ -358,7 +358,8 @@ namespace VanyaTools.Native
             public bool CanRotate { get; set; }
             public bool SmallPart { get; set; }
             public SportContourNesting.Item ContourLayout;
-            public object PrintInkRange;
+            public IList<object> PrintInkShapes;
+            public string Label;
         }
 
         public string AssignSelectedTextBox(string zoneName, out bool prepared)
@@ -1197,7 +1198,6 @@ namespace VanyaTools.Native
                     // preparation hidden, without adding any output pages yet.
                     outputPage = previousPage;
                     stagingLayer = previousPage.CreateLayer("VT_NEST_PREVIEW_" + Guid.NewGuid().ToString("N"));
-                    stagingLayer.Printable = false;
                     outputLayer = stagingLayer;
                 }
 
@@ -1236,7 +1236,13 @@ namespace VanyaTools.Native
                         if (kit.Count == 0) continue;
                         if (preview != null)
                             foreach (var piece in kit) piece.Shape.MoveToLayer((object)outputLayer);
-                        foreach (var piece in kit) piece.GarmentIndex = complete + 1;
+                        foreach (var piece in kit)
+                        {
+                            piece.GarmentIndex = complete + 1;
+                            piece.Label = "Размер «" + size + "», " +
+                                new[] { "перед", "спина", "левый рукав", "правый рукав", "горловина" }[piece.PartIndex] +
+                                ", комплект №" + (complete + 1);
+                        }
                         nested.AddRange(kit);
                         Log.Info("Sport layout: pieces built, item " + (complete + 1));
                         complete++;
@@ -1250,7 +1256,7 @@ namespace VanyaTools.Native
                 var inputs = nested.Select(p => new SportSheetNesting.Item { Width = p.Width, Height = p.Height,
                     SmallPart = p.SmallPart, Allow90 = !cutting && (preview != null ? p.SmallPart : p.CanRotate),
                     Allow180 = cutting && (preview != null || p.ContourLayout.Allow180),
-                    Bands = p.ContourLayout.Bands, Garment = p.GarmentIndex, Part = p.PartIndex }).ToList();
+                    Bands = p.ContourLayout.Bands, Garment = p.GarmentIndex, Part = p.PartIndex, Label = p.Label }).ToList();
                 SportNestingChoice choice = null;
                 SportSheetNesting.Result layout;
                 if (preview == null)
@@ -1260,6 +1266,7 @@ namespace VanyaTools.Native
                 else
                 {
                     stagingLayer.Visible = false;
+                    stagingLayer.Printable = false;
                     ((dynamic)previousLayer).Activate();
                     target.Unit = previousUnit;
                     app.Optimization = previousOptimization;
@@ -1309,14 +1316,16 @@ namespace VanyaTools.Native
                     }
                     else
                     {
-                        SportPrintFootprint.Bounds ink = SportPrintFootprint.Measure(item.PrintInkRange);
+                        SportPrintFootprint.Bounds ink = SportPrintFootprint.Measure(item.PrintInkShapes);
                         if (rotation != 0)
                         {
                             item.Shape.RotateEx(rotation, ink.CenterX, ink.CenterY);
-                            ink = SportPrintFootprint.Measure(item.PrintInkRange);
+                            ink = SportPrintFootprint.Measure(item.PrintInkShapes);
                         }
                         if (Math.Abs(ink.Width - placed.Width) > 0.05 || Math.Abs(ink.Height - placed.Height) > 0.05)
-                            throw new InvalidOperationException("Габариты печатной детали изменились при повороте. " +
+                            throw new InvalidOperationException(item.Label + ": габариты после переноса/поворота " +
+                                ink.Width.ToString("0.###") + " × " + ink.Height.ToString("0.###") +
+                                " мм, в расчёте " + placed.Width.ToString("0.###") + " × " + placed.Height.ToString("0.###") + " мм. " +
                                 "Отключите поворот рукавов и повторите раскладку.");
                         item.Shape.Move(Convert.ToDouble(page.LeftX) + placed.Left - ink.Left,
                             Convert.ToDouble(page.TopY) - placed.Top - placed.Height - ink.Bottom);
@@ -2398,13 +2407,12 @@ namespace VanyaTools.Native
             if (artwork != null) artwork.Shape.AddToPowerClip(part.Shape, 0);
             dynamic groupRange = app.CreateShapeRange();
             groupRange.Add(part.Shape);
-            dynamic inkRange = app.CreateShapeRange();
-            inkRange.Add(part.Shape);
+            var inkShapes = new List<object> { (object)part.Shape };
             var extras = new List<object>();
             Action<object> addPrinted = shape =>
             {
                 groupRange.Add(shape);
-                inkRange.Add(shape);
+                inkShapes.Add(shape);
                 extras.Add(shape);
             };
             foreach (Piece frame in frames.Where(frame => frame != null))
@@ -2421,7 +2429,7 @@ namespace VanyaTools.Native
                     ? "ИМЯ" : frame == backNumber ? "НОМЕР" : "ГРАФИКА");
                 FinishGuide(frame, "VT_FRAME_" + key.Replace(' ', '_'), options.KeepGuides);
                 groupRange.Add(frame.Shape);
-                if (options.KeepGuides) { inkRange.Add(frame.Shape); extras.Add((object)frame.Shape); }
+                if (options.KeepGuides) { inkShapes.Add((object)frame.Shape); extras.Add((object)frame.Shape); }
             }
             if (captionSample != null)
             {
@@ -2475,10 +2483,19 @@ namespace VanyaTools.Native
                 scaled.Add(group);
                 scaled.Stretch(scale, scale, true);
             }
-            SportContourNesting.Item layout = SportPrintFootprint.Build((object)part.Shape, extras, (object)inkRange,
-                printPrepared, size + "|" + partName + "|" + scale.ToString("R", CultureInfo.InvariantCulture),
-                options.NestingMode != SportNestingMode.Rectangles);
-            return new NestedPiece { Shape = group, PrintInkRange = (object)inkRange,
+            SportContourNesting.Item layout;
+            try
+            {
+                layout = SportPrintFootprint.Build((object)part.Shape, extras, inkShapes,
+                    printPrepared, size + "|" + partName + "|" + scale.ToString("R", CultureInfo.InvariantCulture),
+                    options.NestingMode != SportNestingMode.Rectangles);
+            }
+            catch (Exception error)
+            {
+                throw new InvalidOperationException("Размер «" + size + "», " + partName.ToLowerInvariant() +
+                    ", комплект №" + index + ": " + error.Message, error);
+            }
+            return new NestedPiece { Shape = group, PrintInkShapes = inkShapes,
                 PartIndex = partName == "ПЕРЕД" ? 0 : partName == "СПИНА" ? 1 :
                     partName == "ЛЕВЫЙ РУКАВ" ? 2 : partName == "ПРАВЫЙ РУКАВ" ? 3 : 4,
                 Width = layout.Width, Height = layout.Height, ContourLayout = layout };
