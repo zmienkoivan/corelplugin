@@ -111,7 +111,7 @@ namespace VanyaTools.Native
         public bool FrontNameTwoLines;
         public double FrontLineSpacingPercent;
         public int PressMode;
-        public int CalenderMode = 1;
+        public int CalenderMode = SportCalenderNesting.Auto;
         public double CalenderExtraMm = 100;
         public int PressGrouping, PressOrientation = 1;
         public double PressSheetWidthMm = 750;

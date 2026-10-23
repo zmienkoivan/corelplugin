@@ -122,7 +122,7 @@ namespace VanyaTools.Native
         private bool _legacyTwoLines, _whiteCaptions;
         private double _legacyLineSpacing = 100;
         private int _pressMode;
-        private int _calenderMode = 1;
+        private int _calenderMode = SportCalenderNesting.Auto;
         private double _calenderExtraMm = 100;
         private int _pressGrouping, _pressOrientation = 1;
         private double _pressSheetWidthMm = 750;
@@ -2048,7 +2048,7 @@ namespace VanyaTools.Native
                     ? draft.CutGroupingMode.Value : _groupingMode.SelectedIndex;
                 _pressMode = draft.PressMode >= 0 && draft.PressMode <= 2 ? draft.PressMode : 0;
                 _calenderMode = draft.CalenderMode >= 0 && draft.CalenderMode < SportCalenderNesting.Names.Length ?
-                    draft.CalenderMode.Value : 1;
+                    draft.CalenderMode.Value : SportCalenderNesting.Auto;
                 _calenderExtraMm = draft.CalenderExtraMm.HasValue && !Double.IsNaN(draft.CalenderExtraMm.Value) &&
                     !Double.IsInfinity(draft.CalenderExtraMm.Value) && draft.CalenderExtraMm >= 0 &&
                     draft.CalenderExtraMm <= 10000 ? draft.CalenderExtraMm.Value : 100;

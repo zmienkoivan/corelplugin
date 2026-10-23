@@ -96,9 +96,9 @@ namespace VanyaTools.Native
             FreeRectangle slot, SportNestingSettings settings)
         {
             var available = indices.ToList();
-            SleeveBatch best = BestPairs(available, items, slot, settings, out HashSet<int> paired);
+            SleeveBatch best = BestPairs(available, items, slot, settings);
             foreach (int part in new[] { 2, 3 })
-                foreach (var size in available.Where(i => items[i].Part == part && !paired.Contains(i))
+                foreach (var size in available.Where(i => items[i].Part == part)
                     .GroupBy(i => items[i].Size, StringComparer.OrdinalIgnoreCase))
                 foreach (int rotation in settings.Rotate ? new[] { 0, -90 } : new[] { 0 })
                 {
@@ -127,9 +127,9 @@ namespace VanyaTools.Native
         }
 
         private static SleeveBatch BestPairs(IList<int> indices, IList<SportSheetNesting.Item> items,
-            FreeRectangle slot, SportNestingSettings settings, out HashSet<int> protectedPairs)
+            FreeRectangle slot, SportNestingSettings settings)
         {
-            protectedPairs = new HashSet<int>(); SleeveBatch best = null;
+            SleeveBatch best = null;
             foreach (var size in indices.GroupBy(i => items[i].Size, StringComparer.OrdinalIgnoreCase))
             {
                 var pairs = size.GroupBy(i => items[i].Garment).Where(kit => kit.Count() == 2 &&
@@ -138,21 +138,17 @@ namespace VanyaTools.Native
                 foreach (int rotation in settings.Rotate ? new[] { 0, -90 } : new[] { 0 })
                     foreach (bool rows in new[] { false, true })
                     {
-                        var selected = new List<int>();
                         foreach (var pair in pairs)
                         {
                             SportNestingCancellation.Check();
                             if (rotation != 0 && pair.Any(i => !items[i].Allow90)) continue;
-                            var single = PairBatch(pair, rows, rotation, items, settings);
-                            if (single.Width <= settings.Width + .001 && single.Height <= settings.Length + .001 &&
-                                FitsPress(single.Width, single.Height, settings))
-                                foreach (int index in pair) protectedPairs.Add(index);
-                            var next = PairBatch(selected.Concat(pair).ToList(), rows, rotation, items, settings);
+                            // A mixed-side sheet contains exactly one pair.
+                            // Larger stacks are considered separately by hand.
+                            var next = PairBatch(pair, rows, rotation, items, settings);
                             if (next.Width > slot.Width + .001 || next.Height > slot.Height + .001 ||
                                 !FitsPress(next.Width, next.Height, settings)) continue;
-                            selected.AddRange(pair); next.Slot = slot;
+                            next.Slot = slot;
                             if (BetterStack(next, best)) best = next;
-                            if (selected.Count == 4) break;
                         }
                     }
             }
@@ -181,8 +177,8 @@ namespace VanyaTools.Native
         {
             if (candidate == null) return false;
             if (current == null) return true;
-            if (candidate.CompletePairs != current.CompletePairs) return candidate.CompletePairs > current.CompletePairs;
             if (candidate.Indices.Count != current.Indices.Count) return candidate.Indices.Count > current.Indices.Count;
+            if (candidate.CompletePairs != current.CompletePairs) return candidate.CompletePairs < current.CompletePairs;
             if ((candidate.Rotation == 0) != (current.Rotation == 0)) return candidate.Rotation == 0;
             if (Math.Abs(candidate.Area - current.Area) > .001) return candidate.Area > current.Area;
             if (candidate.Slot.Page != current.Slot.Page) return candidate.Slot.Page < current.Slot.Page;

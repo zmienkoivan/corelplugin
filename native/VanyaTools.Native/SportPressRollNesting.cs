@@ -185,7 +185,8 @@ namespace VanyaTools.Native
                     bool completePairs = stack.GroupBy(p => items[p.Index].Garment).All(kit => kit.Count() == 2 &&
                         kit.Select(p => items[p.Index].Part).OrderBy(part => part).SequenceEqual(new[] { 2, 3 }));
                     if (stack.Count > 4 || stack.Any(p => items[p.Index].Part != 2 && items[p.Index].Part != 3) ||
-                        (sheet.PairedSleeves ? !completePairs : stack.Select(p => items[p.Index].Part).Distinct().Count() != 1) ||
+                        (sheet.PairedSleeves ? stack.Count != 2 || !completePairs :
+                            stack.Select(p => items[p.Index].Part).Distinct().Count() != 1) ||
                         (!sheet.PairedSleeves && stack.Max(p => p.Left) - stack.Min(p => p.Left) > .01) ||
                         stack.Select(p => p.Rotation).Distinct().Count() != 1 ||
                         !stack.Select(p => items[p.Index].Garment).SequenceEqual(stack.Select(p => items[p.Index].Garment).OrderBy(i => i)) ||

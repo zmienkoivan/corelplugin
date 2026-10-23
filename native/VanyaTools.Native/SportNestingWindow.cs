@@ -72,9 +72,9 @@ namespace VanyaTools.Native
                 "располагаются прямоугольными блоками на рулоне и не превышают полезную зону стола. " +
                 "По образцам: малые корпуса — отдельная широкая пара, спинка слева и перед справа. " +
                 "Крупные корпуса стоят горловиной вверх на узких высоких листах. Сначала размещаются все листы корпусов, " +
-                "затем свободные полосы заполняются рукавами. В приоритете пара левого и правого одного комплекта; " +
-                "на листе допускается одна или две полные пары. Отдельные рукава собираются стопками по 2–4; " +
-                "в одном отрезном листе только один размер. " +
+                "затем свободные полосы заполняются рукавами. Рукава собираются стопками по 2–4 одной стороны; " +
+                "в одном отрезном листе только один размер. Левый и правый вместе допускаются только " +
+                "на листе из двух рукавов одного комплекта. " +
                 "Если разрешено, рукава могут поворачиваться на 90°. Корпуса при этом остаются на своих местах. " +
                 "Остаток рукавов и горловины размещаются после корпусов; одиночный остаток не теряется. " +
                 "Ширина 750 мм ограничивает вертикальные листы; малые пары используют ширину плиты. " +
@@ -88,13 +88,14 @@ namespace VanyaTools.Native
             _calenderFields = new StackPanel(); settings.Children.Add(_calenderFields);
             _calenderMode = ChoiceBox(_calenderFields, "Схема каландра", SportCalenderNesting.Names);
             _calenderExtra = Field(_calenderFields, "Допуск к длине всего заказа, мм");
-            DockerHelp.Add(_calenderFields, "Размеры идут в порядке таблицы, внутри — номера комплектов. " +
-                "Корпуса горловиной вверх; спинка слева, полка справа. Рукава размещаются со своими корпусами " +
-                "или отдельным блоком по выбранной схеме. Если пара корпусов не входит по ширине, она идёт подряд. " +
-                "Схемы сохраняют ряды и прямоугольные границы групп; контур показывается без хаотического сдвига деталей. " +
+            DockerHelp.Add(_calenderFields, "Корпуса остаются горловиной вверх. Для пар проверяются расположение рядом " +
+                "и друг за другом; мелкие детали заполняют доступные промежутки по выбранной геометрии. " +
+                "Схемы отличаются группировкой пар, партий и комплектов, без обязательного выравнивания всех блоков в ряды. " +
                 "Допуск по умолчанию 100 мм относится ко всему заказу, относительно свободного плотного варианта " +
                 "при тех же ширине, длине, зазоре, геометрии и поворотах. Его расчёт повторно используется в этом окне. " +
-                "Превышение видно заранее и требует подтверждения при создании. Правила порядка при этом не снимаются.");
+                "Авто выбирает самый короткий упорядоченный вариант в пределах допуска. Если такого нет, " +
+                "показывает плотный вариант с явной пометкой, что группировка не сохранена. " +
+                "При ручном выборе схемы превышение видно заранее и требует подтверждения при создании.");
             _groupingFields = new StackPanel(); settings.Children.Add(_groupingFields);
             _grouping = ChoiceBox(_groupingFields, "Держать рядом", "Свободно", "Перед и спина парами", "Все детали комплектом");
             _rotate = new CheckBox { Content = cutting ? "Разрешить 180°" : "Поворачивать рукава и горловину на 90°",
@@ -331,10 +332,14 @@ namespace VanyaTools.Native
                     return calculated;
                 }));
                 if (_closed || revision != _revision) return;
+                if (compareAll) choices = choices.OrderBy(choice =>
+                    choice.Settings.CalenderMode == SportCalenderNesting.Auto ? 0 : choice.OverBudget ? 2 : 1)
+                    .ThenBy(choice => choice.Layout.PageHeights.Sum()).ToList();
                 foreach (var choice in choices.AsEnumerable().Reverse()) _history.Items.Insert(0, choice);
                 while (_history.Items.Count > 10) _history.Items.RemoveAt(_history.Items.Count - 1);
                 _history.SelectedItem = choices[0];
-                if (!choices[0].OverBudget) _message.Text = (compareAll ? "Сравнено схем: " + choices.Count + ". " : "") +
+                if (!choices[0].OverBudget && !choices[0].DenseFallback)
+                    _message.Text = (compareAll ? "Сравнено схем: " + choices.Count + ". " : "") +
                     "Готово за " + clock.Elapsed.TotalSeconds.ToString("0.0") + " с. Страницы ещё не созданы.";
             }
             catch (OperationCanceledException) { }
@@ -355,13 +360,15 @@ namespace VanyaTools.Native
             if (!(_history.SelectedItem is SportNestingChoice choice)) return;
             _revision++; _debounce.Stop(); _cancellation?.Cancel();
             Choice = choice; LoadSettings(choice.Settings); _apply.IsEnabled = true;
-            _stop.IsEnabled = false; _message.Text = choice.OverBudget ? BudgetText(choice) :
+            _stop.IsEnabled = false; _message.Text = choice.OverBudget ? BudgetText(choice) : choice.DenseFallback ?
+                "В пределах допуска нет упорядоченной схемы. Выбран плотный вариант без группировки. Страницы ещё не созданы." :
                 "Выбран готовый вариант. Страницы ещё не созданы.";
             _metrics.Text = choice.Layout.PageHeights.Count + " страниц · " + _items.Count + " деталей · " +
                 (choice.Layout.PageHeights.Sum() / 1000).ToString("0.###") + " м" +
                 (choice.Panels.Count == 0 ? "" : " · " + choice.Panels.Count + " отрезных листов") +
                 (choice.PairedGarments + choice.LargeGarments == 0 ? "" : "\nПо образцам: " +
                     choice.PairedGarments + " малых, " + choice.LargeGarments + " крупных комплектов") +
+                (choice.Settings.Press == 0 && choice.Settings.CalenderMode > 0 ? "\n" + choice.CalenderDescription : "") +
                 (choice.DenseLengthMm.HasValue ? "\nПлотный вариант: " + (choice.DenseLengthMm.Value / 1000).ToString("0.###") +
                     " м · разница " + choice.ExtraMm.ToString("+0.#;-0.#;0") + " мм · допуск " +
                     choice.Settings.CalenderExtraMm.ToString("0.#") + " мм" : "") +

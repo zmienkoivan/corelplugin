@@ -83,7 +83,7 @@ namespace VanyaTools.Native
             if (width <= 0 || limit <= 0 || gap < 0 || Double.IsNaN(width + limit + gap) ||
                 Double.IsInfinity(width + limit + gap))
                 throw new InvalidOperationException("Некорректные размеры страницы или зазор.");
-            if (placementOrder != null && (fixedLayout != null || placementOrder.Count != items.Count ||
+            if (placementOrder != null && (placementOrder.Count != items.Count ||
                 placementOrder.Distinct().Count() != items.Count || placementOrder.Any(i => i < 0 || i >= items.Count)))
                 throw new InvalidOperationException("Некорректный порядок отрезных листов.");
             int columns = ColumnCount(width, mode);
@@ -172,7 +172,7 @@ namespace VanyaTools.Native
                         strategy == 0 ? 2 : items[i].Part == (strategy == 1 ? 2 : 3) ? 2 :
                         items[i].Part == (strategy == 1 ? 3 : 2) ? 3 : 4);
                 }
-                if (placementOrder != null) order = placementOrder;
+                if (placementOrder != null) order = placementOrder.Where(i => !fixedIndices.Contains(i));
                 var pages = new List<Page>();
                 if (fixedLayout != null)
                     for (int pageIndex = 0; pageIndex < fixedLayout.PageHeights.Count; pageIndex++)

@@ -12,7 +12,7 @@ namespace VanyaTools.Native
         internal SportGroupingMode Grouping;
         internal bool Rotate, Improve, Borders = true;
         internal int Press;
-        internal int CalenderMode = 1;
+        internal int CalenderMode = SportCalenderNesting.Auto;
         internal double CalenderExtraMm = 100;
         internal int PressGrouping, PressOrientation = 1;
         internal double PressSheetWidth = 750;
@@ -60,14 +60,20 @@ namespace VanyaTools.Native
         internal double Seconds;
         internal int PairedGarments, LargeGarments;
         internal double? DenseLengthMm;
+        internal int? ResolvedCalenderMode;
+        internal bool DenseFallback => Settings.Press == 0 && Settings.CalenderMode == SportCalenderNesting.Auto &&
+            ResolvedCalenderMode == 0;
+        internal string CalenderDescription => Settings.CalenderMode == SportCalenderNesting.Auto ?
+            "Авто → " + SportCalenderNesting.Names[ResolvedCalenderMode ?? 0] + (DenseFallback ? " · без группировки" : "") :
+            Settings.CalenderMode > 0 ? SportCalenderNesting.Names[Settings.CalenderMode] :
+                new[] { "свободно", "пары", "комплект" }[(int)Settings.Grouping];
         internal double ExtraMm => DenseLengthMm.HasValue ? Layout.PageHeights.Sum() - DenseLengthMm.Value : 0;
         internal bool OverBudget => Settings.Press == 0 && Settings.CalenderMode > 0 && DenseLengthMm.HasValue &&
             ExtraMm > Settings.CalenderExtraMm + .01;
         public override string ToString() => Layout.PageHeights.Count + " стр. · " +
             (Layout.PageHeights.Sum() / 1000).ToString("0.###") + " м · " +
             new[] { "Прямоугольники", "Упрощённые", "Полный контур" }[(int)Settings.Density] +
-            " · " + (Settings.Press == 0 ? Settings.CalenderMode > 0 ? SportCalenderNesting.Names[Settings.CalenderMode] :
-                new[] { "свободно", "пары", "комплект" }[(int)Settings.Grouping] :
+            " · " + (Settings.Press == 0 ? CalenderDescription :
                 new[] { "по образцам", "образцы/пары", "свободно по размерам" }[Settings.PressGrouping]) +
             (Settings.Improve ? " · уплотнение" : " · быстро") +
             (Settings.Press == 0 ? (DenseLengthMm.HasValue ? " · Δ " + ExtraMm.ToString("+0.#;-0.#;0") +
@@ -90,9 +96,37 @@ namespace VanyaTools.Native
                         Layout = baseline != null && settings.Grouping == SportGroupingMode.Free ? baseline.Get(items, settings) :
                             SportGroupedNesting.Place(items, settings.Width, settings.Length, settings.Gap,
                                 settings.Density, settings.Grouping, settings.Improve) };
-                var ordered = SportCalenderNesting.Place(items, settings);
-                var dense = (baseline ?? new SportCalenderBaselineCache()).Get(items, settings);
-                return new SportNestingChoice { Settings = settings, Layout = ordered, DenseLengthMm = dense.PageHeights.Sum() };
+                var cache = baseline ?? new SportCalenderBaselineCache();
+                var dense = cache.Get(items, settings);
+                double denseLength = dense.PageHeights.Sum();
+                if (settings.CalenderMode == SportCalenderNesting.Auto)
+                {
+                    SportNestingChoice bestAutomatic = null;
+                    for (int mode = 1; mode < SportCalenderNesting.Auto; mode++)
+                    {
+                        SportNestingCancellation.Check();
+                        var candidateSettings = settings.Copy(); candidateSettings.CalenderMode = mode;
+                        try
+                        {
+                            var candidate = new SportNestingChoice { Settings = settings,
+                                Layout = cache.Ordered(items, candidateSettings), DenseLengthMm = denseLength,
+                                ResolvedCalenderMode = mode };
+                            Validate(candidate, items.Count);
+                            if (!candidate.OverBudget && (bestAutomatic == null ||
+                                candidate.Layout.PageHeights.Sum() < bestAutomatic.Layout.PageHeights.Sum() - .01 ||
+                                (Math.Abs(candidate.Layout.PageHeights.Sum() - bestAutomatic.Layout.PageHeights.Sum()) <= .01 &&
+                                    candidate.Layout.PageHeights.Count < bestAutomatic.Layout.PageHeights.Count))) bestAutomatic = candidate;
+                        }
+                        catch (InvalidOperationException error)
+                        {
+                            Log.Info("Calender automatic candidate rejected " + mode + ": " + error.Message);
+                        }
+                    }
+                    return bestAutomatic ?? new SportNestingChoice { Settings = settings, Layout = dense,
+                        DenseLengthMm = denseLength, ResolvedCalenderMode = 0 };
+                }
+                return new SportNestingChoice { Settings = settings, Layout = cache.Ordered(items, settings),
+                    DenseLengthMm = denseLength, ResolvedCalenderMode = settings.CalenderMode };
             }
 
             SportNestingChoice best = null;
