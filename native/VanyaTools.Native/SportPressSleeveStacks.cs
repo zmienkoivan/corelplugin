@@ -95,10 +95,12 @@ namespace VanyaTools.Native
         {
             SleeveBatch best = null;
             foreach (int part in new[] { 2, 3 })
+                foreach (var size in indices.Where(i => items[i].Part == part)
+                    .GroupBy(i => items[i].Size, StringComparer.OrdinalIgnoreCase))
                 foreach (int rotation in settings.Rotate ? new[] { 0, -90 } : new[] { 0 })
                 {
                     var selected = new List<int>(); double width = 0, height = 0, area = 0;
-                    foreach (int index in indices.Where(i => items[i].Part == part))
+                    foreach (int index in size)
                     {
                         SportNestingCancellation.Check();
                         var item = items[index];

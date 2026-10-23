@@ -193,8 +193,7 @@ namespace VanyaTools.Native
                         if (stack[i - 1].Top + stack[i - 1].Height + settings.Gap > stack[i].Top + .01)
                             throw new InvalidOperationException("Рукава в стопке пересекаются.");
                 }
-                if (!sheet.SleeveRows && !sheet.SleeveStack &&
-                    sheet.Members.Select(p => items[p.Index].Size).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 1)
+                if (sheet.Members.Select(p => items[p.Index].Size).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 1)
                     throw new InvalidOperationException("В отрезной лист попали разные размеры.");
                 choice.Panels.Add(new SportPressPanel { Page = block.Page, Left = block.Left,
                     Top = block.Top, Width = block.Width, Height = block.Height });
