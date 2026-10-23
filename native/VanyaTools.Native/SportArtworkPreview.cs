@@ -120,7 +120,10 @@ namespace VanyaTools.Native
             var image = new BitmapImage();
             image.BeginInit();
             image.CacheOption = BitmapCacheOption.OnLoad;
-            image.CreateOptions = BitmapCreateOptions.PreservePixelFormat | BitmapCreateOptions.IgnoreImageCache;
+            // IgnoreImageCache expects a URI cache key. These previews use a
+            // StreamSource, so that flag makes WPF query its cache with null.
+            // OnLoad already detaches the pixels from the source file/stream.
+            image.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
             if (width >= height) image.DecodePixelWidth = Math.Min(MaximumSide, width);
             else image.DecodePixelHeight = Math.Min(MaximumSide, height);
             image.StreamSource = source;
