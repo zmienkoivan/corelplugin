@@ -93,36 +93,8 @@ namespace VanyaTools.Native
                     if (innerWidth <= 0 || innerHeight <= 0)
                         throw new InvalidOperationException("Поля не оставляют рабочей зоны для деталей.");
                     var inside = SportPressNesting.Place(items, innerWidth, innerHeight, settings);
-                    var members = Enumerable.Range(0, inside.PageHeights.Count)
-                        .Select(page => inside.Placements.Where(p => p.Page == page).ToList()).ToList();
-                    var blocks = members.Select((parts, index) => new SportSheetNesting.Item {
-                        Label = "Лист для пресса №" + (index + 1),
-                        Width = parts.Max(p => p.Left + p.Width) + settings.Left + settings.Right,
-                        Height = parts.Max(p => p.Top + p.Height) + settings.Top + settings.Bottom }).ToList();
-                    // Complete rectangular sheets can share a roll row but never interlock.
-                    var outside = SportSheetNesting.Place(blocks, settings.Width, settings.Length,
-                        Math.Max(1, settings.Gap), SportNestingMode.Rectangles, false);
-                    var choice = new SportNestingChoice { Settings = settings,
-                        Layout = new SportSheetNesting.Result { PageHeights = outside.PageHeights.ToList(),
-                            Placements = new List<SportSheetNesting.Placement>() } };
-                    foreach (var block in outside.Placements)
-                    {
-                        choice.Panels.Add(new SportPressPanel { Page = block.Page, Left = block.Left,
-                            Top = block.Top, Width = block.Width, Height = block.Height });
-                        foreach (var member in members[block.Index])
-                            choice.Layout.Placements.Add(new SportSheetNesting.Placement { Index = member.Index,
-                                Page = block.Page, Left = block.Left + settings.Left + member.Left,
-                                Top = block.Top + settings.Top + member.Top, Width = member.Width,
-                                Height = member.Height, Rotation = member.Rotation, Profile = member.Profile });
-                    }
-                    Validate(choice, items.Count);
-                    // A press run values fewer transfers first, then paper use.
-                    if (best == null || choice.Panels.Count < best.Panels.Count ||
-                        (choice.Panels.Count == best.Panels.Count &&
-                         choice.Layout.PageHeights.Count < best.Layout.PageHeights.Count) ||
-                        (choice.Panels.Count == best.Panels.Count &&
-                         choice.Layout.PageHeights.Count == best.Layout.PageHeights.Count &&
-                         choice.Layout.PageHeights.Sum() < best.Layout.PageHeights.Sum() - .001)) best = choice;
+                    var choice = SportPressRollNesting.Place(items, inside, innerWidth, innerHeight, settings);
+                    if (SportPressRollNesting.Better(choice, best)) best = choice;
                 }
                 catch (InvalidOperationException error) { failure = error; }
             }
