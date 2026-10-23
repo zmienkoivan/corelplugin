@@ -50,7 +50,7 @@ namespace VanyaTools.Native
                     // then new sheets, exclusively within this same size.
                     layout = SportSheetNesting.Place(sameSize, width, height, settings.Gap,
                         settings.Density, settings.Improve, fixedLayout: pinned.Placements.Count == 0 ? null : pinned,
-                        preferGarmentPages: settings.PressGrouping == 0);
+                        preferGarmentPages: settings.PressGrouping == 0, pressOrder: true);
                 }
                 Append(result, layout, indices);
             }
@@ -72,7 +72,7 @@ namespace VanyaTools.Native
 
         private static SportSheetNesting.Result Pack(IList<SportSheetNesting.Item> items,
             double width, double height, SportNestingSettings settings, bool improve) =>
-            SportSheetNesting.Place(items, width, height, settings.Gap, settings.Density, improve);
+            SportSheetNesting.Place(items, width, height, settings.Gap, settings.Density, improve, pressOrder: true);
 
         private static SportSheetNesting.Result Empty() => new SportSheetNesting.Result {
             Placements = new List<SportSheetNesting.Placement>(), PageHeights = new List<double>() };

@@ -76,7 +76,7 @@ namespace VanyaTools.Native
 
         internal static Result Place(IList<Item> items, double width, double limit, double gap,
             SportNestingMode mode = SportNestingMode.FullContour, bool improve = true, double? firstPageLimit = null,
-            Result fixedLayout = null, bool preferGarmentPages = false)
+            Result fixedLayout = null, bool preferGarmentPages = false, bool pressOrder = false)
         {
             if (!Enum.IsDefined(typeof(SportNestingMode), mode)) throw new ArgumentOutOfRangeException(nameof(mode));
             if (width <= 0 || limit <= 0 || gap < 0 || Double.IsNaN(width + limit + gap) ||
@@ -148,16 +148,26 @@ namespace VanyaTools.Native
                         throw new InvalidOperationException("Некорректная закреплённая деталь раскладки.");
             }
             Result best = null;
-            for (int strategy = 0; strategy < 3; strategy++)
+            for (int strategy = 0; strategy < (pressOrder ? 6 : 3); strategy++)
             {
                 SportNestingCancellation.Check();
+                int baseStrategy = strategy % 3;
+                bool orderedPass = pressOrder && strategy < 3;
                 IEnumerable<int> order = Enumerable.Range(0, items.Count).Where(i => !fixedIndices.Contains(i));
-                if (strategy == 0) order = order.OrderBy(i => items[i].SmallPart)
+                if (baseStrategy == 0) order = order.OrderBy(i => items[i].SmallPart)
                     .ThenByDescending(i => items[i].Height).ThenByDescending(i => items[i].Width);
-                else if (strategy == 1) order = order.OrderBy(i => items[i].SmallPart)
+                else if (baseStrategy == 1) order = order.OrderBy(i => items[i].SmallPart)
                     .ThenByDescending(i => items[i].Width * items[i].Height).ThenByDescending(i => items[i].Height);
                 else order = order.OrderByDescending(i => items[i].Width * items[i].Height)
                     .ThenByDescending(i => Math.Max(items[i].Width, items[i].Height));
+                if (orderedPass)
+                {
+                    // Try left/right sleeve order as well as right/left order:
+                    // horizontal pairs prefer L-R, vertical pairs prefer R-L.
+                    order = order.OrderBy(i => items[i].Part == 1 ? 0 : items[i].Part == 0 ? 1 :
+                        strategy == 0 ? 2 : items[i].Part == (strategy == 1 ? 2 : 3) ? 2 :
+                        items[i].Part == (strategy == 1 ? 3 : 2) ? 3 : 4);
+                }
                 var pages = new List<Page>();
                 if (fixedLayout != null)
                     for (int pageIndex = 0; pageIndex < fixedLayout.PageHeights.Count; pageIndex++)
@@ -176,7 +186,8 @@ namespace VanyaTools.Native
                             placed => items[placed.Index].Garment == items[index].Garment));
                     foreach (int candidate in candidates)
                     {
-                        selected = Find(pages[candidate], variants[index], columns, step, pages[candidate].Limit, gapColumns);
+                        selected = Find(pages[candidate], variants[index], columns, step, pages[candidate].Limit, gapColumns,
+                            preference: orderedPass ? PressPreference(pages[candidate].Placed, index, items) : null);
                         if (selected != null) { pageIndex = candidate; break; }
                     }
                     if (selected == null)
@@ -198,13 +209,20 @@ namespace VanyaTools.Native
                 }));
                 var result = new Result { Placements = pages.SelectMany(p => p.Placed).ToList(),
                     PageHeights = pages.Select(p => Math.Max(10, p.Height)).ToList(), Roughness = roughness };
-                if (Better(result, best)) best = result;
+                if (pressOrder ? BetterPress(result, best, items) : Better(result, best)) best = result;
             }
             // Permutation search and bottom alignment must never split pinned
             // torso pairs. Remaining pieces were fitted against their members.
             if (improve && fixedLayout == null && !firstPageLimit.HasValue &&
                 mode != SportNestingMode.Rectangles && items.Any(item => item.Bands != null))
-                best = ImproveContours(best, items, variants, columns, step, limit, gap, gapColumns);
+            {
+                var input = pressOrder ? new Result { PageHeights = best.PageHeights.ToList(), Roughness = best.Roughness,
+                    Placements = best.Placements.Select(p => new Placement { Index = p.Index, Page = p.Page,
+                        Left = p.Left, Top = p.Top, Width = p.Width, Height = p.Height, Rotation = p.Rotation,
+                        Column = p.Column, Profile = p.Profile }).ToList() } : best;
+                var improved = ImproveContours(input, items, variants, columns, step, limit, gap, gapColumns);
+                if (!pressOrder || BetterPress(improved, best, items)) best = improved;
+            }
             AlignBottomRow(best, gap, gapColumns, fixedIndices);
             if (best.Placements.Count != items.Count || best.Placements.Select(p => p.Index).Distinct().Count() != items.Count ||
                 best.PageHeights.Any(height => height > limit + 0.001))
@@ -243,6 +261,68 @@ namespace VanyaTools.Native
             (candidate.PageHeights.Count == current.PageHeights.Count &&
             (candidate.PageHeights.Sum() < current.PageHeights.Sum() - 0.001 ||
             (Math.Abs(candidate.PageHeights.Sum() - current.PageHeights.Sum()) <= 0.001 && candidate.Roughness < current.Roughness - 0.001)));
+
+        private static bool BetterPress(Result candidate, Result current, IList<Item> items)
+        {
+            if (current == null || candidate.PageHeights.Count != current.PageHeights.Count)
+                return current == null || candidate.PageHeights.Count < current.PageHeights.Count;
+            // Familiar order may cost a little paper, but never an extra press
+            // sheet. Large savings still take priority over these soft rules.
+            double delta = candidate.PageHeights.Sum() - current.PageHeights.Sum();
+            double allowance = 50 * candidate.PageHeights.Count;
+            if (Math.Abs(delta) > allowance) return delta < 0;
+            double candidateErrors = PressDisorder(candidate, items), currentErrors = PressDisorder(current, items);
+            return Math.Abs(candidateErrors - currentErrors) > .001 ? candidateErrors < currentErrors : Better(candidate, current);
+        }
+
+        private static double PressDisorder(Result result, IList<Item> items) => result.Placements.Sum(placed =>
+            PressPreference(result.Placements.Where(other => other.Page == placed.Page).ToList(), placed.Index, items)(placed));
+
+        private static Func<Placement, double> PressPreference(IList<Placement> neighbours, int index, IList<Item> items)
+        {
+            Item item = items[index];
+            var peers = neighbours.Where(p => p.Index != index).ToList();
+            var bodyMate = peers.FirstOrDefault(p => items[p.Index].Garment == item.Garment &&
+                items[p.Index].Part == (item.Part == 0 ? 1 : 0));
+            int opposite = item.Part == 2 ? 3 : 2;
+            var sleeves = peers.Where(p => items[p.Index].Part == opposite).ToList();
+            var ownSleeves = sleeves.Where(p => items[p.Index].Garment == item.Garment).ToList();
+            if (ownSleeves.Count > 0) sleeves = ownSleeves;
+            var bodies = peers.Where(p => items[p.Index].Part < 2).ToList();
+            var ownBodies = bodies.Where(p => items[p.Index].Garment == item.Garment).ToList();
+            if (ownBodies.Count > 0) bodies = ownBodies;
+            return candidate =>
+            {
+                double penalty = 0, x = candidate.Left + candidate.Width / 2, y = candidate.Top + candidate.Height / 2;
+                if (item.Part < 2 && bodyMate != null && OverlapY(candidate, bodyMate) > .25 * Math.Min(candidate.Height, bodyMate.Height))
+                {
+                    double mateX = bodyMate.Left + bodyMate.Width / 2;
+                    if (item.Part == 1 ? x > mateX : x < mateX) penalty++;
+                }
+                if (item.Part != 2 && item.Part != 3) return penalty;
+                var mate = sleeves.OrderBy(p => Math.Abs(p.Left + p.Width / 2 - x) +
+                    Math.Abs(p.Top + p.Height / 2 - y)).FirstOrDefault();
+                if (mate != null)
+                {
+                    double mateX = mate.Left + mate.Width / 2, mateY = mate.Top + mate.Height / 2;
+                    double overlapX = Math.Min(candidate.Left + candidate.Width, mate.Left + mate.Width) - Math.Max(candidate.Left, mate.Left);
+                    if (overlapX > .5 * Math.Min(candidate.Width, mate.Width))
+                    { if (item.Part == 3 ? y > mateY : y < mateY) penalty++; }
+                    else if (OverlapY(candidate, mate) > .25 * Math.Min(candidate.Height, mate.Height))
+                    { if (item.Part == 2 ? x > mateX : x < mateX) penalty++; }
+                }
+                if (bodies.Count > 0)
+                {
+                    double left = bodies.Min(p => p.Left), right = bodies.Max(p => p.Left + p.Width);
+                    bool beside = bodies.Any(p => OverlapY(candidate, p) > .25 * Math.Min(candidate.Height, p.Height));
+                    if (beside && (item.Part == 2 ? x > (left + right) / 2 : x < (left + right) / 2)) penalty++;
+                }
+                return penalty;
+            };
+        }
+
+        private static double OverlapY(Placement a, Placement b) =>
+            Math.Min(a.Top + a.Height, b.Top + b.Height) - Math.Max(a.Top, b.Top);
 
         private static double Roughness(Page page, double gap) => page.Occupied.Sum(cell =>
         {
@@ -412,9 +492,11 @@ namespace VanyaTools.Native
         }
 
         private static Placement Find(Page page, IList<Variant> variants, int columns,
-            double step, double limit, int gapColumns, long deadline = 0, bool dense = false)
+            double step, double limit, int gapColumns, long deadline = 0, bool dense = false,
+            Func<Placement, double> preference = null)
         {
             Placement best = null;
+            double bestScore = Double.PositiveInfinity;
             foreach (Variant variant in variants)
             {
                 if (variant.Rectangular && !CouldFitRectangle(page, variant)) continue;
@@ -435,11 +517,22 @@ namespace VanyaTools.Native
                     double top = LowestTop(page, variant, column, limit, deadline);
                     if (Double.IsInfinity(top)) continue;
                     double bottom = top + variant.Height;
-                    if (best == null || bottom < best.Top + best.Height - 0.000001 ||
-                        (Math.Abs(bottom - best.Top - best.Height) <= 0.000001 &&
-                        (top < best.Top - 0.000001 || (Math.Abs(top - best.Top) <= 0.000001 && column < best.Column))))
-                        best = new Placement { Column = column, Left = column * step, Top = top,
+                    Placement candidate = null;
+                    double score = bottom;
+                    if (preference != null)
+                    {
+                        candidate = new Placement { Column = column, Left = column * step, Top = top,
                             Width = variant.Width, Height = variant.Height, Rotation = variant.Rotation, Profile = variant.Profile };
+                        score += 50 * preference(candidate);
+                    }
+                    if (best == null || score < bestScore - 0.000001 ||
+                        (Math.Abs(score - bestScore) <= 0.000001 &&
+                        (top < best.Top - 0.000001 || (Math.Abs(top - best.Top) <= 0.000001 && column < best.Column))))
+                    {
+                        best = candidate ?? new Placement { Column = column, Left = column * step, Top = top,
+                            Width = variant.Width, Height = variant.Height, Rotation = variant.Rotation, Profile = variant.Profile };
+                        bestScore = score;
+                    }
                 }
             }
             return best;
