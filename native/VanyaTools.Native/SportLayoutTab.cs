@@ -74,6 +74,8 @@ namespace VanyaTools.Native
             public int? CutNestingMode { get; set; }
             public int? CutGroupingMode { get; set; }
             public int PressMode { get; set; }
+            public int? CalenderMode { get; set; }
+            public double? CalenderExtraMm { get; set; }
             public int? PressGrouping { get; set; }
             public int? PressOrientation { get; set; }
             public double? PressSheetWidthMm { get; set; }
@@ -120,6 +122,8 @@ namespace VanyaTools.Native
         private bool _legacyTwoLines, _whiteCaptions;
         private double _legacyLineSpacing = 100;
         private int _pressMode;
+        private int _calenderMode = 1;
+        private double _calenderExtraMm = 100;
         private int _pressGrouping, _pressOrientation = 1;
         private double _pressSheetWidthMm = 750;
         private double _pressLeftMm = 20, _pressRightMm = 20, _pressTopMm = 20, _pressBottomMm = 20;
@@ -395,12 +399,14 @@ namespace VanyaTools.Native
                 "Упрощение увеличивает занятую область, не обрезая реальные детали. " +
                 "Для печати и резки режим выбирается отдельно; изменение одной раскладки " +
                 "не снимает отметку другой. Геометрия деталей не меняется.");
-            panel.Children.Add(Label("Как держать детали заказа"));
+            panel.Children.Add(Label("Группировка плотного режима"));
             _groupingMode = new ComboBox { MinHeight = 27, Margin = new Thickness(0, 0, 0, 4) };
             foreach (string label in new[] { "Свободно · максимальное уплотнение", "Парами · перед + спина, затем рукава", "Комплектом · все пять деталей рядом" })
                 _groupingMode.Items.Add(label);
             _groupingMode.SelectedIndex = 0; panel.Children.Add(_groupingMode);
-            DockerHelp.Add(panel, "Парами: перед и спина одного комплекта укладываются единым блоком; " +
+            DockerHelp.Add(panel, "Упорядоченные схемы каландра и способ переноса выбираются в окне подбора. " +
+                "Эта группировка применяется к прежнему плотному режиму каландра. " +
+                "Парами: перед и спина одного комплекта укладываются единым блоком; " +
                 "рукава и горловины заполняют свободные места на всех листах, не раздвигая пары. " +
                 "Комплектом: все имеющиеся детали одного комплекта остаются одним блоком на одном листе. " +
                 "Смежные блоки могут сближаться по контуру. Группировка может увеличить расход материала. " +
@@ -747,6 +753,7 @@ namespace VanyaTools.Native
                 NameSide = _nameSide.SelectedIndex, NameCase = _frontCase.SelectedIndex,
                 Density = _nestingMode.SelectedIndex, Grouping = _groupingMode.SelectedIndex,
                 Press = _pressMode, PressLeft = _pressLeftMm, PressRight = _pressRightMm,
+                CalenderMode = _calenderMode, CalenderExtraMm = _calenderExtraMm,
                 PressGrouping = _pressGrouping, PressOrientation = _pressOrientation, PressWidth = _pressSheetWidthMm,
                 PressTop = _pressTopMm, PressBottom = _pressBottomMm, PressBorders = _pressBorders });
             string pdf = json.Serialize(new { Print = printing, Folder = _printFolder.Text, Quality = _printQuality.SelectedIndex });
@@ -1771,6 +1778,7 @@ namespace VanyaTools.Native
                 else
                 {
                     _rotateSleeves.IsChecked = options.RotateSleeves; _pressMode = options.PressMode;
+                    _calenderMode = options.CalenderMode; _calenderExtraMm = options.CalenderExtraMm;
                     _pressGrouping = options.PressGrouping; _pressOrientation = options.PressOrientation;
                     _pressSheetWidthMm = options.PressSheetWidthMm;
                     _pressLeftMm = options.PressLeftMm; _pressRightMm = options.PressRightMm;
@@ -1806,6 +1814,7 @@ namespace VanyaTools.Native
                 GroupingMode = (SportGroupingMode)(cutting ? _cutGroupingMode : _groupingMode).SelectedIndex,
                 CutAllow180 = _cutAllow180.IsChecked == true,
                 PressMode = cutting ? 0 : _pressMode, PressLeftMm = _pressLeftMm, PressRightMm = _pressRightMm,
+                CalenderMode = cutting ? 0 : _calenderMode, CalenderExtraMm = _calenderExtraMm,
                 PressGrouping = _pressGrouping, PressOrientation = _pressOrientation, PressSheetWidthMm = _pressSheetWidthMm,
                 PressTopMm = _pressTopMm, PressBottomMm = _pressBottomMm, PressBorders = _pressBorders,
                 CutSizeTags = cutting && _cutSizeTags.IsChecked == true,
@@ -1969,6 +1978,7 @@ namespace VanyaTools.Native
                 NestingMode = _nestingMode.SelectedIndex, GroupingMode = _groupingMode.SelectedIndex,
                 CutNestingMode = _cutNestingMode.SelectedIndex, CutGroupingMode = _cutGroupingMode.SelectedIndex,
                 PressMode = _pressMode, PressLeftMm = _pressLeftMm, PressRightMm = _pressRightMm,
+                CalenderMode = _calenderMode, CalenderExtraMm = _calenderExtraMm,
                 PressGrouping = _pressGrouping, PressOrientation = _pressOrientation, PressSheetWidthMm = _pressSheetWidthMm,
                 PressTopMm = _pressTopMm, PressBottomMm = _pressBottomMm, PressBorders = _pressBorders
             };
@@ -2037,6 +2047,11 @@ namespace VanyaTools.Native
                 _cutGroupingMode.SelectedIndex = draft.CutGroupingMode >= 0 && draft.CutGroupingMode <= 2
                     ? draft.CutGroupingMode.Value : _groupingMode.SelectedIndex;
                 _pressMode = draft.PressMode >= 0 && draft.PressMode <= 2 ? draft.PressMode : 0;
+                _calenderMode = draft.CalenderMode >= 0 && draft.CalenderMode < SportCalenderNesting.Names.Length ?
+                    draft.CalenderMode.Value : 1;
+                _calenderExtraMm = draft.CalenderExtraMm.HasValue && !Double.IsNaN(draft.CalenderExtraMm.Value) &&
+                    !Double.IsInfinity(draft.CalenderExtraMm.Value) && draft.CalenderExtraMm >= 0 &&
+                    draft.CalenderExtraMm <= 10000 ? draft.CalenderExtraMm.Value : 100;
                 _pressGrouping = draft.PressGrouping >= 0 && draft.PressGrouping <= 2 ? draft.PressGrouping.Value : 0;
                 _pressOrientation = draft.PressOrientation >= 0 && draft.PressOrientation <= 2 ? draft.PressOrientation.Value : 1;
                 _pressSheetWidthMm = draft.PressSheetWidthMm.HasValue && !Double.IsNaN(draft.PressSheetWidthMm.Value) &&

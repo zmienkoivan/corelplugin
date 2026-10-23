@@ -16,6 +16,8 @@ namespace VanyaTools.Native
         {
             internal IList<int> Indices;
             internal int Rotation;
+            internal int CompletePairs;
+            internal bool PairRows;
             internal double Width, Height, Area;
             internal FreeRectangle Slot;
         }
@@ -93,9 +95,10 @@ namespace VanyaTools.Native
         private static SleeveBatch BestStack(IEnumerable<int> indices, IList<SportSheetNesting.Item> items,
             FreeRectangle slot, SportNestingSettings settings)
         {
-            SleeveBatch best = null;
+            var available = indices.ToList();
+            SleeveBatch best = BestPairs(available, items, slot, settings, out HashSet<int> paired);
             foreach (int part in new[] { 2, 3 })
-                foreach (var size in indices.Where(i => items[i].Part == part)
+                foreach (var size in available.Where(i => items[i].Part == part && !paired.Contains(i))
                     .GroupBy(i => items[i].Size, StringComparer.OrdinalIgnoreCase))
                 foreach (int rotation in settings.Rotate ? new[] { 0, -90 } : new[] { 0 })
                 {
@@ -123,10 +126,62 @@ namespace VanyaTools.Native
             return best;
         }
 
+        private static SleeveBatch BestPairs(IList<int> indices, IList<SportSheetNesting.Item> items,
+            FreeRectangle slot, SportNestingSettings settings, out HashSet<int> protectedPairs)
+        {
+            protectedPairs = new HashSet<int>(); SleeveBatch best = null;
+            foreach (var size in indices.GroupBy(i => items[i].Size, StringComparer.OrdinalIgnoreCase))
+            {
+                var pairs = size.GroupBy(i => items[i].Garment).Where(kit => kit.Count() == 2 &&
+                    kit.Select(i => items[i].Part).OrderBy(part => part).SequenceEqual(new[] { 2, 3 }))
+                    .OrderBy(kit => kit.Key).Select(kit => kit.OrderBy(i => items[i].Part).ToList()).ToList();
+                foreach (int rotation in settings.Rotate ? new[] { 0, -90 } : new[] { 0 })
+                    foreach (bool rows in new[] { false, true })
+                    {
+                        var selected = new List<int>();
+                        foreach (var pair in pairs)
+                        {
+                            SportNestingCancellation.Check();
+                            if (rotation != 0 && pair.Any(i => !items[i].Allow90)) continue;
+                            var single = PairBatch(pair, rows, rotation, items, settings);
+                            if (single.Width <= settings.Width + .001 && single.Height <= settings.Length + .001 &&
+                                FitsPress(single.Width, single.Height, settings))
+                                foreach (int index in pair) protectedPairs.Add(index);
+                            var next = PairBatch(selected.Concat(pair).ToList(), rows, rotation, items, settings);
+                            if (next.Width > slot.Width + .001 || next.Height > slot.Height + .001 ||
+                                !FitsPress(next.Width, next.Height, settings)) continue;
+                            selected.AddRange(pair); next.Slot = slot;
+                            if (BetterStack(next, best)) best = next;
+                            if (selected.Count == 4) break;
+                        }
+                    }
+            }
+            return best;
+        }
+
+        private static SleeveBatch PairBatch(IList<int> indices, bool rows, int rotation,
+            IList<SportSheetNesting.Item> items, SportNestingSettings settings)
+        {
+            double W(int i) => rotation == 0 ? items[i].Width : items[i].Height;
+            double H(int i) => rotation == 0 ? items[i].Height : items[i].Width;
+            double width = 0, height = 0;
+            for (int at = 0; at < indices.Count; at += 2)
+            {
+                int left = indices[at], right = indices[at + 1];
+                width = Math.Max(width, rows ? W(left) + settings.Gap + W(right) : Math.Max(W(left), W(right)));
+                height += (at == 0 ? 0 : settings.Gap) +
+                    (rows ? Math.Max(H(left), H(right)) : H(left) + settings.Gap + H(right));
+            }
+            return new SleeveBatch { Indices = indices.ToList(), CompletePairs = indices.Count / 2, PairRows = rows,
+                Rotation = rotation, Width = width + settings.Left + settings.Right,
+                Height = height + settings.Top + settings.Bottom, Area = indices.Sum(i => items[i].Width * items[i].Height) };
+        }
+
         private static bool BetterStack(SleeveBatch candidate, SleeveBatch current)
         {
             if (candidate == null) return false;
             if (current == null) return true;
+            if (candidate.CompletePairs != current.CompletePairs) return candidate.CompletePairs > current.CompletePairs;
             if (candidate.Indices.Count != current.Indices.Count) return candidate.Indices.Count > current.Indices.Count;
             if ((candidate.Rotation == 0) != (current.Rotation == 0)) return candidate.Rotation == 0;
             if (Math.Abs(candidate.Area - current.Area) > .001) return candidate.Area > current.Area;
@@ -147,12 +202,23 @@ namespace VanyaTools.Native
             IList<SportSheetNesting.Item> items, SportNestingSettings settings)
         {
             var members = new List<SportSheetNesting.Placement>(); double top = 0;
-            foreach (int index in batch.Indices)
+            for (int at = 0; at < batch.Indices.Count; at++)
             {
+                int index = batch.Indices[at];
+                if (batch.PairRows)
+                {
+                    int right = batch.Indices[++at];
+                    var a = SportPressTemplates.At(items, index, 0, top, batch.Rotation, settings.Width, settings);
+                    var b = SportPressTemplates.At(items, right, a.Width + settings.Gap, top, batch.Rotation, settings.Width, settings);
+                    double height = Math.Max(a.Height, b.Height);
+                    a.Top += height - a.Height; b.Top += height - b.Height;
+                    members.Add(a); members.Add(b); top += height + settings.Gap;
+                    continue;
+                }
                 var member = SportPressTemplates.At(items, index, 0, top, batch.Rotation, settings.Width, settings);
                 members.Add(member); top += member.Height + settings.Gap;
             }
-            var sheet = MakeSheet(members, settings); sheet.SleeveStack = true;
+            var sheet = MakeSheet(members, settings); sheet.SleeveStack = true; sheet.PairedSleeves = batch.CompletePairs > 0;
             AddSheet(sheet, batch.Slot, sheets, outside);
         }
 

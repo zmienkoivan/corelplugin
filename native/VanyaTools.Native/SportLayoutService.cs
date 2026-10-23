@@ -111,6 +111,8 @@ namespace VanyaTools.Native
         public bool FrontNameTwoLines;
         public double FrontLineSpacingPercent;
         public int PressMode;
+        public int CalenderMode = 1;
+        public double CalenderExtraMm = 100;
         public int PressGrouping, PressOrientation = 1;
         public double PressSheetWidthMm = 750;
         public double PressLeftMm = 20, PressRightMm = 20, PressTopMm = 20, PressBottomMm = 20;
@@ -360,7 +362,7 @@ namespace VanyaTools.Native
             public bool CanRotate { get; set; }
             public bool SmallPart { get; set; }
             public SportContourNesting.Item ContourLayout;
-            public IList<object> PrintInkShapes;
+            public SportPrintFootprint.PrintGeometry PrintGeometry;
             public string Label, Size;
         }
 
@@ -1304,15 +1306,18 @@ namespace VanyaTools.Native
                         throw new InvalidOperationException("Corel создал страницу длиннее заданного ограничения.");
                     page.Name = pageName + (outputPages.Count > 1 ? " · " + (i + 1) + "/" + outputPages.Count : "");
                 }
+                // The staging layer is hidden only while the modal preview is
+                // open. Corel must expose its live bounds during final transfer.
+                if (stagingLayer != null) { stagingLayer.Visible = true; stagingLayer.Printable = true; }
                 foreach (SportSheetNesting.Placement placed in layout.Placements)
                 {
                     NestedPiece item = nested[placed.Index];
                     dynamic page = outputPages[placed.Page];
                     page.Activate();
-                    if (preview != null || placed.Page != 0) item.Shape.MoveToLayer(outputLayers[placed.Page]);
                     double rotation = placed.Rotation;
                     if (cutting)
                     {
+                        if (preview != null || placed.Page != 0) item.Shape.MoveToLayer(outputLayers[placed.Page]);
                         if (rotation != 0)
                             item.Shape.RotateEx(rotation, Convert.ToDouble(item.Shape.CenterX), Convert.ToDouble(item.Shape.CenterY));
                         item.Shape.Move(Convert.ToDouble(page.LeftX) + placed.Left - Convert.ToDouble(item.Shape.LeftX),
@@ -1320,19 +1325,17 @@ namespace VanyaTools.Native
                     }
                     else
                     {
-                        SportPrintFootprint.Bounds ink = SportPrintFootprint.Measure(item.PrintInkShapes);
-                        if (rotation != 0)
+                        try
                         {
-                            item.Shape.RotateEx(rotation, ink.CenterX, ink.CenterY);
-                            ink = SportPrintFootprint.Measure(item.PrintInkShapes);
+                            SportPrintFootprint.Place((object)item.Shape, item.PrintGeometry, outputLayers[placed.Page],
+                                preview != null || placed.Page != 0, placed,
+                                Convert.ToDouble(page.LeftX), Convert.ToDouble(page.TopY));
                         }
-                        if (Math.Abs(ink.Width - placed.Width) > 0.05 || Math.Abs(ink.Height - placed.Height) > 0.05)
+                        catch (Exception error)
+                        {
                             throw new InvalidOperationException(item.Label + ": габариты после переноса/поворота " +
-                                ink.Width.ToString("0.###") + " × " + ink.Height.ToString("0.###") +
-                                " мм, в расчёте " + placed.Width.ToString("0.###") + " × " + placed.Height.ToString("0.###") + " мм. " +
-                                "Отключите поворот рукавов и повторите раскладку.");
-                        item.Shape.Move(Convert.ToDouble(page.LeftX) + placed.Left - ink.Left,
-                            Convert.ToDouble(page.TopY) - placed.Top - placed.Height - ink.Bottom);
+                                "(страница " + (placed.Page + 1) + ", угол " + rotation + "°): " + error.Message, error);
+                        }
                     }
                 }
                 if (choice != null && choice.Settings.Borders)
@@ -2488,18 +2491,20 @@ namespace VanyaTools.Native
                 scaled.Stretch(scale, scale, true);
             }
             SportContourNesting.Item layout;
+            SportPrintFootprint.PrintGeometry printGeometry;
             try
             {
                 layout = SportPrintFootprint.Build((object)part.Shape, extras, inkShapes,
                     printPrepared, size + "|" + partName + "|" + scale.ToString("R", CultureInfo.InvariantCulture),
                     options.NestingMode != SportNestingMode.Rectangles);
+                printGeometry = SportPrintFootprint.Capture((object)group, inkShapes);
             }
             catch (Exception error)
             {
                 throw new InvalidOperationException("Размер «" + size + "», " + partName.ToLowerInvariant() +
                     ", комплект №" + index + ": " + error.Message, error);
             }
-            return new NestedPiece { Shape = group, PrintInkShapes = inkShapes,
+            return new NestedPiece { Shape = group, PrintGeometry = printGeometry,
                 PartIndex = partName == "ПЕРЕД" ? 0 : partName == "СПИНА" ? 1 :
                     partName == "ЛЕВЫЙ РУКАВ" ? 2 : partName == "ПРАВЫЙ РУКАВ" ? 3 : 4,
                 Width = layout.Width, Height = layout.Height, ContourLayout = layout };

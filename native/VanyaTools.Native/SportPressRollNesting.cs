@@ -12,7 +12,7 @@ namespace VanyaTools.Native
         {
             internal IList<SportSheetNesting.Placement> Members;
             internal double Width, Height;
-            internal bool Locked, SleeveRows, SleeveStack;
+            internal bool Locked, SleeveRows, SleeveStack, PairedSleeves;
         }
 
         internal static SportNestingChoice Place(IList<SportSheetNesting.Item> items,
@@ -181,17 +181,21 @@ namespace VanyaTools.Native
                     }
                 if (sheet.SleeveStack)
                 {
-                    var stack = sheet.Members.OrderBy(p => p.Top).ToList();
+                    var stack = sheet.Members.OrderBy(p => p.Top).ThenBy(p => p.Left).ToList();
+                    bool completePairs = stack.GroupBy(p => items[p.Index].Garment).All(kit => kit.Count() == 2 &&
+                        kit.Select(p => items[p.Index].Part).OrderBy(part => part).SequenceEqual(new[] { 2, 3 }));
                     if (stack.Count > 4 || stack.Any(p => items[p.Index].Part != 2 && items[p.Index].Part != 3) ||
-                        stack.Select(p => items[p.Index].Part).Distinct().Count() != 1 ||
-                        stack.Max(p => p.Left) - stack.Min(p => p.Left) > .01 ||
+                        (sheet.PairedSleeves ? !completePairs : stack.Select(p => items[p.Index].Part).Distinct().Count() != 1) ||
+                        (!sheet.PairedSleeves && stack.Max(p => p.Left) - stack.Min(p => p.Left) > .01) ||
                         stack.Select(p => p.Rotation).Distinct().Count() != 1 ||
                         !stack.Select(p => items[p.Index].Garment).SequenceEqual(stack.Select(p => items[p.Index].Garment).OrderBy(i => i)) ||
                         stack.Any(p => p.Rotation != 0 && (!settings.Rotate || !items[p.Index].Allow90)))
                         throw new InvalidOperationException("Нарушена стопка рукавов для пресса.");
-                    for (int i = 1; i < stack.Count; i++)
-                        if (stack[i - 1].Top + stack[i - 1].Height + settings.Gap > stack[i].Top + .01)
-                            throw new InvalidOperationException("Рукава в стопке пересекаются.");
+                    for (int i = 0; i < stack.Count; i++)
+                        for (int j = 0; j < i; j++)
+                            if (!Separated(stack[i].Left, stack[i].Top, stack[i].Width, stack[i].Height,
+                                stack[j].Left, stack[j].Top, stack[j].Width, stack[j].Height, settings.Gap))
+                                throw new InvalidOperationException("Рукава на листе пересекаются.");
                 }
                 if (sheet.Members.Select(p => items[p.Index].Size).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 1)
                     throw new InvalidOperationException("В отрезной лист попали разные размеры.");

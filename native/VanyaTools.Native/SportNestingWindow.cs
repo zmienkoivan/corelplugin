@@ -18,13 +18,18 @@ namespace VanyaTools.Native
         private readonly IList<string> _labels;
         private readonly bool _cutting;
         private readonly TextBox _width, _length, _gap, _left, _right, _top, _bottom, _pressWidth;
+        private readonly TextBox _calenderExtra;
         private readonly ComboBox _density, _grouping, _search, _press, _zoom, _pressGrouping, _orientation;
+        private readonly ComboBox _calenderMode;
         private readonly Panel _groupingFields;
         private readonly CheckBox _rotate, _borders;
         private readonly StackPanel _pressFields;
+        private readonly StackPanel _calenderFields;
         private readonly ListBox _history;
         private readonly TextBlock _message, _metrics, _zone, _pressWidthTitle;
         private readonly Button _apply, _stop;
+        private readonly Button _compare;
+        private readonly SportCalenderBaselineCache _baseline = new SportCalenderBaselineCache();
         private readonly Image _image;
         private readonly ScrollViewer _viewport;
         private readonly DispatcherTimer _debounce;
@@ -49,7 +54,7 @@ namespace VanyaTools.Native
             DockPanel.SetDock(footer, Dock.Bottom); root.Children.Add(footer);
             _apply = new Button { Content = "Создать выбранный вариант в Corel", IsEnabled = false,
                 MinHeight = 36, Padding = new Thickness(12, 4, 12, 4) };
-            _apply.Click += (_, __) => { if (Choice != null) DialogResult = true; };
+            _apply.Click += (_, __) => ApplyChoice();
             DockPanel.SetDock(_apply, Dock.Right); footer.Children.Add(_apply);
             var close = new Button { Content = "Закрыть", Margin = new Thickness(0, 0, 8, 0), MinWidth = 85 };
             close.Click += (_, __) => Close(); DockPanel.SetDock(close, Dock.Right); footer.Children.Add(close);
@@ -67,8 +72,9 @@ namespace VanyaTools.Native
                 "располагаются прямоугольными блоками на рулоне и не превышают полезную зону стола. " +
                 "По образцам: малые корпуса — отдельная широкая пара, спинка слева и перед справа. " +
                 "Крупные корпуса стоят горловиной вверх на узких высоких листах. Сначала размещаются все листы корпусов, " +
-                "затем свободные полосы заполняются стопками по 2–4 рукава одним столбцом. Левые и правые рукава " +
-                "собираются раздельно, по порядку комплектов; в одном отрезном листе только один размер. " +
+                "затем свободные полосы заполняются рукавами. В приоритете пара левого и правого одного комплекта; " +
+                "на листе допускается одна или две полные пары. Отдельные рукава собираются стопками по 2–4; " +
+                "в одном отрезном листе только один размер. " +
                 "Если разрешено, рукава могут поворачиваться на 90°. Корпуса при этом остаются на своих местах. " +
                 "Остаток рукавов и горловины размещаются после корпусов; одиночный остаток не теряется. " +
                 "Ширина 750 мм ограничивает вертикальные листы; малые пары используют ширину плиты. " +
@@ -79,6 +85,16 @@ namespace VanyaTools.Native
             _length = Field(settings, "Макс. длина страницы, м");
             _gap = Field(settings, "Между деталями, мм");
             _density = ChoiceBox(settings, "Геометрия", "Прямоугольники", "Упрощённые фигуры", "Полный контур");
+            _calenderFields = new StackPanel(); settings.Children.Add(_calenderFields);
+            _calenderMode = ChoiceBox(_calenderFields, "Схема каландра", SportCalenderNesting.Names);
+            _calenderExtra = Field(_calenderFields, "Допуск к длине всего заказа, мм");
+            DockerHelp.Add(_calenderFields, "Размеры идут в порядке таблицы, внутри — номера комплектов. " +
+                "Корпуса горловиной вверх; спинка слева, полка справа. Рукава размещаются со своими корпусами " +
+                "или отдельным блоком по выбранной схеме. Если пара корпусов не входит по ширине, она идёт подряд. " +
+                "Схемы сохраняют ряды и прямоугольные границы групп; контур показывается без хаотического сдвига деталей. " +
+                "Допуск по умолчанию 100 мм относится ко всему заказу, относительно свободного плотного варианта " +
+                "при тех же ширине, длине, зазоре, геометрии и поворотах. Его расчёт повторно используется в этом окне. " +
+                "Превышение видно заранее и требует подтверждения при создании. Правила порядка при этом не снимаются.");
             _groupingFields = new StackPanel(); settings.Children.Add(_groupingFields);
             _grouping = ChoiceBox(_groupingFields, "Держать рядом", "Свободно", "Перед и спина парами", "Все детали комплектом");
             _rotate = new CheckBox { Content = cutting ? "Разрешить 180°" : "Поворачивать рукава и горловину на 90°",
@@ -104,10 +120,14 @@ namespace VanyaTools.Native
             var actions = new StackPanel { Orientation = Orientation.Horizontal };
             var calculate = new Button { Content = "Рассчитать", MinHeight = 30, Padding = new Thickness(10, 2, 10, 2) };
             calculate.Click += (_, __) => { _debounce.Stop(); Compute(); };
+            _compare = new Button { Content = "Сравнить все схемы каландра", MinHeight = 30,
+                Margin = new Thickness(0, 6, 0, 0) };
+            _compare.Click += (_, __) => { _debounce.Stop(); Compute(true); };
             _stop = new Button { Content = "Стоп", IsEnabled = false, Margin = new Thickness(5, 0, 0, 0) };
             _stop.Click += (_, __) => { _debounce.Stop(); _revision++; _cancellation?.Cancel(); _stop.IsEnabled = false;
                 _message.Text = "Расчёт остановлен. Можно выбрать готовый вариант или изменить настройки."; };
             actions.Children.Add(calculate); actions.Children.Add(_stop); settings.Children.Add(actions);
+            settings.Children.Add(_compare);
             settings.Children.Add(new TextBlock { Text = "Варианты", FontWeight = FontWeights.SemiBold,
                 Margin = new Thickness(0, 12, 0, 5) });
             _history = new ListBox { Height = 160, HorizontalContentAlignment = HorizontalAlignment.Stretch };
@@ -145,9 +165,9 @@ namespace VanyaTools.Native
             _viewport.SizeChanged += (_, __) => ResizeImage(); _zoom.SelectionChanged += (_, __) => ResizeImage();
             _debounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
             _debounce.Tick += (_, __) => { _debounce.Stop(); Compute(); };
-            foreach (var box in new[] { _width, _length, _gap, _left, _right, _top, _bottom, _pressWidth })
+            foreach (var box in new[] { _width, _length, _gap, _left, _right, _top, _bottom, _pressWidth, _calenderExtra })
                 box.TextChanged += (_, __) => Changed();
-            foreach (var combo in new[] { _density, _grouping, _search, _press, _pressGrouping, _orientation })
+            foreach (var combo in new[] { _density, _grouping, _search, _press, _pressGrouping, _orientation, _calenderMode })
                 combo.SelectionChanged += (_, __) => Changed();
             _rotate.Click += (_, __) => Changed(); _borders.Click += (_, __) => Changed();
             LoadSettings(SportNestingSettings.From(options, cutting));
@@ -181,11 +201,21 @@ namespace VanyaTools.Native
             Gap = Read(_gap, 0, 100, "Зазор"), Density = (SportNestingMode)_density.SelectedIndex,
             Grouping = (SportGroupingMode)_grouping.SelectedIndex, Rotate = _rotate.IsChecked == true,
             Improve = _search.SelectedIndex == 1, Press = _cutting ? 0 : _press.SelectedIndex,
+            CalenderMode = _cutting ? 0 : _calenderMode.SelectedIndex,
+            CalenderExtraMm = ReadCalenderExtra(),
             PressGrouping = _pressGrouping.SelectedIndex, PressOrientation = _pressGrouping.SelectedIndex == 2 ? _orientation.SelectedIndex : 0,
             PressSheetWidth = Read(_pressWidth, 0, 1200, "Ширина листа"),
             Left = Read(_left, 0, 200, "Левое поле"), Right = Read(_right, 0, 200, "Правое поле"),
             Top = Read(_top, 0, 200, "Верхнее поле"), Bottom = Read(_bottom, 0, 200, "Нижнее поле"),
             Borders = _borders.IsChecked == true };
+        private double ReadCalenderExtra()
+        {
+            if (!_cutting && _press.SelectedIndex == 0 && _calenderMode.SelectedIndex > 0)
+                return Read(_calenderExtra, 0, 10000, "Допуск к длине");
+            return Double.TryParse(_calenderExtra.Text.Trim().Replace(',', '.'), NumberStyles.Float,
+                CultureInfo.InvariantCulture, out double value) && !Double.IsNaN(value) && !Double.IsInfinity(value) &&
+                value >= 0 && value <= 10000 ? value : 100;
+        }
         private void LoadSettings(SportNestingSettings value)
         {
             _loading = true;
@@ -193,13 +223,13 @@ namespace VanyaTools.Native
             _gap.Text = value.Gap.ToString("0.###"); _density.SelectedIndex = (int)value.Density;
             _grouping.SelectedIndex = (int)value.Grouping; _rotate.IsChecked = value.Rotate;
             _search.SelectedIndex = value.Improve ? 1 : 0; _press.SelectedIndex = value.Press;
+            _calenderMode.SelectedIndex = value.CalenderMode; _calenderExtra.Text = value.CalenderExtraMm.ToString("0.###");
             _pressGrouping.SelectedIndex = value.PressGrouping; _orientation.SelectedIndex = value.PressOrientation;
             _pressWidth.Text = value.PressSheetWidth.ToString("0.###");
             _left.Text = value.Left.ToString("0.###"); _right.Text = value.Right.ToString("0.###");
             _top.Text = value.Top.ToString("0.###"); _bottom.Text = value.Bottom.ToString("0.###");
             _borders.IsChecked = value.Borders;
-            _pressFields.Visibility = value.Press == 0 ? Visibility.Collapsed : Visibility.Visible;
-            _groupingFields.Visibility = value.Press == 0 ? Visibility.Visible : Visibility.Collapsed;
+            UpdateModeVisibility();
             UpdatePressControls();
             _loading = false; UpdateZone(value);
         }
@@ -234,8 +264,7 @@ namespace VanyaTools.Native
             UpdatePressControls();
             _revision++; _cancellation?.Cancel(); Choice = null; _apply.IsEnabled = false;
             _history.SelectedItem = null;
-            _pressFields.Visibility = !_cutting && _press.SelectedIndex != 0 ? Visibility.Visible : Visibility.Collapsed;
-            _groupingFields.Visibility = _pressFields.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+            UpdateModeVisibility();
             _message.Text = "Параметры изменены. Рассчитываю новый вариант…";
             _debounce.Stop(); _debounce.Start();
         }
@@ -251,7 +280,17 @@ namespace VanyaTools.Native
             _pressWidthTitle.Text = templates ? "Макс. ширина вертикального листа, мм · 0 = авто" :
                 "Макс. ширина листа, мм · 0 = авто";
         }
-        private async void Compute()
+        private void UpdateModeVisibility()
+        {
+            bool calender = !_cutting && _press.SelectedIndex == 0;
+            _pressFields.Visibility = !_cutting && !calender ? Visibility.Visible : Visibility.Collapsed;
+            _calenderFields.Visibility = calender ? Visibility.Visible : Visibility.Collapsed;
+            _calenderExtra.IsEnabled = _calenderMode.SelectedIndex > 0;
+            _groupingFields.Visibility = _cutting || (calender && _calenderMode.SelectedIndex == 0) ?
+                Visibility.Visible : Visibility.Collapsed;
+            _compare.Visibility = calender ? Visibility.Visible : Visibility.Collapsed;
+        }
+        private async void Compute(bool compareAll = false)
         {
             if (_closed) return;
             int revision = ++_revision;
@@ -264,15 +303,39 @@ namespace VanyaTools.Native
             {
                 var settings = ReadSettings(); UpdateZone(settings);
                 var clock = Stopwatch.StartNew();
-                var choice = await Task.Run(() => SportNestingCancellation.Run(cancellation.Token,
-                    () => SportNestingPreview.Calculate(_items, settings)));
+                var choices = await Task.Run(() => SportNestingCancellation.Run(cancellation.Token, () =>
+                {
+                    var calculated = new List<SportNestingChoice>();
+                    var modes = compareAll && !_cutting && settings.Press == 0 ?
+                        Enumerable.Range(0, SportCalenderNesting.Names.Length).OrderBy(mode => mode == settings.CalenderMode ? 0 : 1).ToList() :
+                        new List<int> { settings.CalenderMode };
+                    foreach (int mode in modes)
+                    {
+                        SportNestingCancellation.Check();
+                        var variant = settings.Copy(); variant.CalenderMode = mode;
+                        if (compareAll && mode == 0) variant.Grouping = SportGroupingMode.Free;
+                        var elapsed = Stopwatch.StartNew();
+                        try
+                        {
+                            var choice = SportNestingPreview.Calculate(_items, variant, _baseline);
+                            SportNestingPreview.Validate(choice, _items.Count);
+                            choice.Seconds = elapsed.Elapsed.TotalSeconds; calculated.Add(choice);
+                        }
+                        catch (InvalidOperationException error)
+                        {
+                            if (!compareAll) throw;
+                            Log.Info("Calender comparison rejected " + mode + ": " + error.Message);
+                        }
+                    }
+                    if (calculated.Count == 0) throw new InvalidOperationException("Ни одна схема не вместила детали. Проверьте ширину и длину страницы.");
+                    return calculated;
+                }));
                 if (_closed || revision != _revision) return;
-                SportNestingPreview.Validate(choice, _items.Count);
-                choice.Seconds = clock.Elapsed.TotalSeconds;
-                _history.Items.Insert(0, choice);
-                if (_history.Items.Count > 10) _history.Items.RemoveAt(10);
-                _history.SelectedItem = choice;
-                _message.Text = "Готово за " + choice.Seconds.ToString("0.0") + " с. Страницы ещё не созданы.";
+                foreach (var choice in choices.AsEnumerable().Reverse()) _history.Items.Insert(0, choice);
+                while (_history.Items.Count > 10) _history.Items.RemoveAt(_history.Items.Count - 1);
+                _history.SelectedItem = choices[0];
+                if (!choices[0].OverBudget) _message.Text = (compareAll ? "Сравнено схем: " + choices.Count + ". " : "") +
+                    "Готово за " + clock.Elapsed.TotalSeconds.ToString("0.0") + " с. Страницы ещё не созданы.";
             }
             catch (OperationCanceledException) { }
             catch (Exception error)
@@ -292,12 +355,16 @@ namespace VanyaTools.Native
             if (!(_history.SelectedItem is SportNestingChoice choice)) return;
             _revision++; _debounce.Stop(); _cancellation?.Cancel();
             Choice = choice; LoadSettings(choice.Settings); _apply.IsEnabled = true;
-            _stop.IsEnabled = false; _message.Text = "Выбран готовый вариант. Страницы ещё не созданы.";
+            _stop.IsEnabled = false; _message.Text = choice.OverBudget ? BudgetText(choice) :
+                "Выбран готовый вариант. Страницы ещё не созданы.";
             _metrics.Text = choice.Layout.PageHeights.Count + " страниц · " + _items.Count + " деталей · " +
                 (choice.Layout.PageHeights.Sum() / 1000).ToString("0.###") + " м" +
                 (choice.Panels.Count == 0 ? "" : " · " + choice.Panels.Count + " отрезных листов") +
                 (choice.PairedGarments + choice.LargeGarments == 0 ? "" : "\nПо образцам: " +
                     choice.PairedGarments + " малых, " + choice.LargeGarments + " крупных комплектов") +
+                (choice.DenseLengthMm.HasValue ? "\nПлотный вариант: " + (choice.DenseLengthMm.Value / 1000).ToString("0.###") +
+                    " м · разница " + choice.ExtraMm.ToString("+0.#;-0.#;0") + " мм · допуск " +
+                    choice.Settings.CalenderExtraMm.ToString("0.#") + " мм" : "") +
                 "\n" + choice.Settings.Width.ToString("0.#") + " мм · " + choice.Seconds.ToString("0.0") + " с";
             try { Draw(choice); }
             catch (Exception error)
@@ -306,6 +373,16 @@ namespace VanyaTools.Native
                 _message.Text = "Не удалось показать вариант: " + error.GetBaseException().Message;
                 Log.Error("Could not draw sport nesting preview", error);
             }
+        }
+        private static string BudgetText(SportNestingChoice choice) => "Прибавка " + choice.ExtraMm.ToString("0.#") +
+            " мм превышает допуск " + choice.Settings.CalenderExtraMm.ToString("0.#") + " мм. Можно выбрать другую схему.";
+        private void ApplyChoice()
+        {
+            if (Choice == null) return;
+            if (Choice.OverBudget && MessageBox.Show(this, BudgetText(Choice) +
+                "\n\nВсё равно создать этот упорядоченный вариант?", "Длина раскладки каландра",
+                MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+            DialogResult = true;
         }
         private void Draw(SportNestingChoice choice)
         {

@@ -12,6 +12,8 @@ namespace VanyaTools.Native
         internal SportGroupingMode Grouping;
         internal bool Rotate, Improve, Borders = true;
         internal int Press;
+        internal int CalenderMode = 1;
+        internal double CalenderExtraMm = 100;
         internal int PressGrouping, PressOrientation = 1;
         internal double PressSheetWidth = 750;
         internal double Left = 20, Right = 20, Top = 20, Bottom = 20;
@@ -21,6 +23,7 @@ namespace VanyaTools.Native
                 Gap = options.GapMm, Density = options.NestingMode, Grouping = options.GroupingMode,
                 Rotate = cutting ? options.CutAllow180 : options.RotateSleeves,
                 Press = cutting ? 0 : options.PressMode, Left = options.PressLeftMm,
+                CalenderMode = cutting ? 0 : options.CalenderMode, CalenderExtraMm = options.CalenderExtraMm,
                 Right = options.PressRightMm, Top = options.PressTopMm, Bottom = options.PressBottomMm,
                 Borders = options.PressBorders, PressGrouping = options.PressGrouping,
                 PressOrientation = options.PressOrientation, PressSheetWidth = options.PressSheetWidthMm };
@@ -33,12 +36,14 @@ namespace VanyaTools.Native
             else
             {
                 options.RotateSleeves = Rotate; options.PressMode = Press;
+                options.CalenderMode = CalenderMode; options.CalenderExtraMm = CalenderExtraMm;
                 options.PressLeftMm = Left; options.PressRightMm = Right;
                 options.PressTopMm = Top; options.PressBottomMm = Bottom; options.PressBorders = Borders;
                 options.PressGrouping = PressGrouping; options.PressOrientation = PressOrientation;
                 options.PressSheetWidthMm = PressSheetWidth;
             }
         }
+        internal SportNestingSettings Copy() => (SportNestingSettings)MemberwiseClone();
     }
 
     internal sealed class SportPressPanel
@@ -54,27 +59,41 @@ namespace VanyaTools.Native
         internal IList<SportPressPanel> Panels = new List<SportPressPanel>();
         internal double Seconds;
         internal int PairedGarments, LargeGarments;
+        internal double? DenseLengthMm;
+        internal double ExtraMm => DenseLengthMm.HasValue ? Layout.PageHeights.Sum() - DenseLengthMm.Value : 0;
+        internal bool OverBudget => Settings.Press == 0 && Settings.CalenderMode > 0 && DenseLengthMm.HasValue &&
+            ExtraMm > Settings.CalenderExtraMm + .01;
         public override string ToString() => Layout.PageHeights.Count + " стр. · " +
             (Layout.PageHeights.Sum() / 1000).ToString("0.###") + " м · " +
             new[] { "Прямоугольники", "Упрощённые", "Полный контур" }[(int)Settings.Density] +
-            " · " + (Settings.Press == 0 ? new[] { "свободно", "пары", "комплект" }[(int)Settings.Grouping] :
+            " · " + (Settings.Press == 0 ? Settings.CalenderMode > 0 ? SportCalenderNesting.Names[Settings.CalenderMode] :
+                new[] { "свободно", "пары", "комплект" }[(int)Settings.Grouping] :
                 new[] { "по образцам", "образцы/пары", "свободно по размерам" }[Settings.PressGrouping]) +
             (Settings.Improve ? " · уплотнение" : " · быстро") +
-            (Settings.Press == 0 ? "" : " · " + Panels.Count + " листов пресса");
+            (Settings.Press == 0 ? (DenseLengthMm.HasValue ? " · Δ " + ExtraMm.ToString("+0.#;-0.#;0") +
+                " мм" + (OverBudget ? " · сверх допуска" : "") : "") : " · " + Panels.Count + " листов пресса");
     }
 
     internal static class SportNestingPreview
     {
         internal static SportNestingChoice Calculate(IList<SportSheetNesting.Item> source,
-            SportNestingSettings settings)
+            SportNestingSettings settings, SportCalenderBaselineCache baseline = null)
         {
             var items = source.Select(item => new SportSheetNesting.Item { Width = item.Width, Height = item.Height,
                 Label = item.Label, Size = item.Size,
                 Bands = item.Bands, Garment = item.Garment, Part = item.Part, SmallPart = item.SmallPart,
                 Allow90 = item.Allow90 && settings.Rotate, Allow180 = item.Allow180 && settings.Rotate }).ToList();
             if (settings.Press == 0)
-                return new SportNestingChoice { Settings = settings, Layout = SportGroupedNesting.Place(items,
-                    settings.Width, settings.Length, settings.Gap, settings.Density, settings.Grouping, settings.Improve) };
+            {
+                if (settings.CalenderMode == 0)
+                    return new SportNestingChoice { Settings = settings,
+                        Layout = baseline != null && settings.Grouping == SportGroupingMode.Free ? baseline.Get(items, settings) :
+                            SportGroupedNesting.Place(items, settings.Width, settings.Length, settings.Gap,
+                                settings.Density, settings.Grouping, settings.Improve) };
+                var ordered = SportCalenderNesting.Place(items, settings);
+                var dense = (baseline ?? new SportCalenderBaselineCache()).Get(items, settings);
+                return new SportNestingChoice { Settings = settings, Layout = ordered, DenseLengthMm = dense.PageHeights.Sum() };
+            }
 
             SportNestingChoice best = null;
             Exception failure = null;

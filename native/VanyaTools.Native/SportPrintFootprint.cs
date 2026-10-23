@@ -23,6 +23,12 @@ namespace VanyaTools.Native
             internal IList<SportContourNesting.Band> Bands;
         }
 
+        internal sealed class PrintGeometry
+        {
+            internal Bounds Ink;
+            internal double GroupWidth, GroupHeight;
+        }
+
         // Reuse the expensive curve data for every player, while keeping every
         // text box in the profile at every search resolution and rotation.
         private sealed class CombinedBands : IList<SportContourNesting.Band>
@@ -89,6 +95,59 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Corel вернул некорректные габариты объекта: " +
                     width.ToString("R") + " × " + height.ToString("R") + " мм.");
             return new Bounds { Left = left, Bottom = bottom, Width = width, Height = height };
+        }
+
+        internal static PrintGeometry Capture(object target, IList<object> inkShapes)
+        {
+            Bounds ink = Measure(inkShapes), group = Measure(target, false);
+            RequireArea(group);
+            ink.Left -= group.Left; ink.Bottom -= group.Bottom;
+            return new PrintGeometry { Ink = ink, GroupWidth = group.Width, GroupHeight = group.Height };
+        }
+
+        internal static void Place(object target, PrintGeometry geometry, object targetLayer, bool transfer,
+            SportSheetNesting.Placement placed, double pageLeft, double pageTop)
+        {
+            // Child COM proxies may return 0x0 after a cross-page MoveToLayer.
+            // Capture ink relative to its group before the very first transfer,
+            // including the move to staging. Later moves and quarter-turns use
+            // that measured rectangle and only the live root group bounds.
+            if (geometry == null) throw new InvalidOperationException("Не сохранены печатные габариты детали.");
+            dynamic shape = target;
+            if (transfer) shape.MoveToLayer(targetLayer);
+            Bounds moved = Measure(target, false);
+            RequireArea(moved);
+            if (Math.Abs(moved.Width - geometry.GroupWidth) > .05 || Math.Abs(moved.Height - geometry.GroupHeight) > .05)
+                throw new InvalidOperationException("Габариты группы изменились после подготовки или переноса между страницами.");
+            Bounds ink = geometry.Ink; ink.Left += moved.Left; ink.Bottom += moved.Bottom;
+            double angle = (placed.Rotation % 360 + 360) % 360;
+            if (angle != 0 && angle != 90 && angle != 180 && angle != 270)
+                throw new InvalidOperationException("Не поддерживается угол печатной детали " + placed.Rotation + "°.");
+            if (angle != 0)
+            {
+                double centerX = ink.CenterX, centerY = ink.CenterY;
+                shape.RotateEx(placed.Rotation, centerX, centerY);
+                bool quarter = angle == 90 || angle == 270;
+                Bounds rotatedGroup = Measure(target, false);
+                RequireArea(rotatedGroup);
+                if (Math.Abs(rotatedGroup.Width - (quarter ? moved.Height : moved.Width)) > .05 ||
+                    Math.Abs(rotatedGroup.Height - (quarter ? moved.Width : moved.Height)) > .05)
+                    throw new InvalidOperationException("Габариты группы не соответствуют повороту на " + placed.Rotation + "°.");
+                double width = quarter ? ink.Height : ink.Width, height = quarter ? ink.Width : ink.Height;
+                ink = new Bounds { Left = centerX - width / 2, Bottom = centerY - height / 2, Width = width, Height = height };
+            }
+            if (Math.Abs(ink.Width - placed.Width) > .05 || Math.Abs(ink.Height - placed.Height) > .05)
+                throw new InvalidOperationException("Печатные габариты " + ink.Width.ToString("0.###") + " × " +
+                    ink.Height.ToString("0.###") + " мм, в расчёте " + placed.Width.ToString("0.###") + " × " +
+                    placed.Height.ToString("0.###") + " мм.");
+            shape.Move(pageLeft + placed.Left - ink.Left, pageTop - placed.Top - placed.Height - ink.Bottom);
+        }
+
+        private static void RequireArea(Bounds bounds)
+        {
+            if (bounds.Width <= 0 || bounds.Height <= 0)
+                throw new InvalidOperationException("Нулевые габариты группы печатной детали: " +
+                    bounds.Width.ToString("R") + " × " + bounds.Height.ToString("R") + " мм.");
         }
 
         internal static SportContourNesting.Item Build(object container, IList<object> extras, IList<object> inkShapes,
