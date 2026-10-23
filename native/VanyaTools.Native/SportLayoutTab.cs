@@ -20,10 +20,11 @@ using Microsoft.Win32;
 
 namespace VanyaTools.Native
 {
-    internal sealed class SportLayoutTab : UserControl
+    internal sealed partial class SportLayoutTab : UserControl
     {
         private sealed class Draft
         {
+            public int ProjectStorageVersion { get; set; }
             public List<SportLayoutTemplate> Templates { get; set; }
             public List<SportLayoutPlayer> Players { get; set; }
             public string PatternPath { get; set; }
@@ -141,9 +142,9 @@ namespace VanyaTools.Native
         private readonly DispatcherTimer _documentWatch = new DispatcherTimer {
             Interval = TimeSpan.FromSeconds(1) };
         private string _workflowDocument, _workflowSession, _workflowId, _savedWorkflow;
-        private object _playersDocument;
-        private string _playersDocumentKey, _savedProjectPlayers;
-        private bool _switchingPlayers, _playersEverBound;
+        private object _projectDocument;
+        private string _savedProjectPlayers;
+        private bool _switchingPlayers;
 
         public SportLayoutTab(Action<string, bool> status)
         {
@@ -181,7 +182,7 @@ namespace VanyaTools.Native
                 "VT_SPORT_ZONE_BACK_NUMBER, VT_SPORT_ZONE_LEFT_SLEEVE, " +
                 "VT_SPORT_ZONE_RIGHT_SLEEVE; VT_SPORT_ZONE_NECK — по желанию.");
             _templateGrid = new DataGrid { Height = 132, AutoGenerateColumns = false,
-                CanUserAddRows = false, CanUserDeleteRows = false, FontSize = 12,
+                CanUserAddRows = false, CanUserDeleteRows = false, IsReadOnly = false, FontSize = 12,
                 Margin = new Thickness(0, 3, 0, 4), ItemsSource = _templates };
             _templateGrid.Columns.Add(Column("Размер", "Size", 80));
             _templateGrid.Columns.Add(Column("Слой", "LayerName", 110));
@@ -298,7 +299,7 @@ namespace VanyaTools.Native
             var playerControls = new StackPanel();
             Grid.SetRow(playerControls, 1); _playerEditor.Children.Add(playerControls);
             _playerGrid = new DataGrid { Height = 224, AutoGenerateColumns = false,
-                CanUserAddRows = false, CanUserDeleteRows = false, FontSize = 12,
+                CanUserAddRows = false, CanUserDeleteRows = false, IsReadOnly = false, FontSize = 12,
                 SelectionUnit = DataGridSelectionUnit.CellOrRowHeader,
                 SelectionMode = DataGridSelectionMode.Extended,
                 Margin = new Thickness(0, 3, 0, 4), ItemsSource = _players };
@@ -344,8 +345,8 @@ namespace VanyaTools.Native
             playerFiles.Children.Add(Button("Сохранить список CSV…", SavePlayersFile));
             playerFiles.Children.Add(Button("Загрузить список CSV…", LoadPlayersFile));
             playerControls.Children.Add(playerFiles);
-            DockerHelp.Add(playerControls, "Список игроков и все галочки сохраняются внутри текущего CDR. " +
-                "При переключении проектов загружается их собственная таблица. Сохраните CDR, чтобы перенести список на другой ПК. " +
+            DockerHelp.Add(playerControls, "Таблица, галочки, модель, шаблоны, ссылки на рисунки и настройки формы сохраняются внутри текущего CDR. " +
+                "При переключении файлов восстанавливаются их собственные данные. Сохраните CDR (Ctrl+S), чтобы записать изменения на диск. " +
                 "CSV — отдельная копия списка для Блокнота или Excel.");
             var printButtons = new WrapPanel();
             printButtons.Children.Add(Button("Печатать всех", (_, __) => SetPlayersEnabled(true)));
@@ -578,7 +579,10 @@ namespace VanyaTools.Native
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Margin = new Thickness(7, 3, 7, 0) };
             Grid.SetRow(progressView, 2); root.Children.Add(progressView);
 
-            _templates.CollectionChanged += (_, __) => { RefreshSizes(); SaveDraft(); };
+            _templates.CollectionChanged += (_, e) => {
+                if (e.OldItems != null) foreach (SportLayoutTemplate row in e.OldItems) row.PropertyChanged -= TemplateChanged;
+                if (e.NewItems != null) foreach (SportLayoutTemplate row in e.NewItems) row.PropertyChanged += TemplateChanged;
+                RefreshSizes(); SaveDraft(); };
             _players.CollectionChanged += (_, e) => {
                 if (e.OldItems != null) foreach (SportLayoutPlayer row in e.OldItems) row.PropertyChanged -= PlayerChanged;
                 if (e.NewItems != null) foreach (SportLayoutPlayer row in e.NewItems) row.PropertyChanged += PlayerChanged;
@@ -632,16 +636,8 @@ namespace VanyaTools.Native
             _steps.SelectionChanged += (_, e) => { if (e.Source == _steps) SaveDraft(); };
             _documentWatch.Tick += (_, __) => { if (!_busy) RefreshWorkflowDocument(); };
             PreviewMouseDown += (_, __) => { if (!_busy && !_loading) RefreshWorkflowDocument(); };
-            _playerGrid.BeginningEdit += (_, e) => {
-                try
-                {
-                    object document = (object)CorelApp.Get().ActiveDocument;
-                    if (SportProjectPlayers.SameDocument(document, _playersDocument)) return;
-                    e.Cancel = true;
-                    Dispatcher.BeginInvoke(new Action(RefreshWorkflowDocument), DispatcherPriority.Background);
-                }
-                catch { e.Cancel = true; }
-            };
+            _playerGrid.BeginningEdit += GuardProjectEdit;
+            _templateGrid.BeginningEdit += GuardProjectEdit;
             IsVisibleChanged += (_, __) => UpdateDocumentWatch();
             Loaded += (_, __) => UpdateDocumentWatch();
             Unloaded += (_, __) => _documentWatch.Stop();
@@ -802,12 +798,12 @@ namespace VanyaTools.Native
                 if (document == null)
                 {
                     if (Convert.ToInt32(app.Documents.Count) != 0) return;
-                    BindProjectPlayers(null);
+                    BindProjectData(null);
                     _workflowDocument = _workflowSession = _workflowId = _savedWorkflow = null;
                     ClearCompletedSteps(1, 3, 4, 5);
                     return;
                 }
-                BindProjectPlayers(document);
+                BindProjectData(document);
                 string session = SportWorkflowProgress.SessionKey(document);
                 SportWorkflowProgress stored = SportWorkflowProgress.Read(document);
                 // A missing property during a native transition or Undo must
@@ -826,7 +822,7 @@ namespace VanyaTools.Native
                 RefreshWorkflow();
                 Log.Info("Sport workflow: document context restored, saved marks=" + (stored != null));
             }
-            catch { /* Corel can temporarily reject calls while a native dialog is open. */ }
+            catch (Exception error) { ReportProjectError("Не удалось открыть данные формы", error); }
         }
 
         private void PersistWorkflow(bool create)
@@ -857,72 +853,18 @@ namespace VanyaTools.Native
             else _documentWatch.Stop();
         }
 
-        private void BindProjectPlayers(object document)
-        {
-            if (_switchingPlayers || _loading) return;
-            string key = PlayersDocumentKey(document);
-            if (SportProjectPlayers.SameDocument(document, _playersDocument)) { _playersDocumentKey = key; return; }
-            _switchingPlayers = true;
-            bool previousLoading = _loading;
-            try
-            {
-                _loading = true;
-                if (!_playerGrid.CommitEdit(DataGridEditingUnit.Cell, true) || !_playerGrid.CommitEdit(DataGridEditingUnit.Row, true))
-                    throw new InvalidOperationException("Закончите редактирование ячейки списка перед сменой проекта.");
-                PersistProjectPlayers();
-                SportProjectPlayers stored = document == null ? null : SportProjectPlayers.Read(document);
-                bool migrateLegacy = document != null && !_playersEverBound && stored == null;
-                _loading = true;
-                if (!migrateLegacy)
-                {
-                    EnsurePlayerSizes(stored?.Players ?? new List<SportLayoutPlayer>());
-                    _players.Clear();
-                    foreach (SportLayoutPlayer row in stored?.Players ?? new List<SportLayoutPlayer>()) _players.Add(row);
-                }
-                _playersDocument = document; _playersDocumentKey = key;
-                _workflowDocument = _workflowSession = _workflowId = _savedWorkflow = null;
-                _stepInputs = null;
-                Array.Clear(_completedSteps, 0, _completedSteps.Length);
-                Array.Clear(_stepDetails, 0, _stepDetails.Length);
-                _savedProjectPlayers = stored == null ? null : SportProjectPlayers.Json(_players);
-                if (document != null) _playersEverBound = true;
-                RefreshSizes(); _playerGrid.Items.Refresh(); UpdateCount();
-                // Only the first document may adopt the pre-upgrade global list.
-                // A new project never inherits another order's players.
-                if (migrateLegacy && _players.Count > 0) PersistProjectPlayers();
-                else if (stored == null) _savedProjectPlayers = SportProjectPlayers.Json(_players);
-            }
-            finally { _loading = previousLoading; _switchingPlayers = false; }
-        }
-
-        private static string PlayersDocumentKey(object document)
-        {
-            if (document == null) return null;
-            string key = Convert.ToString(((dynamic)document).CodeName);
-            return String.IsNullOrEmpty(key) ? SportWorkflowProgress.SessionKey(document) : key;
-        }
-
-        private void PersistProjectPlayers()
-        {
-            if (_playersDocument == null) return;
-            string json = SportProjectPlayers.Json(_players);
-            if (json == _savedProjectPlayers) return;
-            SportProjectPlayers.Write(_playersDocument, json);
-            _savedProjectPlayers = json;
-        }
-
         private async void SavePlayersFile(object sender, RoutedEventArgs e)
         {
             if (_busy) return;
             try
             {
                 RefreshWorkflowDocument();
-                if (_playersDocument == null) throw new InvalidOperationException("Откройте CDR проекта.");
+                if (_projectDocument == null) throw new InvalidOperationException("Откройте CDR проекта.");
                 if (!_playerGrid.CommitEdit(DataGridEditingUnit.Cell, true) || !_playerGrid.CommitEdit(DataGridEditingUnit.Row, true))
                     throw new InvalidOperationException("Закончите редактирование ячейки.");
                 SaveDraft();
                 var dialog = new SaveFileDialog { Filter = "Список игроков CSV (*.csv)|*.csv", DefaultExt = ".csv",
-                    FileName = Path.GetFileNameWithoutExtension(Convert.ToString(((dynamic)_playersDocument).FileName)) + " - игроки.csv" };
+                    FileName = Path.GetFileNameWithoutExtension(Convert.ToString(((dynamic)_projectDocument).FileName)) + " - игроки.csv" };
                 if (dialog.ShowDialog() != true) return;
                 string csv = SportProjectPlayers.Csv(_players), path = dialog.FileName;
                 await System.Threading.Tasks.Task.Run(() => File.WriteAllText(path, csv, new UTF8Encoding(true)));
@@ -937,8 +879,8 @@ namespace VanyaTools.Native
             try
             {
                 RefreshWorkflowDocument();
-                if (_playersDocument == null) throw new InvalidOperationException("Откройте CDR проекта.");
-                object project = _playersDocument;
+                if (_projectDocument == null) throw new InvalidOperationException("Откройте CDR проекта.");
+                object project = _projectDocument;
                 var dialog = new OpenFileDialog { Filter = "Список игроков CSV (*.csv)|*.csv", CheckFileExists = true };
                 if (dialog.ShowDialog() != true) return;
                 string path = dialog.FileName;
@@ -949,7 +891,7 @@ namespace VanyaTools.Native
                     return SportProjectPlayers.ParseCsv(csv);
                 });
                 RefreshWorkflowDocument();
-                if (!SportProjectPlayers.SameDocument(project, _playersDocument))
+                if (!SportProjectPlayers.SameDocument(project, _projectDocument))
                     throw new InvalidOperationException("Проект сменился. Повторите загрузку для нужного CDR.");
                 if (_players.Count > 0 && MessageBox.Show("Заменить текущий список игроков списком из CSV?", "Список игроков",
                     MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
@@ -1471,8 +1413,8 @@ namespace VanyaTools.Native
 
         private void SetActionButtons(bool enabled)
         {
-            if (!enabled) RefreshWorkflowDocument();
-            else PersistWorkflow(false);
+            if (enabled) PersistWorkflow(false);
+            RefreshWorkflowDocument();
             _steps.IsEnabled = enabled;
             _playerEditor.IsEnabled = enabled;
             _prepare.IsEnabled = _generate.IsEnabled = _generateCut.IsEnabled = _saveCut.IsEnabled = enabled;
@@ -1822,7 +1764,7 @@ namespace VanyaTools.Native
 
         private SportLayoutOptions ReadOptions(bool cutting = false)
         {
-            BindProjectPlayers((object)CorelApp.Get().ActiveDocument);
+            BindProjectData((object)CorelApp.Get().ActiveDocument);
             return new SportLayoutOptions {
                 FrontArtworkPath = _frontArt.Text.Trim(),
                 BackArtworkPath = _backArt.Text.Trim(),
@@ -1954,158 +1896,137 @@ namespace VanyaTools.Native
                 _templateGrid == null || _playerGrid == null) return;
             try
             {
-                PersistProjectPlayers();
+                PersistProjectData();
                 if (IsLoaded && !_busy) RefreshWorkflowDocument();
                 RefreshWorkflow();
-                PersistProjectPlayers();
+                PersistProjectData();
                 PersistWorkflow(false);
-                Directory.CreateDirectory(Path.GetDirectoryName(DraftPath));
-                var draft = new Draft {
-                    Templates = _templates.ToList(), Players = _players.ToList(),
-                    FrontArtworkPath = _frontArt.Text, BackArtworkPath = _backArt.Text,
-                    LeftSleeveArtworkPath = _leftSleeveArt.Text,
-                    RightSleeveArtworkPath = _rightSleeveArt.Text,
-                    NeckArtworkPath = _neckArt.Text, ModelPath = _modelPath.Text,
-                    ArtworkMaxMegapixels = _artworkLimit.SelectedItem is int value ? value : 150,
-                    RasterArtworkCapture = _artworkCapture.SelectedIndex == 1,
-                    RotateSleeves = _rotateSleeves.IsChecked == true,
-                    CutAllow180 = _cutAllow180.IsChecked == true,
-                    CutSizeTags = _cutSizeTags.IsChecked == true,
-                    TagWidth = _tagWidth.Text, TagHeight = _tagHeight.Text,
-                    TagBridge = _tagBridge.Text, TagLetter = _tagLetter.Text,
-                    CutTagLetter = _tagCutLetter.IsChecked == true,
-                    TagLabelHex = _tagLabelHex.Text,
-                    TagFirstOffset = _tagFirstOffset.Text, TagSizeStep = _tagSizeStep.Text,
-                    SheetWidth = _sheetWidth.Text, Gap = _gap.Text,
-                    CutSheetWidth = _cutSheetWidth.Text,
-                    MaxPageLength = _maxPageLength.Text,
-                    CutMaxPageLength = _cutMaxPageLength.Text, CutGap = _cutGap.Text,
-                    PrintFolder = _printFolder.Text,
-                    CutFolder = _cutFolder.Text,
-                    CutDxfSingleColor = _cutDxfSingleColor.IsChecked == true,
-                    CutDxfColorHex = _cutDxfColorHex.Text,
-                    PrintDpi = _printQuality.SelectedIndex == 1 ? 300 : 150,
-                    NameStyle = _legacyNameStyle,
-                    NumberStyle = _legacyNumberStyle,
-                    FrontNameOnRight = _nameSide.SelectedIndex == 1,
-                    FrontNameCase = _frontCase.SelectedIndex,
-                    FrontNameTwoLines = _legacyTwoLines,
-                    FrontLineSpacing = _legacyLineSpacing.ToString(CultureInfo.InvariantCulture),
-                    WhiteText = _whiteCaptions,
-                    KeepGuides = _keepGuides.IsChecked == true,
-                    WorkflowTab = _steps.SelectedIndex, WorkflowUiVersion = 2,
-                    NestingMode = _nestingMode.SelectedIndex, GroupingMode = _groupingMode.SelectedIndex,
-                    CutNestingMode = _cutNestingMode.SelectedIndex, CutGroupingMode = _cutGroupingMode.SelectedIndex,
-                    PressMode = _pressMode, PressLeftMm = _pressLeftMm, PressRightMm = _pressRightMm,
-                    PressTopMm = _pressTopMm, PressBottomMm = _pressBottomMm, PressBorders = _pressBorders
-                };
-                File.WriteAllText(DraftPath, new JavaScriptSerializer().Serialize(draft),
-                    new UTF8Encoding(false));
             }
-            catch (Exception error) { Log.Error("Could not save sport layout draft.", error); }
+            catch (Exception error) { ReportProjectError("Не удалось сохранить данные формы", error); }
         }
 
-        private void LoadDraft()
+        private Draft CaptureDraft()
         {
-            _loading = true;
+            return new Draft {
+                ProjectStorageVersion = 2,
+                Templates = _templates.ToList(), Players = _players.ToList(),
+                FrontArtworkPath = _frontArt.Text, BackArtworkPath = _backArt.Text,
+                LeftSleeveArtworkPath = _leftSleeveArt.Text,
+                RightSleeveArtworkPath = _rightSleeveArt.Text,
+                NeckArtworkPath = _neckArt.Text, ModelPath = _modelPath.Text,
+                ArtworkMaxMegapixels = _artworkLimit.SelectedItem is int value ? value : 150,
+                RasterArtworkCapture = _artworkCapture.SelectedIndex == 1,
+                RotateSleeves = _rotateSleeves.IsChecked == true,
+                CutAllow180 = _cutAllow180.IsChecked == true,
+                CutSizeTags = _cutSizeTags.IsChecked == true,
+                TagWidth = _tagWidth.Text, TagHeight = _tagHeight.Text,
+                TagBridge = _tagBridge.Text, TagLetter = _tagLetter.Text,
+                CutTagLetter = _tagCutLetter.IsChecked == true,
+                TagLabelHex = _tagLabelHex.Text,
+                TagFirstOffset = _tagFirstOffset.Text, TagSizeStep = _tagSizeStep.Text,
+                SheetWidth = _sheetWidth.Text, Gap = _gap.Text,
+                CutSheetWidth = _cutSheetWidth.Text,
+                MaxPageLength = _maxPageLength.Text,
+                CutMaxPageLength = _cutMaxPageLength.Text, CutGap = _cutGap.Text,
+                PrintFolder = _printFolder.Text,
+                CutFolder = _cutFolder.Text,
+                CutDxfSingleColor = _cutDxfSingleColor.IsChecked == true,
+                CutDxfColorHex = _cutDxfColorHex.Text,
+                PrintDpi = _printQuality.SelectedIndex == 1 ? 300 : 150,
+                NameStyle = _legacyNameStyle,
+                NumberStyle = _legacyNumberStyle,
+                FrontNameOnRight = _nameSide.SelectedIndex == 1,
+                FrontNameCase = _frontCase.SelectedIndex,
+                FrontNameTwoLines = _legacyTwoLines,
+                FrontLineSpacing = _legacyLineSpacing.ToString(CultureInfo.InvariantCulture),
+                WhiteText = _whiteCaptions,
+                KeepGuides = _keepGuides.IsChecked == true,
+                WorkflowTab = _steps.SelectedIndex, WorkflowUiVersion = 2,
+                NestingMode = _nestingMode.SelectedIndex, GroupingMode = _groupingMode.SelectedIndex,
+                CutNestingMode = _cutNestingMode.SelectedIndex, CutGroupingMode = _cutGroupingMode.SelectedIndex,
+                PressMode = _pressMode, PressLeftMm = _pressLeftMm, PressRightMm = _pressRightMm,
+                PressTopMm = _pressTopMm, PressBottomMm = _pressBottomMm, PressBorders = _pressBorders
+            };
+        }
+
+        private void ApplyDraft(Draft draft)
+        {
+            bool loading = _loading; _loading = true;
             try
             {
-                if (File.Exists(DraftPath))
-                {
-                    var draft = new JavaScriptSerializer().Deserialize<Draft>(
-                        File.ReadAllText(DraftPath, Encoding.UTF8));
-                    if (draft != null)
-                    {
-                        foreach (var row in draft.Templates ?? new List<SportLayoutTemplate>())
-                            _templates.Add(row);
-                        foreach (var row in draft.Players ?? new List<SportLayoutPlayer>())
-                            _players.Add(row);
-                        _frontArt.Text = draft.FrontArtworkPath ?? draft.PatternPath ?? "";
-                        _backArt.Text = draft.BackArtworkPath ?? draft.PatternPath ?? "";
-                        _leftSleeveArt.Text = draft.LeftSleeveArtworkPath ?? draft.PatternPath ?? "";
-                        _rightSleeveArt.Text = draft.RightSleeveArtworkPath ?? "";
-                        _neckArt.Text = draft.NeckArtworkPath ?? "";
-                        _modelPath.Text = draft.ModelPath ?? "";
-                        int artworkLimit = draft.ArtworkMaxMegapixels ?? 150;
-                        _artworkLimit.SelectedItem = new[] { 100, 150, 200, 250 }.Contains(artworkLimit) ? artworkLimit : 150;
-                        _artworkCapture.SelectedIndex = draft.RasterArtworkCapture ? 1 : 0;
-                        _rotateSleeves.IsChecked = draft.RotateSleeves ?? true;
-                        _cutAllow180.IsChecked = draft.CutAllow180 ?? true;
-                        _cutSizeTags.IsChecked = draft.CutSizeTags ?? true;
-                        _tagWidth.Text = draft.TagWidth ?? "24";
-                        _tagHeight.Text = draft.TagHeight ?? "12";
-                        _tagBridge.Text = draft.TagBridge ?? "2";
-                        _tagLetter.Text = draft.TagLetter ?? "8";
-                        _tagCutLetter.IsChecked = draft.CutTagLetter ?? true;
-                        _tagLabelHex.Text = draft.TagLabelHex ?? "#000000";
-                        _tagFirstOffset.Text = draft.TagFirstOffset ?? "10";
-                        _tagSizeStep.Text = draft.TagSizeStep ?? "20";
-                        _sheetWidth.Text = draft.SheetWidth ?? "1500";
-                        _cutSheetWidth.Text = draft.CutSheetWidth ?? draft.SheetWidth ?? "1500";
-                        _maxPageLength.Text = draft.MaxPageLength ?? "4";
-                        _gap.Text = draft.Gap ?? "10";
-                        _cutMaxPageLength.Text = draft.CutMaxPageLength ?? draft.MaxPageLength ?? "4";
-                        _cutGap.Text = draft.CutGap ?? draft.Gap ?? "10";
-                        _printFolder.Text = draft.PrintFolder ?? "";
-                        _cutFolder.Text = draft.CutFolder ?? "";
-                        _cutDxfSingleColor.IsChecked = draft.CutDxfSingleColor;
-                        _cutDxfColorHex.Text = draft.CutDxfColorHex ?? "#000000";
-                        _printQuality.SelectedIndex = draft.PrintDpi == 300 ? 1 : 0;
-                        _legacyNameStyle = draft.NameStyle ?? LegacyStyle(draft.FontName, 72, draft.WhiteText);
-                        _legacyNumberStyle = draft.NumberStyle ?? LegacyStyle(draft.FontName, 150, draft.WhiteText);
-                        _whiteCaptions = draft.WhiteText;
-                        _nameSide.SelectedIndex = draft.FrontNameOnRight ? 1 : 0;
-                        _frontCase.SelectedIndex = draft.FrontNameCase >= 0 &&
-                            draft.FrontNameCase <= 3 ? draft.FrontNameCase : 0;
-                        _legacyTwoLines = draft.FrontNameTwoLines;
-                        if (Double.TryParse((draft.FrontLineSpacing ?? "100").Replace(',', '.'),
-                            NumberStyles.Float, CultureInfo.InvariantCulture, out double spacing) &&
-                            spacing >= 10 && spacing <= 300) _legacyLineSpacing = spacing;
-                        _keepGuides.IsChecked = draft.KeepGuides;
-                        int tab = draft.WorkflowUiVersion == 2 ? draft.WorkflowTab :
-                            draft.WorkflowTab == 4 ? 3 : draft.WorkflowTab == 5 ? 4 : draft.WorkflowTab;
-                        _steps.SelectedIndex = tab >= 0 && tab < 5 ? tab : 0;
-                        _nestingMode.SelectedIndex = draft.NestingMode >= 0 && draft.NestingMode <= 2 ? draft.NestingMode.Value : 2;
-                        _groupingMode.SelectedIndex = draft.GroupingMode >= 0 && draft.GroupingMode <= 2 ? draft.GroupingMode.Value : 0;
-                        // Older drafts used one common choice; use it as the initial value for both operations.
-                        _cutNestingMode.SelectedIndex = draft.CutNestingMode >= 0 && draft.CutNestingMode <= 2
-                            ? draft.CutNestingMode.Value : _nestingMode.SelectedIndex;
-                        _cutGroupingMode.SelectedIndex = draft.CutGroupingMode >= 0 && draft.CutGroupingMode <= 2
-                            ? draft.CutGroupingMode.Value : _groupingMode.SelectedIndex;
-                        _pressMode = draft.PressMode >= 0 && draft.PressMode <= 2 ? draft.PressMode : 0;
-                        _pressLeftMm = ValidPressMargin(draft.PressLeftMm);
-                        _pressRightMm = ValidPressMargin(draft.PressRightMm);
-                        _pressTopMm = ValidPressMargin(draft.PressTopMm);
-                        _pressBottomMm = ValidPressMargin(draft.PressBottomMm);
-                        _pressBorders = draft.PressBorders ?? true;
-                    }
-                }
-                if (_templates.Count == 0)
-                {
-                    string sample = Path.Combine(Environment.GetFolderPath(
-                        Environment.SpecialFolder.DesktopDirectory), "спорт М.cdr");
-                    if (File.Exists(sample))
-                    {
-                        _templates.Add(new SportLayoutTemplate { Size = "М", Path = sample,
-                            ScalePercent = 100 });
-                        _templates.Add(new SportLayoutTemplate { Size = "S", Path = sample,
-                            ScalePercent = 95 });
-                        _templates.Add(new SportLayoutTemplate { Size = "XL", Path = sample,
-                            ScalePercent = 110 });
-                    }
-                }
-                if (_players.Count == 0)
-                    _players.Add(new SportLayoutPlayer { Size = "М", Quantity = 1 });
+                _templates.Clear(); _players.Clear();
+                foreach (var row in draft.Templates ?? new List<SportLayoutTemplate>())
+                    _templates.Add(row);
+                foreach (var row in draft.Players ?? new List<SportLayoutPlayer>())
+                    _players.Add(row);
+                _frontArt.Text = draft.FrontArtworkPath ?? draft.PatternPath ?? "";
+                _backArt.Text = draft.BackArtworkPath ?? draft.PatternPath ?? "";
+                _leftSleeveArt.Text = draft.LeftSleeveArtworkPath ?? draft.PatternPath ?? "";
+                _rightSleeveArt.Text = draft.RightSleeveArtworkPath ?? "";
+                _neckArt.Text = draft.NeckArtworkPath ?? "";
+                _modelPath.Text = draft.ModelPath ?? "";
+                int artworkLimit = draft.ArtworkMaxMegapixels ?? 150;
+                _artworkLimit.SelectedItem = new[] { 100, 150, 200, 250 }.Contains(artworkLimit) ? artworkLimit : 150;
+                _artworkCapture.SelectedIndex = draft.RasterArtworkCapture ? 1 : 0;
+                _rotateSleeves.IsChecked = draft.RotateSleeves ?? true;
+                _cutAllow180.IsChecked = draft.CutAllow180 ?? true;
+                _cutSizeTags.IsChecked = draft.CutSizeTags ?? true;
+                _tagWidth.Text = draft.TagWidth ?? "24";
+                _tagHeight.Text = draft.TagHeight ?? "12";
+                _tagBridge.Text = draft.TagBridge ?? "2";
+                _tagLetter.Text = draft.TagLetter ?? "8";
+                _tagCutLetter.IsChecked = draft.CutTagLetter ?? true;
+                _tagLabelHex.Text = draft.TagLabelHex ?? "#000000";
+                _tagFirstOffset.Text = draft.TagFirstOffset ?? "10";
+                _tagSizeStep.Text = draft.TagSizeStep ?? "20";
+                _sheetWidth.Text = draft.SheetWidth ?? "1500";
+                _cutSheetWidth.Text = draft.CutSheetWidth ?? draft.SheetWidth ?? "1500";
+                _maxPageLength.Text = draft.MaxPageLength ?? "4";
+                _gap.Text = draft.Gap ?? "10";
+                _cutMaxPageLength.Text = draft.CutMaxPageLength ?? draft.MaxPageLength ?? "4";
+                _cutGap.Text = draft.CutGap ?? draft.Gap ?? "10";
+                _printFolder.Text = draft.PrintFolder ?? "";
+                _cutFolder.Text = draft.CutFolder ?? "";
+                _cutDxfSingleColor.IsChecked = draft.CutDxfSingleColor;
+                _cutDxfColorHex.Text = draft.CutDxfColorHex ?? "#000000";
+                _printQuality.SelectedIndex = draft.PrintDpi == 300 ? 1 : 0;
+                _legacyNameStyle = draft.NameStyle ?? LegacyStyle(draft.FontName, 72, draft.WhiteText);
+                _legacyNumberStyle = draft.NumberStyle ?? LegacyStyle(draft.FontName, 150, draft.WhiteText);
+                _whiteCaptions = draft.WhiteText;
+                _nameSide.SelectedIndex = draft.FrontNameOnRight ? 1 : 0;
+                _frontCase.SelectedIndex = draft.FrontNameCase >= 0 &&
+                    draft.FrontNameCase <= 3 ? draft.FrontNameCase : 0;
+                _legacyTwoLines = draft.FrontNameTwoLines;
+                if (Double.TryParse((draft.FrontLineSpacing ?? "100").Replace(',', '.'),
+                    NumberStyles.Float, CultureInfo.InvariantCulture, out double spacing) &&
+                    spacing >= 10 && spacing <= 300) _legacyLineSpacing = spacing;
+                _keepGuides.IsChecked = draft.KeepGuides;
+                int tab = draft.WorkflowUiVersion == 2 ? draft.WorkflowTab :
+                    draft.WorkflowTab == 4 ? 3 : draft.WorkflowTab == 5 ? 4 : draft.WorkflowTab;
+                _steps.SelectedIndex = tab >= 0 && tab < 5 ? tab : 0;
+                _nestingMode.SelectedIndex = draft.NestingMode >= 0 && draft.NestingMode <= 2 ? draft.NestingMode.Value : 2;
+                _groupingMode.SelectedIndex = draft.GroupingMode >= 0 && draft.GroupingMode <= 2 ? draft.GroupingMode.Value : 0;
+                // Older drafts used one common choice; use it as the initial value for both operations.
+                _cutNestingMode.SelectedIndex = draft.CutNestingMode >= 0 && draft.CutNestingMode <= 2
+                    ? draft.CutNestingMode.Value : _nestingMode.SelectedIndex;
+                _cutGroupingMode.SelectedIndex = draft.CutGroupingMode >= 0 && draft.CutGroupingMode <= 2
+                    ? draft.CutGroupingMode.Value : _groupingMode.SelectedIndex;
+                _pressMode = draft.PressMode >= 0 && draft.PressMode <= 2 ? draft.PressMode : 0;
+                _pressLeftMm = ValidPressMargin(draft.PressLeftMm);
+                _pressRightMm = ValidPressMargin(draft.PressRightMm);
+                _pressTopMm = ValidPressMargin(draft.PressTopMm);
+                _pressBottomMm = ValidPressMargin(draft.PressBottomMm);
+                _pressBorders = draft.PressBorders ?? true;
+                UpdateCutDxfColor(); UpdateTagLabelColor(); RefreshSizes(); UpdateCount();
             }
-            catch (Exception error) { Log.Error("Could not load sport layout draft.", error); }
-            finally { _loading = false; }
+            finally { _loading = loading; }
         }
 
         private static DataGridTextColumn Column(string header, string path, double width)
         {
             return new DataGridTextColumn { Header = header,
                 Binding = new Binding(path) { Mode = BindingMode.TwoWay,
-                    UpdateSourceTrigger = UpdateSourceTrigger.LostFocus },
+                    UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged },
                 Width = new DataGridLength(width) };
         }
 

@@ -21,10 +21,17 @@ namespace VanyaTools.Native
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PrintEnabled))); }
         }
         public event PropertyChangedEventHandler PropertyChanged;
-        public string Size { get; set; }
-        public string Name { get; set; }
-        public string Number { get; set; }
-        public int Quantity { get; set; }
+        private string _size, _name, _number;
+        private int _quantity;
+        public string Size { get => _size; set => Change(ref _size, value, nameof(Size)); }
+        public string Name { get => _name; set => Change(ref _name, value, nameof(Name)); }
+        public string Number { get => _number; set => Change(ref _number, value, nameof(Number)); }
+        public int Quantity { get => _quantity; set => Change(ref _quantity, value, nameof(Quantity)); }
+        private void Change<T>(ref T field, T value, string property)
+        {
+            if (EqualityComparer<T>.Default.Equals(field, value)) return;
+            field = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
+        }
         public bool PrintFront { get => _front; set => Set(ref _front, value, nameof(PrintFront)); }
         public bool PrintBack { get => _back; set => Set(ref _back, value, nameof(PrintBack)); }
         public bool PrintLeftSleeve { get => _leftSleeve; set => Set(ref _leftSleeve, value, nameof(PrintLeftSleeve)); }
@@ -63,12 +70,20 @@ namespace VanyaTools.Native
         internal static string PrintProperty(SportLayoutPart part) => "Print" + part;
     }
 
-    internal sealed class SportLayoutTemplate
+    internal sealed class SportLayoutTemplate : INotifyPropertyChanged
     {
-        public string Size { get; set; }
-        public string Path { get; set; }
-        public string LayerName { get; set; }
-        public double ScalePercent { get; set; }
+        public event PropertyChangedEventHandler PropertyChanged;
+        private string _size, _path, _layer;
+        private double _scale;
+        public string Size { get => _size; set => Change(ref _size, value, nameof(Size)); }
+        public string Path { get => _path; set => Change(ref _path, value, nameof(Path)); }
+        public string LayerName { get => _layer; set => Change(ref _layer, value, nameof(LayerName)); }
+        public double ScalePercent { get => _scale; set => Change(ref _scale, value, nameof(ScalePercent)); }
+        private void Change<T>(ref T field, T value, string property)
+        {
+            if (EqualityComparer<T>.Default.Equals(field, value)) return;
+            field = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
+        }
     }
 
     internal sealed class SportLayoutOptions

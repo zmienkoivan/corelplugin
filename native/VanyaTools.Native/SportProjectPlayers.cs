@@ -15,6 +15,14 @@ namespace VanyaTools.Native
         public int SchemaVersion { get; set; } = 1;
         public List<SportLayoutPlayer> Players { get; set; } = new List<SportLayoutPlayer>();
 
+        internal static string DocumentKey(object document)
+        {
+            if (document == null) return null;
+            IntPtr identity = Marshal.GetIUnknownForObject(document);
+            try { return identity.ToInt64().ToString("X", CultureInfo.InvariantCulture); }
+            finally { Marshal.Release(identity); }
+        }
+
         internal static bool SameDocument(object first, object second)
         {
             if (ReferenceEquals(first, second)) return true;

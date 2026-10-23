@@ -44,10 +44,9 @@ namespace VanyaTools.Native
 
         internal static string SessionKey(object document)
         {
-            dynamic doc = document;
-            // These document properties are stable across repeated COM wrappers.
-            // Index also distinguishes two open copies with identical metadata.
-            return Convert.ToString(doc.CodeName) + "|" + Convert.ToString(doc.Name) + "|" + Convert.ToString(doc.Index);
+            // CodeName can return E_FAIL in Corel even for an open document.
+            // COM identity also survives Save As and does not depend on file names or tab indices.
+            return SportProjectPlayers.DocumentKey(document);
         }
     }
 }
