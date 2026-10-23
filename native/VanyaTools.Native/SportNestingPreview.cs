@@ -53,11 +53,12 @@ namespace VanyaTools.Native
         internal SportSheetNesting.Result Layout;
         internal IList<SportPressPanel> Panels = new List<SportPressPanel>();
         internal double Seconds;
+        internal int PairedGarments, LargeGarments;
         public override string ToString() => Layout.PageHeights.Count + " стр. · " +
             (Layout.PageHeights.Sum() / 1000).ToString("0.###") + " м · " +
             new[] { "Прямоугольники", "Упрощённые", "Полный контур" }[(int)Settings.Density] +
             " · " + (Settings.Press == 0 ? new[] { "свободно", "пары", "комплект" }[(int)Settings.Grouping] :
-                new[] { "комплект → пары", "пары + рукава", "по размерам" }[Settings.PressGrouping]) +
+                new[] { "по образцам", "образцы/пары", "свободно по размерам" }[Settings.PressGrouping]) +
             (Settings.Improve ? " · уплотнение" : " · быстро") +
             (Settings.Press == 0 ? "" : " · " + Panels.Count + " листов пресса");
     }
@@ -78,7 +79,7 @@ namespace VanyaTools.Native
             SportNestingChoice best = null;
             Exception failure = null;
             // Sheet orientation does not rotate the printed artwork.
-            foreach (bool landscape in settings.PressOrientation == 1 ? new[] { false } :
+            foreach (bool landscape in settings.PressGrouping != 2 ? new[] { false } : settings.PressOrientation == 1 ? new[] { false } :
                 settings.PressOrientation == 2 ? new[] { true } : new[] { true, false })
             {
                 SportNestingCancellation.Check();

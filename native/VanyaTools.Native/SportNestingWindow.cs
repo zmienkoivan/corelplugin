@@ -23,7 +23,7 @@ namespace VanyaTools.Native
         private readonly CheckBox _rotate, _borders;
         private readonly StackPanel _pressFields;
         private readonly ListBox _history;
-        private readonly TextBlock _message, _metrics, _zone;
+        private readonly TextBlock _message, _metrics, _zone, _pressWidthTitle;
         private readonly Button _apply, _stop;
         private readonly Image _image;
         private readonly ScrollViewer _viewport;
@@ -65,17 +65,14 @@ namespace VanyaTools.Native
                 "Быстрый поиск не выполняет дополнительный перебор; уплотнение добавляет поиск перестановок. " +
                 "Для листового пресса задайте поля с каждой стороны. Листы уменьшаются по заполнению, " +
                 "располагаются прямоугольными блоками на рулоне и не превышают полезную зону стола. " +
-                "Сначала сравнивается общая длина бумаги; при равной длине выбирается меньше отрезных листов. " +
-                "Свободные полосы рулона заполняются отдельными узкими листами: рукавами, горловинами " +
-                "и подходящими по ширине корпусами из заказа. У каждого такого листа свои поля и границы; " +
-                "разные размеры внутри одного листа не смешиваются. " +
-                "Для пресса размеры не смешиваются. Автоматическая группировка сначала пробует комплект, " +
-                "затем перед со спинкой, затем отдельные корпуса. Рукава того же размера заполняют остатки " +
-                "этих листов и дополнительные листы. Можно сразу выбрать пары с общими рукавами либо группировку по размерам. " +
-                "Предпочтительно спинка слева, перед справа; левый рукав слева, правый справа, " +
-                "а при расположении рукавов друг над другом — правый сверху, левый снизу. " +
-                "Это мягкие правила: при нехватке места допускаются исключения. " +
-                "Ширина отрезного листа включает поля; 0 означает всю доступную ширину. " +
+                "По образцам: малые корпуса — отдельная широкая пара, спинка слева и перед справа. " +
+                "Рукава малых комплектов собираются общим листом: левый слева, правый справа, каждый комплект своей строкой. " +
+                "В разных строках допустимы разные размеры. Эти пары и строки не разбираются при заполнении рулона. " +
+                "Крупные корпуса стоят горловиной вверх на узких высоких листах: полка со своим правым рукавом, " +
+                "спинка со своим левым. Их рукава могут переходить в узкую боковую полосу и поворачиваться на 90°, " +
+                "правый выше левого. Ширина 750 мм ограничивает вертикальные листы; малые пары используют ширину плиты. " +
+                "Расположение по образцу имеет приоритет; для оставшихся деталей сохраняется свободный расчёт. " +
+                "В свободном режиме ширина ограничивает все листы. Размеры включают поля; 0 означает доступную ширину. " +
                 "Серые границы в окне показывают место разрезания; их печать включается отдельно.");
             _width = Field(settings, "Ширина рулона, мм");
             _length = Field(settings, "Макс. длина страницы, м");
@@ -90,10 +87,13 @@ namespace VanyaTools.Native
             _press = ChoiceBox(pressSection, "Способ переноса", "Каландр · рулон", "Пресс 120 × 80 см", "Пресс 120 × 100 см");
             if (cutting) pressSection.Visibility = Visibility.Collapsed;
             _pressFields = new StackPanel(); settings.Children.Add(_pressFields);
-            _pressGrouping = ChoiceBox(_pressFields, "Собирать листы", "Комплект → пара → корпус с рукавами",
-                "Перед/спина + общие рукава", "Все детали по размерам");
-            _orientation = ChoiceBox(_pressFields, "Ориентация листа", "Автоматически", "Вертикально", "Горизонтально");
-            _pressWidth = Field(_pressFields, "Макс. ширина листа, мм · 0 = авто");
+            _pressGrouping = ChoiceBox(_pressFields, "Собирать листы", "По образцам · пары и ряды рукавов",
+                "По образцам · остальные детали парами", "Свободно по размерам");
+            _orientation = ChoiceBox(_pressFields, "Ориентация листа", "По схеме / автоматически", "Вертикально", "Горизонтально");
+            _pressWidthTitle = new TextBlock { Text = "Макс. ширина вертикального листа, мм · 0 = авто",
+                Margin = new Thickness(0, 5, 0, 2) };
+            _pressFields.Children.Add(_pressWidthTitle);
+            _pressWidth = new TextBox { MinHeight = 27 }; _pressFields.Children.Add(_pressWidth);
             _left = Field(_pressFields, "Поле слева, мм"); _right = Field(_pressFields, "Поле справа, мм");
             _top = Field(_pressFields, "Поле сверху, мм"); _bottom = Field(_pressFields, "Поле снизу, мм");
             _zone = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 5) };
@@ -180,7 +180,7 @@ namespace VanyaTools.Native
             Gap = Read(_gap, 0, 100, "Зазор"), Density = (SportNestingMode)_density.SelectedIndex,
             Grouping = (SportGroupingMode)_grouping.SelectedIndex, Rotate = _rotate.IsChecked == true,
             Improve = _search.SelectedIndex == 1, Press = _cutting ? 0 : _press.SelectedIndex,
-            PressGrouping = _pressGrouping.SelectedIndex, PressOrientation = _orientation.SelectedIndex,
+            PressGrouping = _pressGrouping.SelectedIndex, PressOrientation = _pressGrouping.SelectedIndex == 2 ? _orientation.SelectedIndex : 0,
             PressSheetWidth = Read(_pressWidth, 0, 1200, "Ширина листа"),
             Left = Read(_left, 0, 200, "Левое поле"), Right = Read(_right, 0, 200, "Правое поле"),
             Top = Read(_top, 0, 200, "Верхнее поле"), Bottom = Read(_bottom, 0, 200, "Нижнее поле"),
@@ -199,12 +199,24 @@ namespace VanyaTools.Native
             _borders.IsChecked = value.Borders;
             _pressFields.Visibility = value.Press == 0 ? Visibility.Collapsed : Visibility.Visible;
             _groupingFields.Visibility = value.Press == 0 ? Visibility.Visible : Visibility.Collapsed;
+            UpdatePressControls();
             _loading = false; UpdateZone(value);
         }
         private void UpdateZone(SportNestingSettings s)
         {
             if (s.Press == 0) return;
             double shortSide = s.Press == 1 ? 800 : 1000;
+            if (s.PressGrouping != 2)
+            {
+                double smallWidth = Math.Min(s.Width, 1200) - s.Left - s.Right;
+                double cap = s.PressSheetWidth > 0 ? s.PressSheetWidth : shortSide;
+                double largeWidth = Math.Min(s.Width, Math.Min(cap, shortSide)) - s.Left - s.Right;
+                _zone.Text = "Пары: до " + smallWidth.ToString("0.#") + " × " +
+                    (Math.Min(s.Length, shortSide) - s.Top - s.Bottom).ToString("0.#") +
+                    " мм. Вертикальные листы: до " + largeWidth.ToString("0.#") + " × " +
+                    (Math.Min(s.Length, 1200) - s.Top - s.Bottom).ToString("0.#") + " мм внутри полей.";
+                return;
+            }
             double pressWidth = s.PressOrientation == 1 ? shortSide : 1200;
             double pressHeight = s.PressOrientation == 1 ? 1200 : shortSide;
             double sheetWidth = Math.Min(s.Width, pressWidth);
@@ -218,12 +230,25 @@ namespace VanyaTools.Native
         private void Changed()
         {
             if (_loading || _closed) return;
+            UpdatePressControls();
             _revision++; _cancellation?.Cancel(); Choice = null; _apply.IsEnabled = false;
             _history.SelectedItem = null;
             _pressFields.Visibility = !_cutting && _press.SelectedIndex != 0 ? Visibility.Visible : Visibility.Collapsed;
             _groupingFields.Visibility = _pressFields.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
             _message.Text = "Параметры изменены. Рассчитываю новый вариант…";
             _debounce.Stop(); _debounce.Start();
+        }
+        private void UpdatePressControls()
+        {
+            bool templates = _pressGrouping.SelectedIndex != 2;
+            _orientation.IsEnabled = !templates;
+            if (templates && _orientation.SelectedIndex != 0)
+            {
+                bool loading = _loading; _loading = true;
+                _orientation.SelectedIndex = 0; _loading = loading;
+            }
+            _pressWidthTitle.Text = templates ? "Макс. ширина вертикального листа, мм · 0 = авто" :
+                "Макс. ширина листа, мм · 0 = авто";
         }
         private async void Compute()
         {
@@ -270,6 +295,8 @@ namespace VanyaTools.Native
             _metrics.Text = choice.Layout.PageHeights.Count + " страниц · " + _items.Count + " деталей · " +
                 (choice.Layout.PageHeights.Sum() / 1000).ToString("0.###") + " м" +
                 (choice.Panels.Count == 0 ? "" : " · " + choice.Panels.Count + " отрезных листов") +
+                (choice.PairedGarments + choice.LargeGarments == 0 ? "" : "\nПо образцам: " +
+                    choice.PairedGarments + " малых, " + choice.LargeGarments + " крупных комплектов") +
                 "\n" + choice.Settings.Width.ToString("0.#") + " мм · " + choice.Seconds.ToString("0.0") + " с";
             try { Draw(choice); }
             catch (Exception error)

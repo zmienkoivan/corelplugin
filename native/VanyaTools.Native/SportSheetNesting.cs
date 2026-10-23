@@ -76,12 +76,16 @@ namespace VanyaTools.Native
 
         internal static Result Place(IList<Item> items, double width, double limit, double gap,
             SportNestingMode mode = SportNestingMode.FullContour, bool improve = true, double? firstPageLimit = null,
-            Result fixedLayout = null, bool preferGarmentPages = false, bool pressOrder = false)
+            Result fixedLayout = null, bool preferGarmentPages = false, bool pressOrder = false,
+            IList<int> placementOrder = null)
         {
             if (!Enum.IsDefined(typeof(SportNestingMode), mode)) throw new ArgumentOutOfRangeException(nameof(mode));
             if (width <= 0 || limit <= 0 || gap < 0 || Double.IsNaN(width + limit + gap) ||
                 Double.IsInfinity(width + limit + gap))
                 throw new InvalidOperationException("Некорректные размеры страницы или зазор.");
+            if (placementOrder != null && (fixedLayout != null || placementOrder.Count != items.Count ||
+                placementOrder.Distinct().Count() != items.Count || placementOrder.Any(i => i < 0 || i >= items.Count)))
+                throw new InvalidOperationException("Некорректный порядок отрезных листов.");
             int columns = ColumnCount(width, mode);
             double step = width / columns;
             int gapColumns = (int)Math.Ceiling(gap / step);
@@ -148,7 +152,7 @@ namespace VanyaTools.Native
                         throw new InvalidOperationException("Некорректная закреплённая деталь раскладки.");
             }
             Result best = null;
-            for (int strategy = 0; strategy < (pressOrder ? 6 : 3); strategy++)
+            for (int strategy = 0; strategy < (placementOrder != null ? 1 : pressOrder ? 6 : 3); strategy++)
             {
                 SportNestingCancellation.Check();
                 int baseStrategy = strategy % 3;
@@ -168,6 +172,7 @@ namespace VanyaTools.Native
                         strategy == 0 ? 2 : items[i].Part == (strategy == 1 ? 2 : 3) ? 2 :
                         items[i].Part == (strategy == 1 ? 3 : 2) ? 3 : 4);
                 }
+                if (placementOrder != null) order = placementOrder;
                 var pages = new List<Page>();
                 if (fixedLayout != null)
                     for (int pageIndex = 0; pageIndex < fixedLayout.PageHeights.Count; pageIndex++)
@@ -213,7 +218,7 @@ namespace VanyaTools.Native
             }
             // Permutation search and bottom alignment must never split pinned
             // torso pairs. Remaining pieces were fitted against their members.
-            if (improve && fixedLayout == null && !firstPageLimit.HasValue &&
+            if (improve && placementOrder == null && fixedLayout == null && !firstPageLimit.HasValue &&
                 mode != SportNestingMode.Rectangles && items.Any(item => item.Bands != null))
             {
                 var input = pressOrder ? new Result { PageHeights = best.PageHeights.ToList(), Roughness = best.Roughness,
@@ -223,14 +228,14 @@ namespace VanyaTools.Native
                 var improved = ImproveContours(input, items, variants, columns, step, limit, gap, gapColumns);
                 if (!pressOrder || BetterPress(improved, best, items)) best = improved;
             }
-            AlignBottomRow(best, gap, gapColumns, fixedIndices);
+            if (placementOrder == null) AlignBottomRow(best, gap, gapColumns, fixedIndices);
             if (best.Placements.Count != items.Count || best.Placements.Select(p => p.Index).Distinct().Count() != items.Count ||
                 best.PageHeights.Any(height => height > limit + 0.001))
                 throw new InvalidOperationException("Нестинг вернул некорректное число деталей или длину страницы.");
             return best;
         }
 
-        private static SportContourNesting.Profile Profile(SportContourNesting.Item item, double step,
+        internal static SportContourNesting.Profile Profile(SportContourNesting.Item item, double step,
             int angle, SportNestingMode mode)
         {
             var profile = SportContourNesting.MakeProfile(item, step, angle);

@@ -4,11 +4,31 @@ using System.Linq;
 
 namespace VanyaTools.Native
 {
-    // Press sheets are independent batches. Different garment sizes never share
-    // a batch; only the final rectangular sheets are nested together on the roll.
+    // Template sheets are immutable. Free fallback sheets retain one size;
+    // the explicit sleeve template may combine sizes in separate garment rows.
     internal static class SportPressNesting
     {
-        internal static SportSheetNesting.Result Place(IList<SportSheetNesting.Item> items,
+        internal static SportPressPlan Place(IList<SportSheetNesting.Item> items,
+            double width, double height, SportNestingSettings settings)
+        {
+            if (items.Any(item => String.IsNullOrWhiteSpace(item.Size)))
+                throw new InvalidOperationException("У детали не определён размер для листа пресса.");
+            if (items.Any(item => item.Width <= 0 || item.Height <= 0 ||
+                Double.IsNaN(item.Width + item.Height) || Double.IsInfinity(item.Width + item.Height)))
+                throw new InvalidOperationException("Некорректные габариты детали для листа пресса.");
+            var plan = SportPressTemplates.Create(items, settings);
+            var used = new HashSet<int>(plan.Layout.Placements.Select(p => p.Index));
+            var remaining = Enumerable.Range(0, items.Count).Where(index => !used.Contains(index)).ToList();
+            if (remaining.Count > 0)
+                Append(plan.Layout, PlaceFree(items: remaining.Select(index => items[index]).ToList(),
+                    width: width, height: height, settings: settings), remaining);
+            if (plan.Layout.Placements.Count != items.Count ||
+                plan.Layout.Placements.Select(p => p.Index).Distinct().Count() != items.Count)
+                throw new InvalidOperationException("Шаблон листов не сохранил все детали заказа.");
+            return plan;
+        }
+
+        private static SportSheetNesting.Result PlaceFree(IList<SportSheetNesting.Item> items,
             double width, double height, SportNestingSettings settings)
         {
             if (items.Any(item => String.IsNullOrWhiteSpace(item.Size)))

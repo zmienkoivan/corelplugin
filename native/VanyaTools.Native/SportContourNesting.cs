@@ -77,10 +77,10 @@ namespace VanyaTools.Native
 
         internal static Profile MakeProfile(Item item, double step, int angle)
         {
-            if (angle != 0 && angle != 90 && angle != 180)
+            if (angle != 0 && angle != 90 && angle != 180 && angle != 270)
                 throw new ArgumentOutOfRangeException(nameof(angle));
-            double rotatedWidth = angle == 90 ? item.Height : item.Width;
-            double rotatedHeight = angle == 90 ? item.Width : item.Height;
+            double rotatedWidth = angle == 90 || angle == 270 ? item.Height : item.Width;
+            double rotatedHeight = angle == 90 || angle == 270 ? item.Width : item.Height;
             int width = Math.Max(1, (int)Math.Ceiling(rotatedWidth / step - 0.00000001));
             var result = new Profile { Top = Enumerable.Repeat(Double.PositiveInfinity, width).ToArray(),
                 Bottom = Enumerable.Repeat(Double.NegativeInfinity, width).ToArray() };
@@ -89,10 +89,10 @@ namespace VanyaTools.Native
                 SportNestingCancellation.Check();
                 // Corel's positive 90 degrees is counterclockwise. These
                 // bands use a downward Y axis, measured from the top left.
-                double left = angle == 90 ? band.Top : angle == 180 ? item.Width - band.Right : band.Left;
-                double right = angle == 90 ? band.Bottom : angle == 180 ? item.Width - band.Left : band.Right;
-                double top = angle == 90 ? item.Width - band.Right : angle == 180 ? item.Height - band.Bottom : band.Top;
-                double bottom = angle == 90 ? item.Width - band.Left : angle == 180 ? item.Height - band.Top : band.Bottom;
+                double left = angle == 90 ? band.Top : angle == 270 ? item.Height - band.Bottom : angle == 180 ? item.Width - band.Right : band.Left;
+                double right = angle == 90 ? band.Bottom : angle == 270 ? item.Height - band.Top : angle == 180 ? item.Width - band.Left : band.Right;
+                double top = angle == 90 ? item.Width - band.Right : angle == 270 ? band.Left : angle == 180 ? item.Height - band.Bottom : band.Top;
+                double bottom = angle == 90 ? item.Width - band.Left : angle == 270 ? band.Right : angle == 180 ? item.Height - band.Top : band.Bottom;
                 int first = Math.Max(0, Math.Min(width - 1, (int)Math.Floor(left / step - 0.00000001)));
                 int last = Math.Max(0, Math.Min(width - 1, (int)Math.Floor(right / step + 0.00000001)));
                 for (int j = first; j <= last; j++)
