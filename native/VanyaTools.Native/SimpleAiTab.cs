@@ -171,13 +171,14 @@ namespace VanyaTools.Native
             var correctionTools = DockerLayout.ToolGroup("Коррекция");
             _correctionButton = DockerTheme.Primary(Button("Коррекция и обводка…", async (_, __) => await OpenCorrection()));
             _correctionButton.ToolTip = "Открыть выделение один раз и подбирать прозрачность, сглаживание и обводку с живым предпросмотром. Работает без интернета.";
-            if (!styleOnly) { correctionTools.Children.Add(_correctionButton); panel.Children.Add(correctionTools); }
+            if (!styleOnly) panel.Children.Add(correctionTools);
             _alphaButton = Button("Убрать полупрозрачность", async (_, __) => await RemoveSemiTransparent());
             _alphaThreshold = new TextBox { Text = "130", Width = 50, MinHeight = 27, FontSize = 11,
                 VerticalContentAlignment = VerticalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
             var alphaRow = DockerLayout.Trailing(_alphaButton,
                 DockerLayout.FieldRow("Порог", _alphaThreshold, 50));
             alphaRow.Margin = new Thickness(0, 0, 0, 2);
+            if (!styleOnly) correctionTools.Children.Add(alphaRow);
 
             _highlightButton = Button(styleOnly ? "Подсветить полупрозрачные" : "Подсветить", async (_, __) => await HighlightSemiTransparent());
             _highlightButton.ToolTip = "Создаёт рядом с оригиналом копию с яркой отметкой пикселей, у которых прозрачность между 0 и 100%.";
@@ -188,9 +189,11 @@ namespace VanyaTools.Native
             _highlightColor.SelectedIndex = 0;
             var highlightRow = DockerLayout.Trailing(_highlightButton, _highlightColor);
             highlightRow.Margin = new Thickness(0, 0, 0, 2);
+            if (!styleOnly) correctionTools.Children.Add(highlightRow);
 
             _stairButton = Button("Сгладить лесенку", async (_, __) => await SmoothStairs());
             _stairButton.ToolTip = "Создаёт в 2–4 раза более плотную сетку пикселей и сглаживает край и цветовые границы рисунка. Прозрачность результата остаётся 0 или 100%.";
+            if (!styleOnly) correctionTools.Children.Add(_stairButton);
 
             var edgeRow = DockerLayout.ToolGroup("Обводка", "Единицы мм/px относятся к сглаживанию и наружной обводке. " +
                 "При переключении значения пересчитываются по DPI захвата. Под полями показан размер в других единицах; " +
@@ -239,6 +242,7 @@ namespace VanyaTools.Native
             Grid.SetColumn(_pipetteButton, 1); outlineColorRow.Children.Add(_pipetteButton);
             edgeRow.Children.Add(outlineColorRow);
             _underlayHex.TextChanged += (_, __) => UpdateUnderlaySwatch();
+            if (!styleOnly) panel.Children.Add(edgeRow);
             _edgeUnits = Note("");
             if (!styleOnly) edgeRow.Children.Add(_edgeUnits);
             RefreshOutlinePresets();
@@ -251,6 +255,7 @@ namespace VanyaTools.Native
             _edgeRadius.TextChanged += (_, __) => UpdateEdgeUnits(false);
             _edgeExpansion.TextChanged += (_, __) => UpdateEdgeUnits(false);
             edgeRow.MouseEnter += (_, __) => UpdateEdgeUnits();
+            if (!styleOnly) { UpdateEdgeUnits(false); panel.Children.Add(_correctionButton); }
 
             var localPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 5) };
             _localPreviewButton = Button("Загрузить выделение для предпросмотра",

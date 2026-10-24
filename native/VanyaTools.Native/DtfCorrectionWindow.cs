@@ -30,7 +30,7 @@ namespace VanyaTools.Native
     }
 
     /// <summary>All processing is local. Only the caller captures and imports Corel artwork.</summary>
-    internal sealed class DtfCorrectionWindow : Window
+    internal sealed partial class DtfCorrectionWindow : Window
     {
         private readonly string _sourcePath;
         private readonly string _workspace = Path.Combine(Path.GetTempPath(), "Vanya-Correction-" + Guid.NewGuid().ToString("N"));
@@ -45,7 +45,8 @@ namespace VanyaTools.Native
         private readonly StackPanel _settingsPanel;
         private readonly ScrollViewer _beforeScroll, _afterScroll;
         private readonly DispatcherTimer _delay = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(160) };
-        private BitmapSource _original, _overview;
+        private BitmapSource _overview;
+        private DtfCorrectionPixels _originalPixels, _overviewPixels;
         private string _overviewPath;
         private CancellationTokenSource _previewCancellation, _applyCancellation;
         private Task _previewTask;
@@ -136,21 +137,24 @@ namespace VanyaTools.Native
             previews.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             previews.RowDefinitions.Add(new RowDefinition());
             previews.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            var previewToolbar = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
-            _view = Combo(new[] { "Весь рисунок", "Фрагмент 1:1", "Фрагмент ×2", "Фрагмент ×4" });
-            _view.Width = 155; DockPanel.SetDock(_view, Dock.Right); previewToolbar.Children.Add(_view);
-            previewToolbar.Children.Add(Text("Исходник и результат", 15, true)); previews.Children.Add(previewToolbar);
+            var previewToolbar = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+            previewToolbar.Children.Add(Text("Исходник и результат", 15, true));
+            _view = Combo(new[] { "Весь рисунок", "Точный фрагмент" });
+            previewToolbar.Children.Add(CreateZoomToolbar()); previews.Children.Add(previewToolbar);
             var pair = new Grid(); pair.ColumnDefinitions.Add(new ColumnDefinition()); pair.ColumnDefinitions.Add(new ColumnDefinition());
             pair.Children.Add(Preview("Исходник", out _before, out _beforeScroll));
             var after = Preview("Результат", out _after, out _afterScroll); Grid.SetColumn(after, 1); pair.Children.Add(after);
             _beforeScroll.ScrollChanged += (_, e) => SyncScroll(_beforeScroll, _afterScroll, e);
             _afterScroll.ScrollChanged += (_, e) => SyncScroll(_afterScroll, _beforeScroll, e);
+            ConfigurePreviewNavigation(_beforeScroll, _before);
+            ConfigurePreviewNavigation(_afterScroll, _after);
             Grid.SetRow(pair, 1); previews.Children.Add(pair);
-            var hint = Text("Весь рисунок — быстрый обзор. Кликните на исходник, затем выберите фрагмент для точной проверки края.", 11);
+            var hint = Text("Колесо — масштаб; средняя/правая кнопка или пробел + перетаскивание — перемещение. Клик на обзор — точный фрагмент края.", 11);
             Grid.SetRow(hint, 2); previews.Children.Add(hint);
             _before.MouseLeftButtonDown += (_, e) =>
             {
-                if (!_loaded || _applying || _view.SelectedIndex != 0 || _before.Source == null) return;
+                if (!_loaded || _applying || _view.SelectedIndex != 0 || _before.Source == null ||
+                    _panScroll != null || Keyboard.IsKeyDown(Key.Space) || !_zoomFit) return;
                 var point = e.GetPosition(_before);
                 double scale = Math.Min(_before.ActualWidth / _overview.PixelWidth, _before.ActualHeight / _overview.PixelHeight);
                 double width = _overview.PixelWidth * scale, height = _overview.PixelHeight * scale;
@@ -223,13 +227,21 @@ namespace VanyaTools.Native
                             PixelFormats.Bgra32, null, pixels, stride); overview.Freeze();
                     }
                     string path = Path.Combine(_workspace, "overview.png"); Save(overview, path);
-                    return Tuple.Create(image, overview, path);
+                    return Tuple.Create(DtfCorrectionPixels.Capture(image), DtfCorrectionPixels.Capture(overview), path);
+                }).ConfigureAwait(false);
+                await OnUiAsync(() =>
+                {
+                    if (_closed) { Cleanup(); return; }
+                    _originalPixels = loaded.Item1; _overviewPixels = loaded.Item2;
+                    _overview = _overviewPixels.Bitmap(); _overviewPath = loaded.Item3;
+                    _loaded = true; _before.Source = _overview; SetControlsEnabled(true); QueuePreview();
                 });
-                if (_closed) { Cleanup(); return; }
-                _original = loaded.Item1; _overview = loaded.Item2; _overviewPath = loaded.Item3;
-                _loaded = true; _before.Source = _overview; SetControlsEnabled(true); QueuePreview();
             }
-            catch (Exception error) { if (!_closed) ShowMessage("Не удалось загрузить исходник: " + error.GetBaseException().Message, true); }
+            catch (Exception error)
+            {
+                Log.Error("Correction source load failed.", error);
+                await OnUiAsync(() => { if (!_closed) ShowMessage("Не удалось загрузить исходник: " + error.GetBaseException().Message, true); });
+            }
         }
 
         private void SwitchUnits()
@@ -238,7 +250,7 @@ namespace VanyaTools.Native
             _syncing = true;
             if (DtfOutlineUnits.TryNumber(_radius.Text, out double radius) && DtfOutlineUnits.TryNumber(_expansion.Text, out double expansion))
             {
-                double factor = _units.SelectedIndex == 0 ? 25.4 / _original.DpiX : _original.DpiX / 25.4;
+                double factor = _units.SelectedIndex == 0 ? 25.4 / _originalPixels.DpiX : _originalPixels.DpiX / 25.4;
                 _radius.Text = DtfOutlineUnits.Format(radius * factor); _expansion.Text = DtfOutlineUnits.Format(expansion * factor);
                 _previousUnit = _units.SelectedIndex;
             }
@@ -256,23 +268,23 @@ namespace VanyaTools.Native
             { ShowMessage("Сглаживание и обводка: неотрицательные числа.", true); return false; }
             if (!TryColor(_hex.Text, out Color color)) { ShowMessage("Цвет обводки: #RRGGBB.", true); return false; }
             bool mm = _units.SelectedIndex == 0;
-            if (!mm) { radius *= 25.4 / _original.DpiX; expansion *= 25.4 / _original.DpiX; }
+            if (!mm) { radius *= 25.4 / _originalPixels.DpiX; expansion *= 25.4 / _originalPixels.DpiX; }
             options = new DtfCorrectionOptions { Threshold = threshold, RadiusMm = radius, ExpansionMm = expansion,
                 RemoveSemiTransparent = _remove.IsChecked == true, SmoothStairs = _stairs.IsChecked == true,
                 Outline = _outline.IsChecked == true, Color = color };
-            long pixels = (long)_original.PixelWidth * _original.PixelHeight;
+            long pixels = (long)_originalPixels.Width * _originalPixels.Height;
             options.StairsScale = pixels <= 2000000 ? 4 : pixels <= 3500000 ? 3 : pixels <= 8000000 ? 2 : 1;
             try
             {
-                double dpiX = _original.DpiX * (options.SmoothStairs ? options.StairsScale : 1);
-                double dpiY = _original.DpiY * (options.SmoothStairs ? options.StairsScale : 1);
+                double dpiX = _originalPixels.DpiX * (options.SmoothStairs ? options.StairsScale : 1);
+                double dpiY = _originalPixels.DpiY * (options.SmoothStairs ? options.StairsScale : 1);
                 int rx = DtfOutlineUnits.Pixels(radius, true, dpiX, DtfOutlineUnits.MaxRadiusPixels, "Сглаживание");
                 int ry = DtfOutlineUnits.Pixels(radius, true, dpiY, DtfOutlineUnits.MaxRadiusPixels, "Сглаживание");
                 int ex = DtfOutlineUnits.Pixels(expansion, true, dpiX, DtfOutlineUnits.MaxExpansionPixels, "Обводка");
                 int ey = DtfOutlineUnits.Pixels(expansion, true, dpiY, DtfOutlineUnits.MaxExpansionPixels, "Обводка");
                 _metrics.Text = "Сглаживание " + rx + (rx == ry ? "" : "×" + ry) + " px · обводка +" + ex +
-                    (ex == ey ? "" : "×" + ey) + " px\n" + DtfOutlineUnits.Format(_original.DpiX) + " DPI · " +
-                    _original.PixelWidth + " × " + _original.PixelHeight + " px";
+                    (ex == ey ? "" : "×" + ey) + " px\n" + DtfOutlineUnits.Format(_originalPixels.DpiX) + " DPI · " +
+                    _originalPixels.Width + " × " + _originalPixels.Height + " px";
             }
             catch (Exception error)
             { if (options.Outline) { ShowMessage(error.Message, true); return false; } }
@@ -282,7 +294,8 @@ namespace VanyaTools.Native
         private void QueuePreview()
         {
             if (_syncing || !_loaded || _closed || _applying) return;
-            _apply.IsEnabled = false; _revision++; _previewCancellation?.Cancel(); _delay.Stop(); _delay.Start();
+            _apply.IsEnabled = false; _after.Opacity = 0.45;
+            _revision++; _previewCancellation?.Cancel(); _delay.Stop(); _delay.Start();
         }
 
         private async Task PreviewAsync()
@@ -293,6 +306,11 @@ namespace VanyaTools.Native
             int revision = _revision, view = _view.SelectedIndex;
             double cropX = _cropX, cropY = _cropY;
             bool highlight = _highlight.IsChecked == true, red = _marker.SelectedIndex == 1;
+            // Capture only managed data on the UI thread. A BitmapFrame can
+            // retain a decoder graph even when its top-level object is frozen.
+            DtfCorrectionPixels originalPixels = _originalPixels, overviewPixels = _overviewPixels;
+            string overviewPath = _overviewPath, workspace = _workspace;
+            var processor = _processor;
             _previewCancellation = new CancellationTokenSource();
             var cancellationSource = _previewCancellation; CancellationToken cancellation = cancellationSource.Token;
             _rendering = true; _retryPreview = false; ShowMessage("Пересчитываю предпросмотр…", false);
@@ -302,23 +320,25 @@ namespace VanyaTools.Native
                 var task = Task.Run(() =>
                 {
                     Int32Rect focus = new Int32Rect();
-                    BitmapSource original = view == 0 ? _overview : Fragment(_original, cropX, cropY, options, out focus);
+                    BitmapSource original = view == 0 ? overviewPixels.Bitmap() : Fragment(originalPixels, cropX, cropY, options, cancellation, out focus);
                     if (view == 0) focus = new Int32Rect(0, 0, original.PixelWidth, original.PixelHeight);
-                    input = view == 0 ? _overviewPath : Path.Combine(_workspace, "fragment-" + Guid.NewGuid().ToString("N") + ".png");
+                    input = view == 0 ? overviewPath : Path.Combine(workspace, "fragment-" + Guid.NewGuid().ToString("N") + ".png");
                     if (view != 0) Save(original, input);
                     cancellation.ThrowIfCancellationRequested();
-                    DtfCorrectionResult processed = _processor(input, output, options, cancellation);
+                    DtfCorrectionResult processed = processor(input, output, options, cancellation);
                     BitmapSource result = Load(output);
                     var aligned = Align(original, result, processed.OffsetMm, focus, cancellation);
                     original = aligned.Item1; result = aligned.Item2;
                     if (highlight) { original = Highlight(original, red, cancellation); result = Highlight(result, red, cancellation); }
                     cancellation.ThrowIfCancellationRequested();
-                    return Tuple.Create(original, result);
+                    return Tuple.Create(DtfCorrectionPixels.Capture(original), DtfCorrectionPixels.Capture(result));
                 }, cancellation);
                 _previewTask = task;
-                var images = await task;
+                var images = await task.ConfigureAwait(false);
+                await OnUiAsync(() =>
+                {
                 if (_closed || revision != _revision || _applying) return;
-                _before.Source = images.Item1; _after.Source = images.Item2; SetPreviewScale(view);
+                _before.Source = images.Item1.Bitmap(); _after.Source = images.Item2.Bitmap(); _after.Opacity = 1; SetPreviewScale(view);
                 if (_displayView != view)
                 {
                     _displayView = view;
@@ -333,19 +353,26 @@ namespace VanyaTools.Native
                     }), DispatcherPriority.Loaded);
                 }
                 Options = options; _apply.IsEnabled = true;
-                ShowMessage(view == 0 ? "Обзор уменьшен. Для оценки пикселей выберите «Фрагмент 1:1»." :
+                ShowMessage(view == 0 ? "Обзор уменьшен. Кнопка «1:1» открывает точный фрагмент." :
                     "Точный фрагмент исходного растра. Полная обработка — по кнопке «Применить».", false);
+                });
             }
             catch (OperationCanceledException) { }
             catch (Exception error)
-            { if (!_closed && revision == _revision) ShowMessage("Предпросмотр: " + error.GetBaseException().Message, true); }
+            {
+                Log.Error("Correction preview failed; view=" + view + ", revision=" + revision + ".", error);
+                await OnUiAsync(() => { if (!_closed && revision == _revision) ShowMessage("Предпросмотр не обновлён: " + error.GetBaseException().Message, true); });
+            }
             finally
             {
-                if (input != _overviewPath) DeleteFile(input); DeleteFile(output);
+                if (input != overviewPath) DeleteFile(input); DeleteFile(output);
+                await OnUiAsync(() =>
+                {
                 _rendering = false; cancellationSource.Dispose();
                 if (ReferenceEquals(_previewCancellation, cancellationSource)) _previewCancellation = null;
                 if (_closed && !_applying) Cleanup();
                 else if (!_applying && (_retryPreview || revision != _revision)) { _delay.Stop(); _delay.Start(); }
+                });
             }
         }
 
@@ -357,27 +384,38 @@ namespace VanyaTools.Native
             _applyCancellation = new CancellationTokenSource();
             var cancellationSource = _applyCancellation; CancellationToken cancellation = cancellationSource.Token;
             string output = Path.Combine(Path.GetTempPath(), "Vanya-Correction-Result-" + Guid.NewGuid().ToString("N") + ".png");
+            string sourcePath = _sourcePath;
+            var processor = _processor;
             bool keepOutput = false;
             try
             {
                 ShowMessage("Обрабатываю исходник в полном разрешении…", false);
-                if (_previewTask != null) { try { await _previewTask; } catch { /* A stale preview must not prevent a fresh full render. */ } }
+                if (_previewTask != null) { try { await _previewTask.ConfigureAwait(false); } catch { /* A stale preview must not prevent a fresh full render. */ } }
                 cancellation.ThrowIfCancellationRequested();
-                var result = await Task.Run(() => _processor(_sourcePath, output, options, cancellation), cancellation);
+                var result = await Task.Run(() => processor(sourcePath, output, options, cancellation), cancellation).ConfigureAwait(false);
                 cancellation.ThrowIfCancellationRequested();
-                if (_closed) return;
-                result.OutputPath = output; Result = result; Options = options; keepOutput = true; DialogResult = true;
+                await OnUiAsync(() =>
+                {
+                    if (_closed) return;
+                    result.OutputPath = output; Result = result; Options = options; keepOutput = true; DialogResult = true;
+                });
             }
-            catch (OperationCanceledException) { if (!_closed) ShowMessage("Обработка отменена. Настройки сохранены в этом окне.", false); }
+            catch (OperationCanceledException) { await OnUiAsync(() => { if (!_closed) ShowMessage("Обработка отменена. Настройки сохранены в этом окне.", false); }); }
             catch (Exception error)
-            { if (!_closed) ShowMessage("Не удалось обработать: " + error.GetBaseException().Message, true); }
+            {
+                Log.Error("Correction full render failed.", error);
+                await OnUiAsync(() => { if (!_closed) ShowMessage("Не удалось обработать: " + error.GetBaseException().Message, true); });
+            }
             finally
             {
                 if (!keepOutput) DeleteFile(output);
+                await OnUiAsync(() =>
+                {
                 _applying = false; cancellationSource.Dispose();
                 if (ReferenceEquals(_applyCancellation, cancellationSource)) _applyCancellation = null;
                 if (_closed) Cleanup();
                 else { SetControlsEnabled(true); _cancel.Content = "Закрыть"; QueuePreview(); }
+                });
             }
         }
 
@@ -390,18 +428,12 @@ namespace VanyaTools.Native
 
         private void SetPreviewScale(int view)
         {
-            double scale = view <= 1 ? 1 : view == 2 ? 2 : 4;
-            foreach (var image in new[] { _before, _after })
+            if (_zoomView != view)
             {
-                image.Stretch = view == 0 ? Stretch.Uniform : Stretch.None;
-                image.Width = Double.NaN; image.Height = Double.NaN;
-                // Explicit dimensions are pixel dimensions at 96 DIP; ignore source print DPI when displaying 1:1.
-                if (view != 0 && image.Source is BitmapSource bitmap)
-                { image.Width = bitmap.PixelWidth * scale; image.Height = bitmap.PixelHeight * scale; image.Stretch = Stretch.Fill; }
-                RenderOptions.SetBitmapScalingMode(image, view == 0 ? BitmapScalingMode.HighQuality : BitmapScalingMode.NearestNeighbor);
+                _zoomView = view; _zoomFit = view == 0;
+                _zoomScale = view <= 1 ? 1 : view == 2 ? 2 : 4;
             }
-            _beforeScroll.HorizontalScrollBarVisibility = _afterScroll.HorizontalScrollBarVisibility = view == 0 ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
-            _beforeScroll.VerticalScrollBarVisibility = _afterScroll.VerticalScrollBarVisibility = view == 0 ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+            ApplyPreviewZoom();
         }
 
         private void SyncScroll(ScrollViewer source, ScrollViewer target, ScrollChangedEventArgs change)
@@ -412,20 +444,20 @@ namespace VanyaTools.Native
             finally { _syncingScroll = false; }
         }
 
-        private static BitmapSource Fragment(BitmapSource source, double centerX, double centerY,
-            DtfCorrectionOptions options, out Int32Rect focus)
+        private static BitmapSource Fragment(DtfCorrectionPixels source, double centerX, double centerY,
+            DtfCorrectionOptions options, CancellationToken cancellation, out Int32Rect focus)
         {
-            int width = Math.Min(560, source.PixelWidth), height = Math.Min(560, source.PixelHeight);
-            int x = Math.Max(0, Math.Min(source.PixelWidth - width, (int)(source.PixelWidth * centerX) - width / 2));
-            int y = Math.Max(0, Math.Min(source.PixelHeight - height, (int)(source.PixelHeight * centerY) - height / 2));
+            int width = Math.Min(560, source.Width), height = Math.Min(560, source.Height);
+            int x = Math.Max(0, Math.Min(source.Width - width, (int)(source.Width * centerX) - width / 2));
+            int y = Math.Max(0, Math.Min(source.Height - height, (int)(source.Height * centerY) - height / 2));
             // Process a guard band around the visible fragment. Its cut edges
             // must not become artificial contours inside the visible preview.
             int guardX = options.Outline ? (int)Math.Ceiling((options.RadiusMm + options.ExpansionMm) * source.DpiX / 25.4) + 4 : 4;
             int guardY = options.Outline ? (int)Math.Ceiling((options.RadiusMm + options.ExpansionMm) * source.DpiY / 25.4) + 4 : 4;
             int left = Math.Max(0, x - guardX), top = Math.Max(0, y - guardY);
-            int right = Math.Min(source.PixelWidth, x + width + guardX), bottom = Math.Min(source.PixelHeight, y + height + guardY);
+            int right = Math.Min(source.Width, x + width + guardX), bottom = Math.Min(source.Height, y + height + guardY);
             focus = new Int32Rect(x - left, y - top, width, height);
-            var crop = new CroppedBitmap(source, new Int32Rect(left, top, right - left, bottom - top)); crop.Freeze(); return crop;
+            return source.Crop(new Int32Rect(left, top, right - left, bottom - top), cancellation).Bitmap();
         }
 
         private static Tuple<BitmapSource, BitmapSource> Align(BitmapSource original, BitmapSource result,
@@ -506,6 +538,11 @@ namespace VanyaTools.Native
         private static void DeleteFile(string path) { if (path != null) try { File.Delete(path); } catch { } }
         private void ShowMessage(string message, bool error)
         { _message.Text = message; _message.Foreground = error ? Brushes.Firebrick : Brushes.DarkSlateGray; }
+        private Task OnUiAsync(Action action)
+        {
+            if (Dispatcher.CheckAccess()) { action(); return Task.CompletedTask; }
+            return Dispatcher.InvokeAsync(action).Task;
+        }
         private static bool TryColor(string value, out Color color)
         {
             color = Colors.White; string hex = (value ?? "").Trim().TrimStart('#');
@@ -524,7 +561,7 @@ namespace VanyaTools.Native
             button.Click += (_, __) =>
             {
                 if (_applying || !_loaded) return;
-                _expansion.Text = DtfOutlineUnits.Format(_units.SelectedIndex == 0 ? millimeters : millimeters * _original.DpiX / 25.4);
+                _expansion.Text = DtfOutlineUnits.Format(_units.SelectedIndex == 0 ? millimeters : millimeters * _originalPixels.DpiX / 25.4);
                 _outline.IsChecked = true;
             };
             return button;
