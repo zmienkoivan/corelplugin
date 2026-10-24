@@ -200,7 +200,8 @@ namespace VanyaTools.Native
                 Color.FromRgb(68, 126, 104), orderCards.OrdersView));
             tabs.Items.Add(ThumbnailTabs.Create("Стикерпаки", ThumbnailTabs.Stickers,
                 Color.FromRgb(171, 111, 43),
-                new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = stickerTools }));
+                new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = stickerTools }));
             tabs.Items.Add(ThumbnailTabs.Create("Развёртка формы", ThumbnailTabs.Shirt,
                 Color.FromRgb(74, 114, 174),
                 new SublimationTab(ImportAiResult, (message, isError) => SetStatus(message, isError),
@@ -305,65 +306,84 @@ namespace VanyaTools.Native
                 printExport.QuickButtons));
 
             root = stickerTools;
-            AddSectionTitle(root, "Подготовка стикерпака");
+            var sizeTools = DockerLayout.ToolGroup("1. Размер и метки", "Выделите весь пак и нажмите его размер. " +
+                "Кнопка ставит метки 1×1 мм и при необходимости поворачивает и пропорционально уменьшает пак. " +
+                "Внутренняя рамка 4 мм не печатается. Размеры указаны в миллиметрах.");
+            root.Children.Add(sizeTools);
+            var markPresetGrid = new UniformGrid { Columns = 3 };
+            markPresetGrid.Children.Add(StickerPreset("S", 48, 60));
+            markPresetGrid.Children.Add(StickerPreset("M", 105, 142));
+            markPresetGrid.Children.Add(StickerPreset("L", 142, 195));
+            sizeTools.Children.Add(markPresetGrid);
+            var sizeSettings = new UniformGrid { Columns = 2 };
+            sizeTools.Children.Add(StickerOptions("Поворот пака", sizeSettings));
+            _rotatePackClockwise = AddRadioButton(sizeSettings, "Вправо", "PackRotationDirection", true);
+            _rotatePackClockwise.ToolTip = "Альбомный пак: повернуть на 90° по часовой стрелке";
+            _rotatePackCounterClockwise = AddRadioButton(sizeSettings, "Влево", "PackRotationDirection", false);
+            _rotatePackCounterClockwise.ToolTip = "Альбомный пак: повернуть на 90° против часовой стрелки";
 
-            AddSectionTitle(root, "1. Выберите размер пака");
-            DockerHelp.Add(root, "Выделите весь пак.");
-            var markPresetGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 5) };
-            markPresetGrid.Children.Add(Button("S 48×60", (_, __) => RunCreateCutMarks("S", 48, 60)));
-            markPresetGrid.Children.Add(Button("M 105×142", (_, __) => RunCreateCutMarks("M", 105, 142)));
-            markPresetGrid.Children.Add(Button("L 142×195", (_, __) => RunCreateCutMarks("L", 142, 195)));
-            root.Children.Add(markPresetGrid);
-            var sizeSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
-            AddSettingsExpander(root, "Настройки размера и меток", sizeSettings);
-            DockerHelp.Add(sizeSettings, "Метки 1×1 мм; рамка 4 мм не печатается.");
-            AddSmallLabel(sizeSettings, "Поворот альбомного пака:");
-            _rotatePackClockwise = AddRadioButton(sizeSettings, "Вправо (по часовой)", "PackRotationDirection", true);
-            _rotatePackCounterClockwise = AddRadioButton(sizeSettings, "Влево (против часовой)", "PackRotationDirection", false);
-
-            AddSeparator(root);
-            AddSectionTitle(root, "2. Создайте контур пака");
-            DockerHelp.Add(root, "Выделите стикеры.");
-            root.Children.Add(DockerTheme.Primary(Button("Создать контур реза", (_, __) => RunCutContour())));
-            var contourSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
-            AddSettingsExpander(root, "Настройки контура", contourSettings);
-            _offsetMm = AddRow(contourSettings, "Отступ, мм", "2");
-            _rasterDpi = AddRow(contourSettings, "Растр DPI", "300");
-            _useAlphaMask = AddCheckBox(contourSettings, "Трассировать по альфа-маске", true);
-            _alphaThreshold = AddRow(contourSettings, "Порог альфа, 0–254", "10");
-            _smoothing = AddRow(contourSettings, "Сглаживание", "70");
-            _detail = AddRow(contourSettings, "Детализация", "35");
-            _roundSpikesMm = AddRow(contourSettings, "Скругление, мм", "0.7");
-            _simplificationToleranceMm = AddRow(contourSettings, "Упрощение контура, мм", "0.05");
+            var contourTools = DockerLayout.ToolGroup("2. Контур реза", "Для создания контура выделите стикеры. " +
+                "«Сгладить» обрабатывает уже готовый выделенный контур и использует отдельные параметры. " +
+                "Если эффект сглаживания слабый, увеличьте его радиус или допуск.");
+            root.Children.Add(contourTools);
+            var contourActions = new UniformGrid { Columns = 2 };
+            contourActions.Children.Add(StickerAction("Создать контур", "Создать контур реза для выделенных стикеров",
+                (_, __) => RunCutContour(), true));
+            contourActions.Children.Add(StickerAction("Сгладить", "Сгладить выбранный готовый контур",
+                (_, __) => RunSmoothSelectedContour()));
+            contourTools.Children.Add(contourActions);
+            var contourSettings = new StackPanel();
+            contourTools.Children.Add(StickerOptions("Параметры создания", contourSettings));
+            var contourFields = new UniformGrid { Columns = 2 };
+            contourSettings.Children.Add(contourFields);
+            _offsetMm = AddStickerField(contourFields, "Отступ, мм", "2");
+            _rasterDpi = AddStickerField(contourFields, "Растр, DPI", "300");
+            _smoothing = AddStickerField(contourFields, "Сглаживание", "70");
+            _detail = AddStickerField(contourFields, "Детализация", "35");
+            _roundSpikesMm = AddStickerField(contourFields, "Скругление, мм", "0.7");
+            _simplificationToleranceMm = AddStickerField(contourFields, "Упрощение, мм", "0.05",
+                "Допуск упрощения создаваемого контура, мм");
+            var alphaSettings = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            _useAlphaMask = AddCheckBox(alphaSettings, "По альфа-маске", true);
+            _useAlphaMask.ToolTip = "Трассировать растр по маске прозрачности";
+            _alphaThreshold = new TextBox { Text = "10", MinHeight = 27, FontSize = 11,
+                TextAlignment = TextAlignment.Right, VerticalContentAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(3, 1, 3, 1), ToolTip = "Порог альфа-маски · 0–254" };
+            System.Windows.Automation.AutomationProperties.SetName(_alphaThreshold, "Порог альфа-маски, 0–254");
+            contourSettings.Children.Add(DockerLayout.Trailing(alphaSettings,
+                DockerLayout.FieldRow("Порог", _alphaThreshold, 56)));
             _mergeAdjacentContours = AddCheckBox(contourSettings, "Сливать соседние объекты", false);
-            root.Children.Add(Button("Сгладить выбранный контур", (_, __) => RunSmoothSelectedContour()));
-            var smoothingSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
-            AddSettingsExpander(root, "Настройки сглаживания", smoothingSettings);
-            _smoothSelectedRadiusMm = AddRow(smoothingSettings, "Радиус скругления, мм", "1.5");
-            _smoothSelectedSimplificationMm = AddRow(smoothingSettings, "Допуск упрощения, мм", "0.2");
-            DockerHelp.Add(smoothingSettings, "Слабый эффект — увеличьте радиус или допуск.");
+            var smoothingSettings = new UniformGrid { Columns = 2 };
+            contourTools.Children.Add(StickerOptions("Параметры сглаживания", smoothingSettings));
+            _smoothSelectedRadiusMm = AddStickerField(smoothingSettings, "Радиус, мм", "1.5",
+                "Радиус скругления выбранного готового контура, мм");
+            _smoothSelectedSimplificationMm = AddStickerField(smoothingSettings, "Упрощение, мм", "0.2",
+                "Допуск упрощения выбранного готового контура, мм");
 
-            AddSeparator(root);
-            AddSectionTitle(root, "3. Создайте язычки");
-            DockerHelp.Add(root, "Выделите контур. Маркеры можно двигать.");
-            root.Children.Add(Button("Добавить маркеры язычков", (_, __) => RunAddPeelMarker()));
-            var tabSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
-            AddSettingsExpander(root, "Настройки язычков", tabSettings);
-            _tabWidthMm = AddRow(tabSettings, "Ширина, мм", "4");
-            _tabHeightMm = AddRow(tabSettings, "Длина, мм", "12");
-            _tabRadiusMm = AddRow(tabSettings, "Скругление язычка, мм", "2");
-            root.Children.Add(Button("Переприкрепить маркеры", (_, __) => RunReattachMarkers()));
+            var tabTools = DockerLayout.ToolGroup("3. Язычки", "Выделите контур и добавьте маркеры — их можно двигать. " +
+                "«Переприкрепить» заново привязывает маркеры к контуру. Для применения выделите контур или маркер. " +
+                "Ширина, длина и радиус общие для добавления, переприкрепления и применения язычков.");
+            root.Children.Add(tabTools);
+            var markerActions = new UniformGrid { Columns = 2 };
+            markerActions.Children.Add(StickerAction("Добавить маркеры", "Добавить подвижные маркеры язычков",
+                (_, __) => RunAddPeelMarker()));
+            markerActions.Children.Add(StickerAction("Переприкрепить", "Переприкрепить маркеры язычков к контуру",
+                (_, __) => RunReattachMarkers()));
+            tabTools.Children.Add(markerActions);
+            var tabSettings = new UniformGrid { Columns = 3 };
+            tabTools.Children.Add(StickerOptions("Параметры язычков", tabSettings));
+            _tabWidthMm = AddStickerField(tabSettings, "Ширина, мм", "4");
+            _tabHeightMm = AddStickerField(tabSettings, "Длина, мм", "12");
+            _tabRadiusMm = AddStickerField(tabSettings, "Радиус, мм", "2", "Радиус скругления язычка, мм");
+            tabTools.Children.Add(StickerAction("Применить язычки", "Применить язычки по маркерам к выбранному контуру",
+                (_, __) => RunApplyPeelTabs(), true));
 
-            AddSeparator(root);
-            AddSectionTitle(root, "4. Примените язычки");
-            DockerHelp.Add(root, "Выделите контур или маркер.");
-            root.Children.Add(DockerTheme.Primary(Button("Применить язычки", (_, __) => RunApplyPeelTabs())));
-
-            AddSeparator(root);
-            var maintenance = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
-            AddSettingsExpander(root, "Дополнительные действия", maintenance);
-            maintenance.Children.Add(Button("Удалить контуры пака", (_, __) => RunDeletePackContours()));
-            maintenance.Children.Add(Button("Удалить маркеры пака", (_, __) => RunDeletePackMarkers()));
+            var maintenance = new UniformGrid { Columns = 2 };
+            root.Children.Add(StickerOptions("Удаление", maintenance));
+            maintenance.Children.Add(StickerAction("Удалить контуры", "Удалить контуры выбранного пака",
+                (_, __) => RunDeletePackContours()));
+            maintenance.Children.Add(StickerAction("Удалить маркеры", "Удалить маркеры выбранного пака",
+                (_, __) => RunDeletePackMarkers()));
             Log.Info("VanyaToolsDocker constructor finished.");
         }
 
@@ -764,15 +784,45 @@ namespace VanyaTools.Native
             }
         }
 
-        private static void AddSettingsExpander(Panel root, string title, Panel content)
+        private Button StickerPreset(string name, double widthMm, double heightMm)
         {
-            root.Children.Add(new Expander
-            {
-                Header = title,
-                IsExpanded = false,
-                Content = content,
-                Margin = new Thickness(0, 0, 0, 6)
-            });
+            string size = widthMm.ToString("0", CultureInfo.InvariantCulture) + "×" +
+                heightMm.ToString("0", CultureInfo.InvariantCulture);
+            var caption = new StackPanel();
+            caption.Children.Add(new TextBlock { Text = name, FontSize = 11, FontWeight = FontWeights.SemiBold,
+                TextAlignment = TextAlignment.Center });
+            caption.Children.Add(new TextBlock { Text = size, FontSize = 11, TextAlignment = TextAlignment.Center });
+            var button = StickerAction(name, "Поставить метки " + name + " · " + size + " мм",
+                (_, __) => RunCreateCutMarks(name, widthMm, heightMm));
+            button.Content = caption; button.MinHeight = 37;
+            return button;
+        }
+
+        private static Button StickerAction(string title, string help, RoutedEventHandler action, bool primary = false)
+        {
+            var button = Button(title, action);
+            button.MinHeight = 27; button.Margin = new Thickness(2, 1, 2, 2); button.ToolTip = help;
+            System.Windows.Automation.AutomationProperties.SetName(button, help);
+            return primary ? DockerTheme.Primary(button) : button;
+        }
+
+        private static Expander StickerOptions(string title, Panel content)
+        {
+            content.Margin = new Thickness(4, 4, 4, 4);
+            return new Expander { Header = new TextBlock { Text = title, FontSize = 11, TextWrapping = TextWrapping.Wrap },
+                IsExpanded = false, Content = content, HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                Margin = new Thickness(1, 2, 1, 3) };
+        }
+
+        private static TextBox AddStickerField(Panel fields, string title, string value, string help = null)
+        {
+            var input = new TextBox { Text = value, FontSize = 11, MinHeight = 27,
+                TextAlignment = TextAlignment.Right, VerticalContentAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(3, 1, 3, 1), ToolTip = help ?? title };
+            System.Windows.Automation.AutomationProperties.SetName(input, help ?? title);
+            var field = DockerLayout.LabeledField(title, input);
+            field.Margin = new Thickness(2, 0, 2, 4); fields.Children.Add(field);
+            return input;
         }
 
         private static Button Button(string text, RoutedEventHandler handler)
@@ -914,27 +964,6 @@ namespace VanyaTools.Native
                 Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
                 Margin     = new Thickness(0, 3, 0, 2),
                 TextWrapping = TextWrapping.Wrap
-            });
-        }
-
-        private static void AddSectionTitle(Panel root, string text)
-        {
-            root.Children.Add(new TextBlock
-            {
-                Text = text,
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 0, 0, 4)
-            });
-        }
-
-        private static void AddSeparator(Panel root)
-        {
-            root.Children.Add(new Border
-            {
-                BorderBrush = new SolidColorBrush(Color.FromRgb(200, 206, 211)),
-                BorderThickness = new Thickness(0, 1, 0, 0),
-                Margin = new Thickness(0, 3, 0, 6)
             });
         }
 
