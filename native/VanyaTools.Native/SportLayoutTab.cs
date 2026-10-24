@@ -223,15 +223,23 @@ namespace VanyaTools.Native
                 "Позже укажите отдельные файлы CDR и масштаб 100%.");
 
             panel = panels[1];
-            panel.Children.Add(Title("Рисунки и подготовка макетов"));
+            panel.Children.Add(Title("Рисунки деталей"));
             DockerHelp.Add(panel, "Выберите файл или выделите готовый рисунок в Corel и нажмите " +
                 "«Взять выделение» для нужной детали. На странице-макете рисунок " +
                 "лежит под контуром; выступающие края обрежутся при генерации. " +
                 "По умолчанию копируются сами объекты в CDR: текст, кривые, заливки и группы остаются редактируемыми. " +
                 "Встроенные растры сохраняются растрами; автоматической трассировки нет. Исходный рисунок не меняется.");
             _artworkCapture = new ComboBox { MinHeight = 27, ItemsSource = new[] {
-                "Объекты Corel · редактируемые", "PNG · снимок 300 DPI" }, SelectedIndex = 0 };
-            panel.Children.Add(DockerLayout.FieldRow("Из выделения Corel", _artworkCapture, 0));
+                "Объекты CDR", "PNG · 300 DPI" }, SelectedIndex = 0 };
+            panel.Children.Add(DockerLayout.FieldRow("Захват", _artworkCapture, 0));
+            DockerHelp.Add(panel, "CDR сохраняет редактируемые объекты; каждый размер получает независимую копию. " +
+                "Элементы внутри группы можно менять через Ctrl+щелчок; внешнюю группу рисунка сохраняйте, чтобы этап 2 использовал ваши правки. " +
+                "PNG создаёт снимок 300 DPI с заданным пределом мегапикселей. Перед захватом проверяется доступная память; DPI автоматически не уменьшается. " +
+                "Полное имя файла видно в подсказке; нажмите на поле, чтобы отредактировать путь. " +
+                "«Обновить макеты» заменяет рисунок только этой детали в подготовленных размерах отмеченных игроков. " +
+                "Ручные правки заменяемого рисунка будут сброшены; замену можно отменить Ctrl+Z. " +
+                "Крестик убирает рисунок выбранной детали, в том числе на обзорной странице. " +
+                "Пустое поле оставляет деталь без печатного рисунка. Для замены старого PNG вектором возьмите исходное выделение заново.");
             _artworkLimit = new ComboBox { Width = 90, MinHeight = 27, FontSize = 12,
                 Margin = new Thickness(3, 0, 0, 0), ItemsSource = new[] { 100, 150, 200, 250 }, SelectedItem = 150 };
             var artworkLimitRow = DockerLayout.FieldRow("Предел захвата PNG, Мп", _artworkLimit, 94);
@@ -240,26 +248,14 @@ namespace VanyaTools.Native
                 artworkLimitRow.Visibility = _artworkCapture.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
                 SaveDraft();
             };
-            DockerHelp.Add(panel, "Режим объектов сохраняет выделение отдельным CDR в папке рисунков плагина и не зависит от DPI или лимита мегапикселей. " +
-                "Каждый размер получает независимую группу рисунка: выберите элемент внутри группы через Ctrl+щелчок и поправьте его. " +
-                "Сохраняйте внешнюю группу рисунка детали, чтобы этап 2 использовал ваши изменения. " +
-                "Для PNG по умолчанию 150 Мп. Для тяжёлых рисунков можно выбрать до 250 Мп. " +
-                "Перед захватом проверяется свободная ОЗУ и доступная память Windows; " +
-                "DPI автоматически не уменьшается. Предел относится к одному захвату, а не ко всей раскладке.");
             _frontArt = ArtworkField(panel, "Перед", "переда", SportLayoutPart.Front);
             _backArt = ArtworkField(panel, "Спина", "спины", SportLayoutPart.Back);
-            _leftSleeveArt = ArtworkField(panel, "Левый рукав (верхний на шаблоне)",
-                "левого рукава", SportLayoutPart.LeftSleeve);
-            _rightSleeveArt = ArtworkField(panel, "Правый рукав (нижний, необязательно)",
-                "правого рукава", SportLayoutPart.RightSleeve);
-            _neckArt = ArtworkField(panel, "Горловина (для модели с пятью деталями)",
-                "горловины", SportLayoutPart.Neck);
-            DockerHelp.Add(panel, "Крестик убирает рисунок только у выбранной детали. " +
-                "Пустое поле оставляет деталь без печатного рисунка; на готовой обзорной " +
-                "странице рисунок убирается сразу. «Обновить в макетах» заменяет рисунок этой детали " +
-                "только в уже подготовленных размерах отмеченных игроков. Ручные правки заменяемого рисунка будут сброшены; " +
-                "лекала, текстовые образцы и подписи сохраняются. Замену можно отменить одним Ctrl+Z. " +
-                "Для старых PNG возьмите исходный вектор заново и нажмите эту кнопку; сам PNG вектором не становится.");
+            _leftSleeveArt = ArtworkField(panel, "Левый рукав", "левого рукава",
+                SportLayoutPart.LeftSleeve, "Верхний рукав на шаблоне");
+            _rightSleeveArt = ArtworkField(panel, "Правый рукав", "правого рукава",
+                SportLayoutPart.RightSleeve, "Нижний рукав на шаблоне; рисунок необязателен");
+            _neckArt = ArtworkField(panel, "Горловина", "горловины",
+                SportLayoutPart.Neck, "Для модели с пятью деталями");
             _prepare = DockerTheme.Primary(Button("Этап 1 · Подготовить / добавить размеры", Prepare));
             panel.Children.Add(_prepare);
             DockerHelp.Add(panel, "Этап 1 берёт только размеры строк с галочкой «Печатать» в таблице игроков. " +
@@ -1215,42 +1211,89 @@ namespace VanyaTools.Native
             UpdateCount(); SaveDraft();
         }
 
-        private TextBox ArtworkField(Panel panel, string title, string partName,
-            SportLayoutPart part)
+        private sealed class ArtworkFileName : IValueConverter
         {
-            panel.Children.Add(Label(title));
+            public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+            {
+                string path = value as string;
+                if (String.IsNullOrWhiteSpace(path)) return "Файл не выбран";
+                try { return Path.GetFileName(path.Trim()); }
+                catch (ArgumentException) { return path; }
+            }
+            public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+                Binding.DoNothing;
+        }
+
+        private TextBox ArtworkField(Panel panel, string title, string partName,
+            SportLayoutPart part, string hint = null)
+        {
+            var card = new StackPanel { Margin = new Thickness(0, 4, 0, 5) };
+            var heading = Label(title);
+            heading.FontWeight = FontWeights.SemiBold; heading.Margin = new Thickness(0, 0, 0, 3);
+            heading.ToolTip = hint;
+            card.Children.Add(heading);
             TextBox field = Field("");
-            field.MinWidth = 0;
+            field.MinWidth = 0; field.Margin = new Thickness(0);
+            AutomationProperties.SetName(field, "Файл рисунка: " + title);
             field.SetBinding(ToolTipProperty, new Binding("Text") { Source = field });
-            var preview = new SportArtworkThumbnail(field, title);
+            var preview = new SportArtworkThumbnail(field, title) {
+                Width = 56, Height = 56, Margin = new Thickness(0, 0, 6, 0),
+                HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
             field.Tag = preview;
             var block = new Grid();
             block.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             block.ColumnDefinitions.Add(new ColumnDefinition());
             block.Children.Add(preview);
-            var editors = new StackPanel();
+            var editors = new Grid();
+            editors.RowDefinitions.Add(new RowDefinition { Height = new GridLength(27) });
+            editors.RowDefinitions.Add(new RowDefinition { Height = new GridLength(2) });
+            editors.RowDefinitions.Add(new RowDefinition { Height = new GridLength(27) });
             Grid.SetColumn(editors, 1); block.Children.Add(editors);
-            var row = new Grid { Margin = new Thickness(0, 2, 0, 5) };
-            row.ColumnDefinitions.Add(new ColumnDefinition {
-                Width = new GridLength(1, GridUnitType.Star) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            row.Children.Add(field);
-            var browse = Button("Выбрать файл", (_, __) => BrowseArtwork(field));
+            var row = new Grid();
+            row.ColumnDefinitions.Add(new ColumnDefinition());
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(27) });
+            var pathCell = new Grid { Margin = new Thickness(0, 0, 4, 0), MinWidth = 0 };
+            pathCell.Children.Add(field);
+            // The model retains the full editable path. At rest, a filename
+            // overlay gives a useful label even when the folder is very long.
+            var fieldStyle = new Style(typeof(TextBox));
+            var unfocused = new Trigger { Property = IsKeyboardFocusWithinProperty, Value = false };
+            unfocused.Setters.Add(new Setter(ForegroundProperty, Brushes.Transparent));
+            fieldStyle.Triggers.Add(unfocused); field.Style = fieldStyle;
+            var filename = new TextBlock { FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(5, 0, 5, 0), IsHitTestVisible = false };
+            filename.SetBinding(TextBlock.TextProperty, new Binding("Text") { Source = field, Converter = new ArtworkFileName() });
+            var filenameStyle = new Style(typeof(TextBlock));
+            filenameStyle.Setters.Add(new Setter(TextBlock.ForegroundProperty, SystemColors.ControlTextBrush));
+            var editing = new DataTrigger { Binding = new Binding("IsKeyboardFocusWithin") { Source = field }, Value = true };
+            editing.Setters.Add(new Setter(VisibilityProperty, Visibility.Collapsed)); filenameStyle.Triggers.Add(editing);
+            var empty = new DataTrigger { Binding = new Binding("Text") { Source = field }, Value = "" };
+            empty.Setters.Add(new Setter(TextBlock.ForegroundProperty, Brushes.DimGray)); filenameStyle.Triggers.Add(empty);
+            filename.Style = filenameStyle; pathCell.Children.Add(filename); row.Children.Add(pathCell);
+            var browse = Button("Файл…", (_, __) => BrowseArtwork(field));
+            browse.Margin = new Thickness(0, 0, 4, 0); browse.Padding = new Thickness(3, 0, 3, 0);
+            browse.ToolTip = "Выбрать файл рисунка " + partName;
             Grid.SetColumn(browse, 1);
             row.Children.Add(browse);
             var clear = Button("×", (_, __) => ClearArtwork(field, partName, part));
             clear.ToolTip = "Убрать рисунок " + partName;
-            clear.Width = 29;
-            clear.Padding = new Thickness(0);
+            clear.Margin = new Thickness(0); clear.Padding = new Thickness(0);
+            AutomationProperties.SetName(clear, "Убрать рисунок: " + title);
             Grid.SetColumn(clear, 2);
             row.Children.Add(clear);
             editors.Children.Add(row);
-            var actions = DockerLayout.Cards(150, 2);
-            actions.Children.Add(Button("Взять выделение из Corel", (_, __) => CaptureArtwork(field, partName)));
-            actions.Children.Add(Button("Обновить в макетах", (_, __) => ReplaceArtwork(field, partName, part)));
+            var actions = new System.Windows.Controls.Primitives.UniformGrid { Rows = 1, Columns = 2 };
+            var capture = Button("Из выделения", (_, __) => CaptureArtwork(field, partName));
+            capture.Margin = new Thickness(0, 0, 2, 0); capture.Padding = new Thickness(2, 0, 2, 0);
+            capture.ToolTip = "Взять текущее выделение Corel для рисунка " + partName;
+            var replace = Button("Обновить макеты", (_, __) => ReplaceArtwork(field, partName, part));
+            replace.Margin = new Thickness(2, 0, 0, 0); replace.Padding = new Thickness(2, 0, 2, 0);
+            replace.ToolTip = "Заменить рисунок " + partName + " в подготовленных размерах отмеченных игроков. Ручные правки этого рисунка будут сброшены; Ctrl+Z отменяет замену.";
+            actions.Children.Add(capture); actions.Children.Add(replace);
+            Grid.SetRow(actions, 2);
             editors.Children.Add(actions);
-            panel.Children.Add(block);
+            card.Children.Add(block); panel.Children.Add(card);
             return field;
         }
 
