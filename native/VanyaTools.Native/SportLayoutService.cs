@@ -236,7 +236,7 @@ namespace VanyaTools.Native
                 requested.Add(size);
             }
             if (requested.Count == 0)
-                throw new InvalidOperationException("Отметьте галочкой «Печатать» хотя бы одного игрока.");
+                throw new InvalidOperationException("Включите хотя бы одну строку галочкой «В заказ» на вкладке «Игроки».");
             var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var result = new List<SportLayoutTemplate>();
             foreach (var template in templates ?? Enumerable.Empty<SportLayoutTemplate>())
@@ -1019,7 +1019,7 @@ namespace VanyaTools.Native
             throw new InvalidOperationException(candidates.Count == 0
                 ? "В рабочем CDR не найдена исходная страница лекала" +
                     (String.IsNullOrWhiteSpace(layerName) ? "." : " со слоем «" + layerName + "».")
-                : "В рабочем CDR несколько исходных страниц. Откройте нужную страницу лекала и повторите этап 1.");
+                : "В рабочем CDR несколько исходных страниц. Откройте нужную страницу лекала и повторите «Подготовить макеты».");
         }
 
         private static void RestoreTemplateSessions(IDictionary<string, TemplateSession> sessions)
@@ -2053,7 +2053,7 @@ namespace VanyaTools.Native
                 }
             }
             throw new InvalidOperationException("Для размера " + size +
-                " нет страницы-макета. Отметьте строку игрока этого размера и запустите этап 1.");
+                " нет страницы-макета. Включите строку этого размера в заказ и нажмите «Подготовить макеты».");
         }
 
         private static object FindPreparedPage(dynamic document, string size)

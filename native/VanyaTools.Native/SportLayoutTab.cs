@@ -140,8 +140,9 @@ namespace VanyaTools.Native
         private readonly Grid _playerEditor;
         private Window _playerWindow;
         private bool _loading, _busy;
-        private static readonly string[] StepNames = { "Лекала", "Рисунки", "Игроки", "Печать", "Резка" };
-        private static readonly int[] StepStates = { 0, 1, 2, 3, 5 };
+        private static readonly string[] StepNames = { "Лекала", "Игроки", "Макеты", "Печать", "Резка" };
+        // Completion keys are stored in CDR independently of the visual order.
+        private static readonly int[] StepStates = { 0, 2, 1, 3, 5 };
         private readonly TabControl _steps;
         private readonly TabItem[] _stepTabs = new TabItem[5];
         private readonly TextBlock[] _stepMarks = new TextBlock[5];
@@ -164,431 +165,261 @@ namespace VanyaTools.Native
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             Content = root;
             var intro = new StackPanel { Margin = new Thickness(7, 0, 7, 3) };
-            intro.Children.Add(Title("Раскладка спортформы"));
-            DockerHelp.Add(intro, "Сначала заполните таблицу игроков, назначьте размеры и отметьте кого печатать. " +
-                "Подготовьте страницу-макет и поправьте рисунки " +
-                "под видимыми контурами. Затем создайте комплекты и раскладку. " +
-                "Галочки на вкладках показывают назначенные лекала, заполненную таблицу и успешные действия в текущем CDR. " +
-                "После изменения данных зависимые отметки снимаются. Отметки действий хранятся в самом CDR; " +
-                "сохраните документ, чтобы оставить их после закрытия Corel. " +
-                "PDF отмечает экспорт активного листа; при нескольких листах экспортируйте каждый отдельно.");
+            intro.Children.Add(new TextBlock { Text = "Заказ формы", FontSize = 12, FontWeight = FontWeights.SemiBold });
+            DockerHelp.Add(intro, "Новый заказ: выберите лекала → заполните игроков → назначьте рисунки и подготовьте макеты. " +
+                "Поправьте макеты на холсте, затем выбирайте печать или резку: это независимые ветки. " +
+                "Галочки отмечают успешные действия в текущем CDR и снимаются при изменении данных. " +
+                "Сохраняйте CDR (Ctrl+S), чтобы оставить таблицу, рисунки и настройки. " +
+                "PDF и DXF сохраняют только активный лист. Допечатка отдельных деталей находится во вкладке «Игроки».");
+            intro.Children.Add(CreateWorkflowGuide());
             root.Children.Add(intro);
-            var panels = Enumerable.Range(0, 5).Select(_ => new StackPanel { Margin = new Thickness(7) }).ToArray();
-            _steps = CreateSteps(panels);
+            var panels = Enumerable.Range(0, 5).Select(_ => new StackPanel { Margin = new Thickness(5) }).ToArray();
+            _steps = CreateSteps(new[] { panels[0], panels[2], panels[1], panels[3], panels[4] });
             Grid.SetRow(_steps, 1); root.Children.Add(_steps);
             StackPanel panel = panels[0];
-
-            panel.Children.Add(Title("Лекала по размерам"));
-            _modelPath = Field("");
-            _modelPath.IsReadOnly = true;
-            panel.Children.Add(PathRow(_modelPath, "Выбрать модель CDR", ChooseLayeredModel));
-            DockerHelp.Add(panel, "Новая модель: одна страница; поля переменной информации персональны для каждого размера на слое VT_ZONES_<размер>. " +
-                "в каждом слое размера — группа VT_TOP с пятью именованными деталями. " +
-                "Названия слоёв размеров станут вариантами в таблице игроков.");
-            DockerHelp.Add(panel, "В группе VT_TOP: VT_FRONT, VT_BACK, VT_SLEEVE_LEFT, " +
-                "VT_SLEEVE_RIGHT, VT_NECK. На персональном слое полей: VT_SPORT_ZONE_FRONT_LEFT, " +
-                "VT_SPORT_ZONE_FRONT_RIGHT, VT_SPORT_ZONE_BACK, " +
-                "VT_SPORT_ZONE_BACK_NUMBER, VT_SPORT_ZONE_LEFT_SLEEVE, " +
-                "VT_SPORT_ZONE_RIGHT_SLEEVE; VT_SPORT_ZONE_NECK — по желанию.");
-            _templateGrid = new DataGrid { Height = 132, AutoGenerateColumns = false,
-                CanUserAddRows = false, CanUserDeleteRows = false, IsReadOnly = false, FontSize = 12,
-                Margin = new Thickness(0, 3, 0, 4), ItemsSource = _templates };
-            _templateGrid.Columns.Add(Column("Размер", "Size", 80));
-            _templateGrid.Columns.Add(Column("Слой", "LayerName", 110));
-            _templateGrid.Columns.Add(Column("Масштаб %", "ScalePercent", 85));
-            _templateGrid.Columns.Add(Column("Файл CDR", "Path", 290));
-            panel.Children.Add(_templateGrid);
-            panel.Children.Add(Button("Создать персональные поля в модели", (_, __) =>
-            {
+            var models = UiGroup(panel, "Модель и размеры", "Выберите CDR модели: названия слоёв размеров появятся в таблице игроков. " +
+                "В каждой группе VT_TOP нужны VT_FRONT, VT_BACK, VT_SLEEVE_LEFT, VT_SLEEVE_RIGHT и VT_NECK. " +
+                "Для отдельных CDR добавьте шаблоны и проверьте масштаб.");
+            _modelPath = Field(""); _modelPath.IsReadOnly = true;
+            models.Children.Add(PathRow(_modelPath, "Модель…", ChooseLayeredModel));
+            _templateGrid = new DataGrid { Height = 142, AutoGenerateColumns = false,
+                CanUserAddRows = false, CanUserDeleteRows = false, IsReadOnly = false, FontSize = 11,
+                FrozenColumnCount = 1, Margin = new Thickness(2, 2, 2, 5), ItemsSource = _templates };
+            ScrollViewer.SetHorizontalScrollBarVisibility(_templateGrid, ScrollBarVisibility.Visible);
+            _templateGrid.Columns.Add(Column("Размер", "Size", 64));
+            _templateGrid.Columns.Add(Column("Слой", "LayerName", 105));
+            _templateGrid.Columns.Add(Column("Масштаб %", "ScalePercent", 76));
+            _templateGrid.Columns.Add(Column("Файл CDR", "Path", 220));
+            models.Children.Add(_templateGrid);
+            UiActions(models, UiAction("Добавить CDR…", AddTemplate), UiAction("Удалить", (_, __) => {
+                if (_templateGrid.SelectedItem is SportLayoutTemplate item) _templates.Remove(item);
+                SaveDraft();
+            }, help: "Убрать выбранный размер из списка лекал"));
+            var modelSetup = UiFold(panel, "Подготовка исходной модели",
+                "Только для настройки модели. В обычном заказе достаточно выбрать готовый CDR.");
+            modelSetup.Children.Add(UiAction("Поля по размерам", (_, __) => {
                 if (_busy) return;
                 try { _status(new SportLayoutService().CreatePersonalSizeZones(), false); }
                 catch (Exception error) { Log.Error("Could not initialize personal size zones.", error); _status(error.Message, true); }
-            }));
-            DockerHelp.Add(panel, "Откройте исходную страницу модели в Corel. Кнопка создаёт отдельный слой VT_ZONES_S, VT_ZONES_M и т. д. " +
-                "с независимыми копиями полей; существующие персональные слои сохраняются. Настройте положение и шрифты каждого размера и сохраните CDR модели. " +
-                "Этап 1 берёт только его поля. Общий VT_ZONES служит запасным вариантом для старых моделей без персональных слоёв. " +
-                "Удаление поля с персонального слоя отключает его для этого размера; пустой персональный слой отключает все его поля. " +
-                "Готовые макеты не перезаписываются: их поля редактируйте на слое размера либо удалите слой размера и повторите этап 1.");
-            var templateButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
-            templateButtons.Children.Add(Button("Добавить шаблон CDR", AddTemplate));
-            templateButtons.Children.Add(Button("Сделать S и XL из М", AddApproximateSizes));
-            templateButtons.Children.Add(Button("Убрать выбранный", (_, __) =>
-            {
-                if (_templateGrid.SelectedItem is SportLayoutTemplate item) _templates.Remove(item);
-                SaveDraft();
-            }));
-            panel.Children.Add(templateButtons);
-            DockerHelp.Add(panel, "Для размера М: перед, спина, верхний левый рукав и нижний правый. " +
-                "Временные S и XL масштабируются целиком; 95% и 110% можно изменить. " +
-                "Позже укажите отдельные файлы CDR и масштаб 100%.");
+            }, help: "Создать персональные поля переменных надписей в исходной модели"));
+            modelSetup.Children.Add(UiAction("S и XL из M", AddApproximateSizes,
+                help: "Добавить приблизительные S и XL масштабированием M: 95% и 110%"));
+            UiFoldHelp(modelSetup, "Откройте исходную модель. «Поля по размерам» создаёт независимые слои VT_ZONES_<размер>, " +
+                "сохраняя существующие. Настройте положение и шрифты каждого размера в Corel и сохраните модель. " +
+                "Общий VT_ZONES используется только в старых моделях без персональных слоёв. Удалённое поле отключается только для своего размера. " +
+                "S/XL из M — временные масштабированные шаблоны: затем назначьте отдельные CDR с масштабом 100%.");
 
             panel = panels[1];
-            panel.Children.Add(Title("Рисунки деталей"));
-            DockerHelp.Add(panel, "Выберите файл или выделите готовый рисунок в Corel и нажмите " +
-                "«Взять выделение» для нужной детали. На странице-макете рисунок " +
-                "лежит под контуром; выступающие края обрежутся при генерации. " +
-                "По умолчанию копируются сами объекты в CDR: текст, кривые, заливки и группы остаются редактируемыми. " +
-                "Встроенные растры сохраняются растрами; автоматической трассировки нет. Исходный рисунок не меняется.");
-            _artworkCapture = new ComboBox { MinHeight = 27, ItemsSource = new[] {
-                "Объекты CDR", "PNG · 300 DPI" }, SelectedIndex = 0 };
-            panel.Children.Add(DockerLayout.FieldRow("Захват", _artworkCapture, 0));
-            DockerHelp.Add(panel, "CDR сохраняет редактируемые объекты; каждый размер получает независимую копию. " +
-                "Элементы внутри группы можно менять через Ctrl+щелчок; внешнюю группу рисунка сохраняйте, чтобы этап 2 использовал ваши правки. " +
-                "PNG создаёт снимок 300 DPI с заданным пределом мегапикселей. Перед захватом проверяется доступная память; DPI автоматически не уменьшается. " +
-                "Полное имя файла видно в подсказке; нажмите на поле, чтобы отредактировать путь. " +
-                "«Обновить макеты» заменяет рисунок только этой детали в подготовленных размерах отмеченных игроков. " +
-                "Ручные правки заменяемого рисунка будут сброшены; замену можно отменить Ctrl+Z. " +
-                "Крестик убирает рисунок выбранной детали, в том числе на обзорной странице. " +
-                "Пустое поле оставляет деталь без печатного рисунка. Для замены старого PNG вектором возьмите исходное выделение заново.");
-            _artworkLimit = new ComboBox { Width = 90, MinHeight = 27, FontSize = 12,
-                Margin = new Thickness(3, 0, 0, 0), ItemsSource = new[] { 100, 150, 200, 250 }, SelectedItem = 150 };
-            var artworkLimitRow = DockerLayout.FieldRow("Предел захвата PNG, Мп", _artworkLimit, 94);
-            artworkLimitRow.Visibility = Visibility.Collapsed; panel.Children.Add(artworkLimitRow);
+            var artwork = UiGroup(panel, "Рисунки деталей", "Выберите файл или возьмите выделение Corel для нужной детали. " +
+                "Объекты CDR остаются редактируемыми, PNG — растровый снимок. Пустой рисунок допустим. " +
+                "«Обновить макеты» заменяет эту деталь в подготовленных размерах отмеченных игроков; ручные правки рисунка будут сброшены, Ctrl+Z отменяет замену. " +
+                "Крестик убирает рисунок детали. Полный путь — в подсказке, нажатие на поле позволяет его изменить.");
+            _artworkCapture = new ComboBox { MinHeight = 27, ItemsSource = new[] { "Объекты CDR", "PNG · 300 DPI" }, SelectedIndex = 0 };
+            artwork.Children.Add(DockerLayout.FieldRow("Захват", _artworkCapture, 0));
+            _artworkLimit = new ComboBox { MinHeight = 27, FontSize = 11, ItemsSource = new[] { 100, 150, 200, 250 }, SelectedItem = 150 };
+            var artworkLimitRow = DockerLayout.FieldRow("Предел PNG, Мп", _artworkLimit, 80);
+            artworkLimitRow.Visibility = Visibility.Collapsed; artwork.Children.Add(artworkLimitRow);
             _artworkCapture.SelectionChanged += (_, __) => {
                 artworkLimitRow.Visibility = _artworkCapture.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
                 SaveDraft();
             };
-            _frontArt = ArtworkField(panel, "Перед", "переда", SportLayoutPart.Front);
-            _backArt = ArtworkField(panel, "Спина", "спины", SportLayoutPart.Back);
-            _leftSleeveArt = ArtworkField(panel, "Левый рукав", "левого рукава",
-                SportLayoutPart.LeftSleeve, "Верхний рукав на шаблоне");
-            _rightSleeveArt = ArtworkField(panel, "Правый рукав", "правого рукава",
-                SportLayoutPart.RightSleeve, "Нижний рукав на шаблоне; рисунок необязателен");
-            _neckArt = ArtworkField(panel, "Горловина", "горловины",
-                SportLayoutPart.Neck, "Для модели с пятью деталями");
-            _prepare = DockerTheme.Primary(Button("Этап 1 · Подготовить / добавить размеры", Prepare));
-            panel.Children.Add(_prepare);
-            DockerHelp.Add(panel, "Этап 1 берёт только размеры строк с галочкой «Печатать» в таблице игроков. " +
-                "При первом запуске комплекты располагаются по два размера в ряд, следующие пары ниже. " +
-                "Повторный запуск добавляет только недостающие размеры на ту же страницу. " +
-                "Готовые размеры и ваши правки сохраняются. Каждый размер остаётся на отдельном слое для ручной правки рисунков, " +
-                "контуров, текстовых образцов и подписей в подгибке. Оформление и положение " +
-                "подписей изменяйте в Corel. Чтобы пересоздать размер, удалите его слой на обзорной странице и повторите этап 1.");
-            DockerHelp.Add(panel, "Исходный CDR модели остаётся открытым в отдельной вкладке. " +
-                "Повторный запуск использует его; рабочий документ остаётся активным.");
-            DockerHelp.Add(panel, "Создайте фигурный текст: XXXXXXXXX для имени, две строки X для " +
-                "имени в две строки, XX или XXX для номера. Настройте его в Corel, выделите и назначьте " +
-                "кнопкой ниже. Образец заменит прежний бокс только своего размера. " +
-                "Кнопки работают и в готовом макете, и в исходной модели: разместите образец на слое размера или на его VT_ZONES_<размер>.");
-            DockerHelp.Add(panel, "Ненужное текстовое поле можно удалить на слое размера: " +
-                "например, номер правого рукава только для маленьких размеров. Этап 2 пропустит " +
-                "удалённое поле. Текст XX на рукаве заменяется номером игрока.");
-            var zoneButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
-            zoneButtons.Children.Add(Button("Имя груди слева", (_, __) => AssignTextBox(
-                "VT_SPORT_ZONE_FRONT_LEFT", "имени на груди слева")));
-            zoneButtons.Children.Add(Button("Имя груди справа", (_, __) => AssignTextBox(
-                "VT_SPORT_ZONE_FRONT_RIGHT", "имени на груди справа")));
-            zoneButtons.Children.Add(Button("Имя на спине", (_, __) => AssignTextBox(
-                "VT_SPORT_ZONE_BACK", "имени на спине")));
-            zoneButtons.Children.Add(Button("Номер на спине", (_, __) => AssignTextBox(
-                "VT_SPORT_ZONE_BACK_NUMBER", "номера на спине")));
-            zoneButtons.Children.Add(Button("Номер левого рукава", (_, __) => AssignTextBox(
-                "VT_SPORT_ZONE_LEFT_SLEEVE", "номера левого рукава")));
-            zoneButtons.Children.Add(Button("Номер правого рукава", (_, __) => AssignTextBox(
-                "VT_SPORT_ZONE_RIGHT_SLEEVE", "номера правого рукава")));
-            zoneButtons.Children.Add(Button("Номер горловины", (_, __) => AssignTextBox(
-                "VT_SPORT_ZONE_NECK", "номера горловины")));
-            panel.Children.Add(zoneButtons);
+            _frontArt = ArtworkField(artwork, "Перед", "переда", SportLayoutPart.Front);
+            _backArt = ArtworkField(artwork, "Спина", "спины", SportLayoutPart.Back);
+            _leftSleeveArt = ArtworkField(artwork, "Левый рукав", "левого рукава", SportLayoutPart.LeftSleeve, "Верхний рукав на шаблоне");
+            _rightSleeveArt = ArtworkField(artwork, "Правый рукав", "правого рукава", SportLayoutPart.RightSleeve, "Нижний рукав на шаблоне; рисунок необязателен");
+            _neckArt = ArtworkField(artwork, "Горловина", "горловины", SportLayoutPart.Neck, "Для модели с пятью деталями");
+            var masters = UiGroup(panel, "Макеты размеров", "Подготовка использует размеры отмеченных игроков. " +
+                "Добавляются только недостающие размеры на общую обзорную страницу; уже подготовленные размеры и ручные правки сохраняются. " +
+                "Каждый размер находится на отдельном слое. Чтобы пересоздать его, удалите слой на обзорной странице и повторите подготовку. " +
+                "CDR модели остаётся открытым отдельно. После подготовки поправьте рисунки и текстовые образцы на холсте.");
+            _prepare = UiAction("Подготовить макеты", Prepare, true);
+            masters.Children.Add(_prepare);
+            var zones = UiFold(panel, "Переменные надписи",
+                "Дополнительная настройка полей. Оформление, положение и размеры надписей меняются в Corel.");
+            UiActions(zones,
+                UiAction("Грудь слева", (_, __) => AssignTextBox("VT_SPORT_ZONE_FRONT_LEFT", "имени на груди слева")),
+                UiAction("Грудь справа", (_, __) => AssignTextBox("VT_SPORT_ZONE_FRONT_RIGHT", "имени на груди справа")),
+                UiAction("Имя спины", (_, __) => AssignTextBox("VT_SPORT_ZONE_BACK", "имени на спине")),
+                UiAction("№ спины", (_, __) => AssignTextBox("VT_SPORT_ZONE_BACK_NUMBER", "номера на спине")),
+                UiAction("№ левого рук.", (_, __) => AssignTextBox("VT_SPORT_ZONE_LEFT_SLEEVE", "номера левого рукава")),
+                UiAction("№ правого рук.", (_, __) => AssignTextBox("VT_SPORT_ZONE_RIGHT_SLEEVE", "номера правого рукава")));
+            zones.Children.Add(UiAction("№ горловины", (_, __) => AssignTextBox("VT_SPORT_ZONE_NECK", "номера горловины")));
+            UiFoldHelp(zones, "Создайте фигурный текст: XXXXXXXXX для имени, две строки X для двух строк, XX или XXX для номера. " +
+                "Настройте его в Corel, выделите и назначьте нужной кнопкой. Образец заменяет поле только своего размера. " +
+                "Работает на слое подготовленного размера или VT_ZONES_<размер> исходной модели. Удаление поля отключает надпись этого размера.");
 
             panel = panels[2];
-            panel.Children.Add(Title("Игроки и допечатка"));
-            DockerHelp.Add(panel, "Скопируйте диапазон из Excel или Google Таблиц. Ctrl+V вставляет " +
-                "его с выбранной ячейки; кнопка ниже добавляет строки в конец. Столбцы без " +
-                "заголовка: размер, имя, номер, количество. Один столбец в пустой таблице " +
-                "или через кнопку добавления — имена; размеры можно назначить после вставки. " +
-                "Заголовки распознаются автоматически. " +
-                "Кнопка ↗ добавляет выбранную деталь на общий рабочий лист допечатки.");
+            var roster = UiGroup(panel, "Список заказа", "Добавьте игроков вручную или вставьте список из Excel / Google Таблиц. " +
+                "Без заголовков порядок: размер, имя, номер, количество. Один столбец — имена; размеры можно назначить позже. " +
+                "«В заказ» включает строку и в печать, и в резку. Галочки отдельных деталей ограничивают только печать. " +
+                "Стрелка ↗ добавляет одну деталь в отдельную допечатку. Для всех столбцов откройте большую таблицу.");
             _playerEditor = new Grid();
+            _playerEditor.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             _playerEditor.RowDefinitions.Add(new RowDefinition());
             _playerEditor.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            _expandPlayers = UiAction("Открыть таблицу…", OpenPlayersEditor, true);
+            _playerEditor.Children.Add(_expandPlayers);
             var playerControls = new StackPanel();
-            Grid.SetRow(playerControls, 1); _playerEditor.Children.Add(playerControls);
-            _playerGrid = new DataGrid { Height = 224, AutoGenerateColumns = false,
-                CanUserAddRows = false, CanUserDeleteRows = false, IsReadOnly = false, FontSize = 12,
-                SelectionUnit = DataGridSelectionUnit.CellOrRowHeader,
-                SelectionMode = DataGridSelectionMode.Extended,
-                Margin = new Thickness(0, 3, 0, 4), ItemsSource = _players };
+            Grid.SetRow(playerControls, 2); _playerEditor.Children.Add(playerControls);
+            _playerGrid = new DataGrid { Height = 190, AutoGenerateColumns = false, CanUserAddRows = false,
+                CanUserDeleteRows = false, IsReadOnly = false, FontSize = 11, FrozenColumnCount = 1,
+                SelectionUnit = DataGridSelectionUnit.CellOrRowHeader, SelectionMode = DataGridSelectionMode.Extended,
+                Margin = new Thickness(2, 3, 2, 5), ItemsSource = _players };
+            ScrollViewer.SetHorizontalScrollBarVisibility(_playerGrid, ScrollBarVisibility.Visible);
             _playerGrid.PreviewKeyDown += PlayerGridPasteKeyDown;
             DataObject.AddPastingHandler(_playerGrid, PlayerGridPasting);
-            _playerGrid.Columns.Add(new DataGridComboBoxColumn { Header = "Размер",
-                ItemsSource = _sizeOptions, SelectedItemBinding = new Binding("Size") {
-                    Mode = BindingMode.TwoWay,
-                    UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged },
-                Width = new DataGridLength(85) });
-            _playerGrid.Columns.Add(Column("Имя", "Name", 185));
-            _playerGrid.Columns.Add(Column("№", "Number", 60));
-            _playerGrid.Columns.Add(Column("Шт.", "Quantity", 55));
+            _playerGrid.Columns.Add(new DataGridComboBoxColumn { Header = "Размер", ItemsSource = _sizeOptions,
+                SelectedItemBinding = new Binding("Size") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged },
+                Width = new DataGridLength(64) });
+            _playerGrid.Columns.Add(Column("Имя", "Name", 130));
+            _playerGrid.Columns.Add(Column("№", "Number", 48));
+            _playerGrid.Columns.Add(Column("Шт.", "Quantity", 46));
             var printCheck = new FrameworkElementFactory(typeof(CheckBox));
             printCheck.SetValue(CheckBox.HorizontalAlignmentProperty, HorizontalAlignment.Center);
             printCheck.SetValue(CheckBox.VerticalAlignmentProperty, VerticalAlignment.Center);
             printCheck.SetBinding(CheckBox.IsCheckedProperty, new Binding(nameof(SportLayoutPlayer.PrintEnabled)) {
                 Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
-            _playerGrid.Columns.Add(new DataGridTemplateColumn { Header = "Печатать", Width = 75,
+            _playerGrid.Columns.Add(new DataGridTemplateColumn { Header = "В заказ", Width = 66,
                 CellTemplate = new DataTemplate { VisualTree = printCheck } });
             _playerGrid.Columns.Add(PartColumn("Перед", SportLayoutPart.Front));
             _playerGrid.Columns.Add(PartColumn("Спина", SportLayoutPart.Back));
             _playerGrid.Columns.Add(PartColumn("Лев. рук.", SportLayoutPart.LeftSleeve));
             _playerGrid.Columns.Add(PartColumn("Прав. рук.", SportLayoutPart.RightSleeve));
             _playerGrid.Columns.Add(PartColumn("Горловина", SportLayoutPart.Neck));
-            _playerEditor.Children.Add(_playerGrid);
-            DockerHelp.Add(playerControls, "Галочки в столбцах деталей задают только печать этой детали. " +
-                "Снятые детали остаются в полном комплекте резки. Галочка в заголовке меняет эту деталь сразу у всех строк; " +
-                "в ячейке — только у одного игрока. Общая галочка «Печатать» выбирает строку заказа для печати и резки. " +
-                "Кнопка ↗ добавляет одну деталь в допечатку независимо от галочки детали.");
-            var playerButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 3) };
-            playerButtons.Children.Add(Button("Добавить строку", (_, __) =>
-            {
-                _players.Add(new SportLayoutPlayer { Size = _sizeOptions.FirstOrDefault() ?? "М",
-                    Quantity = 1 });
-                _playerGrid.SelectedIndex = _players.Count - 1;
-                SaveDraft();
-            }));
-            playerButtons.Children.Add(Button("Добавить из Excel / Google Таблиц", PastePlayers));
-            playerButtons.Children.Add(Button("Убрать строки", RemovePlayers));
-            playerControls.Children.Add(playerButtons);
-            var playerFiles = new WrapPanel();
-            playerFiles.Children.Add(Button("Сохранить список CSV…", SavePlayersFile));
-            playerFiles.Children.Add(Button("Загрузить список CSV…", LoadPlayersFile));
-            playerControls.Children.Add(playerFiles);
-            DockerHelp.Add(playerControls, "Таблица, галочки, модель, шаблоны, ссылки на рисунки и настройки формы сохраняются внутри текущего CDR. " +
-                "При переключении файлов восстанавливаются их собственные данные. Сохраните CDR (Ctrl+S), чтобы записать изменения на диск. " +
-                "CSV — отдельная копия списка для Блокнота или Excel.");
-            var printButtons = new WrapPanel();
-            printButtons.Children.Add(Button("Печатать всех", (_, __) => SetPlayersEnabled(true)));
-            printButtons.Children.Add(Button("Снять все", (_, __) => SetPlayersEnabled(false)));
-            _expandPlayers = Button("Открыть таблицу большим окном", OpenPlayersEditor);
-            printButtons.Children.Add(_expandPlayers); playerControls.Children.Add(printButtons);
-            var batchSizeRow = new StackPanel { Margin = new Thickness(0, 1, 0, 3) };
-            batchSizeRow.Children.Add(Label("Размер выделенным"));
-            _batchSize = new ComboBox { ItemsSource = _sizeOptions,
-                Margin = new Thickness(2, 1, 4, 3), MinHeight = 27,
-                ToolTip = "Выделите строки или ячейки игроков и выберите размер для них" };
-            batchSizeRow.Children.Add(DockerLayout.Trailing(_batchSize, Button("Назначить", ApplySizeToSelection)));
-            playerControls.Children.Add(batchSizeRow);
-            DockerHelp.Add(playerControls, "Для группы одного размера выделите диапазон ячеек с Shift " +
-                "или несколько строк с Ctrl, выберите размер выше и нажмите «Назначить».");
-            DockerHelp.Add(playerControls, "Этап 2 и резка включают только строки с галочкой «Печатать». " +
-                "Кнопки ↗ собирают отдельные детали для допечатки на одном рабочем листе текущего CDR.");
-            _count = Note("");
-            playerControls.Children.Add(_count);
-            playerControls.Children.Add(Title("Допечатка"));
-            _arrangeReprint = DockerTheme.Primary(Button("Расставить допечатку…", ArrangeReprint));
-            playerControls.Children.Add(_arrangeReprint);
-            DockerHelp.Add(playerControls, "Нажимайте ↗ у нужных деталей: реальные редактируемые объекты добавляются на один рабочий лист допечатки этого CDR. " +
-                "Каждое нажатие добавляет одну копию. Затем нажмите «Расставить допечатку», сравните варианты в окне подбора и примените выбранный. " +
-                "Используются уже добавленные объекты с вашими правками, без повторного создания рисунков. Отмена подбора сохраняет рабочий лист как есть. " +
-                "Сохраняйте внешнюю группу каждой детали; дополнительную графику добавляйте внутрь неё. Набор остаётся в CDR после сохранения.");
-            panel.Children.Add(_playerEditor);
+            Grid.SetRow(_playerGrid, 1); _playerEditor.Children.Add(_playerGrid);
+            UiActions(playerControls,
+                UiAction("Добавить", (_, __) => { _players.Add(new SportLayoutPlayer {
+                    Size = _sizeOptions.FirstOrDefault() ?? "М", Quantity = 1 });
+                    _playerGrid.SelectedIndex = _players.Count - 1; SaveDraft(); }),
+                UiAction("Вставить список", PastePlayers));
+            playerControls.Children.Add(UiAction("Удалить строки", RemovePlayers));
+            _batchSize = new ComboBox { ItemsSource = _sizeOptions, MinHeight = 27,
+                ToolTip = "Размер для строк или ячеек, выделенных с Shift / Ctrl" };
+            var batchSizeRow = DockerLayout.Trailing(_batchSize, UiAction("Назначить", ApplySizeToSelection));
+            UiLabeled(playerControls, "Размер выделенным", batchSizeRow);
+            _count = Note(""); playerControls.Children.Add(_count);
+            var lists = UiFold(playerControls, "CSV и выбор строк", "Список и настройки хранятся в текущем CDR. Сохраните документ Ctrl+S. CSV — отдельная копия списка.");
+            UiActions(lists, UiAction("Сохранить CSV…", SavePlayersFile), UiAction("Загрузить CSV…", LoadPlayersFile),
+                UiAction("Включить всех", (_, __) => SetPlayersEnabled(true)), UiAction("Исключить всех", (_, __) => SetPlayersEnabled(false)));
+            var reprint = UiFold(playerControls, "Допечатка отдельных деталей", "Необязательная ветка. ↗ добавляет детали на один лист текущего CDR, затем «Расставить» открывает подбор.");
+            _arrangeReprint = UiAction("Расставить допечатку…", ArrangeReprint);
+            reprint.Children.Add(_arrangeReprint);
+            UiFoldHelp(reprint, "Нажимайте ↗ у нужных деталей таблицы: каждое нажатие добавляет одну редактируемую копию на общий лист. " +
+                "Затем нажмите «Расставить допечатку» и выберите вариант. Используются уже добавленные объекты с вашими правками. " +
+                "Отмена сохраняет лист как есть. Сохраняйте внешнюю группу детали, дополнительную графику добавляйте внутрь. Готовый лист экспортируется в PDF во вкладке «Печать».");
+            roster.Children.Add(_playerEditor);
 
             panel = panels[3];
-            panel.Children.Add(Title("Полотно, надписи и печатная раскладка"));
-            var roll = new StackPanel { Margin = new Thickness(0, 3, 0, 2) };
-            _sheetWidth = Field("1500");
-            _sheetWidth.Width = 72;
-            roll.Children.Add(DockerLayout.FieldRow("Ширина печати, мм", _sheetWidth));
-            _gap = Field("10");
-            _gap.Width = 60;
-            roll.Children.Add(DockerLayout.FieldRow("Между деталями, мм", _gap));
-            panel.Children.Add(roll);
-            _maxPageLength = Field("4"); _maxPageLength.Width = 72;
-            panel.Children.Add(DockerLayout.FieldRow("Макс. длина страницы, м", _maxPageLength));
-            panel.Children.Add(Label("Плотность раскладки"));
-            _nestingMode = new ComboBox { MinHeight = 27, Margin = new Thickness(0, 0, 0, 4) };
-            foreach (string label in new[] { "Прямоугольники · быстрее", "Упрощённые фигуры · баланс", "Полный контур · плотнее" })
-                _nestingMode.Items.Add(label);
-            _nestingMode.SelectedIndex = 2; panel.Children.Add(_nestingMode);
-            DockerHelp.Add(panel, "Прямоугольники резервируют полные габариты. Упрощённые фигуры " +
-                "используют наружные полосы по 20 мм; полный контур — профиль с шагом до 2 мм. " +
-                "Упрощение увеличивает занятую область, не обрезая реальные детали. " +
-                "Для печати и резки режим выбирается отдельно; изменение одной раскладки " +
-                "не снимает отметку другой. Геометрия деталей не меняется.");
-            panel.Children.Add(Label("Группировка плотного режима"));
-            _groupingMode = new ComboBox { MinHeight = 27, Margin = new Thickness(0, 0, 0, 4) };
-            foreach (string label in new[] { "Свободно · максимальное уплотнение", "Парами · перед + спина, затем рукава", "Комплектом · все пять деталей рядом" })
-                _groupingMode.Items.Add(label);
-            _groupingMode.SelectedIndex = 0; panel.Children.Add(_groupingMode);
-            DockerHelp.Add(panel, "Упорядоченные схемы каландра и способ переноса выбираются в окне подбора. " +
-                "Эта группировка применяется к прежнему плотному режиму каландра. " +
-                "Парами: перед и спина одного комплекта укладываются единым блоком; " +
-                "рукава и горловины заполняют свободные места на всех листах, не раздвигая пары. " +
-                "Комплектом: все имеющиеся детали одного комплекта остаются одним блоком на одном листе. " +
-                "Смежные блоки могут сближаться по контуру. Группировка может увеличить расход материала. " +
-                "Если целый блок не помещается, увеличьте лист или выберите свободную раскладку.");
-            _rotateSleeves = new CheckBox { Content = "Поворачивать рукава и горловину на 90° для плотной раскладки",
-                FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
-            panel.Children.Add(_rotateSleeves);
-            DockerHelp.Add(panel, "Печать раскладывается по контуру контейнера с припуском +6 мм; " +
-                "видимые подписи и рамки за контуром тоже занимают место. " +
-                "Поиск перестановок заполняет свободные участки рядом с крупными деталями. " +
-                "При разрешённом повороте весь рисунок детали поворачивается вместе с ней. " +
-                "Страницы создаются в пределах заданной длины для печати и резки. " +
-                "Сначала заполняются свободные места на предыдущих страницах; " +
-                "нижний ряд по возможности выравнивается. Отступа от края полотна нет; " +
-                "расстояние применяется только между деталями. Для этапа 2 берутся текущие " +
-                "положения рисунков и зон со страницы-макета; после замены исходного файла " +
-                "рисунка подготовьте макет заново.");
-            DockerHelp.Add(panel, "У текстового образца берутся шрифт, кегль, начертание, цвет, " +
-                "обводка, выравнивание и интервалы из Corel. Ширина образца ограничивает надпись: " +
-                "длинный текст уменьшается пропорционально, короткий сохраняет кегль образца. " +
-                "Оформление меняйте в самом текстовом образце на странице-макете.");
-            _nameSide = new ComboBox { Width = 110, Height = 27, FontSize = 12,
-                Margin = new Thickness(0) };
-            _nameSide.Items.Add("Слева");
-            _nameSide.Items.Add("Справа");
-            _nameSide.SelectedIndex = 0;
-            panel.Children.Add(DockerLayout.FieldRow("Имя спереди (сторона футболки)", _nameSide, 110));
-            panel.Children.Add(Label("Регистр имени на груди"));
-            _frontCase = new ComboBox { Height = 27, FontSize = 12,
-                Margin = new Thickness(0, 0, 0, 4) };
-            _frontCase.Items.Add("Как в таблице");
-            _frontCase.Items.Add("все строчные");
-            _frontCase.Items.Add("Каждое слово с заглавной");
-            _frontCase.Items.Add("ВСЕ ПРОПИСНЫЕ");
-            _frontCase.SelectedIndex = 0;
-            panel.Children.Add(_frontCase);
-            DockerHelp.Add(panel, "В текстовом образце две строки X задают две строки имени. " +
-                "Перенос — после первого слова; символ | в таблице задаёт его вручную. " +
-                "Имя и номер на спине назначаются отдельными текстовыми объектами.");
-            _keepGuides = new CheckBox { Content = "Оставить красные рамки в готовом CDR",
-                FontSize = 11, Margin = new Thickness(0, 0, 0, 8), IsChecked = false };
-            panel.Children.Add(_keepGuides);
-            DockerHelp.Add(panel, "Свободная зона переда и зоны рукавов сохраняются как именованные " +
-                "фреймы для дополнительной графики. Подписи каждой детали находятся в нижнем припуске.");
+            var printSheet = UiGroup(panel, "Полотно", "Параметры печати и резки независимы. Размеры указаны в мм, длина страницы — в метрах. " +
+                "Зазор применяется между деталями, поля по краю рулона не добавляются.");
+            var printFields = UiFields(printSheet, 3);
+            _sheetWidth = UiNumber(printFields, "Ширина, мм", "1500");
+            _gap = UiNumber(printFields, "Зазор, мм", "10");
+            _maxPageLength = UiNumber(printFields, "Длина, м", "4", "Максимальная длина печатной страницы, м");
+            var printNesting = UiGroup(panel, "Раскладка", "Каландр или пресс, поля пресса и варианты компоновки выбираются в окне подбора. " +
+                "Прямоугольники — быстрее, полный контур — плотнее. Учитываются припуск +6 мм и подписи за контуром. " +
+                "Детали сначала пробуют разместить в свободных местах предыдущих страниц.");
+            _nestingMode = new ComboBox { MinHeight = 27 };
+            foreach (string label in new[] { "Прямоугольники · быстро", "Упрощённый контур", "Полный контур" }) _nestingMode.Items.Add(label);
+            _nestingMode.SelectedIndex = 2; UiLabeled(printNesting, "Геометрия", _nestingMode);
+            _rotateSleeves = new CheckBox { Content = "Рукава и горловина: поворот 90°", FontSize = 11,
+                IsChecked = true, Margin = new Thickness(2, 1, 2, 5) };
+            printNesting.Children.Add(_rotateSleeves);
+            var densePrint = UiFold(printNesting, "Плотный режим · дополнительно", "Эта группировка относится к свободному плотному режиму каландра. Другие схемы выбираются в окне подбора.");
+            _groupingMode = new ComboBox { MinHeight = 27 };
+            foreach (string label in new[] { "Свободно", "Перед + спина, затем рукава", "Весь комплект рядом" }) _groupingMode.Items.Add(label);
+            _groupingMode.SelectedIndex = 0; UiLabeled(densePrint, "Группировка", _groupingMode);
+            _generate = UiAction("Подобрать раскладку…", Generate, true);
+            printNesting.Children.Add(_generate);
+            var lettering = UiFold(panel, "Имена и рамки", "Шрифт, кегль, цвет, обводка и интервалы берутся из текстового образца на макете. Длинная надпись уменьшается до его ширины. Две строки X задают имя в две строки; | в таблице задаёт ручной перенос.");
+            _nameSide = new ComboBox { MinHeight = 27, ItemsSource = new[] { "Слева", "Справа" }, SelectedIndex = 0 };
+            UiLabeled(lettering, "Имя на груди", _nameSide);
+            _frontCase = new ComboBox { MinHeight = 27, ItemsSource = new[] { "Как в таблице", "все строчные", "Каждое слово с заглавной", "ВСЕ ПРОПИСНЫЕ" }, SelectedIndex = 0 };
+            UiLabeled(lettering, "Регистр имени", _frontCase);
+            _keepGuides = new CheckBox { Content = "Красные рамки в готовом CDR", FontSize = 11,
+                Margin = new Thickness(2, 1, 2, 4), IsChecked = false };
+            lettering.Children.Add(_keepGuides);
+            var pdf = UiGroup(panel, "PDF · активный лист", "Сохраняется только активный готовый лист печати или допечатки, целиком и в масштабе 1:1. " +
+                "При нескольких листах откройте нужный и повторите экспорт для каждого. Векторы и надписи сохраняются, растры ограничиваются выбранным DPI. Каждый экспорт создаёт новый файл.");
+            _printFolder = Field(""); _printFolder.IsReadOnly = true; _printFolder.FontSize = 11;
+            _printFolder.SetBinding(ToolTipProperty, new Binding("Text") { Source = _printFolder });
+            _choosePrintFolder = UiAction("Папка…", ChoosePrintFolder);
+            pdf.Children.Add(DockerLayout.Trailing(_printFolder, _choosePrintFolder));
+            _printQuality = new ComboBox { MinHeight = 27, ItemsSource = new[] { "150 DPI · компактно", "300 DPI · подробно" }, SelectedIndex = 0 };
+            UiLabeled(pdf, "Растры в PDF", _printQuality);
+            _exportPrint = UiAction("Сохранить лист PDF", ExportPrint);
+            pdf.Children.Add(_exportPrint);
+            _pdfProgress = Note(""); UiHideEmpty(_pdfProgress); pdf.Children.Add(_pdfProgress);
 
-            _generate = DockerTheme.Primary(Button("Подобрать раскладку печати…", Generate));
-            _generate.Margin = new Thickness(0, 7, 0, 4);
-            panel.Children.Add(_generate);
-            panel.Children.Add(Title("Экспорт печати в PDF"));
-            _printFolder = Field(""); _printFolder.IsReadOnly = true;
-            var folderRow = new Grid { Margin = new Thickness(0, 2, 0, 5) };
-            folderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            folderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            folderRow.Children.Add(_printFolder);
-            _choosePrintFolder = Button("Папка печати…", ChoosePrintFolder);
-            Grid.SetColumn(_choosePrintFolder, 1); folderRow.Children.Add(_choosePrintFolder);
-            panel.Children.Add(folderRow);
-            _printQuality = new ComboBox { Margin = new Thickness(0, 0, 4, 5), MinHeight = 27 };
-            _printQuality.Items.Add("PDF · компактный · изображения до 150 DPI");
-            _printQuality.Items.Add("PDF · детальный · изображения до 300 DPI");
-            _printQuality.SelectedIndex = 0;
-            panel.Children.Add(_printQuality);
-            _exportPrint = Button("Экспортировать активный лист печати в PDF", ExportPrint);
-            panel.Children.Add(_exportPrint);
-            DockerHelp.Add(panel, "Сохраняется активная страница после этапа 2, целиком и в масштабе 1:1. " +
-                "Надписи остаются векторными; изображения сжимаются с высоким качеством. " +
-                "При нескольких листах откройте нужный и повторите экспорт. Папка и качество запоминаются; " +
-                "каждый экспорт создаёт новый файл.");
-            _pdfProgress = Note(""); panel.Children.Add(_pdfProgress);
             panel = panels[4];
-            panel.Children.Add(Title("Раскладка резки"));
-            _cutSheetWidth = Field("1500"); _cutSheetWidth.Width = 72;
-            panel.Children.Add(DockerLayout.FieldRow("Ширина ткани для резки, мм", _cutSheetWidth));
-            _cutMaxPageLength = Field("4"); _cutMaxPageLength.Width = 72;
-            panel.Children.Add(DockerLayout.FieldRow("Макс. длина листа резки, м", _cutMaxPageLength));
-            _cutGap = Field("10"); _cutGap.Width = 60;
-            panel.Children.Add(DockerLayout.FieldRow("Между деталями резки, мм", _cutGap));
-            panel.Children.Add(Label("Плотность раскладки резки"));
-            _cutNestingMode = CopyChoice(_nestingMode); panel.Children.Add(_cutNestingMode);
-            panel.Children.Add(Label("Как держать детали заказа при резке"));
-            _cutGroupingMode = CopyChoice(_groupingMode); panel.Children.Add(_cutGroupingMode);
-            DockerHelp.Add(panel, "Размер листа, расстояние между деталями, плотность и группировка резки задаются независимо от печати. " +
-                "Изменение этих настроек снимает только отметку резки; готовая печать и PDF сохраняют свои отметки.");
-            DockerHelp.Add(panel, "В каждой группе детали нужен замкнутый контур silhouette. " +
-                "Для печати она расширяется наружу на 6 мм; для резки берутся все исходные " +
-                "кривые группы, включая silhouette и надсечки. Рисунки и надписи не добавляются. " +
-                "Размеры и количество — из таблицы игроков. Ширина ткани, длина листа и зазор задаются на этой вкладке.");
-            _cutAllow180 = new CheckBox { Content = "Разрешить поворот деталей резки на 180°",
-                FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
-            panel.Children.Add(_cutAllow180);
-            _cutSizeTags = new CheckBox { Content = "Съёмный язычок на каждой детали",
-                FontSize = 11, IsChecked = true, Margin = new Thickness(0, 0, 0, 5) };
-            panel.Children.Add(_cutSizeTags);
-            _tagWidth = TagField(panel, "Ширина язычка, мм", "24");
-            _tagHeight = TagField(panel, "Высота язычка, мм (не меньше 12)", "12");
-            _tagBridge = TagField(panel, "Длина каждого мостика, мм", "2");
-            _tagLetter = TagField(panel, "Высота буквы, мм", "8");
-            _tagCutLetter = new CheckBox { Content = "Прорезать размер внутри язычка", IsChecked = true,
-                FontSize = 11, Margin = new Thickness(0, 1, 0, 4) };
-            panel.Children.Add(_tagCutLetter);
-            _tagLabelHex = new TextBox { Text = "#000000", FontSize = 11, MinHeight = 26,
-                VerticalContentAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) };
-            _tagLabelColor = new Button { Content = new Border { Width = 22, Height = 18,
-                Background = Brushes.Black, BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1) },
-                Padding = new Thickness(4), ToolTip = "Выбрать цвет подписи язычка" };
+            var cutSheet = UiGroup(panel, "Материал", "Размеры, количество и состав резки берутся из отмеченных строк «В заказ». Галочки отдельных печатных деталей на резку не влияют. Параметры материала независимы от печати.");
+            var cutFields = UiFields(cutSheet, 3);
+            _cutSheetWidth = UiNumber(cutFields, "Ширина, мм", "1500");
+            _cutGap = UiNumber(cutFields, "Зазор, мм", "10");
+            _cutMaxPageLength = UiNumber(cutFields, "Длина, м", "4", "Максимальная длина листа резки, м");
+            var cutNesting = UiGroup(panel, "Раскладка", "Используются исходные контуры силуэта и надсечки. Рисунки и надписи печати не добавляются. " +
+                "Каждую деталь можно повернуть на 180°, поворота на 90° в резке нет.");
+            _cutNestingMode = CopyChoice(_nestingMode); UiLabeled(cutNesting, "Геометрия", _cutNestingMode);
+            _cutGroupingMode = CopyChoice(_groupingMode); UiLabeled(cutNesting, "Группировка", _cutGroupingMode);
+            _cutAllow180 = new CheckBox { Content = "Поворот деталей на 180°", FontSize = 11, IsChecked = true, Margin = new Thickness(2, 1, 2, 5) };
+            cutNesting.Children.Add(_cutAllow180);
+            var tags = UiGroup(panel, "Язычки", "Съёмный язычок имеет два непрорезанных мостика. Буква размера создаётся отдельно, своим цветом для мощности лазера. Без буквы размер различается по положению язычка.");
+            _cutSizeTags = new CheckBox { Content = "Добавлять язычок на детали", FontSize = 11, IsChecked = true, Margin = new Thickness(2, 1, 2, 4) };
+            tags.Children.Add(_cutSizeTags);
+            var tagSettings = UiFold(tags, "Размеры и подпись язычка");
+            var tagFields = UiFields(tagSettings);
+            _tagWidth = UiNumber(tagFields, "Ширина, мм", "24");
+            _tagHeight = UiNumber(tagFields, "Высота, мм", "12", "Высота язычка, мм · не меньше 12");
+            _tagBridge = UiNumber(tagFields, "Мостик, мм", "2", "Длина каждого непрорезанного мостика, мм");
+            _tagLetter = UiNumber(tagFields, "Буква, мм", "8", "Высота прорезной буквы размера, мм");
+            _tagFirstOffset = UiNumber(tagFields, "Отступ, мм", "10", "Отступ первого размера от начала прямого нижнего края, мм");
+            _tagSizeStep = UiNumber(tagFields, "Шаг, мм", "20", "Шаг положения язычков следующих размеров, мм");
+            _tagCutLetter = new CheckBox { Content = "Прорезать букву размера", IsChecked = true, FontSize = 11, Margin = new Thickness(2, 1, 2, 5) };
+            tagSettings.Children.Add(_tagCutLetter);
+            _tagLabelHex = Field("#000000"); _tagLabelHex.FontSize = 11;
+            _tagLabelColor = new Button { Content = new Border { Width = 22, Height = 18, Background = Brushes.Black, BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1) },
+                Padding = new Thickness(4), Margin = new Thickness(4, 0, 0, 0), ToolTip = "Выбрать цвет подписи язычка" };
             _tagLabelColor.Click += (_, __) => ChooseTagLabelColor();
-            panel.Children.Add(DockerLayout.FieldRow("Цвет подписи язычка",
-                DockerLayout.Trailing(_tagLabelHex, _tagLabelColor), 142));
-            DockerHelp.Add(panel, "Подпись имеет отдельный цвет для назначения мощности в программе лазера. " +
-                "Выберите цвет, отличающийся от контура детали. Используется в новой раскладке и на листе пробной резки.");
-            var largerTag = Button("Пресет 30×20 мм · мостики 4 мм", (_, __) => {
+            UiLabeled(tagSettings, "Цвет буквы", DockerLayout.Trailing(_tagLabelHex, _tagLabelColor));
+            tagSettings.Children.Add(UiAction("30×20 мм · мостики 4 мм", (_, __) => {
                 if (_busy) return;
                 bool wasLoading = _loading; _loading = true;
                 try { _tagWidth.Text = "30"; _tagHeight.Text = "20"; _tagBridge.Text = "4"; _tagLetter.Text = "8"; }
                 finally { _loading = wasLoading; }
-                SaveDraft();
-                _status("Выбран пробный язычок 30×20 мм, мостики по 4 мм. Проверьте его на листе образцов.", false);
-            });
-            panel.Children.Add(largerTag);
-            _tagFirstOffset = TagField(panel, "Отступ первого размера слева, мм", "10");
-            _tagSizeStep = TagField(panel, "Шаг следующих размеров, мм", "20");
-            DockerHelp.Add(panel, "П-образный язычок без ножек; два непрорезанных мостика на линии детали. " +
-                "Надпись — однолинейные чертёжные знаки с трафаретными разрывами. " +
-                "Для длинного размера ширина увеличивается, высота букв сохраняется. " +
-                "Без прорезной буквы площадка остаётся цельной; размер определяется положением язычка. " +
-                "Пресет 30×20 мм с мостиками 4 мм — кандидат для пробной резки, а не проверенный для любой ткани режим.");
-            DockerHelp.Add(panel, "Левый угол крепления: 10, 30, 50 мм и далее от начала прямого нижнего края " +
-                "до поворота в раскладке. Порядок размеров — от меньшей площади силуэта переда к большей " +
-                "только среди размеров отмеченных игроков текущей резки. Отступ и шаг можно изменить. " +
-                "Если на заданном месте нет свободного прямого нижнего края, появится сообщение с размером и деталью.");
-            _tagSamples = Button("Лист язычков для пробной резки", CreateTagSamples);
-            panel.Children.Add(_tagSamples);
-            DockerHelp.Add(panel, "Сравнительный лист: 24×12 мм с мостиками 2 мм, 30×20 и 40×25 мм с мостиками 3 и 4 мм, " +
-                "пары с буквой M высотой 8 мм и без буквы; также текущие настройки и примеры S, XS, XL, XXL, 116, 128, 152. " +
-                "На самих образцах нет мелкого прорезного кода. Отдельная страница-памятка показывает размеры и положение образцов " +
-                "в той же сетке. Сохраняйте порядок образцов при разборе. В DXF отправляется только страница резки, памятка остаётся в CDR.");
-            _generateCut = Button("Подобрать раскладку резки…", GenerateCutting);
+                SaveDraft(); _status("Выбран пробный язычок 30×20 мм, мостики по 4 мм. Проверьте его на листе образцов.", false);
+            }));
+            _tagSamples = UiAction("Лист пробной резки", CreateTagSamples);
+            tagSettings.Children.Add(_tagSamples);
+            UiFoldHelp(tagSettings, "Лист сравнивает язычки 24×12, 30×20 и 40×25 мм, разные мостики, буквы и текущие настройки. " +
+                "Памятка расположена на отдельной странице и не экспортируется в DXF. Порядок размеров определяется площадью переда среди отмеченных игроков. " +
+                "Если для язычка нет прямого свободного края, появится сообщение. Пресет требует пробной резки на вашей ткани.");
+            _generateCut = UiAction("Подобрать раскладку…", GenerateCutting, true);
             panel.Children.Add(_generateCut);
-            _combineCut = Button("Объединить контуры готового листа", CombineCutting);
-            panel.Children.Add(_combineCut);
-            DockerHelp.Add(panel, "Контур, язычок и надсечки каждой детали становятся одним объектом-кривой. " +
-                "Буква остаётся отдельной внутри группы детали. Положение деталей не меняется; операция отменяется одним Undo.");
-            _saveCut = Button("Сохранить страницу резки в отдельный CDR…", SaveCutting);
-            panel.Children.Add(_saveCut);
-            DockerHelp.Add(panel, "Раскладка резки создаётся на отдельной странице текущего CDR. " +
-                "Сохранение копирует только эту страницу; версия CDR берётся из настроек Vanya Tools. " +
-                "При нескольких страницах переключайтесь между листами раскладки и сохраняйте каждый отдельно. " +
-                "Раскладка учитывает контуры деталей и заданный зазор. " +
-                "Повороты подбираются по контуру: 0° или 180°. Поворота на 90° для резки нет.");
-            panel.Children.Add(Title("Экспорт резки в DXF"));
-            _cutFolder = Field(""); _cutFolder.IsReadOnly = true;
-            var cutFolderRow = new Grid { Margin = new Thickness(0, 2, 0, 5) };
-            cutFolderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            cutFolderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            cutFolderRow.Children.Add(_cutFolder);
-            _chooseCutFolder = Button("Папка резки…", ChooseCutFolder);
-            Grid.SetColumn(_chooseCutFolder, 1); cutFolderRow.Children.Add(_chooseCutFolder);
-            panel.Children.Add(cutFolderRow);
-            _cutDxfSingleColor = new CheckBox { Content = "Один цвет для контуров резки",
-                IsChecked = false, FontSize = 11, Margin = new Thickness(0, 2, 0, 4) };
-            panel.Children.Add(_cutDxfSingleColor);
-            _cutDxfColorHex = new TextBox { Text = "#000000", FontSize = 11, MinHeight = 26,
-                VerticalContentAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) };
-            _cutDxfColor = new Button { Content = new Border { Width = 22, Height = 18,
-                Background = Brushes.Black, BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1) },
-                Padding = new Thickness(4), ToolTip = "Выбрать единый цвет контуров DXF" };
+            var dxf = UiGroup(panel, "DXF · активный лист", "Экспортируется готовый активный лист резки, AutoCAD 2000, миллиметры, масштаб 1:1. " +
+                "Каждая деталь с язычком, надсечками и буквой записывается одним блоком. При нескольких листах сохраните каждый отдельно. " +
+                "Единый цвет относится только к контурам резки, язычкам и надсечкам. Буквы сохраняют выбранный цвет подписи; исходный CDR не перекрашивается.");
+            _cutFolder = Field(""); _cutFolder.IsReadOnly = true; _cutFolder.FontSize = 11;
+            _cutFolder.SetBinding(ToolTipProperty, new Binding("Text") { Source = _cutFolder });
+            _chooseCutFolder = UiAction("Папка…", ChooseCutFolder);
+            dxf.Children.Add(DockerLayout.Trailing(_cutFolder, _chooseCutFolder));
+            _cutDxfSingleColor = new CheckBox { Content = "Один цвет контуров", IsChecked = false, FontSize = 11, Margin = new Thickness(2, 2, 2, 4) };
+            dxf.Children.Add(_cutDxfSingleColor);
+            _cutDxfColorHex = Field("#000000"); _cutDxfColorHex.FontSize = 11;
+            _cutDxfColor = new Button { Content = new Border { Width = 22, Height = 18, Background = Brushes.Black, BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1) },
+                Padding = new Thickness(4), Margin = new Thickness(4, 0, 0, 0), ToolTip = "Выбрать единый цвет контуров DXF" };
             _cutDxfColor.Click += (_, __) => ChooseCutDxfColor();
-            panel.Children.Add(DockerLayout.FieldRow("Цвет контуров DXF",
-                DockerLayout.Trailing(_cutDxfColorHex, _cutDxfColor), 142));
-            DockerHelp.Add(panel, "Единый цвет применяется в DXF к контурам деталей, язычков и надсечкам. " +
-                "Буквы на язычках сохраняют свой отдельный цвет подписи. " +
-                "Цвета исходного CDR сохраняются. Без галочки экспортируются прежние цвета.");
-            _exportCut = Button("Экспортировать активный лист резки в DXF", ExportCut);
-            panel.Children.Add(_exportCut);
-            DockerHelp.Add(panel, "DXF AutoCAD 2000 · миллиметры · масштаб 1:1. Экспортируется активный лист резки " +
-                "целиком; каждая деталь с надсечками, язычком и буквой записывается одним блоком DXF. " +
-                "Цвет буквы сохраняется отдельно. Папка запоминается; каждый экспорт создаёт новый файл. " +
-                "При нескольких листах откройте нужный и повторите экспорт.");
-            _progress = Note("");
+            UiLabeled(dxf, "Цвет контуров", DockerLayout.Trailing(_cutDxfColorHex, _cutDxfColor));
+            _exportCut = UiAction("Сохранить лист DXF", ExportCut);
+            dxf.Children.Add(_exportCut);
+            var cutExtras = UiFold(panel, "Готовый лист · дополнительно");
+            _combineCut = UiAction("Объединить контуры", CombineCutting);
+            cutExtras.Children.Add(_combineCut);
+            _saveCut = UiAction("Сохранить лист CDR…", SaveCutting);
+            cutExtras.Children.Add(_saveCut);
+            UiFoldHelp(cutExtras, "Объединение превращает контур, язычок и надсечки детали в одну кривую, буква остаётся отдельно в группе. " +
+                "Положение не меняется, Ctrl+Z отменяет операцию. CDR сохраняет только активную страницу; версия файла берётся из настроек Vanya Tools.");
+
+            _progress = Note(""); UiHideEmpty(_progress);
             var progressView = new ScrollViewer { Content = _progress, MaxHeight = 100,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Margin = new Thickness(7, 3, 7, 0) };
             Grid.SetRow(progressView, 2); root.Children.Add(progressView);
@@ -647,7 +478,7 @@ namespace VanyaTools.Native
             RefreshSizes();
             UpdateCount();
             RefreshWorkflow();
-            _steps.SelectionChanged += (_, e) => { if (e.Source == _steps) SaveDraft(); };
+            _steps.SelectionChanged += (_, e) => { if (e.Source == _steps) { SaveDraft(); RefreshWorkflowGuide(); } };
             _documentWatch.Tick += (_, __) => { if (!_busy) RefreshWorkflowDocument(); };
             PreviewMouseDown += (_, __) => { if (!_busy && !_loading) RefreshWorkflowDocument(); };
             _playerGrid.BeginningEdit += GuardProjectEdit;
@@ -712,6 +543,7 @@ namespace VanyaTools.Native
                 AutomationProperties.SetName(_stepTabs[index], description);
             }
             if (_pdfProgress != null) _pdfProgress.Text = _completedSteps[4] ? "✓ Активный лист сохранён в PDF" : "";
+            RefreshWorkflowGuide();
         }
 
         private static ComboBox CopyChoice(ComboBox source)
@@ -813,13 +645,15 @@ namespace VanyaTools.Native
                 object document = (object)app.ActiveDocument;
                 if (document == null)
                 {
-                    if (Convert.ToInt32(app.Documents.Count) != 0) return;
+                    if (Convert.ToInt32(app.Documents.Count) != 0) { SetWorkflowGuideContext(false); return; }
                     BindProjectData(null);
+                    SetWorkflowGuideContext(true);
                     _workflowDocument = _workflowSession = _workflowId = _savedWorkflow = null;
                     ClearCompletedSteps(1, 3, 4, 5);
                     return;
                 }
                 BindProjectData(document);
+                SetWorkflowGuideContext(true);
                 string session = SportWorkflowProgress.SessionKey(document);
                 SportWorkflowProgress stored = SportWorkflowProgress.Read(document);
                 // A missing property during a native transition or Undo must
@@ -838,7 +672,7 @@ namespace VanyaTools.Native
                 RefreshWorkflow();
                 Log.Info("Sport workflow: document context restored, saved marks=" + (stored != null));
             }
-            catch (Exception error) { ReportProjectError("Не удалось открыть данные формы", error); }
+            catch (Exception error) { SetWorkflowGuideContext(false); ReportProjectError("Не удалось открыть данные формы", error); }
         }
 
         private void PersistWorkflow(bool create)
@@ -1308,7 +1142,7 @@ namespace VanyaTools.Native
             {
                 var templates = SportLayoutService.RequestedTemplates(_templates, _players);
                 int changed = new SportLayoutService().ReplacePreparedArtwork(part, field.Text.Trim(), templates.Select(t => t.Size));
-                if (changed == 0) { _status("Нет готовых макетов выбранных размеров. Сначала выполните этап 1.", true); return; }
+                if (changed == 0) { _status("Нет макетов выбранных размеров. Нажмите «Подготовить макеты» на вкладке «Макеты».", true); return; }
                 ClearCompletedSteps(3, 4);
                 _status("Рисунок " + partName + " обновлён в размерах: " + changed + ". Поправьте объекты и создайте печать заново.", false);
             }
@@ -1432,7 +1266,7 @@ namespace VanyaTools.Native
                     "Добавлены размеры: " + String.Join(", ", prepared.AddedSizes) + ".";
                 string kept = prepared.KeptSizes.Count == 0 ? "" :
                     " Уже подготовлены: " + String.Join(", ", prepared.KeptSizes) + ".";
-                _progress.Text = added + kept + " Поправьте макеты и запустите этап 2.";
+                _progress.Text = added + kept + " Поправьте макеты на холсте, затем откройте «Печать» или «Резка».";
                 _status(added + kept, false);
                 Log.Info("Sport overview: docker status updated");
             }
@@ -1507,6 +1341,7 @@ namespace VanyaTools.Native
             _arrangeReprint.IsEnabled = enabled;
             _artworkLimit.IsEnabled = enabled;
             _artworkCapture.IsEnabled = enabled;
+            RefreshWorkflowGuide();
         }
 
         private async void CreateTagSamples(object sender, RoutedEventArgs e)
@@ -1762,10 +1597,10 @@ namespace VanyaTools.Native
                 var players = _players.Where(row => row.PrintEnabled).ToList();
                 if (!cutting) players = players.Where(row => row.HasPrintedParts).ToList();
                 if (players.Count == 0)
-                    throw new InvalidOperationException(cutting ? "Отметьте строку заказа галочкой «Печатать»." : "Выберите строки заказа и детали для печати.");
+                    throw new InvalidOperationException(cutting ? "Включите строки галочкой «В заказ» на вкладке «Игроки»." : "Включите строки «В заказ» и нужные детали для печати.");
                 var templates = SportLayoutService.RequestedTemplates(_templates, players);
                 if (players.Count == 0)
-                    throw new InvalidOperationException("Отметьте галочкой «Печатать» хотя бы одного игрока.");
+                    throw new InvalidOperationException("Включите хотя бы одну строку галочкой «В заказ».");
                 if (players.Any(row => row.Quantity < 1 || row.Quantity > 100))
                     throw new InvalidOperationException("Количество в каждой строке: от 1 до 100.");
                 long totalLong = players.Sum(row => (long)row.Quantity);
@@ -1942,6 +1777,7 @@ namespace VanyaTools.Native
             parent.Children.Remove(_playerEditor);
             try
             {
+                _expandPlayers.Visibility = Visibility.Collapsed;
                 _playerGrid.Height = Double.NaN;
                 _playerGrid.Columns[1].Width = new DataGridLength(1, DataGridLengthUnitType.Star);
                 root.Children.Add(_playerEditor);
@@ -1956,6 +1792,7 @@ namespace VanyaTools.Native
             {
                 root.Children.Remove(_playerEditor);
                 _playerGrid.Height = oldHeight; _playerGrid.Columns[1].Width = oldNameWidth;
+                _expandPlayers.Visibility = Visibility.Visible;
                 parent.Children.Insert(position, _playerEditor);
                 _playerWindow = null;
                 UpdateCount(); SaveDraft();
@@ -2028,7 +1865,7 @@ namespace VanyaTools.Native
                 FrontLineSpacing = _legacyLineSpacing.ToString(CultureInfo.InvariantCulture),
                 WhiteText = _whiteCaptions,
                 KeepGuides = _keepGuides.IsChecked == true,
-                WorkflowTab = _steps.SelectedIndex, WorkflowUiVersion = 2,
+                WorkflowTab = _steps.SelectedIndex, WorkflowUiVersion = 3,
                 NestingMode = _nestingMode.SelectedIndex, GroupingMode = _groupingMode.SelectedIndex,
                 CutNestingMode = _cutNestingMode.SelectedIndex, CutGroupingMode = _cutGroupingMode.SelectedIndex,
                 PressMode = _pressMode, PressLeftMm = _pressLeftMm, PressRightMm = _pressRightMm,
@@ -2090,8 +1927,11 @@ namespace VanyaTools.Native
                     NumberStyles.Float, CultureInfo.InvariantCulture, out double spacing) &&
                     spacing >= 10 && spacing <= 300) _legacyLineSpacing = spacing;
                 _keepGuides.IsChecked = draft.KeepGuides;
-                int tab = draft.WorkflowUiVersion == 2 ? draft.WorkflowTab :
+                // Older six-tab files first map to the prior five tabs;
+                // then players and mockups swap while retaining their identity.
+                int tab = draft.WorkflowUiVersion >= 2 ? draft.WorkflowTab :
                     draft.WorkflowTab == 4 ? 3 : draft.WorkflowTab == 5 ? 4 : draft.WorkflowTab;
+                if ((draft.WorkflowUiVersion ?? 0) < 3) tab = tab == 1 ? 2 : tab == 2 ? 1 : tab;
                 _steps.SelectedIndex = tab >= 0 && tab < 5 ? tab : 0;
                 _nestingMode.SelectedIndex = draft.NestingMode >= 0 && draft.NestingMode <= 2 ? draft.NestingMode.Value : 2;
                 _groupingMode.SelectedIndex = draft.GroupingMode >= 0 && draft.GroupingMode <= 2 ? draft.GroupingMode.Value : 0;
@@ -2191,11 +2031,13 @@ namespace VanyaTools.Native
 
         private static UIElement PathRow(TextBox field, string label, RoutedEventHandler click)
         {
+            field.MinWidth = 0; field.FontSize = 11;
+            field.SetBinding(ToolTipProperty, new Binding("Text") { Source = field });
             var grid = new Grid { Margin = new Thickness(0, 2, 0, 5) };
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             grid.Children.Add(field);
-            var button = Button(label, click);
+            var button = UiAction(label, click, true, "Выбрать CDR модели и загрузить её размеры");
             Grid.SetColumn(button, 1);
             grid.Children.Add(button);
             return grid;
