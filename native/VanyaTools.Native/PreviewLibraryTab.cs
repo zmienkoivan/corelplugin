@@ -10,6 +10,8 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -38,38 +40,48 @@ namespace VanyaTools.Native
         public PreviewLibraryTab(Action<string, bool> status)
         {
             _status = status;
-            var panel = new StackPanel { Margin = new Thickness(8) };
+            var panel = new StackPanel { Margin = new Thickness(5) };
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Content = panel };
-            panel.Children.Add(new TextBlock { Text = "Превью принта", FontSize = 14,
-                FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 1, 0, 6) });
-            DockerHelp.Add(panel, "Выделите принт. Ссылка действует 7 дней.");
-            _publish = DockerTheme.Primary(Button("Опубликовать выделение", async (_, __) => await Publish()));
-            panel.Children.Add(_publish);
-            DockerHelp.Add(panel, "Размер сохраняется. Большие макеты: 150 или 72 DPI.");
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = panel };
+            var publication = DockerLayout.ToolGroup("Ссылка на принт", "Выделите принт на холсте и создайте ссылку для просмотра. " +
+                "Ссылка действует 7 дней; физический размер сохраняется. Для больших макетов разрешение автоматически снижается до 150 или 72 DPI. " +
+                "Подключение настраивается один раз внизу этой вкладки.");
+            panel.Children.Add(publication);
+            _publish = DockerTheme.Primary(Button("Создать ссылку из выделения", async (_, __) => await Publish()));
+            publication.Children.Add(_publish);
             _cancel = Button("Отменить", (_, __) => _cancellation?.Cancel());
             _cancel.Visibility = Visibility.Collapsed;
-            panel.Children.Add(_cancel);
+            publication.Children.Add(_cancel);
             _size = Note("");
-            panel.Children.Add(_size);
+            CollapseWhenEmpty(_size, _size); publication.Children.Add(_size);
             _activity = Note("");
-            panel.Children.Add(_activity);
+            CollapseWhenEmpty(_activity, _activity); publication.Children.Add(_activity);
             _progress = new ProgressBar { Height = 6, IsIndeterminate = true,
                 Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 0, 5) };
-            panel.Children.Add(_progress);
+            publication.Children.Add(_progress);
             _timer.Tick += (_, __) => _activity.Text = _stage + " · " + _elapsed.Elapsed.ToString(@"m\:ss");
-            _link = new TextBox { IsReadOnly = true, FontSize = 11,
-                Margin = new Thickness(0, 1, 0, 4) };
-            panel.Children.Add(_link);
-            panel.Children.Add(Button("Копировать ссылку", (_, __) => Copy(_link.Text)));
+            _link = new TextBox { IsReadOnly = true, FontSize = 11, MinHeight = 27,
+                VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(3, 1, 3, 1),
+                Margin = new Thickness(1, 1, 1, 3), ToolTip = "Готовая ссылка для просмотра принта" };
+            System.Windows.Automation.AutomationProperties.SetName(_link, "Готовая ссылка на принт");
+            var linkGroup = new StackPanel { Margin = new Thickness(0, 3, 0, 0) };
+            linkGroup.Children.Add(_link);
+            var linkActions = new UniformGrid { Columns = 2 };
+            linkActions.Children.Add(Button("Копировать", (_, __) => Copy(_link.Text)));
+            linkActions.Children.Add(Button("Открыть", (_, __) => Open(_link.Text)));
+            linkGroup.Children.Add(linkActions); CollapseWhenEmpty(linkGroup, _link);
+            publication.Children.Add(linkGroup);
 
-            var header = new System.Windows.Controls.Primitives.UniformGrid { Columns = 2 };
+            var header = new DockPanel { Margin = new Thickness(1, 1, 1, 4) };
+            _refresh = Button("↻", async (_, __) => await Refresh());
+            _refresh.MinWidth = 30; _refresh.ToolTip = "Обновить список опубликованных превью";
+            System.Windows.Automation.AutomationProperties.SetName(_refresh, "Обновить список превью");
+            DockPanel.SetDock(_refresh, Dock.Right); header.Children.Add(_refresh);
             header.Children.Add(new TextBlock { Text = "Опубликованные", FontWeight = FontWeights.SemiBold,
-                VerticalAlignment = VerticalAlignment.Center, FontSize = 12 });
-            _refresh = Button("Обновить список", async (_, __) => await Refresh());
-            header.Children.Add(_refresh);
+                VerticalAlignment = VerticalAlignment.Center, FontSize = 11 });
             panel.Children.Add(header);
             _items = new StackPanel();
+            _items.Children.Add(Note("После подключения здесь появятся ваши ссылки."));
             panel.Children.Add(_items);
 
             var settingsPanel = new StackPanel { Margin = new Thickness(4) };
@@ -78,11 +90,12 @@ namespace VanyaTools.Native
             panel.Children.Add(_settings);
             DockerHelp.Add(settingsPanel, "Настраивается один раз. Ключ сохраняется в Windows в зашифрованном виде.");
             settingsPanel.Children.Add(Note("Адрес сервера"));
-            _server = new TextBox { Text = "https://evpmerch.com:9443", FontSize = 11,
+            _server = new TextBox { Text = "https://evpmerch.com:9443", FontSize = 11, MinHeight = 27,
+                VerticalContentAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 0, 4) };
             settingsPanel.Children.Add(_server);
             settingsPanel.Children.Add(Note("Ключ публикации"));
-            _key = new PasswordBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 4) };
+            _key = new PasswordBox { FontSize = 11, MinHeight = 27, Margin = new Thickness(0, 0, 0, 4) };
             settingsPanel.Children.Add(_key);
             settingsPanel.Children.Add(Button("Сохранить подключение", (_, __) => SaveSettings()));
             LoadSettings();
@@ -104,9 +117,9 @@ namespace VanyaTools.Native
                   FitsSide(widthMm, heightMm, 150) ? 150 : 72;
             pixels = PixelCount(widthMm, heightMm, dpi);
             _size.Text = String.Format(CultureInfo.CurrentCulture,
-                "{0:0} × {1:0} мм · публикация {2} DPI ({3:0.0} Мп).\n" +
-                "Без сжатия: 300 / 150 / 72 DPI — {4} / {5} / {6} МБ.",
-                widthMm, heightMm, dpi, pixels / 1000000.0,
+                "{0:0} × {1:0} мм · {2} DPI · {3:0.0} Мп", widthMm, heightMm, dpi, pixels / 1000000.0);
+            _size.ToolTip = String.Format(CultureInfo.CurrentCulture,
+                "Размер без сжатия: 300 / 150 / 72 DPI — {0} / {1} / {2} МБ.",
                 RawSize(widthMm, heightMm, 300), RawSize(widthMm, heightMm, 150),
                 RawSize(widthMm, heightMm, 72));
             if (pixels > 70000000 || !FitsSide(widthMm, heightMm, dpi))
@@ -182,13 +195,14 @@ namespace VanyaTools.Native
                     DateTimeStyles.AdjustToUniversal, out date) ? date.ToLocalTime().ToString("dd.MM.yyyy HH:mm") : expires;
                 var row = new StackPanel { Margin = new Thickness(0, 5, 0, 5) };
                 row.Children.Add(new TextBlock { Text = title, TextWrapping = TextWrapping.Wrap,
+                    MaxHeight = 34, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = title,
                     FontSize = 11, FontWeight = FontWeights.SemiBold });
                 long sizeBytes;
                 string size = Int64.TryParse(bytesText, out sizeBytes) && sizeBytes >= 0
                     ? FormatFileSize(sizeBytes) : "вес неизвестен";
-                row.Children.Add(Note("Готовый PNG: " + size + " · " + dpiText + " DPI · до " + until));
+                row.Children.Add(Note(size + " · " + dpiText + " DPI · до " + until));
                 var actions = new System.Windows.Controls.Primitives.UniformGrid { Columns = 3 };
-                actions.Children.Add(Button("Ссылка", (_, __) => Copy(link)));
+                actions.Children.Add(Button("Копировать", (_, __) => Copy(link)));
                 actions.Children.Add(Button("Открыть", (_, __) => Open(link)));
                 actions.Children.Add(Button("Удалить", async (_, __) => await Delete(id, title)));
                 row.Children.Add(actions);
@@ -257,6 +271,7 @@ namespace VanyaTools.Native
         {
             _busy = busy;
             _publish.IsEnabled = _refresh.IsEnabled = !busy;
+            _items.IsEnabled = _settings.IsEnabled = !busy;
             _cancel.Visibility = busy && _cancellation != null ? Visibility.Visible : Visibility.Collapsed;
             _progress.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             if (busy) { _stage = stage; _elapsed.Restart(); _timer.Start(); }
@@ -293,6 +308,13 @@ namespace VanyaTools.Native
         private static TextBlock Note(string text) => new TextBlock { Text = text, FontSize = 11,
             Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 2, 0, 5) };
+        private static void CollapseWhenEmpty(FrameworkElement target, DependencyObject source)
+        {
+            var style = new Style(target.GetType());
+            var empty = new DataTrigger { Binding = new Binding("Text") { Source = source }, Value = "" };
+            empty.Setters.Add(new Setter(VisibilityProperty, Visibility.Collapsed));
+            style.Triggers.Add(empty); target.Style = style;
+        }
         private static Button Button(string text, RoutedEventHandler handler)
         {
             var button = new Button { Content = text, MinHeight = 28, Margin = new Thickness(1, 1, 1, 3) };

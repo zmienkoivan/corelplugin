@@ -17,6 +17,8 @@ namespace VanyaTools.Native
         public VanyaOrdersDocker(object app)
         {
             CorelApp.SetHostApplication(app);
+            HorizontalContentAlignment = HorizontalAlignment.Stretch;
+            VerticalContentAlignment = VerticalAlignment.Stretch;
 
             var root = new Grid {
                 Margin = new Thickness(6),
@@ -45,6 +47,8 @@ namespace VanyaTools.Native
             root.Children.Add(statusFrame);
 
             _orders = new OrderCardTab(SetStatus, standaloneOrders: true);
+            _orders.OrdersView.HorizontalAlignment = HorizontalAlignment.Stretch;
+            _orders.OrdersView.VerticalAlignment = VerticalAlignment.Stretch;
             Grid.SetRow(_orders.OrdersView, 2);
             root.Children.Add(_orders.OrdersView);
         }

@@ -192,7 +192,7 @@ namespace VanyaTools.Native
                     Items =
                     {
                         new TabItem { Header = "Карточка заказа", Content = orderCards },
-                        new TabItem { Header = "Превью", Content =
+                        new TabItem { Header = "Ссылка на принт", Content =
                             new PreviewLibraryTab((message, isError) => SetStatus(message, isError)) }
                     }
                 }));

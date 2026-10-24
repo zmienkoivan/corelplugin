@@ -35,7 +35,8 @@ namespace VanyaTools.Native
         private readonly PasswordBox _key;
         private readonly TextBlock _caption, _documentName, _orderInfo, _ordersCount, _unassignedCount,
             _photoLabel, _photoMessage;
-        private readonly StackPanel _frames, _editor;
+        private readonly StackPanel _frames;
+        private readonly Grid _editor;
         private readonly Expander _frameExpander;
         private readonly Button _send, _updateText, _state, _refreshServer, _unassignedRefresh,
             _saveDocument, _linkOrder, _loadOrders, _blanksPause, _applicationPause, _urgent, _blanksReady,
@@ -106,11 +107,20 @@ namespace VanyaTools.Native
         internal OrderCardTab(Action<string, bool> status, bool standaloneOrders = false)
         {
             _status = status;
-            var panel = new StackPanel { Margin = new Thickness(8) };
-            Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel };
+            var panel = new Grid { Margin = new Thickness(5) };
+            panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            panel.RowDefinitions.Add(new RowDefinition());
+            Content = panel;
             _documentName = Note("Откройте CDR или создайте новый документ.");
+            _documentName.TextWrapping = TextWrapping.NoWrap;
+            _documentName.TextTrimming = TextTrimming.CharacterEllipsis;
+            _documentName.VerticalAlignment = VerticalAlignment.Center;
+            _documentName.SetBinding(ToolTipProperty, new Binding("Text") { Source = _documentName });
             var documentRow = new DockPanel();
-            _saveDocument = Button("Сохранить CDR", (_, __) => Safe(SaveCurrentDocument));
+            _saveDocument = Button("Сохранить", (_, __) => Safe(SaveCurrentDocument));
+            _saveDocument.ToolTip = "Сохранить текущий CDR и карточку заказа";
             DockPanel.SetDock(_saveDocument, Dock.Right);
             documentRow.Children.Add(_saveDocument);
             var reload = Button("↻", (_, __) => { if (!_busy) Safe(() => LoadDocument(true)); });
@@ -124,10 +134,10 @@ namespace VanyaTools.Native
             var unassignedBar = new DockPanel { Margin = new Thickness(0, 1, 0, 2) };
             _unassignedRefresh = Button("↻", async (_, __) => await LoadUnassignedTable());
             _unassignedRefresh.MinWidth = 32;
-            _unassignedRefresh.ToolTip = "Обновить список заказов без макета";
+            _unassignedRefresh.ToolTip = "Обновить список заказов без карточки";
             DockPanel.SetDock(_unassignedRefresh, Dock.Right);
             unassignedBar.Children.Add(_unassignedRefresh);
-            _unassignedCount = Note("Загрузка списка…");
+            _unassignedCount = Note("");
             unassignedBar.Children.Add(_unassignedCount);
             openPanel.Children.Add(unassignedBar);
             DockerHelp.Add(openPanel, "Нажмите на заказ в списке, чтобы связать его с текущим CDR.");
@@ -148,13 +158,26 @@ namespace VanyaTools.Native
             _unassignedTable.AddHandler(UIElement.MouseLeftButtonUpEvent,
                 new MouseButtonEventHandler(UnassignedRowClicked), true);
             openPanel.Children.Add(_unassignedTable);
-            var openExpander = new Expander { Header = "Заказы без макета", Content = openPanel,
+            _unassignedOpenExpander = new Expander { Header = UnassignedHeader("Заказы без карточки"), Content = openPanel,
+                Visibility = Visibility.Collapsed, HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 Margin = new Thickness(0, 1, 0, 2) };
-            openExpander.Expanded += async (_, __) => await LoadUnassignedTable();
-            panel.Children.Add(openExpander);
-            _orderInfo = Note(""); panel.Children.Add(_orderInfo);
-            var ordersPanel = new StackPanel { Margin = new Thickness(8) };
-            ordersPanel.Children.Add(Title("Заказы"));
+            _unassignedOpenExpander.Expanded += async (_, e) =>
+            {
+                if (!ReferenceEquals(e.Source, _unassignedOpenExpander)) return;
+                _unassignedOpenExpander.IsExpanded = false;
+                await ShowUnassignedPicker(openPanel);
+            };
+            var orderHeader = new Grid();
+            orderHeader.ColumnDefinitions.Add(new ColumnDefinition());
+            orderHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            Grid.SetRow(orderHeader, 1); panel.Children.Add(orderHeader);
+            Grid.SetColumn(_unassignedOpenExpander, 1); orderHeader.Children.Add(_unassignedOpenExpander);
+            _orderInfo = Note(""); _orderInfo.Margin = new Thickness(0, 0, 5, 0);
+            _orderInfo.VerticalAlignment = VerticalAlignment.Center; _orderInfo.TextWrapping = TextWrapping.NoWrap;
+            _orderInfo.TextTrimming = TextTrimming.CharacterEllipsis;
+            _orderInfo.SetBinding(ToolTipProperty, new Binding("Text") { Source = _orderInfo });
+            orderHeader.Children.Add(_orderInfo);
+            var ordersPanel = new StackPanel();
             var ordersTools = new DockPanel();
             _loadOrders = Button("↻", async (_, __) => await LoadOrders());
             _loadOrders.MinWidth = 32; _loadOrders.ToolTip = "Обновить заказы с сервера";
@@ -169,18 +192,19 @@ namespace VanyaTools.Native
             columnsButton.ToolTip = "Выбрать столбцы таблицы";
             DockPanel.SetDock(columnsButton, Dock.Right); ordersTools.Children.Add(columnsButton);
             _ordersSearch = Input(); _ordersSearch.ToolTip = "Поиск по номеру и заказчику";
+            System.Windows.Automation.AutomationProperties.SetName(_ordersSearch, "Поиск заказа по номеру и заказчику");
             ordersTools.Children.Add(_ordersSearch); ordersPanel.Children.Add(ordersTools);
             if (!standaloneOrders)
-                ordersPanel.Children.Add(Button("Открыть заказы отдельным докером ↗", (_, __) => {
+                ordersPanel.Children.Add(Button("Отдельная таблица ↗", (_, __) => {
                     try { CorelApp.Get().FrameWork.ShowDocker(VanyaOrdersDocker.DockerGuid); }
                     catch (Exception error) { _status("Открытие докера заказов: " + error.Message, true); }
                 }));
             var orderFilters = new WrapPanel { Margin = new Thickness(2, 0, 0, 4) };
-            _onlyAvailable = new CheckBox { Content = "Только без макета", Margin = new Thickness(2, 0, 0, 4) };
+            _onlyAvailable = new CheckBox { Content = "Без макета", FontSize = 11, Margin = new Thickness(2, 2, 0, 2) };
             _onlyAvailable.Checked += (_, __) => FilterOrders();
             _onlyAvailable.Unchecked += (_, __) => FilterOrders();
             orderFilters.Children.Add(_onlyAvailable);
-            _hideCompleted = new CheckBox { Content = "Скрыть готовые", Margin = new Thickness(12, 0, 0, 4) };
+            _hideCompleted = new CheckBox { Content = "Скрыть готовые", FontSize = 11, Margin = new Thickness(12, 2, 0, 2) };
             _hideCompleted.Checked += (_, __) => FilterOrders();
             _hideCompleted.Unchecked += (_, __) => FilterOrders();
             orderFilters.Children.Add(_hideCompleted);
@@ -238,7 +262,7 @@ namespace VanyaTools.Native
             _orderColumns.Add("number", numberColumn);
             var tableSettings = LoadOrderTableSettings();
             AddOrderColumn(columnsMenu, tableSettings.Visible, "customer", "Заказчик", "Customer",
-                new DataGridLength(1, DataGridLengthUnitType.Star), true, 170);
+                new DataGridLength(1, DataGridLengthUnitType.Star), true, 110);
             AddOrderColumn(columnsMenu, tableSettings.Visible, "source", "Источник", "Source",
                 new DataGridLength(68), false);
             AddOrderColumn(columnsMenu, tableSettings.Visible, "technologies", "Технология", "Technologies",
@@ -273,9 +297,10 @@ namespace VanyaTools.Native
                 new MouseButtonEventHandler(OrderCellClicked), true);
             _ordersTable.SelectionChanged += (_, __) => {
                 UpdateActions();
+                RefreshOrderSelectionUi();
                 if (!_restoringOrderSelection) _ = ShowSelectedPhoto();
             };
-            ordersPanel.Children.Add(_ordersTable);
+            var orderDetails = new StackPanel();
             var photoBar = new DockPanel { Margin = new Thickness(1, 2, 1, 2) };
             _nextPhoto = Button("›", (_, __) => ChangePhoto(1));
             _nextPhoto.Width = 32; _nextPhoto.ToolTip = "Следующее фото";
@@ -291,7 +316,7 @@ namespace VanyaTools.Native
             reloadPhoto.Width = 32; reloadPhoto.ToolTip = "Повторить загрузку фото";
             DockPanel.SetDock(reloadPhoto, Dock.Right); photoBar.Children.Add(reloadPhoto);
             _photoLabel = Note("Выберите заказ");
-            photoBar.Children.Add(_photoLabel); ordersPanel.Children.Add(photoBar);
+            photoBar.Children.Add(_photoLabel); orderDetails.Children.Add(photoBar);
             var photoStage = new Grid { Height = 175,
                 Background = new SolidColorBrush(Color.FromRgb(235, 238, 240)),
                 Margin = new Thickness(1, 0, 1, 4) };
@@ -304,7 +329,7 @@ namespace VanyaTools.Native
             _photoMessage.HorizontalAlignment = HorizontalAlignment.Center;
             _photoMessage.VerticalAlignment = VerticalAlignment.Center;
             photoStage.Children.Add(_photoMessage);
-            ordersPanel.Children.Add(photoStage);
+            orderDetails.Children.Add(photoStage);
             var selectedOrderBody = new StackPanel();
             var selectedOrderHeader = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
             _selectedOrderNumber = new TextBlock { FontSize = 12, FontWeight = FontWeights.SemiBold,
@@ -334,93 +359,122 @@ namespace VanyaTools.Native
                 BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6),
                 Padding = new Thickness(9, 8, 9, 7), Margin = new Thickness(1, 0, 1, 7),
                 Visibility = Visibility.Collapsed };
-            ordersPanel.Children.Add(_selectedOrderCard);
+            orderDetails.Children.Add(_selectedOrderCard);
             UpdatePhotoNavigation(null);
-            var listActions = new UniformGrid { Columns = 2 };
             string[] actions = { "state", "blanks", "application", "urgent", "blanksReady" };
             for (int i = 0; i < actions.Length; i++)
             {
                 string action = actions[i];
                 _listWorkflow[i] = Button("", async (_, __) => await ChangeWorkflow(action, true));
-                listActions.Children.Add(_listWorkflow[i]);
             }
             _linkOrder = Button("Открыть файл CDR", async (_, __) => await LinkSelectedOrder());
-            listActions.Children.Add(_linkOrder);
-            ordersPanel.Children.Add(listActions);
-            OrdersView = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Content = ordersPanel };
+            CardActionRows(CardFold(orderDetails, "Состояние заказа"), _listWorkflow);
+            OrdersView = CreateOrdersView(ordersPanel, orderDetails, standaloneOrders);
             _ordersSearch.TextChanged += (_, __) => FilterOrders();
-            _editor = new StackPanel { IsEnabled = false };
-            panel.Children.Add(_editor);
-            _editor.Children.Add(Button("Добавить выделение", (_, __) => Safe(AddSelection)));
-            _frames = new StackPanel { Margin = new Thickness(0, 3, 0, 5) };
-            _frameExpander = new Expander { Header = "Кадры (0)", Content = _frames,
-                Margin = new Thickness(0, 2, 0, 3) };
-            _editor.Children.Add(_frameExpander);
-
-            _editor.Children.Add(Label("Заказчик"));
-            _customer = Input(); _editor.Children.Add(_customer);
-            _editor.Children.Add(Label("Имя макета"));
-            _designName = Input(); _editor.Children.Add(_designName);
-            _editor.Children.Add(Label("Источник"));
+            _editor = new Grid { IsEnabled = false };
+            _editor.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            _editor.RowDefinitions.Add(new RowDefinition());
+            _editor.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Grid.SetRow(_editor, 3); panel.Children.Add(_editor);
+            var body = new StackPanel(); _editor.Children.Add(body);
+            var identity = new UniformGrid { Columns = 2, Margin = new Thickness(0, 1, 0, 4) };
+            body.Children.Add(identity);
+            _customer = Input(); CompactCardField(identity, "Заказчик", _customer, false);
+            _designName = Input(); CompactCardField(identity, "Макет", _designName, true);
             _sourceOptions = new WrapPanel { Margin = new Thickness(0, 0, 0, 3) };
-            foreach (string name in new[] { "ТГ", "ВК", "ПОЧТА", "КП" })
-                AddSourceChoice(name);
-            _editor.Children.Add(_sourceOptions);
-            _editor.Children.Add(Label("Технология печати"));
-            _technologyOptions = new UniformGrid { Columns = 2 };
+            _sourceOptions.Children.Add(new TextBlock { Text = "Канал", FontSize = 11,
+                Foreground = Brushes.DimGray, VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(1, 0, 7, 0) });
+            foreach (string name in new[] { "ТГ", "ВК", "ПОЧТА", "КП" }) AddSourceChoice(name);
+            body.Children.Add(_sourceOptions);
+            var production = new StackPanel { Margin = new Thickness(0, 1, 0, 4) };
+            body.Children.Add(production);
+            production.Children.Add(new TextBlock { Text = "Технологии", FontSize = 11,
+                Foreground = Brushes.DimGray, Margin = new Thickness(1, 0, 1, 2) });
+            _technologyOptions = new UniformGrid { Columns = 3 };
             foreach (string name in new[] { "ДТФ", "Шелкография", "ПУФ", "Вышивка", "Сублимация", "Лазер", "УФ ДТФ", "ТЕРМ" })
                 AddTechnologyChoice(name);
-            _editor.Children.Add(_technologyOptions);
-            _delivery = new CheckBox { Content = "🚚 ДОСТАВКА",
-                Margin = new Thickness(2, 5, 2, 5) };
+            production.Children.Add(_technologyOptions);
+            _delivery = new CheckBox { Content = "Доставка", FontSize = 11,
+                Margin = new Thickness(2, 3, 2, 4) };
             _customerTextile = new CheckBox { Content = "Текстиль клиента", ToolTip = "Изделия или текстиль предоставлены заказчиком", Margin = new Thickness(2, 5, 2, 5) };
-            _editor.Children.Add(_customerTextile);
-            _editor.Children.Add(_delivery);
+            _customerTextile.FontSize = 11;
+            var textileRow = new Grid { Margin = new Thickness(0, 3, 0, 4) };
+            textileRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.05, GridUnitType.Star) });
+            textileRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(.9, GridUnitType.Star) });
+            textileRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.65, GridUnitType.Star) });
+            _customerTextile.Margin = _delivery.Margin = new Thickness(1, 0, 3, 0);
+            _customerTextile.VerticalAlignment = _delivery.VerticalAlignment = VerticalAlignment.Center;
+            textileRow.Children.Add(_customerTextile); Grid.SetColumn(_delivery, 1); textileRow.Children.Add(_delivery);
+            production.Children.Add(textileRow);
             _urgent = Button("⚡ Срочно", async (_, __) => await ToggleCardUrgency());
-            _editor.Children.Add(_urgent);
-            _editor.Children.Add(Label("Срок сдачи"));
             var dueRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
-            var clearDue = Button("Очистить", (_, __) => _dueDate.SelectedDate = null);
+            var clearDue = Button("×", (_, __) => _dueDate.SelectedDate = null); clearDue.Width = 20;
+            clearDue.Padding = new Thickness(0); clearDue.Margin = new Thickness(1, 0, 0, 0);
             clearDue.ToolTip = "Убрать срок заказа";
             DockPanel.SetDock(clearDue, Dock.Right);
             dueRow.Children.Add(clearDue);
             _dueDate = new DatePicker { SelectedDateFormat = DatePickerFormat.Short,
-                FontSize = 11, MinHeight = 27, Margin = new Thickness(1, 1, 4, 3) };
+                FontSize = 11, MinWidth = 0, MinHeight = 27, Margin = new Thickness(1, 0, 0, 0) };
+            System.Windows.Automation.AutomationProperties.SetName(_dueDate, "Срок сдачи");
             _dueDate.ToolTip = "Выберите дату сдачи. Срок сохранится на сервере при публикации карточки.";
             _dueDate.DateValidationError += (_, error) => {
                 error.ThrowException = false;
                 _status("Срок сдачи: выберите корректную дату.", true);
             };
             dueRow.Children.Add(_dueDate);
-            _editor.Children.Add(dueRow);
-            _editor.Children.Add(Label("Описание"));
-            _description = Input(48); _editor.Children.Add(_description);
-            _editor.Children.Add(Label("Изделия и количество"));
-            _items = Input(55); _editor.Children.Add(_items);
+            Grid.SetColumn(dueRow, 2); textileRow.Children.Add(dueRow);
+
+            var frameTools = new Grid { Margin = new Thickness(0, 1, 0, 5) };
+            body.Children.Add(frameTools);
+            _frames = new StackPanel { Margin = new Thickness(0, 2, 0, 0) };
+            _frameExpander = new Expander { Header = "Кадры (0)", Content = _frames, IsExpanded = true,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                Template = AlwaysOpenFramesTemplate() };
+            frameTools.Children.Add(_frameExpander);
+            var addFrame = Button("Добавить выделение", (_, __) => { if (!_busy) Safe(AddSelection); });
+            addFrame.ToolTip = "Сохранить текущее выделение Corel как новый кадр карточки";
+            addFrame.HorizontalAlignment = HorizontalAlignment.Right;
+            addFrame.VerticalAlignment = VerticalAlignment.Top;
+            addFrame.Height = 26; addFrame.Margin = new Thickness(0);
+            frameTools.Children.Add(addFrame);
+
+            var details = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 4) };
+            body.Children.Add(details);
+            _description = Input(44); _description.Height = _description.MinHeight = _description.MaxHeight = 44;
+            CompactCardField(details, "Описание", _description, false);
+            _items = Input(44); _items.Height = _items.MinHeight = _items.MaxHeight = 44;
+            CompactCardField(details, "Изделия и количество", _items, true);
+            var stateRow = new UniformGrid { Columns = 2 };
+            _state = Button("", async (_, __) => await ChangeWorkflow("state"));
+            stateRow.Children.Add(_state); stateRow.Children.Add(_urgent); body.Children.Add(stateRow);
+
+            var publication = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
+            Grid.SetRow(publication, 2); _editor.Children.Add(publication);
             _caption = Note("");
             _caption.Padding = new Thickness(5);
-            _editor.Children.Add(new Expander { Header = "Подпись Telegram", Content = _caption,
-                Margin = new Thickness(0, 4, 0, 4) });
+            CardHideEmpty(_caption);
             _send = DockerTheme.Primary(Button("Опубликовать в Telegram", async (_, __) => await Publish(true)));
-            _editor.Children.Add(_send);
-            _updateText = Button("Обновить текст без экспорта фото", async (_, __) => await Publish(false));
-            _editor.Children.Add(_updateText);
-            AddLabelPrinting(_editor);
-            var workflow = new UniformGrid { Columns = 2 };
-            _state = Button("", async (_, __) => await ChangeWorkflow("state"));
+            publication.Children.Add(_send);
+            _updateText = Button("Только текст", async (_, __) => await Publish(false));
+            _updateText.ToolTip = "Обновить текст карточки без экспорта и замены фотографий";
+            AddLabelPrinting(publication);
+            CardHideEmpty(_printLabelResult);
+            var more = new StackPanel { Margin = new Thickness(6) };
+            more.Children.Add(new Expander { Header = "Подпись Telegram", Content = _caption,
+                IsExpanded = false, HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                Margin = new Thickness(0, 0, 0, 5) });
             _blanksPause = Button("", async (_, __) => await ChangeWorkflow("blanks"));
             _applicationPause = Button("", async (_, __) => await ChangeWorkflow("application"));
             _blanksReady = Button("", async (_, __) => await ChangeWorkflow("blanksReady"));
-            foreach (var button in new[] { _state, _blanksPause, _applicationPause, _blanksReady })
-                workflow.Children.Add(button);
-            _editor.Children.Add(workflow);
-            _refreshServer = Button("Загрузить карточку с сервера", async (_, __) => await RefreshServer());
-            _editor.Children.Add(_refreshServer);
-            var more = new StackPanel();
-            more.Children.Add(Button("Новая карточка", (_, __) => Safe(ClearCard)));
-            _editor.Children.Add(new Expander { Header = "Ещё", Content = more,
-                Margin = new Thickness(0, 3, 0, 0) });
+            foreach (var button in new[] { _blanksPause, _applicationPause, _blanksReady }) more.Children.Add(button);
+            _refreshServer = Button("Обновить с сервера", async (_, __) => await RefreshServer());
+            more.Children.Add(_refreshServer);
+            more.Children.Add(Button("Новая карточка", (_, __) => { if (!_busy) Safe(ClearCard); }));
+            var moreButton = Button("Ещё ▾", (_, __) => ShowCardTools(more));
+            moreButton.ToolTip = "Подпись Telegram, состояния производства и дополнительные команды карточки";
+            CardActionRows(publication, _updateText, moreButton);
+            CardHideEmpty(_orderInfo);
 
             var settings = new StackPanel { Margin = new Thickness(0) };
             var serverSettings = new StackPanel();
@@ -509,7 +563,7 @@ namespace VanyaTools.Native
             QuickDocumentFields = CreateQuickDocumentFields();
             _documentWatcher = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
             _documentWatcher.Tick += (_, __) => {
-                if (IsVisible || QuickDocumentFields.IsVisible) RefreshDocument();
+                if (IsVisible || QuickDocumentFields.IsVisible) { RefreshDocument(); _ = RefreshUnassignedIfDue(); }
                 else _documentWatcher.Stop();
             };
             _serverWatcher = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
@@ -518,7 +572,7 @@ namespace VanyaTools.Native
                 else _serverWatcher.Stop();
             };
             IsVisibleChanged += (_, __) => {
-                if (IsLoaded && IsVisible) { _documentWatcher.Start(); RefreshDocument(); }
+                if (IsLoaded && IsVisible) { _documentWatcher.Start(); RefreshDocument(); _ = RefreshUnassignedIfDue(); }
                 else if (!QuickDocumentFields.IsVisible) _documentWatcher.Stop();
             };
             QuickDocumentFields.IsVisibleChanged += (_, __) => {
@@ -529,7 +583,7 @@ namespace VanyaTools.Native
                 if (OrdersView.IsLoaded && OrdersView.IsVisible) { _serverWatcher.Start(); await LoadOrders(true); }
                 else _serverWatcher.Stop();
             };
-            Loaded += (_, __) => { _documentWatcher.Start(); RefreshDocument(); };
+            Loaded += (_, __) => { _documentWatcher.Start(); RefreshDocument(); _ = RefreshUnassignedIfDue(); };
             Unloaded += (_, __) => { if (!QuickDocumentFields.IsLoaded) _documentWatcher.Stop();
                 if (!OrdersView.IsLoaded) _serverWatcher.Stop(); };
             QuickDocumentFields.Loaded += (_, __) => { _documentWatcher.Start(); RefreshDocument(); };
@@ -882,7 +936,7 @@ namespace VanyaTools.Native
         private void AddSourceChoice(string name)
         {
             var radio = new RadioButton { Content = name,
-                Margin = new Thickness(2, 2, 15, 2), VerticalAlignment = VerticalAlignment.Center };
+                FontSize = 11, Margin = new Thickness(2, 2, 10, 2), VerticalAlignment = VerticalAlignment.Center };
             radio.Checked += (_, __) => { _sourceValue = name; FormChanged(); };
             _sourceButtons.Add(radio);
             _sourceOptions.Children.Add(radio);
@@ -890,7 +944,7 @@ namespace VanyaTools.Native
 
         private void AddTechnologyChoice(string name)
         {
-            var box = new CheckBox { Content = name, Margin = new Thickness(2, 1, 2, 1) };
+            var box = new CheckBox { Content = name, FontSize = 11, Margin = new Thickness(2, 2, 2, 2) };
             box.Checked += (_, __) => FormChanged();
             box.Unchecked += (_, __) => FormChanged();
             _technologies.Add(box);
@@ -984,82 +1038,6 @@ namespace VanyaTools.Native
                 catch (Exception error) { Log.Error("Order frame shape reference unavailable", error); }
             }
             return frame;
-        }
-
-        private void RenderFrames()
-        {
-            _frameExpander.Header = "Кадры (" + _data.Frames.Count + ")";
-            _frames.Children.Clear();
-            if (_data.Frames.Count == 0)
-            {
-                _frames.Children.Add(Note("Кадров нет."));
-                DockerHelp.Add(_frames, "При публикации текущее выделение станет первым кадром.");
-                return;
-            }
-            DockerHelp.Add(_frames, "После изменения макета выделите объекты и нажмите ↻ у нужного кадра.");
-            for (int i = 0; i < _data.Frames.Count; i++)
-            {
-                int index = i;
-                var row = new Grid { Margin = new Thickness(0, 2, 0, 2) };
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                var thumbnail = new Border { Width = 46, Height = 46,
-                    Margin = new Thickness(0, 0, 5, 0),
-                    Background = new SolidColorBrush(Color.FromRgb(240, 242, 244)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(213, 219, 224)),
-                    BorderThickness = new Thickness(1), Cursor = Cursors.Hand,
-                    ToolTip = "Показать сохранённый растровый кадр" };
-                try
-                {
-                    string encoded = _data.Frames[i].Thumbnail;
-                    if (!String.IsNullOrEmpty(encoded))
-                        thumbnail.Child = new Image { Source = DecodePhoto(Convert.FromBase64String(encoded), 100),
-                            Stretch = Stretch.Uniform };
-                }
-                catch (Exception error) { Log.Error("Order frame thumbnail unavailable", error); }
-                thumbnail.MouseLeftButtonUp += (_, __) => Safe(() => PreviewFrame(index));
-                Grid.SetRowSpan(thumbnail, 2);
-                row.Children.Add(thumbnail);
-                int count = _data.Frames[i].ObjectCount > 0 ? _data.Frames[i].ObjectCount
-                    : _data.Frames[i].Shapes.Count;
-                var label = new TextBlock { Text = (i + 1) + (count > 0 ? ". Кадр · " + count + " объект(ов)" :
-                    String.IsNullOrEmpty(_data.Frames[i].ServerPhotoKey) ? ". Растровый кадр" : ". Фото из карточки"),
-                    FontSize = 11, Margin = new Thickness(1, 0, 1, 1),
-                    TextTrimming = TextTrimming.CharacterEllipsis };
-                Grid.SetColumn(label, 1);
-                row.Children.Add(label);
-                var actions = new UniformGrid { Columns = 5, Height = 28 };
-                Grid.SetColumn(actions, 1);
-                Grid.SetRow(actions, 1);
-                foreach (var action in new[] {
-                    ("⌖", "Показать объекты кадра на холсте", (Action)(() => SelectFrame(index))),
-                    ("↻", "Переснять кадр из текущего выделения", (Action)(() => RecaptureFrame(index))),
-                    ("↑", "Переместить кадр выше", (Action)(() => MoveFrame(index, -1))),
-                    ("↓", "Переместить кадр ниже", (Action)(() => MoveFrame(index, 1))),
-                    ("×", "Удалить кадр из карточки", (Action)(() => RemoveFrame(index))) })
-                {
-                    var button = Button(action.Item1, (_, __) => Safe(action.Item3));
-                    button.MinWidth = 0;
-                    button.MinHeight = button.Height = 26;
-                    button.Padding = new Thickness(0);
-                    button.Margin = new Thickness(1);
-                    button.ToolTip = action.Item2;
-                    if (action.Item1 == "⌖" && (_data.Frames[i].Shapes?.Count ?? 0) == 0)
-                    {
-                        button.IsEnabled = false;
-                        button.ToolTip = "Фото карточки: нажмите миниатюру для просмотра.";
-                        ToolTipService.SetShowOnDisabled(button, true);
-                    }
-                    System.Windows.Automation.AutomationProperties.SetName(button, action.Item2);
-                    if (action.Item1 == "↑") button.IsEnabled = i > 0;
-                    if (action.Item1 == "↓") button.IsEnabled = i + 1 < _data.Frames.Count;
-                    actions.Children.Add(button);
-                }
-                row.Children.Add(actions);
-                _frames.Children.Add(row);
-            }
         }
 
         private void RecaptureFrame(int index)
@@ -1527,7 +1505,7 @@ namespace VanyaTools.Native
             if (key == "customer")
             {
                 var nameStyle = new Style(typeof(TextBlock));
-                nameStyle.Setters.Add(new Setter(TextBlock.FontSizeProperty, 15.0));
+                nameStyle.Setters.Add(new Setter(TextBlock.FontSizeProperty, 12.0));
                 nameStyle.Setters.Add(new Setter(TextBlock.FontWeightProperty, FontWeights.SemiBold));
                 nameStyle.Setters.Add(new Setter(TextBlock.TextTrimmingProperty,
                     TextTrimming.CharacterEllipsis));
@@ -1535,6 +1513,7 @@ namespace VanyaTools.Native
                     VerticalAlignment.Center));
                 nameStyle.Setters.Add(new Setter(FrameworkElement.MarginProperty,
                     new Thickness(4, 0, 2, 0)));
+                nameStyle.Setters.Add(new Setter(FrameworkElement.ToolTipProperty, new Binding(property)));
                 column.ElementStyle = nameStyle;
             }
             _ordersTable.Columns.Add(column);
@@ -1999,26 +1978,35 @@ namespace VanyaTools.Native
             }
         }
 
-        private async Task LoadUnassignedTable()
+        private async Task LoadUnassignedTable(bool automatic = false)
         {
             if (_unassignedLoading || _busy) return;
-            if (String.IsNullOrWhiteSpace(_server.Text) || String.IsNullOrWhiteSpace(_key.Password))
+            if (automatic && (!IsLoaded || !IsVisible)) return;
+            string server = _server.Text.Trim(), key = _key.Password.Trim();
+            ResetUnassignedContext(server, key);
+            if (server.Length == 0 || key.Length == 0)
             {
-                _unassignedCount.Text = "Укажите сервер и ключ в настройках.";
+                _unassignedOpenExpander.Visibility = Visibility.Collapsed;
                 return;
             }
+            int snapshotVersion = _unassignedSnapshotVersion;
+            _nextUnassignedRefreshUtc = DateTime.UtcNow.AddSeconds(30);
             _unassignedLoading = true;
             _unassignedRefresh.IsEnabled = false;
-            _unassignedCount.Text = "Загрузка заказов без макета…";
+            if (_unassignedOpenExpander.Visibility == Visibility.Visible)
+                _unassignedCount.Text = "Обновляю список…";
             try
             {
-                var response = await OrderServerClient.Unassigned(_server.Text.Trim(), _key.Password.Trim());
+                var response = await OrderServerClient.Unassigned(server, key);
+                if (server != _server.Text.Trim() || key != _key.Password.Trim() ||
+                    snapshotVersion != _unassignedSnapshotVersion || _busy) return;
                 if (!response.TryGetValue("orders", out object value) || !(value is IList rows))
                     throw new InvalidDataException("Сервер вернул неверный список заказов.");
                 var available = new List<OrderListItem>();
                 foreach (object item in rows)
                 {
-                    if (!(item is Dictionary<string, object> row)) continue;
+                    if (!(item is Dictionary<string, object> row))
+                        throw new InvalidDataException("Сервер вернул неверную строку заказа.");
                     available.Add(new OrderListItem {
                         Id = Convert.ToInt32(row["id"]),
                         Number = Convert.ToString(row["number"]),
@@ -2029,15 +2017,12 @@ namespace VanyaTools.Native
                         SendState = Convert.ToString(row["sendState"])
                     });
                 }
-                _unassignedTable.ItemsSource = available;
-                _unassignedTable.Visibility = available.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-                _unassignedCount.Text = available.Count > 0
-                    ? "Найдено: " + available.Count : "Сейчас заказов без макета нет.";
+                ApplyUnassignedRows(available);
             }
             catch (Exception error)
             {
-                _unassignedTable.Visibility = Visibility.Collapsed;
-                _unassignedCount.Text = "Не удалось загрузить заказы: " + error.Message;
+                if (server == _server.Text.Trim() && key == _key.Password.Trim() &&
+                    snapshotVersion == _unassignedSnapshotVersion) ShowUnassignedFailure(error);
             }
             finally { _unassignedLoading = false; _unassignedRefresh.IsEnabled = true; }
         }
@@ -2049,7 +2034,10 @@ namespace VanyaTools.Native
             while (current != null && !(current is DataGridRow))
                 current = VisualTreeHelper.GetParent(current);
             if (current is DataGridRow row && row.Item is OrderListItem selected)
+            {
                 await AssignIntake(selected);
+                if (_data.ServerOrderId == selected.Id) _unassignedPicker?.Close();
+            }
         }
 
         private static bool SameOrders(IList<OrderListItem> current, IList<OrderListItem> incoming)
@@ -2411,14 +2399,12 @@ namespace VanyaTools.Native
             finally { _busy = false; UpdateActions(); }
             if (linked)
             {
+                _unassignedSnapshotVersion++; _nextUnassignedRefreshUtc = DateTime.MinValue;
                 var remaining = (_unassignedTable.ItemsSource as IEnumerable<OrderListItem>)?
                     .Where(order => order.Id != selected.Id).ToList();
                 if (remaining != null)
                 {
-                    _unassignedTable.ItemsSource = remaining;
-                    _unassignedTable.Visibility = remaining.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-                    _unassignedCount.Text = remaining.Count > 0
-                        ? "Найдено: " + remaining.Count : "Сейчас заказов без макета нет.";
+                    ApplyUnassignedRows(remaining);
                 }
                 if (OrdersView.IsLoaded) await LoadOrders();
                 await LoadUnassignedTable();
@@ -3140,11 +3126,13 @@ namespace VanyaTools.Native
             bool draft = _data.ServerSendState == "draft";
             bool published = assigned && (_data.ServerSendState == "sent" || _data.ServerSendState == "local");
             bool pending = assigned && (_data.ServerSendState == "uncertain" || _data.ServerSendState == "sending");
-            _send.Content = published ? "Заменить фото и обновить текст" :
-                pending ? "Проверить и повторить публикацию" :
-                draft ? "Опубликовать фото заказа" : "Опубликовать карточку";
+            _send.Content = published ? "Обновить фото и текст" :
+                pending ? "Проверить публикацию" :
+                draft ? "Опубликовать фото" : "Опубликовать карточку";
             _send.IsEnabled = !_busy;
-            _send.ToolTip = _busy ? "Дождитесь завершения операции с карточкой." : null;
+            _send.ToolTip = _busy ? "Дождитесь завершения операции с карточкой." :
+                published ? "Заменить фотографии заказа и обновить текст карточки в Telegram" :
+                pending ? "Проверить и при необходимости повторить публикацию карточки" : "Опубликовать карточку заказа в Telegram";
             ToolTipService.SetShowOnDisabled(_send, true);
             _loadOrders.IsEnabled = !_busy && !_ordersLoading;
             _linkOrder.IsEnabled = !_busy && _ordersTable.SelectedItem != null;
@@ -3188,11 +3176,16 @@ namespace VanyaTools.Native
                 application ? "▶ Нанесение продолжить" : "⏸ Нанесение пауза",
                 urgent ? "⚡ Снять срочность" : "⚡ Срочно",
                 blanksReady ? "❤️ Снять готовность заготовок" : "🤍 Заготовки готовы" };
+            string[] captions = { state == "done" ? "В работу" : "Готов",
+                blanks ? "Продолжить заготовки" : "Пауза заготовок",
+                application ? "Продолжить нанесение" : "Пауза нанесения",
+                urgent ? "Снять срочность" : "Срочно",
+                blanksReady ? "Снять готовность" : "Заготовки готовы" };
             bool[] active = { state == "done", blanks, application, urgent, blanksReady };
             for (int i = 0; i < buttons.Length; i++)
             {
                 if (buttons[i] == null) continue;
-                buttons[i].Content = labels[i]; buttons[i].ToolTip = labels[i];
+                buttons[i].Content = captions[i]; buttons[i].ToolTip = labels[i];
                 buttons[i].IsEnabled = !_busy && (i == 3 ? assigned : published);
                 buttons[i].FontWeight = active[i] ? FontWeights.Bold : FontWeights.Normal;
                 if (active[i]) buttons[i].Foreground = Brushes.Firebrick;
@@ -3300,7 +3293,9 @@ namespace VanyaTools.Native
             TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray,
             Margin = new Thickness(0, 2, 0, 4) };
         private static TextBox Input(int height = 0) => new TextBox { MinHeight = height > 0 ? height : 26,
-            AcceptsReturn = height > 0, TextWrapping = TextWrapping.Wrap,
+            MaxHeight = height > 0 ? Math.Max(height, 110) : Double.PositiveInfinity,
+            FontSize = 11, Padding = new Thickness(3, 2, 3, 2), VerticalContentAlignment = VerticalAlignment.Center,
+            AcceptsReturn = height > 0, TextWrapping = height > 0 ? TextWrapping.Wrap : TextWrapping.NoWrap,
             VerticalScrollBarVisibility = height > 0 ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled,
             Margin = new Thickness(0, 0, 0, 3) };
         private FrameworkElement CreateQuickDocumentFields()
@@ -3368,7 +3363,8 @@ namespace VanyaTools.Native
         }
         private static Button Button(string text, RoutedEventHandler handler)
         {
-            var button = new Button { Content = text, MinHeight = 29, Margin = new Thickness(1, 1, 1, 3) };
+            var button = new Button { Content = text, FontSize = 11, MinHeight = 27, MinWidth = 0,
+                Padding = new Thickness(5, 3, 5, 3), Margin = new Thickness(1, 1, 1, 3) };
             button.Click += handler; return button;
         }
     }
