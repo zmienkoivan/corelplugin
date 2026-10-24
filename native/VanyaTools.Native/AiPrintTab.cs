@@ -673,13 +673,20 @@ namespace VanyaTools.Native
         private void Report(string message, bool error) { _status(message, error); }
         private static double P(string s, double fallback) { double v; return Double.TryParse((s ?? "").Replace(",", "."), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v) ? v : fallback; }
         private static TextBlock Label(string text, bool heading) { return new TextBlock { Text = text, FontSize = heading ? 13 : 11, FontWeight = heading ? FontWeights.SemiBold : FontWeights.Normal, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 3) }; }
-        private static TextBlock Note(string text) { return new TextBlock { Text = text, FontSize = 10, Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 5) }; }
+        private static TextBlock Note(string text)
+        {
+            var note = new TextBlock { Text = text, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 5) };
+            DockerTheme.UseTheme(note, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
+            return note;
+        }
         private static Button Button(string text, RoutedEventHandler handler) { var b = new Button { Content = text, FontSize = 11, MinHeight = 24, Margin = new Thickness(0, 0, 0, 2) }; b.Click += handler; return b; }
         private static Border Preview(string title, out Image image)
         {
             image = new Image { Height = 92, Stretch = Stretch.Uniform };
             var stack = new StackPanel(); stack.Children.Add(Label(title, false));
-            stack.Children.Add(new Border { Height = 98, BorderThickness = new Thickness(1), BorderBrush = Brushes.LightGray, Child = image });
+            var frame = new Border { Height = 98, BorderThickness = new Thickness(1), Child = image };
+            DockerTheme.UseTheme(frame, Border.BorderBrushProperty, DockerTheme.BorderBrush);
+            stack.Children.Add(frame);
             return new Border { Margin = new Thickness(2), Child = stack };
         }
         private static TextBox CropField(Panel parent, string value) { var t = new TextBox { Text = value, FontSize = 10, Height = 22, TextAlignment = TextAlignment.Center, Margin = new Thickness(1) }; parent.Children.Add(t); return t; }

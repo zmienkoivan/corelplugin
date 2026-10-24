@@ -20,14 +20,12 @@ namespace VanyaTools.Native
             HorizontalContentAlignment = HorizontalAlignment.Stretch;
             VerticalContentAlignment = VerticalAlignment.Stretch;
 
-            var root = new Grid {
-                Margin = new Thickness(6),
-                Background = new SolidColorBrush(Color.FromRgb(236, 239, 241))
-            };
+            var root = new Grid { Margin = new Thickness(6) };
+            DockerTheme.UseTheme(root, Panel.BackgroundProperty, DockerTheme.WindowBackground);
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            DockerTheme.Apply(root);
+            DockerTheme.Apply(this);
             Content = root;
 
             root.Children.Add(new TextBlock {
@@ -39,10 +37,11 @@ namespace VanyaTools.Native
                 Text = "Готово", FontSize = 11, TextWrapping = TextWrapping.Wrap,
                 Padding = new Thickness(5, 3, 5, 3)
             };
+            DockerTheme.UseTheme(_status, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
             var statusFrame = new Border {
-                Background = new SolidColorBrush(Color.FromRgb(223, 229, 232)),
                 CornerRadius = new CornerRadius(5), Child = _status
             };
+            DockerTheme.UseTheme(statusFrame, Border.BackgroundProperty, DockerTheme.StatusBackground);
             Grid.SetRow(statusFrame, 1);
             root.Children.Add(statusFrame);
 
@@ -56,7 +55,8 @@ namespace VanyaTools.Native
         private void SetStatus(string message, bool isError)
         {
             _status.Text = message;
-            _status.Foreground = isError ? Brushes.Firebrick : Brushes.DimGray;
+            DockerTheme.UseTheme(_status, TextBlock.ForegroundProperty,
+                isError ? DockerTheme.ErrorTextBrush : DockerTheme.MutedTextBrush);
         }
     }
 }

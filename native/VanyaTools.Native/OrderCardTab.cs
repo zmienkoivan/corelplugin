@@ -154,7 +154,8 @@ namespace VanyaTools.Native
             _unassignedTable.Columns.Add(new DataGridTextColumn { Header = "Срок",
                 Binding = new Binding("Due"), Width = new DataGridLength(80) });
             _unassignedTable.AlternationCount = 2;
-            _unassignedTable.AlternatingRowBackground = new SolidColorBrush(Color.FromRgb(246, 248, 250));
+            DockerTheme.UseTheme(_unassignedTable, DataGrid.RowBackgroundProperty, DockerTheme.SurfaceBackground);
+            DockerTheme.UseTheme(_unassignedTable, DataGrid.AlternatingRowBackgroundProperty, DockerTheme.PanelBackground);
             _unassignedTable.AddHandler(UIElement.MouseLeftButtonUpEvent,
                 new MouseButtonEventHandler(UnassignedRowClicked), true);
             openPanel.Children.Add(_unassignedTable);
@@ -170,13 +171,12 @@ namespace VanyaTools.Native
             var orderHeader = new Grid();
             orderHeader.ColumnDefinitions.Add(new ColumnDefinition());
             orderHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            Grid.SetRow(orderHeader, 1); panel.Children.Add(orderHeader);
             Grid.SetColumn(_unassignedOpenExpander, 1); orderHeader.Children.Add(_unassignedOpenExpander);
             _orderInfo = Note(""); _orderInfo.Margin = new Thickness(0, 0, 5, 0);
             _orderInfo.VerticalAlignment = VerticalAlignment.Center; _orderInfo.TextWrapping = TextWrapping.NoWrap;
             _orderInfo.TextTrimming = TextTrimming.CharacterEllipsis;
             _orderInfo.SetBinding(ToolTipProperty, new Binding("Text") { Source = _orderInfo });
-            orderHeader.Children.Add(_orderInfo);
+            orderHeader.SetBinding(ToolTipProperty, new Binding("Text") { Source = _orderInfo });
             var ordersPanel = new StackPanel();
             var ordersTools = new DockPanel();
             _loadOrders = Button("↻", async (_, __) => await LoadOrders());
@@ -220,40 +220,46 @@ namespace VanyaTools.Native
             _ordersTable.SetValue(ScrollViewer.HorizontalScrollBarVisibilityProperty,
                 ScrollBarVisibility.Auto);
             _ordersTable.AlternationCount = 2;
-            _ordersTable.RowBackground = Brushes.White;
-            _ordersTable.AlternatingRowBackground = new SolidColorBrush(Color.FromRgb(246, 248, 250));
+            DockerTheme.UseTheme(_ordersTable, DataGrid.RowBackgroundProperty, DockerTheme.SurfaceBackground);
+            DockerTheme.UseTheme(_ordersTable, DataGrid.AlternatingRowBackgroundProperty, DockerTheme.PanelBackground);
             var orderRowStyle = new Style(typeof(DataGridRow));
+            orderRowStyle.Setters.Add(new Setter(Control.ForegroundProperty,
+                new DynamicResourceExtension(DockerTheme.TextBrush)));
             var urgentRow = new DataTrigger { Binding = new Binding("Urgent"), Value = true };
             urgentRow.Setters.Add(new Setter(Control.BackgroundProperty,
-                new SolidColorBrush(Color.FromRgb(255, 238, 238))));
+                new DynamicResourceExtension(DockerTheme.UrgentBackground)));
             orderRowStyle.Triggers.Add(urgentRow);
             var completedRow = new DataTrigger { Binding = new Binding("State"), Value = "done" };
             completedRow.Setters.Add(new Setter(Control.BackgroundProperty,
-                new SolidColorBrush(Color.FromRgb(201, 218, 248))));
+                new DynamicResourceExtension(DockerTheme.CompleteBackground)));
             orderRowStyle.Triggers.Add(completedRow);
             var selectedRow = new Trigger { Property = DataGridRow.IsSelectedProperty, Value = true };
             selectedRow.Setters.Add(new Setter(Control.BackgroundProperty,
-                new SolidColorBrush(Color.FromRgb(207, 230, 247))));
-            selectedRow.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.Black));
+                new DynamicResourceExtension(DockerTheme.SelectedBackground)));
+            selectedRow.Setters.Add(new Setter(Control.ForegroundProperty,
+                new DynamicResourceExtension(DockerTheme.SelectedTextBrush)));
             orderRowStyle.Triggers.Add(selectedRow);
             _ordersTable.RowStyle = orderRowStyle;
             // DataGrid may paint cell backgrounds over row backgrounds; tint both layers.
             var orderCellStyle = new Style(typeof(DataGridCell));
             orderCellStyle.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
+            orderCellStyle.Setters.Add(new Setter(Control.ForegroundProperty,
+                new DynamicResourceExtension(DockerTheme.TextBrush)));
             var urgentCell = new DataTrigger { Binding = new Binding("Urgent"), Value = true };
             urgentCell.Setters.Add(new Setter(Control.BackgroundProperty,
-                new SolidColorBrush(Color.FromRgb(255, 238, 238))));
+                new DynamicResourceExtension(DockerTheme.UrgentBackground)));
             orderCellStyle.Triggers.Add(urgentCell);
             var completedCell = new DataTrigger { Binding = new Binding("State"), Value = "done" };
             completedCell.Setters.Add(new Setter(Control.BackgroundProperty,
-                new SolidColorBrush(Color.FromRgb(201, 218, 248))));
+                new DynamicResourceExtension(DockerTheme.CompleteBackground)));
             orderCellStyle.Triggers.Add(completedCell);
             var selectedCell = new DataTrigger { Binding = new Binding("IsSelected") {
                 RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(DataGridRow), 1) },
                 Value = true };
             selectedCell.Setters.Add(new Setter(Control.BackgroundProperty,
-                new SolidColorBrush(Color.FromRgb(207, 230, 247))));
-            selectedCell.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.Black));
+                new DynamicResourceExtension(DockerTheme.SelectedBackground)));
+            selectedCell.Setters.Add(new Setter(Control.ForegroundProperty,
+                new DynamicResourceExtension(DockerTheme.SelectedTextBrush)));
             orderCellStyle.Triggers.Add(selectedCell);
             _ordersTable.CellStyle = orderCellStyle;
             var numberColumn = new DataGridTextColumn { Header = "№", Binding = new Binding("Number"),
@@ -317,9 +323,8 @@ namespace VanyaTools.Native
             DockPanel.SetDock(reloadPhoto, Dock.Right); photoBar.Children.Add(reloadPhoto);
             _photoLabel = Note("Выберите заказ");
             photoBar.Children.Add(_photoLabel); orderDetails.Children.Add(photoBar);
-            var photoStage = new Grid { Height = 175,
-                Background = new SolidColorBrush(Color.FromRgb(235, 238, 240)),
-                Margin = new Thickness(1, 0, 1, 4) };
+            var photoStage = new Grid { Height = 175, Margin = new Thickness(1, 0, 1, 4) };
+            DockerTheme.UseTheme(photoStage, Panel.BackgroundProperty, DockerTheme.PanelBackground);
             _orderPhoto = new Image { Stretch = Stretch.Uniform, SnapsToDevicePixels = true };
             photoStage.Children.Add(_orderPhoto);
             photoStage.Cursor = Cursors.Hand;
@@ -333,8 +338,9 @@ namespace VanyaTools.Native
             var selectedOrderBody = new StackPanel();
             var selectedOrderHeader = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
             _selectedOrderNumber = new TextBlock { FontSize = 12, FontWeight = FontWeights.SemiBold,
-                Foreground = Brushes.DimGray, VerticalAlignment = VerticalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(8, 0, 0, 0) };
+            DockerTheme.UseTheme(_selectedOrderNumber, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
             DockPanel.SetDock(_selectedOrderNumber, Dock.Right);
             selectedOrderHeader.Children.Add(_selectedOrderNumber);
             _selectedOrderHeading = new TextBlock { FontSize = 15, FontWeight = FontWeights.SemiBold,
@@ -354,11 +360,11 @@ namespace VanyaTools.Native
             selectedOrderBody.Children.Add(_selectedOrderDescription);
             selectedOrderBody.Children.Add(_selectedOrderItems);
             _selectedOrderCard = new Border { Child = selectedOrderBody,
-                Background = new SolidColorBrush(Color.FromRgb(247, 249, 250)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(219, 226, 230)),
                 BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6),
                 Padding = new Thickness(9, 8, 9, 7), Margin = new Thickness(1, 0, 1, 7),
                 Visibility = Visibility.Collapsed };
+            DockerTheme.UseTheme(_selectedOrderCard, Border.BackgroundProperty, DockerTheme.PanelBackground);
+            DockerTheme.UseTheme(_selectedOrderCard, Border.BorderBrushProperty, DockerTheme.BorderBrush);
             orderDetails.Children.Add(_selectedOrderCard);
             UpdatePhotoNavigation(null);
             string[] actions = { "state", "blanks", "application", "urgent", "blanksReady" };
@@ -377,45 +383,53 @@ namespace VanyaTools.Native
             _editor.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             Grid.SetRow(_editor, 3); panel.Children.Add(_editor);
             var body = new StackPanel(); _editor.Children.Add(body);
-            var identity = new UniformGrid { Columns = 2, Margin = new Thickness(0, 1, 0, 4) };
-            body.Children.Add(identity);
+            var identityAndDescription = new UniformGrid { Columns = 2, Margin = new Thickness(0, 1, 0, 4) };
+            var identity = new StackPanel();
+            identityAndDescription.Children.Add(identity);
             _customer = Input(); CompactCardField(identity, "Заказчик", _customer, false);
-            _designName = Input(); CompactCardField(identity, "Макет", _designName, true);
+            _designName = Input(); CompactCardField(identity, "Имя файла", _designName, false);
             _sourceOptions = new WrapPanel { Margin = new Thickness(0, 0, 0, 3) };
-            _sourceOptions.Children.Add(new TextBlock { Text = "Канал", FontSize = 11,
-                Foreground = Brushes.DimGray, VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(1, 0, 7, 0) });
+            var sourceLabel = Note("Источник");
+            sourceLabel.VerticalAlignment = VerticalAlignment.Center;
+            sourceLabel.Margin = new Thickness(1, 0, 7, 0);
+            _sourceOptions.Children.Add(sourceLabel);
             foreach (string name in new[] { "ТГ", "ВК", "ПОЧТА", "КП" }) AddSourceChoice(name);
-            body.Children.Add(_sourceOptions);
             var production = new StackPanel { Margin = new Thickness(0, 1, 0, 4) };
-            body.Children.Add(production);
-            production.Children.Add(new TextBlock { Text = "Технологии", FontSize = 11,
-                Foreground = Brushes.DimGray, Margin = new Thickness(1, 0, 1, 2) });
+            var technologyLabel = Note("Технологии");
+            technologyLabel.Margin = new Thickness(1, 0, 1, 2);
+            production.Children.Add(technologyLabel);
             _technologyOptions = new UniformGrid { Columns = 3 };
             foreach (string name in new[] { "ДТФ", "Шелкография", "ПУФ", "Вышивка", "Сублимация", "Лазер", "УФ ДТФ", "ТЕРМ" })
                 AddTechnologyChoice(name);
             production.Children.Add(_technologyOptions);
-            _delivery = new CheckBox { Content = "Доставка", FontSize = 11,
-                Margin = new Thickness(2, 3, 2, 4) };
-            _customerTextile = new CheckBox { Content = "Текстиль клиента", ToolTip = "Изделия или текстиль предоставлены заказчиком", Margin = new Thickness(2, 5, 2, 5) };
-            _customerTextile.FontSize = 11;
-            var textileRow = new Grid { Margin = new Thickness(0, 3, 0, 4) };
-            textileRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.05, GridUnitType.Star) });
-            textileRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(.9, GridUnitType.Star) });
-            textileRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.65, GridUnitType.Star) });
-            _customerTextile.Margin = _delivery.Margin = new Thickness(1, 0, 3, 0);
+            _delivery = new CheckBox { Content = "Доставка", FontSize = 10, ToolTip = "Доставка заказа" };
+            _customerTextile = new CheckBox { Content = "Текстиль", FontSize = 10,
+                ToolTip = "Изделия или текстиль предоставлены заказчиком" };
+            UseCompactChoiceCaption(_customerTextile, "Текстиль");
+            UseCompactChoiceCaption(_delivery, "Доставка");
+            var textileRow = new Grid { Margin = new Thickness(0, 2, 0, 2) };
+            textileRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            textileRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            textileRow.ColumnDefinitions.Add(new ColumnDefinition());
+            _customerTextile.Margin = _delivery.Margin = new Thickness(1, 0, 4, 0);
             _customerTextile.VerticalAlignment = _delivery.VerticalAlignment = VerticalAlignment.Center;
             textileRow.Children.Add(_customerTextile); Grid.SetColumn(_delivery, 1); textileRow.Children.Add(_delivery);
             production.Children.Add(textileRow);
             _urgent = Button("⚡ Срочно", async (_, __) => await ToggleCardUrgency());
-            var dueRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
-            var clearDue = Button("×", (_, __) => _dueDate.SelectedDate = null); clearDue.Width = 20;
+            var dueRow = new DockPanel();
+            var clearDue = Button("×", (_, __) => _dueDate.SelectedDate = null); clearDue.Width = 16;
+            clearDue.MinHeight = 24;
             clearDue.Padding = new Thickness(0); clearDue.Margin = new Thickness(1, 0, 0, 0);
             clearDue.ToolTip = "Убрать срок заказа";
             DockPanel.SetDock(clearDue, Dock.Right);
             dueRow.Children.Add(clearDue);
             _dueDate = new DatePicker { SelectedDateFormat = DatePickerFormat.Short,
-                FontSize = 11, MinWidth = 0, MinHeight = 27, Margin = new Thickness(1, 0, 0, 0) };
+                FontSize = 10, MinWidth = 0, MinHeight = 24, Margin = new Thickness(0) };
+            _dueDate.Loaded += (_, __) =>
+            {
+                if (_dueDate.Template.FindName("PART_TextBox", _dueDate) is DatePickerTextBox dateText)
+                    dateText.Padding = new Thickness(1, 1, 0, 1);
+            };
             System.Windows.Automation.AutomationProperties.SetName(_dueDate, "Срок сдачи");
             _dueDate.ToolTip = "Выберите дату сдачи. Срок сохранится на сервере при публикации карточки.";
             _dueDate.DateValidationError += (_, error) => {
@@ -426,7 +440,6 @@ namespace VanyaTools.Native
             Grid.SetColumn(dueRow, 2); textileRow.Children.Add(dueRow);
 
             var frameTools = new Grid { Margin = new Thickness(0, 1, 0, 5) };
-            body.Children.Add(frameTools);
             _frames = new StackPanel { Margin = new Thickness(0, 2, 0, 0) };
             _frameExpander = new Expander { Header = "Кадры (0)", Content = _frames, IsExpanded = true,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
@@ -439,15 +452,22 @@ namespace VanyaTools.Native
             addFrame.Height = 26; addFrame.Margin = new Thickness(0);
             frameTools.Children.Add(addFrame);
 
-            var details = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 4) };
-            body.Children.Add(details);
-            _description = Input(44); _description.Height = _description.MinHeight = _description.MaxHeight = 44;
-            CompactCardField(details, "Описание", _description, false);
-            _items = Input(44); _items.Height = _items.MinHeight = _items.MaxHeight = 44;
-            CompactCardField(details, "Изделия и количество", _items, true);
-            var stateRow = new UniformGrid { Columns = 2 };
+            var descriptionColumn = new StackPanel(); identityAndDescription.Children.Add(descriptionColumn);
+            _description = Input(71); _description.Height = _description.MinHeight = _description.MaxHeight = 71;
+            CompactCardField(descriptionColumn, "Описание заказа", _description, true);
+            var itemDetails = new StackPanel { Margin = new Thickness(0, 0, 0, 3) };
+            _items = Input(30); _items.Height = _items.MinHeight = _items.MaxHeight = 30;
+            CompactCardField(itemDetails, "Изделия и количество", _items, false);
+
+            // Keep the intake sequence visible from top to bottom in the docker.
+            body.Children.Add(frameTools);
+            body.Children.Add(production);
+            body.Children.Add(_sourceOptions);
+            body.Children.Add(identityAndDescription);
+            orderHeader.Children.Add(CreateCardNumberRow());
+            body.Children.Add(orderHeader);
+            body.Children.Add(itemDetails);
             _state = Button("", async (_, __) => await ChangeWorkflow("state"));
-            stateRow.Children.Add(_state); stateRow.Children.Add(_urgent); body.Children.Add(stateRow);
 
             var publication = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
             Grid.SetRow(publication, 2); _editor.Children.Add(publication);
@@ -455,26 +475,28 @@ namespace VanyaTools.Native
             _caption.Padding = new Thickness(5);
             CardHideEmpty(_caption);
             _send = DockerTheme.Primary(Button("Опубликовать в Telegram", async (_, __) => await Publish(true)));
-            publication.Children.Add(_send);
             _updateText = Button("Только текст", async (_, __) => await Publish(false));
             _updateText.ToolTip = "Обновить текст карточки без экспорта и замены фотографий";
-            AddLabelPrinting(publication);
+            CardActionRows(publication, _send, _updateText);
+            AddLabelPrinting(publication, compact: true);
             CardHideEmpty(_printLabelResult);
-            var more = new StackPanel { Margin = new Thickness(6) };
-            more.Children.Add(new Expander { Header = "Подпись Telegram", Content = _caption,
-                IsExpanded = false, HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                Margin = new Thickness(0, 0, 0, 5) });
             _blanksPause = Button("", async (_, __) => await ChangeWorkflow("blanks"));
             _applicationPause = Button("", async (_, __) => await ChangeWorkflow("application"));
             _blanksReady = Button("", async (_, __) => await ChangeWorkflow("blanksReady"));
-            foreach (var button in new[] { _blanksPause, _applicationPause, _blanksReady }) more.Children.Add(button);
-            _refreshServer = Button("Обновить с сервера", async (_, __) => await RefreshServer());
-            more.Children.Add(_refreshServer);
-            more.Children.Add(Button("Новая карточка", (_, __) => { if (!_busy) Safe(ClearCard); }));
-            var moreButton = Button("Ещё ▾", (_, __) => ShowCardTools(more));
-            moreButton.ToolTip = "Подпись Telegram, состояния производства и дополнительные команды карточки";
-            CardActionRows(publication, _updateText, moreButton);
-            CardHideEmpty(_orderInfo);
+            var workflow = new UniformGrid { Columns = 3 };
+            foreach (var button in new[] { _state, _urgent, _blanksReady, _blanksPause, _applicationPause })
+                workflow.Children.Add(button);
+            _refreshServer = Button("↻ Сервер", async (_, __) => await RefreshServer());
+            _refreshServer.ToolTip = "Обновить карточку с сервера";
+            workflow.Children.Add(_refreshServer);
+            publication.Children.Add(workflow);
+            var finalActions = new UniformGrid { Columns = 2 };
+            finalActions.Children.Add(Button("Новая карточка", (_, __) => { if (!_busy) Safe(ClearCard); }));
+            finalActions.Children.Add(new Expander { Header = "Подпись Telegram", Content = _caption,
+                IsExpanded = false, HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                FontSize = 10, VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(4, 1, 1, 0) });
+            publication.Children.Add(finalActions);
 
             var settings = new StackPanel { Margin = new Thickness(0) };
             var serverSettings = new StackPanel();
@@ -502,11 +524,12 @@ namespace VanyaTools.Native
             var browseFolder = Button("", (_, __) => Safe(ChooseYearFolder));
             browseFolder.Width = 36;
             browseFolder.ToolTip = "Выбрать папку года";
-            browseFolder.Content = new Viewbox { Width = 18, Height = 18, Child =
-                new System.Windows.Shapes.Path {
+            var folderIcon = new System.Windows.Shapes.Path {
                     Data = Geometry.Parse("M 2,6 L 8,6 10,8 20,8 20,18 2,18 Z M 2,6 L 2,4 9,4 11,6"),
-                    Stroke = Brushes.DarkSlateGray, StrokeThickness = 1.7,
-                    StrokeLineJoin = PenLineJoin.Round, Fill = Brushes.Transparent } };
+                    StrokeThickness = 1.7,
+                    StrokeLineJoin = PenLineJoin.Round, Fill = Brushes.Transparent };
+            DockerTheme.UseTheme(folderIcon, System.Windows.Shapes.Shape.StrokeProperty, DockerTheme.TextBrush);
+            browseFolder.Content = new Viewbox { Width = 18, Height = 18, Child = folderIcon };
             DockPanel.SetDock(browseFolder, Dock.Right);
             folderRow.Children.Add(browseFolder);
             var saveFolder = Button("✓", (_, __) => Safe(SaveFileSettings));
@@ -944,7 +967,11 @@ namespace VanyaTools.Native
 
         private void AddTechnologyChoice(string name)
         {
-            var box = new CheckBox { Content = name, FontSize = 11, Margin = new Thickness(2, 2, 2, 2) };
+            string caption = name == "Шелкография" ? "Шёлк" : name == "Сублимация" ? "Сублим." :
+                name == "Вышивка" ? "Вышив." : name;
+            var box = new CheckBox { Content = name, FontSize = 10.5,
+                MinHeight = 18, Margin = new Thickness(1, 0, 1, 0), ToolTip = name };
+            UseCompactChoiceCaption(box, caption);
             box.Checked += (_, __) => FormChanged();
             box.Unchecked += (_, __) => FormChanged();
             _technologies.Add(box);
@@ -3123,12 +3150,14 @@ namespace VanyaTools.Native
             if (_send == null) return;
             UpdateLabelPrinting();
             bool assigned = _data.ServerOrderId > 0;
+            if (_cardNumberCaption != null)
+                _cardNumberCaption.Text = assigned ? "№" + _data.ServerOrderNumber : "Заказ №";
             bool draft = _data.ServerSendState == "draft";
             bool published = assigned && (_data.ServerSendState == "sent" || _data.ServerSendState == "local");
             bool pending = assigned && (_data.ServerSendState == "uncertain" || _data.ServerSendState == "sending");
-            _send.Content = published ? "Обновить фото и текст" :
-                pending ? "Проверить публикацию" :
-                draft ? "Опубликовать фото" : "Опубликовать карточку";
+            _send.Content = published ? "Обновить фото" :
+                pending ? "Проверить" : "Опубликовать";
+            Grid.SetColumnSpan(_send, published ? 1 : 2);
             _send.IsEnabled = !_busy;
             _send.ToolTip = _busy ? "Дождитесь завершения операции с карточкой." :
                 published ? "Заменить фотографии заказа и обновить текст карточки в Telegram" :
@@ -3144,12 +3173,12 @@ namespace VanyaTools.Native
                 _data.ServerState, _data.ServerBlanksPaused, _data.ServerApplicationPaused, _data.ServerUrgent,
                 _data.ServerBlanksReady, canWorkflow, assigned);
             bool publicationUrgent = published ? _data.ServerUrgent : _data.IsUrgent ?? _data.ServerUrgent;
-            _urgent.Content = publicationUrgent ? "⚡ Снять срочность" : "⚡ Срочно";
+            _urgent.Content = publicationUrgent ? "Срочно ✓" : "⚡ Срочно";
             _urgent.IsEnabled = !_busy;
             _urgent.ToolTip = published ? "Изменить срочность заказа" :
                 "Добавить или убрать тег «Срочно» перед публикацией карточки";
             _urgent.FontWeight = publicationUrgent ? FontWeights.Bold : FontWeights.Normal;
-            if (publicationUrgent) _urgent.Foreground = Brushes.Firebrick;
+            if (publicationUrgent) DockerTheme.UseTheme(_urgent, Control.ForegroundProperty, DockerTheme.ErrorTextBrush);
             else _urgent.ClearValue(Control.ForegroundProperty);
             var selected = _ordersTable.SelectedItem as OrderListItem;
             SetWorkflowButtons(_listWorkflow, selected?.State, selected?.BlanksPaused == true,
@@ -3177,10 +3206,10 @@ namespace VanyaTools.Native
                 urgent ? "⚡ Снять срочность" : "⚡ Срочно",
                 blanksReady ? "❤️ Снять готовность заготовок" : "🤍 Заготовки готовы" };
             string[] captions = { state == "done" ? "В работу" : "Готов",
-                blanks ? "Продолжить заготовки" : "Пауза заготовок",
-                application ? "Продолжить нанесение" : "Пауза нанесения",
-                urgent ? "Снять срочность" : "Срочно",
-                blanksReady ? "Снять готовность" : "Заготовки готовы" };
+                blanks ? "Заготовки ▶" : "Заготовки ⏸",
+                application ? "Нанесение ▶" : "Нанесение ⏸",
+                urgent ? "Срочно ✓" : "Срочно",
+                blanksReady ? "Заготовки ✓" : "Заготовки ♡" };
             bool[] active = { state == "done", blanks, application, urgent, blanksReady };
             for (int i = 0; i < buttons.Length; i++)
             {
@@ -3188,7 +3217,7 @@ namespace VanyaTools.Native
                 buttons[i].Content = captions[i]; buttons[i].ToolTip = labels[i];
                 buttons[i].IsEnabled = !_busy && (i == 3 ? assigned : published);
                 buttons[i].FontWeight = active[i] ? FontWeights.Bold : FontWeights.Normal;
-                if (active[i]) buttons[i].Foreground = Brushes.Firebrick;
+                if (active[i]) DockerTheme.UseTheme(buttons[i], Control.ForegroundProperty, DockerTheme.ErrorTextBrush);
                 else buttons[i].ClearValue(Control.ForegroundProperty);
             }
         }
@@ -3289,9 +3318,13 @@ namespace VanyaTools.Native
             FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 5) };
         private static TextBlock Label(string text) => new TextBlock { Text = text, FontSize = 11,
             Margin = new Thickness(0, 5, 0, 2) };
-        private static TextBlock Note(string text) => new TextBlock { Text = text, FontSize = 11,
-            TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray,
-            Margin = new Thickness(0, 2, 0, 4) };
+        private static TextBlock Note(string text)
+        {
+            var note = new TextBlock { Text = text, FontSize = 11, TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 2, 0, 4) };
+            DockerTheme.UseTheme(note, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
+            return note;
+        }
         private static TextBox Input(int height = 0) => new TextBox { MinHeight = height > 0 ? height : 26,
             MaxHeight = height > 0 ? Math.Max(height, 110) : Double.PositiveInfinity,
             FontSize = 11, Padding = new Thickness(3, 2, 3, 2), VerticalContentAlignment = VerticalAlignment.Center,
@@ -3352,12 +3385,12 @@ namespace VanyaTools.Native
             grid.Children.Add(save);
             var border = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(218, 238, 218)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(150, 192, 153)),
                 BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6),
                 Padding = new Thickness(6, 4, 6, 4), Margin = new Thickness(5, 3, 5, 4),
                 Child = grid
             };
+            DockerTheme.UseTheme(border, Border.BackgroundProperty, DockerTheme.PanelBackground);
+            DockerTheme.UseTheme(border, Border.BorderBrushProperty, DockerTheme.BorderBrush);
             border.SetBinding(IsEnabledProperty, new Binding("IsEnabled") { Source = _editor });
             return border;
         }

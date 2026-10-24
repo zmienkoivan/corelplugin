@@ -7,7 +7,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 using Microsoft.Win32;
 
 namespace VanyaTools.Native
@@ -46,7 +45,8 @@ namespace VanyaTools.Native
             inputHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             inputHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             _count = new TextBlock { Text = "0 надписей", VerticalAlignment = VerticalAlignment.Center,
-                Foreground = Brushes.DimGray, FontSize = 11 };
+                FontSize = 11 };
+            DockerTheme.UseTheme(_count, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
             inputHeader.Children.Add(_count);
             var loadButton = Button("Загрузить TXT", LoadFile);
             Grid.SetColumn(loadButton, 1);
@@ -289,8 +289,13 @@ namespace VanyaTools.Native
 
         private static TextBlock Label(string text) { return new TextBlock { Text = text, FontSize = 11,
             VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap }; }
-        private static TextBlock Note(string text) { return new TextBlock { Text = text, FontSize = 10,
-            TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, Margin = new Thickness(0, 0, 0, 6) }; }
+        private static TextBlock Note(string text)
+        {
+            var note = new TextBlock { Text = text, FontSize = 10,
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) };
+            DockerTheme.UseTheme(note, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
+            return note;
+        }
         private static TextBox Field(string text) { return new TextBox { Text = text, FontSize = 11,
             Height = 25, TextAlignment = TextAlignment.Center, Margin = new Thickness(3, 0, 0, 0) }; }
         private static Button Button(string text, RoutedEventHandler action)

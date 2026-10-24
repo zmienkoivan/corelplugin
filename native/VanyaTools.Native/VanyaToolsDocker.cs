@@ -61,13 +61,13 @@ namespace VanyaTools.Native
 
             var outer = new Grid
             {
-                Margin = new Thickness(6),
-                Background = new SolidColorBrush(Color.FromRgb(236, 239, 241))
+                Margin = new Thickness(6)
             };
             outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             outer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            DockerTheme.Apply(outer);
+            DockerTheme.Apply(this);
+            DockerTheme.UseTheme(outer, Panel.BackgroundProperty, DockerTheme.WindowBackground);
             Content = outer;
 
             var heading = new TextBlock
@@ -91,10 +91,10 @@ namespace VanyaTools.Native
             };
             var statusFrame = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(223, 229, 232)),
                 CornerRadius = new CornerRadius(5),
                 Child = _status
             };
+            DockerTheme.UseTheme(statusFrame, Border.BackgroundProperty, DockerTheme.StatusBackground);
             Grid.SetRow(statusFrame, 1);
             outer.Children.Add(statusFrame);
 
@@ -119,6 +119,7 @@ namespace VanyaTools.Native
             var printExportSettings = PrintExportSettings.Load();
             var printExport = new PrintExportTab(printExportSettings, SetStatus);
             var interfaceSettings = new StackPanel();
+            interfaceSettings.Children.Add(DockerTheme.CreateSettingsView(SetStatus));
             interfaceSettings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
             interfaceSettings.Children.Add(Button("Восстановить кнопки на панели Corel", (_, __) =>
             {
@@ -745,9 +746,8 @@ namespace VanyaTools.Native
         {
             _uiWatchdog?.Note(text);
             _status.Text = text;
-            _status.Foreground = isError
-                ? new SolidColorBrush(Color.FromRgb(138, 31, 17))
-                : new SolidColorBrush(Color.FromRgb(66, 81, 91));
+            DockerTheme.UseTheme(_status, TextBlock.ForegroundProperty,
+                isError ? DockerTheme.ErrorTextBrush : DockerTheme.TextBrush);
         }
 
         private static Dock LoadTabsPlacement()
@@ -850,8 +850,8 @@ namespace VanyaTools.Native
             var cells = new UniformGrid { Rows = 3, Columns = 3, Width = 39, Height = 39 };
             var marker = new FrameworkElementFactory(typeof(Border));
             marker.Name = "Marker";
-            marker.SetValue(Border.BackgroundProperty, new SolidColorBrush(Colors.White));
-            marker.SetValue(Border.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(109, 127, 138)));
+            marker.SetResourceReference(Border.BackgroundProperty, DockerTheme.InputBackground);
+            marker.SetResourceReference(Border.BorderBrushProperty, DockerTheme.BorderBrush);
             marker.SetValue(Border.BorderThicknessProperty, new Thickness(1));
             marker.SetValue(Border.CornerRadiusProperty, new CornerRadius(1));
             marker.SetValue(FrameworkElement.MarginProperty, new Thickness(1));
@@ -883,17 +883,18 @@ namespace VanyaTools.Native
                 cells.Children.Add(radio);
             }
 
-            return new Border
+            var picker = new Border
             {
                 Child = cells,
-                Background = new SolidColorBrush(Color.FromRgb(223, 229, 232)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(166, 186, 199)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(2),
                 Margin = new Thickness(0, 0, 0, 2),
                 VerticalAlignment = VerticalAlignment.Center
             };
+            DockerTheme.UseTheme(picker, Border.BackgroundProperty, DockerTheme.StatusBackground);
+            DockerTheme.UseTheme(picker, Border.BorderBrushProperty, DockerTheme.BorderBrush);
+            return picker;
         }
 
         private static TextBox AddRow(Panel root, string label, string value)
@@ -957,14 +958,15 @@ namespace VanyaTools.Native
 
         private static void AddSmallLabel(Panel root, string text)
         {
-            root.Children.Add(new TextBlock
+            var label = new TextBlock
             {
                 Text       = text,
                 FontSize   = 10,
-                Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
                 Margin     = new Thickness(0, 3, 0, 2),
                 TextWrapping = TextWrapping.Wrap
-            });
+            };
+            DockerTheme.UseTheme(label, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
+            root.Children.Add(label);
         }
 
         private static double ParseDouble(string text, double fallback)

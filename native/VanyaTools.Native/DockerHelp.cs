@@ -40,14 +40,19 @@ namespace VanyaTools.Native
                 Children.Add(_button);
                 _text = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap,
                     BorderThickness = new Thickness(0), Background = Brushes.Transparent,
-                    Foreground = Brushes.Black, FontFamily = new FontFamily("Segoe UI"),
+                    FontFamily = new FontFamily("Segoe UI"),
                     FontSize = 12, MaxHeight = 360,
                     VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+                DockerTheme.UseTheme(_text, Control.ForegroundProperty, DockerTheme.TextBrush);
+                var popupView = new Border { Width = 380, Padding = new Thickness(12),
+                    BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Child = _text };
+                // Popup has its own presentation tree. Register its palette once
+                // so an already open help window follows the selected theme.
+                DockerTheme.Apply(popupView);
+                DockerTheme.UseTheme(popupView, Border.BackgroundProperty, DockerTheme.SurfaceBackground);
+                DockerTheme.UseTheme(popupView, Border.BorderBrushProperty, DockerTheme.BorderBrush);
                 _popup = new Popup { PlacementTarget = _button, Placement = PlacementMode.Bottom,
-                    StaysOpen = false, AllowsTransparency = true,
-                    Child = new Border { Width = 380, Padding = new Thickness(12),
-                        Background = Brushes.White, BorderBrush = Brushes.SlateGray,
-                        BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Child = _text } };
+                    StaysOpen = false, AllowsTransparency = true, Child = popupView };
                 _button.Click += (_, __) => _popup.IsOpen = !_popup.IsOpen;
                 _popup.Opened += (_, __) => _text.Focus();
                 _text.PreviewKeyDown += (_, e) =>

@@ -47,8 +47,10 @@ namespace VanyaTools.Native
             var panel = new StackPanel(); Content = panel;
             var title = new TextBlock { Text = "Пары меток документа", FontWeight = FontWeights.SemiBold, FontSize = 13,
                 Margin = new Thickness(0, 5, 0, 3) }; panel.Children.Add(title);
-            _summary = new TextBlock { FontSize = 10, Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, 3) }; panel.Children.Add(_summary);
+            _summary = new TextBlock { FontSize = 10, TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 3) };
+            DockerTheme.UseTheme(_summary, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
+            panel.Children.Add(_summary);
             _grid = new DataGrid { ItemsSource = _rows, AutoGenerateColumns = false, CanUserAddRows = false,
                 CanUserDeleteRows = false, CanUserSortColumns = false, SelectionMode = DataGridSelectionMode.Single,
                 HeadersVisibility = DataGridHeadersVisibility.Column, RowHeight = 28, FontSize = 11,
@@ -174,7 +176,7 @@ namespace VanyaTools.Native
 
         private void Show(string message, bool error, bool notify = true)
         {
-            if (_message != null) { _message.Text = message; _message.Foreground = error ? Brushes.Firebrick : Brushes.DarkSlateGray; }
+            if (_message != null) { _message.Text = message; DockerTheme.UseTheme(_message, TextBlock.ForegroundProperty, error ? DockerTheme.ErrorTextBrush : DockerTheme.TextBrush); }
             if (notify && !String.IsNullOrWhiteSpace(message)) _status(message, error);
         }
     }

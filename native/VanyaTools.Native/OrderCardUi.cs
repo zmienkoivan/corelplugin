@@ -14,12 +14,13 @@ namespace VanyaTools.Native
     {
         private Expander _orderSelectionExpander;
         private TextBlock _orderSelectionLabel;
+        private TextBlock _cardNumberCaption;
         private Expander _unassignedOpenExpander;
         private int? _unassignedKnownCount;
         private int _unassignedSnapshotVersion;
         private string _unassignedContextServer, _unassignedContextKey, _lastUnassignedError;
         private DateTime _nextUnassignedRefreshUtc = DateTime.MinValue, _lastUnassignedErrorUtc;
-        private Window _unassignedPicker, _cardToolsWindow;
+        private Window _unassignedPicker;
 
         private static void CompactCardField(Panel parent, string caption, Control editor, bool right)
         {
@@ -29,6 +30,16 @@ namespace VanyaTools.Native
             var field = DockerLayout.LabeledField(caption, editor);
             field.Margin = right ? new Thickness(3, 0, 0, 0) : new Thickness(0, 0, 3, 0);
             parent.Children.Add(field);
+        }
+
+        private static void UseCompactChoiceCaption(ContentControl choice, string caption)
+        {
+            var text = new FrameworkElementFactory(typeof(TextBlock));
+            text.SetValue(TextBlock.TextProperty, caption);
+            text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.NoWrap);
+            text.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+            choice.ContentTemplate = new DataTemplate { VisualTree = text };
+            AutomationProperties.SetName(choice, Convert.ToString(choice.Content));
         }
 
         private static ControlTemplate AlwaysOpenFramesTemplate()
@@ -57,22 +68,28 @@ namespace VanyaTools.Native
             }
         }
 
-        private void ShowCardTools(StackPanel tools)
+        private FrameworkElement CreateCardNumberRow()
         {
-            if (_busy || !_editor.IsEnabled || _cardToolsWindow != null) return;
-            var scroll = new ScrollViewer { Content = tools, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
-            var window = new Window { Title = "Карточка · дополнительные действия", Width = 390,
-                SizeToContent = SizeToContent.Height, MaxHeight = Math.Max(300, SystemParameters.WorkArea.Height - 80),
-                MinWidth = 320, WindowStartupLocation = WindowStartupLocation.CenterScreen, Content = scroll };
-            _cardToolsWindow = window;
-            try
+            var row = new DockPanel { Margin = new Thickness(0, 0, 5, 2) };
+            var number = Input(); number.Margin = new Thickness(1, 0, 1, 0);
+            number.MaxLength = 10;
+            number.ToolTip = "Открыть карточку по номеру, например 10001 или 2026/10001.";
+            AutomationProperties.SetName(number, "Номер заказа для загрузки карточки");
+            var open = Button("↵", async (_, __) => await OpenServerOrder(number.Text.Trim()));
+            open.Width = 27; open.Margin = new Thickness(1, 0, 0, 0);
+            open.Padding = new Thickness(0);
+            open.ToolTip = "Загрузить карточку заказа по номеру";
+            DockPanel.SetDock(open, Dock.Right); row.Children.Add(open);
+            _cardNumberCaption = Label("Заказ №"); _cardNumberCaption.VerticalAlignment = VerticalAlignment.Center;
+            _cardNumberCaption.Margin = new Thickness(1, 0, 4, 0);
+            DockPanel.SetDock(_cardNumberCaption, Dock.Left); row.Children.Add(_cardNumberCaption);
+            row.Children.Add(number);
+            number.KeyDown += async (_, e) =>
             {
-                tools.SetBinding(IsEnabledProperty, new Binding("IsEnabled") { Source = _editor });
-                DockerTheme.Apply(scroll); OwnCardWindow(window); window.ShowDialog();
-            }
-            catch (Exception error) { Log.Error("Card tools window failed.", error); _status(error.Message, true); }
-            finally { scroll.Content = null; window.Content = null; _cardToolsWindow = null; }
+                if (e.Key != System.Windows.Input.Key.Enter || _busy) return;
+                e.Handled = true; await OpenServerOrder(number.Text.Trim());
+            };
+            return row;
         }
 
         private async Task ShowUnassignedPicker(StackPanel content)
@@ -91,7 +108,7 @@ namespace VanyaTools.Native
                 _unassignedOpenExpander.Content = null;
                 _unassignedTable.Height = 280;
                 content.Margin = new Thickness(8);
-                window.Content = content; DockerTheme.Apply(content); OwnCardWindow(window); window.ShowDialog();
+                window.Content = content; DockerTheme.Apply(window); OwnCardWindow(window); window.ShowDialog();
             }
             catch (Exception error) { Log.Error("Orders without cards picker failed.", error); _status(error.Message, true); }
             finally

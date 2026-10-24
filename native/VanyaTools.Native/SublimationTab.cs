@@ -589,8 +589,13 @@ namespace VanyaTools.Native
         private static TextBlock Label(string text, bool heading) { return new TextBlock { Text = text, FontSize = heading ? 13 : 11,
             FontWeight = heading ? FontWeights.SemiBold : FontWeights.Normal, TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 3, 0, 3) }; }
-        private static TextBlock Note(string text) { return new TextBlock { Text = text, FontSize = 10,
-            Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 5) }; }
+        private static TextBlock Note(string text)
+        {
+            var note = new TextBlock { Text = text, FontSize = 10,
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 5) };
+            DockerTheme.UseTheme(note, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
+            return note;
+        }
         private static TextBox Field(string value) { return new TextBox { Text = value, FontSize = 11, Height = 24,
             TextAlignment = TextAlignment.Center, Margin = new Thickness(1, 0, 1, 4) }; }
         private static Button Button(string text, RoutedEventHandler click) { var button = new Button { Content = text,
@@ -599,8 +604,9 @@ namespace VanyaTools.Native
         {
             image = new Image { Height = 90, Stretch = Stretch.Uniform };
             var content = new StackPanel(); content.Children.Add(Label(title, false));
-            content.Children.Add(new Border { Height = 96, BorderBrush = Brushes.LightGray,
-                BorderThickness = new Thickness(1), Child = image });
+            var frame = new Border { Height = 96, BorderThickness = new Thickness(1), Child = image };
+            DockerTheme.UseTheme(frame, Border.BorderBrushProperty, DockerTheme.BorderBrush);
+            content.Children.Add(frame);
             return new Border { Margin = new Thickness(2), Child = content };
         }
     }

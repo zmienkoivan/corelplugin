@@ -300,7 +300,12 @@ namespace VanyaTools.Native
         }
         private static TextBlock Title(string text) => new TextBlock { Text = text, FontSize = 14,
             FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) };
-        private static TextBlock Note(string text) => new TextBlock { Text = text, FontSize = 10,
-            TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, Margin = new Thickness(0, 0, 0, 8) };
+        private static TextBlock Note(string text)
+        {
+            var note = new TextBlock { Text = text, FontSize = 10,
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
+            DockerTheme.UseTheme(note, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
+            return note;
+        }
     }
 }

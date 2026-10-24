@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 
 namespace VanyaTools.Native
 {
@@ -29,7 +28,8 @@ namespace VanyaTools.Native
             _workflowGuide.ColumnDefinitions.Add(new ColumnDefinition());
             _workflowGuide.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             _workflowGuideText = new TextBlock { FontSize = 11, TextWrapping = TextWrapping.Wrap,
-                Foreground = Brushes.DarkSlateGray, VerticalAlignment = VerticalAlignment.Center };
+                VerticalAlignment = VerticalAlignment.Center };
+            DockerTheme.UseTheme(_workflowGuideText, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
             _workflowGuide.Children.Add(_workflowGuideText);
             _workflowGuideNext = new Button { FontSize = 11, MinHeight = 27, MinWidth = 0,
                 Padding = new Thickness(6, 2, 6, 2), Margin = new Thickness(6, 0, 0, 0),

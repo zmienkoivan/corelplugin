@@ -30,7 +30,7 @@ namespace VanyaTools.Native
                 int visible = Math.Min(4, count);
                 var tiles = new UniformGrid { Columns = visible == 4 ? 2 : visible,
                     Margin = new Thickness(-2, 0, -2, 0) };
-                double height = visible == 1 ? 106 : visible == 2 ? 78 : visible == 3 ? 68 : count > 4 ? 42 : 56;
+                double height = visible == 1 ? 78 : visible == 2 ? 62 : visible == 3 ? 54 : 39;
                 for (int index = 0; index < visible; index++) tiles.Children.Add(CreateFrameTile(index, height));
                 _frames.Children.Add(tiles);
                 if (count > 4)
@@ -49,9 +49,10 @@ namespace VanyaTools.Native
             object document = _documentIdentity;
             var tile = new Grid { Height = height, Margin = new Thickness(2), MinWidth = 0 };
             var image = new Image { Stretch = Stretch.Uniform, Margin = new Thickness(2), SnapsToDevicePixels = true };
-            var imageArea = new Border { Child = image, Background = new SolidColorBrush(Color.FromRgb(235, 239, 242)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(184, 198, 207)), BorderThickness = new Thickness(1),
+            var imageArea = new Border { Child = image, BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(4), Cursor = Cursors.Hand };
+            DockerTheme.UseTheme(imageArea, Border.BackgroundProperty, DockerTheme.PanelBackground);
+            DockerTheme.UseTheme(imageArea, Border.BorderBrushProperty, DockerTheme.BorderBrush);
             int objects = frame.ObjectCount > 0 ? frame.ObjectCount : frame.Shapes?.Count ?? 0;
             string description = "Кадр " + (index + 1) + (objects > 0 ? " · объектов: " + objects :
                 String.IsNullOrWhiteSpace(frame.ServerPhotoKey) ? " · растровый снимок" : " · фото заказа");
@@ -64,18 +65,24 @@ namespace VanyaTools.Native
             }
             catch (Exception error) { Log.Error("Order frame tile thumbnail unavailable.", error); }
             if (image.Source == null)
-                imageArea.Child = new TextBlock { Text = "Кадр " + (index + 1), FontSize = 11,
-                    Foreground = Brushes.SlateGray, HorizontalAlignment = HorizontalAlignment.Center,
+            {
+                var placeholder = new TextBlock { Text = "Кадр " + (index + 1), FontSize = 11,
+                    HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
+                DockerTheme.UseTheme(placeholder, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
+                imageArea.Child = placeholder;
+            }
             imageArea.MouseLeftButtonUp += (_, e) =>
             { e.Handled = true; RunFrameTileAction(index, frame, document, () => PreviewFrame(index)); };
             tile.Children.Add(imageArea);
 
-            var badge = new Border { Background = new SolidColorBrush(Color.FromArgb(225, 248, 250, 251)),
+            var badgeText = new TextBlock { Text = (index + 1).ToString(), FontSize = 11 };
+            DockerTheme.UseTheme(badgeText, TextBlock.ForegroundProperty, DockerTheme.TextBrush);
+            var badge = new Border {
                 CornerRadius = new CornerRadius(2), Padding = new Thickness(3, 0, 3, 0), Margin = new Thickness(3),
                 HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
-                IsHitTestVisible = false,
-                Child = new TextBlock { Text = (index + 1).ToString(), FontSize = 11, Foreground = Brushes.DarkSlateGray } };
+                IsHitTestVisible = false, Child = badgeText };
+            DockerTheme.UseTheme(badge, Border.BackgroundProperty, DockerTheme.SurfaceBackground);
             tile.Children.Add(badge);
             var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(2) };
@@ -137,11 +144,12 @@ namespace VanyaTools.Native
             if (_busy) return;
             if (_frameGalleryWindow != null) { _frameGalleryWindow.Activate(); return; }
             _frameGalleryTiles = new UniformGrid { Columns = 3, Margin = new Thickness(6) };
-            var root = new Grid(); DockerTheme.Apply(root);
+            var root = new Grid();
             root.Children.Add(new ScrollViewer { Content = _frameGalleryTiles,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
             _frameGalleryWindow = new Window { Title = "Кадры заказа", Width = 720, Height = 610,
                 MinWidth = 380, MinHeight = 280, Content = root, WindowStartupLocation = WindowStartupLocation.CenterScreen };
+            DockerTheme.Apply(_frameGalleryWindow);
             Window owner = Window.GetWindow(this);
             if (owner != null) { _frameGalleryWindow.Owner = owner; _frameGalleryWindow.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
             _frameGalleryWindow.Closed += (_, __) => { _frameGalleryTiles = null; _frameGalleryWindow = null; };

@@ -163,8 +163,9 @@ namespace VanyaTools.Native
         {
             var panel = new StackPanel { Margin = new Thickness(2) }; panel.Children.Add(new TextBlock { Text = text, FontSize = 10 });
             image = new Image { Height = 180, Stretch = Stretch.Uniform };
-            panel.Children.Add(new Border { Child = image, Background = Brushes.WhiteSmoke, BorderBrush = Brushes.LightGray,
-                BorderThickness = new Thickness(1) }); return panel;
+            var frame = new Border { Child = image, Background = Brushes.WhiteSmoke, BorderThickness = new Thickness(1) };
+            DockerTheme.UseTheme(frame, Border.BorderBrushProperty, DockerTheme.BorderBrush);
+            panel.Children.Add(frame); return panel;
         }
     }
 }

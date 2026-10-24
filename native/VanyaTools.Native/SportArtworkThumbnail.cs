@@ -101,6 +101,8 @@ namespace VanyaTools.Native
                 WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false,
                 Content = new Border { Background = Checker(), Padding = new Thickness(12),
                     Child = new Image { Source = _bitmap, Stretch = Stretch.Uniform } } };
+            DockerTheme.Apply(window);
+            DockerTheme.UseTheme(window, Control.BackgroundProperty, DockerTheme.WindowBackground);
             Window owner = Window.GetWindow(this);
             if (owner != null) window.Owner = owner;
             else if (PresentationSource.FromVisual(this) is System.Windows.Interop.HwndSource source)

@@ -33,8 +33,7 @@ namespace VanyaTools.Native
             _localSaturation, _localBrightness;
         private readonly Button _localApplyButton, _localPreviewButton;
         private readonly TextBox _prompt;
-        private readonly TextBox _backgroundTolerance, _whiteCutPixels, _backgroundHex;
-        private readonly Border _backgroundSwatch;
+        private BackgroundRemovalOptions _backgroundOptions = new BackgroundRemovalOptions();
         private readonly TextBox _alphaThreshold;
         private readonly ComboBox _highlightColor;
         private readonly TextBox _edgeRadius, _edgeExpansion, _underlayHex;
@@ -49,7 +48,7 @@ namespace VanyaTools.Native
         private readonly Image _sourcePreview, _resultPreview;
         private readonly TextBlock _progress;
         private readonly ProgressBar _progressBar;
-        private readonly Button _removeButton, _removeWhiteButton, _backgroundPipetteButton, _upscaleButton,
+        private readonly Button _removeButton, _removeWhiteButton, _upscaleButton,
             _alphaButton, _highlightButton, _smoothButton, _stairButton, _pipetteButton, _underlayColorButton,
             _editButton, _cancelButton, _retryButton;
         private readonly List<RadioButton> _styleButtons = new List<RadioButton>();
@@ -121,45 +120,14 @@ namespace VanyaTools.Native
             _backgroundModel.ToolTip = "Модель удаления фона. Строит маску прозрачности; настоящие отверстия в объекте автоматически не закрашиваются.";
             System.Windows.Automation.AutomationProperties.SetName(_backgroundModel, "Модель удаления фона");
             _upscaleButton = Button("Апскейл ×2", async (_, __) => await Run("upscale"));
-            var whiteRow = new Grid { Margin = new Thickness(0, 0, 0, 2) };
-            whiteRow.ColumnDefinitions.Add(new ColumnDefinition());
-            for (int column = 0; column < 3; column++)
-                whiteRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            _removeWhiteButton = Button("Удалить фон", async (_, __) => await RemoveWhiteBackground());
-            whiteRow.Children.Add(_removeWhiteButton);
-            _backgroundHex = new TextBox { Text = "#FFFFFF", Width = 72, FontSize = 11,
-                Margin = new Thickness(3, 0, 2, 0), VerticalContentAlignment = VerticalAlignment.Center };
-            Grid.SetColumn(_backgroundHex, 1);
-            whiteRow.Children.Add(_backgroundHex);
-            _backgroundSwatch = new Border { Width = 18, Height = 18, Background = Brushes.White,
-                BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Margin = new Thickness(2) };
-            Grid.SetColumn(_backgroundSwatch, 2); whiteRow.Children.Add(_backgroundSwatch);
-            _backgroundPipetteButton = Button("Пипетка", (_, __) => PickBackgroundFromCanvas());
-            _backgroundPipetteButton.ToolTip = "Выберите цвет на холсте CorelDRAW. Esc — отмена.";
-            Grid.SetColumn(_backgroundPipetteButton, 3); whiteRow.Children.Add(_backgroundPipetteButton);
-            _backgroundHex.TextChanged += (_, __) => UpdateBackgroundSwatch();
-            _backgroundTolerance = new TextBox { Text = "10", FontSize = 11,
-                VerticalContentAlignment = VerticalAlignment.Center };
-            _whiteCutPixels = new TextBox { Text = "0", FontSize = 11,
-                VerticalContentAlignment = VerticalAlignment.Center };
-            _whiteCutPixels.ToolTip = "Сдвинуть край прозрачности внутрь на указанное число пикселей.";
-            var backgroundFields = new UniformGrid { Columns = 2 };
-            var toleranceRow = DockerLayout.FieldRow("Допуск", _backgroundTolerance, 50);
-            toleranceRow.Margin = new Thickness(1, 0, 5, 3);
-            backgroundFields.Children.Add(toleranceRow);
-            var cutRow = DockerLayout.FieldRow("Срез, px", _whiteCutPixels, 50);
-            cutRow.Margin = new Thickness(5, 0, 1, 3);
-            backgroundFields.Children.Add(cutRow);
-            _backgroundHex.ToolTip = "Цвет удаляемого фона · HEX";
-            _backgroundTolerance.ToolTip = "Допуск близости к цвету фона";
-            _backgroundTolerance.MinHeight = _whiteCutPixels.MinHeight = 27;
+            _removeWhiteButton = Button("Удалить фон…", async (_, __) => await RemoveWhiteBackground());
+            _removeWhiteButton.ToolTip = "Подобрать цвет, допуск и срез с живым предпросмотром. Без интернета.";
             if (!styleOnly)
             {
                 var backgroundTools = DockerLayout.ToolGroup("Фон и размер",
-                    "Выделите объект или группу. Цвет удаляемого фона можно ввести в HEX или взять пипеткой с холста. " +
-                    "Допуск задаёт близость к выбранному цвету; подрезка сдвигает край прозрачности внутрь в пикселях.");
-                backgroundTools.Children.Add(whiteRow);
-                backgroundTools.Children.Add(backgroundFields);
+                    "«Удалить фон» открывает окно подбора цвета, допуска и среза. " +
+                    "Настройки меняют предпросмотр; результат вставляется по кнопке «Применить в Corel».");
+                backgroundTools.Children.Add(_removeWhiteButton);
                 var aiRow = new UniformGrid { Columns = 2 };
                 aiRow.Children.Add(_removeButton);
                 aiRow.Children.Add(_upscaleButton);
@@ -394,10 +362,10 @@ namespace VanyaTools.Native
             panel.Children.Add(_progress); panel.Children.Add(_progressBar);
             if (!styleOnly)
             {
-                foreach (var button in new[] { _removeWhiteButton, _backgroundPipetteButton, _removeButton,
+                foreach (var button in new[] { _removeWhiteButton, _removeButton,
                     _upscaleButton, _alphaButton, _highlightButton, _stairButton, _smoothButton, _pipetteButton })
                 { button.MinHeight = 27; button.FontSize = 11; }
-                _backgroundHex.MinHeight = _underlayHex.MinHeight = 27;
+                _underlayHex.MinHeight = 27;
                 _alphaThreshold.ToolTip = "Порог 0–255 для удаления полупрозрачности и быстрой команды «Сгладить лесенку». На обводку не влияет.";
                 _edgeRadius.ToolTip = "Радиус сглаживания в выбранных единицах мм/px";
                 _edgeExpansion.ToolTip = "Наружная обводка в выбранных единицах мм/px";
@@ -422,13 +390,14 @@ namespace VanyaTools.Native
             var choice = new RadioButton { GroupName = "VanyaSimpleAiStyle" + _radioGroup, Content = content,
                 HorizontalAlignment = HorizontalAlignment.Center };
             _styleButtons.Add(choice);
-            var border = new Border { BorderBrush = Brushes.LightGray, BorderThickness = new Thickness(1),
+            var border = new Border { BorderThickness = new Thickness(1),
                 Margin = new Thickness(1), Padding = new Thickness(2), Child = choice };
+            DockerTheme.UseTheme(border, Border.BorderBrushProperty, DockerTheme.BorderBrush);
             choice.Checked += (_, __) => { _selectedStyle = style;
                 _prompt.Text = style.Prompt +
                 " Preserve the main subject, pose and composition of the input image. Do not invent text.";
                 border.BorderBrush = Brushes.SteelBlue; border.BorderThickness = new Thickness(2); };
-            choice.Unchecked += (_, __) => { border.BorderBrush = Brushes.LightGray;
+            choice.Unchecked += (_, __) => { DockerTheme.UseTheme(border, Border.BorderBrushProperty, DockerTheme.BorderBrush);
                 border.BorderThickness = new Thickness(1); };
             return border;
         }
@@ -444,11 +413,12 @@ namespace VanyaTools.Native
             var choice = new RadioButton { Content = content, GroupName = "VanyaLocalPhotoStyle" + _radioGroup,
                 HorizontalAlignment = HorizontalAlignment.Center };
             _localStyleButtons.Add(choice);
-            var border = new Border { Child = choice, BorderBrush = Brushes.LightGray,
+            var border = new Border { Child = choice,
                 BorderThickness = new Thickness(1), Margin = new Thickness(1), Padding = new Thickness(2) };
+            DockerTheme.UseTheme(border, Border.BorderBrushProperty, DockerTheme.BorderBrush);
             choice.Checked += (_, __) => { _localPreset.SelectedIndex = index;
                 border.BorderBrush = Brushes.SteelBlue; border.BorderThickness = new Thickness(2); };
-            choice.Unchecked += (_, __) => { border.BorderBrush = Brushes.LightGray;
+            choice.Unchecked += (_, __) => { DockerTheme.UseTheme(border, Border.BorderBrushProperty, DockerTheme.BorderBrush);
                 border.BorderThickness = new Thickness(1); };
             return border;
         }
@@ -697,31 +667,27 @@ namespace VanyaTools.Native
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
             { Report("Сначала вставьте готовый результат.", true); return; }
-            int tolerance, cutPixels;
-            Color backgroundColor;
-            if (!TryHexColor(_backgroundHex.Text, out backgroundColor))
-            { Report("Цвет фона: #RRGGBB.", true); return; }
-            if (!Int32.TryParse(_backgroundTolerance.Text, out tolerance) || tolerance < 0 || tolerance > 80)
-            { Report("Допуск цвета: от 0 до 80.", true); return; }
-            if (!Int32.TryParse(_whiteCutPixels.Text, out cutPixels) || cutPixels < 0 || cutPixels > 8)
-            { Report("Подрезка края: от 0 до 8 пикселей.", true); return; }
-            SetBusy(true, "Удаляю выбранный фон…");
+            string source = null;
+            SetBusy(true, "Подготавливаю выделение для удаления фона…");
             try
             {
+                await Dispatcher.Yield(DispatcherPriority.Background);
                 _importWarning = null;
-                Color[] backgroundVariants = BackgroundVariants(backgroundColor);
-                string source = AiSelectionCapture.Capture();
+                source = AiSelectionCapture.CaptureForCorrection();
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
-                string output = Path.Combine(Path.GetTempPath(), "Vanya-Background-" + Guid.NewGuid().ToString("N") + ".png");
-                CancellationToken cancellation = _cancellation.Token;
-                await Task.Run(() => BackgroundRemovalProcessor.RemoveColor(
-                    source, output, backgroundVariants, tolerance, cutPixels, cancellation), cancellation);
-                cancellation.ThrowIfCancellationRequested();
-                _readyOutput = output;
+                var dialog = new BackgroundRemovalWindow(source, _backgroundOptions, BackgroundVariants);
+                var owner = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
+                if (owner != null) new System.Windows.Interop.WindowInteropHelper(dialog).Owner = owner.Handle;
+                _timer.Stop(); _progress.Text = "Подбор удаления фона · без интернета.";
+                bool accepted = dialog.ShowDialog() == true;
+                _backgroundOptions = dialog.Options;
+                if (!accepted || String.IsNullOrEmpty(dialog.OutputPath))
+                { Report("Удаление фона отменено.", false); return; }
+                _readyOutput = dialog.OutputPath;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
-                File.WriteAllText(PendingPath(), output);
-                _resultPreview.Source = PreviewBitmap(output);
+                File.WriteAllText(PendingPath(), _readyOutput);
+                _resultPreview.Source = PreviewBitmap(_readyOutput);
                 SetStage("Вставляю результат в Corel…");
                 InsertReady();
                 ReportOutcome();
@@ -729,7 +695,11 @@ namespace VanyaTools.Native
             catch (OperationCanceledException) { Report("Операция отменена.", false); }
             catch (Exception ex) { Log.Error("Local background removal failed.", ex);
                 Report(ex.GetBaseException().Message, true); }
-            finally { SetBusy(false, null); }
+            finally
+            {
+                if (source != null) try { File.Delete(source); } catch { }
+                SetBusy(false, null);
+            }
         }
 
         private async Task RemoveSemiTransparent()
@@ -1036,10 +1006,11 @@ namespace VanyaTools.Native
             var shape = new System.Windows.Shapes.Path
             {
                 Data = Geometry.Parse("M5,4 C8,0 18,0 21,6 L23,14 C24,20 18,24 13,22 L4,20 C0,18 2,9 5,4 Z"),
-                Stroke = Brushes.SlateGray, StrokeThickness = thick ? 3.0 : 1.0,
+                StrokeThickness = thick ? 3.0 : 1.0,
                 StrokeLineJoin = PenLineJoin.Round, Fill = Brushes.Transparent,
                 Width = 22, Height = 22, Stretch = Stretch.Uniform
             };
+            DockerTheme.UseTheme(shape, System.Windows.Shapes.Shape.StrokeProperty, DockerTheme.MutedTextBrush);
             var button = new Button { Content = shape, Width = 32, Height = 28,
                 MinWidth = 32, MinHeight = 28, Padding = new Thickness(4, 2, 4, 2), Margin = new Thickness(1) };
             button.Click += handler; return button;
@@ -1472,40 +1443,6 @@ namespace VanyaTools.Native
                 new SolidColorBrush(color) : Brushes.Transparent;
         }
 
-        private void UpdateBackgroundSwatch()
-        {
-            Color color;
-            _backgroundSwatch.Background = TryHexColor(_backgroundHex.Text, out color) ?
-                new SolidColorBrush(color) : Brushes.Transparent;
-        }
-
-        private void PickBackgroundFromCanvas()
-        {
-            if (_busy) return;
-            try
-            {
-                dynamic app = CorelApp.Get();
-                dynamic doc = app.ActiveDocument;
-                if (doc == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
-                Report("Кликните по цвету на холсте CorelDRAW. Esc — отмена.", false);
-                double x = 0, y = 0;
-                int shift = 0;
-                int result = Convert.ToInt32(doc.GetUserClick(ref x, ref y, ref shift,
-                    30, false, 326)); // cdrCursorEyeDrop
-                if (result != 0) { Report("Выбор цвета отменён.", false); return; }
-                dynamic sampled = doc.SampleColorAtPoint(x, y, 99); // cdrColorMixed: retain RGB/CMYK source
-                if (sampled == null) throw new InvalidOperationException("Цвет в этой точке не найден.");
-                dynamic rgb = app.CreateColor();
-                rgb.CopyAssign(sampled);
-                rgb.ConvertToRGB(); // Corel applies the document color profile to CMYK colors.
-                _backgroundHex.Text = String.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}",
-                    (int)rgb.RGBRed, (int)rgb.RGBGreen, (int)rgb.RGBBlue);
-                Report("Цвет фона: " + _backgroundHex.Text, false);
-            }
-            catch (Exception ex) { Log.Error("Corel canvas color pick failed.", ex);
-                Report("Не удалось взять цвет с холста: " + ex.GetBaseException().Message, true); }
-        }
-
         private static Color[] BackgroundVariants(Color chosen)
         {
             int min = Math.Min(chosen.R, Math.Min(chosen.G, chosen.B));
@@ -1708,10 +1645,10 @@ namespace VanyaTools.Native
         {
             _busy = busy;
             _correctionButton.IsEnabled = !busy;
-            _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _backgroundPipetteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
+            _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
                 _highlightButton.IsEnabled = _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled = _underlayColorButton.IsEnabled =
                 _editButton.IsEnabled = _localApplyButton.IsEnabled = _localPreviewButton.IsEnabled = !busy;
-            _model.IsEnabled = _backgroundModel.IsEnabled = _localPreset.IsEnabled = _prompt.IsEnabled = _backgroundHex.IsEnabled = _backgroundTolerance.IsEnabled = _whiteCutPixels.IsEnabled = _alphaThreshold.IsEnabled =
+            _model.IsEnabled = _backgroundModel.IsEnabled = _localPreset.IsEnabled = _prompt.IsEnabled = _alphaThreshold.IsEnabled =
                 _edgeRadius.IsEnabled = _edgeExpansion.IsEnabled = _underlayHex.IsEnabled = !busy;
             _localStrength.IsEnabled = _localContrast.IsEnabled = _localWarmth.IsEnabled =
                 _localSaturation.IsEnabled = _localBrightness.IsEnabled = !busy;
@@ -1779,8 +1716,13 @@ namespace VanyaTools.Native
         private static TextBlock Label(string text, bool heading) { return new TextBlock { Text = text,
             FontSize = heading ? 12 : 10, FontWeight = heading ? FontWeights.SemiBold : FontWeights.Normal,
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 2) }; }
-        private static TextBlock Note(string text) { return new TextBlock { Text = text, FontSize = 10,
-            Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 2) }; }
+        private static TextBlock Note(string text)
+        {
+            var note = new TextBlock { Text = text, FontSize = 10,
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 2) };
+            DockerTheme.UseTheme(note, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
+            return note;
+        }
         private static BitmapSource PreviewBitmap(string path)
         {
             int width, height;
@@ -1808,8 +1750,9 @@ namespace VanyaTools.Native
         {
             image = new Image { Height = height, Stretch = Stretch.Uniform };
             var stack = new StackPanel(); stack.Children.Add(Label(title, false));
-            stack.Children.Add(new Border { Height = height + 4, BorderThickness = new Thickness(1),
-                BorderBrush = Brushes.LightGray, Child = image });
+            var frame = new Border { Height = height + 4, BorderThickness = new Thickness(1), Child = image };
+            DockerTheme.UseTheme(frame, Border.BorderBrushProperty, DockerTheme.BorderBrush);
+            stack.Children.Add(frame);
             return new Border { Margin = new Thickness(2), Child = stack };
         }
     }

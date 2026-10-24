@@ -206,8 +206,9 @@ namespace VanyaTools.Native
                 actions.Children.Add(Button("Открыть", (_, __) => Open(link)));
                 actions.Children.Add(Button("Удалить", async (_, __) => await Delete(id, title)));
                 row.Children.Add(actions);
-                _items.Children.Add(new Border { Child = row, BorderBrush = Brushes.LightGray,
-                    BorderThickness = new Thickness(0, 0, 0, 1) });
+                var itemFrame = new Border { Child = row, BorderThickness = new Thickness(0, 0, 0, 1) };
+                DockerTheme.UseTheme(itemFrame, Border.BorderBrushProperty, DockerTheme.BorderBrush);
+                _items.Children.Add(itemFrame);
             }
         }
 
@@ -305,9 +306,13 @@ namespace VanyaTools.Native
             try { Process.Start(new ProcessStartInfo(link) { UseShellExecute = true }); }
             catch (Exception error) { _status(error.Message, true); }
         }
-        private static TextBlock Note(string text) => new TextBlock { Text = text, FontSize = 11,
-            Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 2, 0, 5) };
+        private static TextBlock Note(string text)
+        {
+            var note = new TextBlock { Text = text, FontSize = 11, TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 2, 0, 5) };
+            DockerTheme.UseTheme(note, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
+            return note;
+        }
         private static void CollapseWhenEmpty(FrameworkElement target, DependencyObject source)
         {
             var style = new Style(target.GetType());

@@ -96,8 +96,10 @@ namespace VanyaTools.Native
 
         private static TextBlock Note(string text)
         {
-            return new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap,
-                FontSize = 10, Foreground = Brushes.DimGray, Margin = new Thickness(0, 2, 0, 3) };
+            var note = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap,
+                FontSize = 10, Margin = new Thickness(0, 2, 0, 3) };
+            DockerTheme.UseTheme(note, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
+            return note;
         }
 
         private static FrameworkElement Preview(string label, out Image image)
@@ -106,8 +108,9 @@ namespace VanyaTools.Native
             panel.Children.Add(new TextBlock { Text = label, FontSize = 10 });
             image = new Image { Width = 110, Height = 110, Stretch = Stretch.Uniform,
                 HorizontalAlignment = HorizontalAlignment.Center };
-            panel.Children.Add(new Border { Child = image, Background = Brushes.WhiteSmoke,
-                BorderBrush = Brushes.LightGray, BorderThickness = new Thickness(1) });
+            var frame = new Border { Child = image, Background = Brushes.WhiteSmoke, BorderThickness = new Thickness(1) };
+            DockerTheme.UseTheme(frame, Border.BorderBrushProperty, DockerTheme.BorderBrush);
+            panel.Children.Add(frame);
             return panel;
         }
 

@@ -176,7 +176,8 @@ namespace VanyaTools.Native
             _loading = false;
             Loaded += (_, __) => Compute();
             Closing += (_, __) => { _closed = true; _revision++; _debounce.Stop(); _cancellation?.Cancel(); };
-            DockerTheme.Apply(root);
+            DockerTheme.Apply(this);
+            DockerTheme.UseTheme(this, Control.BackgroundProperty, DockerTheme.WindowBackground);
         }
 
         private static TextBox Field(Panel panel, string title)

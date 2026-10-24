@@ -69,7 +69,8 @@ namespace VanyaTools.Native
             Width = Math.Min(1220, SystemParameters.WorkArea.Width - 40);
             Height = Math.Min(820, SystemParameters.WorkArea.Height - 40);
             MinWidth = 860; MinHeight = 570; WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            Background = Brushes.WhiteSmoke;
+            DockerTheme.Apply(this);
+            DockerTheme.UseTheme(this, Control.BackgroundProperty, DockerTheme.WindowBackground);
             var root = new Grid { Margin = new Thickness(12) };
             root.RowDefinitions.Add(new RowDefinition());
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -561,7 +562,7 @@ namespace VanyaTools.Native
         }
         private static void DeleteFile(string path) { if (path != null) try { File.Delete(path); } catch { } }
         private void ShowMessage(string message, bool error)
-        { _message.Text = message; _message.Foreground = error ? Brushes.Firebrick : Brushes.DarkSlateGray; }
+        { _message.Text = message; DockerTheme.UseTheme(_message, TextBlock.ForegroundProperty, error ? DockerTheme.ErrorTextBrush : DockerTheme.TextBrush); }
         private Task OnUiAsync(Action action)
         {
             if (Dispatcher.CheckAccess()) { action(); return Task.CompletedTask; }
@@ -578,8 +579,9 @@ namespace VanyaTools.Native
         private Button Preset(bool thick, double millimeters)
         {
             var shape = new System.Windows.Shapes.Path { Data = Geometry.Parse("M5,4 C8,0 18,0 21,6 L23,14 C24,20 18,24 13,22 L4,20 C0,18 2,9 5,4 Z"),
-                Stroke = Brushes.SlateGray, StrokeThickness = thick ? 3 : 1, Fill = Brushes.Transparent,
+                StrokeThickness = thick ? 3 : 1, Fill = Brushes.Transparent,
                 Width = 22, Height = 22, Stretch = Stretch.Uniform };
+            DockerTheme.UseTheme(shape, System.Windows.Shapes.Shape.StrokeProperty, DockerTheme.MutedTextBrush);
             var button = new Button { Content = shape, Height = 30, Margin = new Thickness(0, 0, 4, 0),
                 ToolTip = (thick ? "Толстая +" : "Тонкая +") + DtfOutlineUnits.Format(millimeters) + " мм" };
             button.Click += (_, __) =>
@@ -609,7 +611,8 @@ namespace VanyaTools.Native
             image = new Image { Stretch = Stretch.Uniform, Cursor = Cursors.Cross };
             scroll = new ScrollViewer { Content = image, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, Background = Checkerboard() };
-            var border = new Border { Child = scroll, BorderBrush = Brushes.LightSlateGray, BorderThickness = new Thickness(1) };
+            var border = new Border { Child = scroll, BorderThickness = new Thickness(1) };
+            DockerTheme.UseTheme(border, Border.BorderBrushProperty, DockerTheme.BorderBrush);
             Grid.SetRow(border, 1); panel.Children.Add(border); return panel;
         }
         private static Brush Checkerboard()

@@ -106,8 +106,10 @@ namespace VanyaTools.Native
                 "PDF 1.7, совместимый с Acrobat DC: выделение, размер по объектам, исходные цвета, без ICC-профилей, сжатия и субдискретизации, " +
                 "текст кривыми, без типографских меток, полутоновых настроек и паролей. " +
                 "Вывод готовится во временном документе с цветовым контекстом исходника, затем закрывается. Буфер обмена используется для переноса копии.");
-            _folder = new TextBlock { FontSize = 10, TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray,
-                Margin = new Thickness(0, 3, 0, 4) }; _panel.Children.Add(_folder);
+            _folder = new TextBlock { FontSize = 10, TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 3, 0, 4) };
+            DockerTheme.UseTheme(_folder, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
+            _panel.Children.Add(_folder);
             AddButton("Открыть папку фотовыводов", () => {
                 string path = Folder(); Directory.CreateDirectory(path); Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
                 return Task.CompletedTask;
@@ -118,8 +120,10 @@ namespace VanyaTools.Native
                 "Каждый готовый растр в пакетном режиме сохраняется отдельным PDF с цветом и номером слоя в имени. " +
                 "Файлы не перезаписываются. Полутона предупреждают, но не блокируют экспорт; недопустимые цвета блокируют. " +
                 "Печатайте 1:1, без вписывания в лист. Полосы обеспечивают непрерывную печатную область, но фактические проходы задаются RIP и принтером.");
-            _ripFolder = new TextBlock { FontSize = 10, TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray,
-                Margin = new Thickness(0, 5, 0, 3) }; _panel.Children.Add(_ripFolder);
+            _ripFolder = new TextBlock { FontSize = 10, TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 5, 0, 3) };
+            DockerTheme.UseTheme(_ripFolder, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
+            _panel.Children.Add(_ripFolder);
             AddButton("Отправить на печать в RIP", () => Output(true), true);
             DockerHelp.Add(_panel, "Выделение, масштаб 1:1, полосы и проверка цветов такие же, как при экспорте. " +
                 "PDF передаётся прямо в hot folder из «Настройки → Фотовывод · RIP». Папка архива для отправки не требуется. " +
@@ -127,7 +131,8 @@ namespace VanyaTools.Native
             _progress = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 3), FontSize = 11 };
             _panel.Children.Add(_progress);
             _report = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 230, MinHeight = 48,
-                FontSize = 10, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, BorderBrush = Brushes.LightGray };
+                FontSize = 10, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            DockerTheme.UseTheme(_report, Control.BorderBrushProperty, DockerTheme.BorderBrush);
             _panel.Children.Add(_report);
             Loaded += (_, __) => UpdateFolder();
             _ripSettings.Changed += UpdateFolder;
@@ -195,7 +200,7 @@ namespace VanyaTools.Native
             finally { _panel.IsEnabled = true; _busy = false; _marksTable.Refresh(); }
         }
         private void Report(string message, bool error)
-        { _progress.Text = message; _progress.Foreground = error ? Brushes.Firebrick : Brushes.DarkSlateGray; _status(message, error); }
+        { _progress.Text = message; DockerTheme.UseTheme(_progress, TextBlock.ForegroundProperty, error ? DockerTheme.ErrorTextBrush : DockerTheme.TextBrush); _status(message, error); }
         private string Folder()
         {
             string path = "";
@@ -236,7 +241,7 @@ namespace VanyaTools.Native
                 MinWidth = 390, MinHeight = 280, WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false };
             Window owner = Window.GetWindow(this); if (owner != null) dialog.Owner = owner;
             else try { new WindowInteropHelper(dialog).Owner = new IntPtr(Convert.ToInt64(CorelApp.Get().AppWindow.Handle)); } catch { }
-            var root = new DockPanel { Margin = new Thickness(10) }; dialog.Content = root; DockerTheme.Apply(root);
+            var root = new DockPanel { Margin = new Thickness(10) }; dialog.Content = root; DockerTheme.Apply(dialog);
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
             DockPanel.SetDock(buttons, Dock.Bottom); root.Children.Add(buttons);
             var ok = new Button { Content = "Поставить метки", IsDefault = true, Margin = new Thickness(3), MinWidth = 130 };

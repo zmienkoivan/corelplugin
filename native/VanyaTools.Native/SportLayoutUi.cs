@@ -76,6 +76,7 @@ namespace VanyaTools.Native
             var trigger = new DataTrigger { Binding = new Binding("Text") { Source = note }, Value = "" };
             trigger.Setters.Add(new Setter(VisibilityProperty, Visibility.Collapsed));
             style.Triggers.Add(trigger); note.Style = style;
+            DockerTheme.UseTheme(note, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
         }
     }
 }

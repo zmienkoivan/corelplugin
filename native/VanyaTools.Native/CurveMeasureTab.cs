@@ -41,15 +41,16 @@ namespace VanyaTools.Native
             _first = new ValueRow("Между узлами", CopyNumber);
             _second = new ValueRow("Больший участок", CopyNumber) { Visibility = Visibility.Collapsed };
             panel.Children.Add(_first); panel.Children.Add(_second);
-            _context = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray,
+            _context = new TextBlock { TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 5, 0, 8), Visibility = Visibility.Collapsed };
+            DockerTheme.UseTheme(_context, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
             panel.Children.Add(_context);
             _copyAll = new Button { Content = "Копировать измерение", IsEnabled = false,
                 MinHeight = 30, Margin = new Thickness(0, 0, 0, 8) };
             _copyAll.Click += (_, __) => CopyMeasurement();
             panel.Children.Add(_copyAll);
-            _message = new TextBlock { Text = "Выберите два узла одной кривой (F10).", TextWrapping = TextWrapping.Wrap,
-                Foreground = Brushes.DimGray };
+            _message = new TextBlock { Text = "Выберите два узла одной кривой (F10).", TextWrapping = TextWrapping.Wrap };
+            DockerTheme.UseTheme(_message, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
             panel.Children.Add(_message);
         }
 
@@ -77,7 +78,7 @@ namespace VanyaTools.Native
                 _context.Visibility = Visibility.Visible;
                 _copyAll.IsEnabled = true;
                 _message.Text = "Измерено. Выберите другую пару узлов для следующего измерения.";
-                _message.Foreground = Brushes.DimGray;
+                DockerTheme.UseTheme(_message, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
                 _status(ResultText(result), false);
                 Log.Info("Curve measurement: subpath=" + result.SubPathIndex + ", nodes=" + result.FirstNode +
                     "-" + result.SecondNode + ", closed=" + result.Closed + ", mm=" +
@@ -93,7 +94,7 @@ namespace VanyaTools.Native
                 _mode.Text = ""; _copyAll.IsEnabled = false;
                 while (error is TargetInvocationException && error.InnerException != null) error = error.InnerException;
                 _message.Text = error.Message;
-                _message.Foreground = Brushes.Firebrick;
+                DockerTheme.UseTheme(_message, TextBlock.ForegroundProperty, DockerTheme.ErrorTextBrush);
                 _status("Рулетка: " + error.Message, true);
                 if (!(error is InvalidOperationException)) Log.Error("Curve measurement failed", error);
             }

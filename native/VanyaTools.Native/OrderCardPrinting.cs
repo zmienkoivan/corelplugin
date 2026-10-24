@@ -38,14 +38,17 @@ namespace VanyaTools.Native
             public override string ToString() => Name;
         }
 
-        private void AddLabelPrinting(StackPanel editor)
+        private bool _compactLabelPrinting;
+
+        private void AddLabelPrinting(StackPanel editor, bool compact = false)
         {
-            editor.Children.Add(Label("Печать этикетки"));
+            _compactLabelPrinting = compact;
+            if (!compact) editor.Children.Add(Label("Печать этикетки"));
             var halves = new Grid();
             halves.ColumnDefinitions.Add(new ColumnDefinition());
             halves.ColumnDefinitions.Add(new ColumnDefinition());
-            _printLabelButton = Button("Производство", async (_, __) => await PrintCardLabel("detailed"));
-            _printCustomerLabelButton = Button("Заказчик", async (_, __) => await PrintCardLabel("customer"));
+            _printLabelButton = Button(compact ? "Этик. производство" : "Производство", async (_, __) => await PrintCardLabel("detailed"));
+            _printCustomerLabelButton = Button(compact ? "Этик. заказчик" : "Заказчик", async (_, __) => await PrintCardLabel("customer"));
             _printLabelButton.MinWidth = _printCustomerLabelButton.MinWidth = 0;
             _printLabelButton.Margin = new Thickness(0, 1, 0, 3);
             _printCustomerLabelButton.Margin = new Thickness(0, 1, 0, 3);
@@ -279,9 +282,10 @@ namespace VanyaTools.Native
                 else if (state == "failed" || state == "uncertain") throw new InvalidOperationException(PrintValue(result, "error") + (state == "uncertain" ? " Проверьте бумагу и очередь перед повторной печатью." : ""));
                 else _printLabelResult.Text = "Задание обрабатывается. Повторная кнопка проверит результат без повторной печати.";
             }
-            catch (Exception error) { _printLabelResult.Text = "Печать: " + error.Message; _printLabelResult.Foreground = Brushes.Firebrick; _status(_printLabelResult.Text, true); }
-            finally { printLock.Dispose(); _busy = false; _printLabelButton.Content = "Производство";
-                _printCustomerLabelButton.Content = "Заказчик"; UpdateActions(); }
+            catch (Exception error) { _printLabelResult.Text = "Печать: " + error.Message; DockerTheme.UseTheme(_printLabelResult, TextBlock.ForegroundProperty, DockerTheme.ErrorTextBrush); _status(_printLabelResult.Text, true); }
+            finally { printLock.Dispose(); _busy = false;
+                _printLabelButton.Content = _compactLabelPrinting ? "Этик. производство" : "Производство";
+                _printCustomerLabelButton.Content = _compactLabelPrinting ? "Этик. заказчик" : "Заказчик"; UpdateActions(); }
         }
     }
 }

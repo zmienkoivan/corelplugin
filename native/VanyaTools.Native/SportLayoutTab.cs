@@ -236,7 +236,8 @@ namespace VanyaTools.Native
                 "Каждый размер находится на отдельном слое. Чтобы пересоздать его, удалите слой на обзорной странице и повторите подготовку. " +
                 "CDR модели остаётся открытым отдельно. После подготовки поправьте рисунки и текстовые образцы на холсте.");
             _masterSizes = new TextBlock { FontSize = 11, TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(2, 0, 2, 5), Foreground = Brushes.DarkSlateGray };
+                Margin = new Thickness(2, 0, 2, 5) };
+            DockerTheme.UseTheme(_masterSizes, TextBlock.ForegroundProperty, DockerTheme.TextBrush);
             masters.Children.Add(_masterSizes);
             _prepare = UiAction("Подготовить макеты", Prepare, true);
             masters.Children.Add(_prepare);
@@ -510,8 +511,8 @@ namespace VanyaTools.Native
             headers.SetValue(KeyboardNavigation.TabNavigationProperty, KeyboardNavigationMode.Once);
             dock.AppendChild(headers);
             var border = new FrameworkElementFactory(typeof(Border));
-            border.SetValue(Border.BackgroundProperty, Brushes.White);
-            border.SetValue(Border.BorderBrushProperty, Brushes.LightSlateGray);
+            border.SetResourceReference(Border.BackgroundProperty, DockerTheme.SurfaceBackground);
+            border.SetResourceReference(Border.BorderBrushProperty, DockerTheme.BorderBrush);
             border.SetValue(Border.BorderThicknessProperty, new Thickness(1));
             var content = new FrameworkElementFactory(typeof(ContentPresenter), "PART_SelectedContentHost");
             content.SetValue(ContentPresenter.ContentSourceProperty, "SelectedContent");
@@ -546,7 +547,8 @@ namespace VanyaTools.Native
                 int state = StepStates[index];
                 bool done = state < 0 ? artworkAssigned : _completedSteps[state] || (state == 3 && _completedSteps[4]);
                 _stepMarks[index].Text = (index + 1).ToString(CultureInfo.InvariantCulture) + (done ? " ✓" : "");
-                _stepMarks[index].Foreground = done ? Brushes.ForestGreen : Brushes.DimGray;
+                if (done) _stepMarks[index].Foreground = Brushes.ForestGreen;
+                else DockerTheme.UseTheme(_stepMarks[index], TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
                 string detail = state < 0 ? "рисунки назначены" : state == 3 && _completedSteps[4] ? _stepDetails[4] : _stepDetails[state];
                 string description = StepNames[index] + ": " + (done ? detail ?? "выполнено" : state < 0 ? "рисунки не назначены; пустые рисунки допустимы" : "не выполнено");
                 _stepTabs[index].ToolTip = description;
@@ -1105,7 +1107,7 @@ namespace VanyaTools.Native
             pathCell.Children.Add(field);
             // The model retains the full editable path. At rest, a filename
             // overlay gives a useful label even when the folder is very long.
-            var fieldStyle = new Style(typeof(TextBox));
+            var fieldStyle = new Style(typeof(TextBox)) { BasedOn = DockerTheme.ControlStyle(typeof(TextBox)) };
             var unfocused = new Trigger { Property = IsKeyboardFocusWithinProperty, Value = false };
             unfocused.Setters.Add(new Setter(ForegroundProperty, Brushes.Transparent));
             fieldStyle.Triggers.Add(unfocused); field.Style = fieldStyle;
@@ -1113,11 +1115,11 @@ namespace VanyaTools.Native
                 VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(5, 0, 5, 0), IsHitTestVisible = false };
             filename.SetBinding(TextBlock.TextProperty, new Binding("Text") { Source = field, Converter = new ArtworkFileName() });
             var filenameStyle = new Style(typeof(TextBlock));
-            filenameStyle.Setters.Add(new Setter(TextBlock.ForegroundProperty, SystemColors.ControlTextBrush));
+            filenameStyle.Setters.Add(new Setter(TextBlock.ForegroundProperty, new DynamicResourceExtension(DockerTheme.TextBrush)));
             var editing = new DataTrigger { Binding = new Binding("IsKeyboardFocusWithin") { Source = field }, Value = true };
             editing.Setters.Add(new Setter(VisibilityProperty, Visibility.Collapsed)); filenameStyle.Triggers.Add(editing);
             var empty = new DataTrigger { Binding = new Binding("Text") { Source = field }, Value = "" };
-            empty.Setters.Add(new Setter(TextBlock.ForegroundProperty, Brushes.DimGray)); filenameStyle.Triggers.Add(empty);
+            empty.Setters.Add(new Setter(TextBlock.ForegroundProperty, new DynamicResourceExtension(DockerTheme.MutedTextBrush))); filenameStyle.Triggers.Add(empty);
             filename.Style = filenameStyle; pathCell.Children.Add(filename); row.Children.Add(pathCell);
             var browse = Button("Файл…", (_, __) => BrowseArtwork(field));
             browse.Margin = new Thickness(0, 0, 4, 0); browse.Padding = new Thickness(3, 0, 3, 0);
@@ -1780,7 +1782,7 @@ namespace VanyaTools.Native
                 Width = Math.Min(1450, SystemParameters.WorkArea.Width - 40),
                 Height = Math.Min(900, SystemParameters.WorkArea.Height - 40),
                 MinWidth = 720, MinHeight = 420, WindowStartupLocation = WindowStartupLocation.CenterScreen };
-            DockerTheme.Apply(root);
+            DockerTheme.Apply(window);
             Window owner = Window.GetWindow(this);
             if (owner != null) { window.Owner = owner; window.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
             window.Closing += (_, args) => {
@@ -2113,9 +2115,11 @@ namespace VanyaTools.Native
 
         private static TextBlock Note(string value)
         {
-            return new TextBlock { Text = value, FontSize = 11,
-                Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap,
+            var note = new TextBlock { Text = value, FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 2, 0, 5) };
+            DockerTheme.UseTheme(note, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
+            return note;
         }
     }
 }
