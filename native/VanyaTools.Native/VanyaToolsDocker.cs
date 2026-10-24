@@ -253,6 +253,8 @@ namespace VanyaTools.Native
             outer.Children.Add(tabs);
             Panel root = standardTools;
 
+            var rasterTools = DockerLayout.ToolGroup("Растр и рамка");
+            root.Children.Add(rasterTools);
             var quickActions = new Grid();
             quickActions.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             quickActions.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -260,24 +262,30 @@ namespace VanyaTools.Native
             quickActions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             quickActions.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             var trimButton = Button("Обрезать растр", (_, __) => RunTrim(true));
+            trimButton.MinHeight = 27;
             trimButton.Margin = new Thickness(0, 0, 3, 2);
             quickActions.Children.Add(trimButton);
             var fitFrame = Button("Подогнать рамку", (_, __) => RunFitFrame());
+            fitFrame.MinHeight = 27;
             fitFrame.Margin = new Thickness(0, 0, 3, 2);
             fitFrame.ToolTip = "Выделите части принта, затем рамку последней через Shift+щелчок. Точку привязки выберите справа.";
             Grid.SetColumn(fitFrame, 1);
             quickActions.Children.Add(fitFrame);
             var anchorPicker = CreatePrintFrameAnchorPicker();
             Grid.SetColumn(anchorPicker, 2);
+            Grid.SetRowSpan(anchorPicker, 2);
             quickActions.Children.Add(anchorPicker);
-            var approvalButton = Button("Копировать визуализацию + текст", (_, __) => approvalCopy.CopySelection());
+            var approvalButton = Button("Копировать согласование", (_, __) => approvalCopy.CopySelection());
+            approvalButton.MinHeight = 27;
+            approvalButton.Margin = new Thickness(0, 0, 3, 2);
             approvalButton.ToolTip = "Крупное изображение выделения с красной подписью для согласования. Ctrl+Alt+C.";
             Grid.SetRow(approvalButton, 1);
-            Grid.SetColumnSpan(approvalButton, 3);
+            Grid.SetColumnSpan(approvalButton, 2);
             quickActions.Children.Add(approvalButton);
-            root.Children.Add(quickActions);
+            rasterTools.Children.Add(quickActions);
             var trimSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
-            AddSettingsExpander(root, "Настройки обрезки растра", trimSettings);
+            rasterTools.Children.Add(new Expander { Header = "Параметры обрезки", Content = trimSettings,
+                FontSize = 11, IsExpanded = false, Margin = new Thickness(1, 2, 0, 0) });
             AddSmallLabel(trimSettings, "По границе");
             AddRadioButton(trimSettings, "Прозрачные пиксели", "TrimMode", true);
             _trimModeTopLeft = AddRadioButton(trimSettings, "Цвет верхнего-левого угла", "TrimMode", false);

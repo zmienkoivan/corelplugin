@@ -7,6 +7,25 @@ namespace VanyaTools.Native
 {
     internal static class DockerLayout
     {
+        internal static StackPanel ToolGroup(string title, string help = null)
+        {
+            var group = new StackPanel { Margin = new Thickness(0, 0, 0, 7) };
+            group.Children.Add(new TextBlock { Text = title, FontSize = 11,
+                FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(1, 2, 1, 4) });
+            if (!String.IsNullOrWhiteSpace(help)) DockerHelp.Add(group, help);
+            return group;
+        }
+
+        internal static StackPanel LabeledField(string label, FrameworkElement editor)
+        {
+            var field = new StackPanel();
+            field.Children.Add(new TextBlock { Text = label, FontSize = 11,
+                Margin = new Thickness(0, 0, 0, 2), TextWrapping = TextWrapping.Wrap });
+            field.Children.Add(editor);
+            return field;
+        }
+
         // A label and its editor share one row even in a narrow docker.
         internal static Grid FieldRow(string label, FrameworkElement editor, double editorWidth = 80)
         {

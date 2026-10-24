@@ -3306,46 +3306,61 @@ namespace VanyaTools.Native
         private FrameworkElement CreateQuickDocumentFields()
         {
             var grid = new Grid();
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(58) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(6) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(72) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(27) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(2) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(27) });
             var labels = new[] { "Заказчик", "Имя макета" };
+            var captions = new[] { "Заказчик", "Макет" };
             var originals = new[] { _customer, _designName };
             for (int row = 0; row < labels.Length; row++)
             {
-                var label = Label(labels[row]);
+                var label = Label(captions[row]);
+                label.FontSize = 11; label.TextWrapping = TextWrapping.NoWrap;
                 label.VerticalAlignment = VerticalAlignment.Center;
-                label.Margin = new Thickness(0, 1, 8, 3);
-                Grid.SetRow(label, row);
+                label.Margin = new Thickness(0, 0, 6, 0);
+                Grid.SetRow(label, row * 2);
                 grid.Children.Add(label);
                 var input = Input();
-                input.ToolTip = "Поле карточки заказа. Сохраняется в CDR автоматически.";
+                input.MinWidth = 0; input.MinHeight = 27; input.Margin = new Thickness(0);
+                input.FontSize = 11; input.Padding = new Thickness(4, 1, 4, 1);
+                input.TextWrapping = TextWrapping.NoWrap;
+                input.AcceptsReturn = false;
+                input.HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden;
+                input.VerticalContentAlignment = VerticalAlignment.Center;
+                System.Windows.Automation.AutomationProperties.SetName(input, labels[row]);
+                var tooltip = new TextBlock { TextWrapping = TextWrapping.Wrap, MaxWidth = 300 };
+                tooltip.SetBinding(TextBlock.TextProperty, new Binding("Text") { Source = input,
+                    StringFormat = labels[row] + ": {0}\nПоле карточки заказа. Сохраняется в CDR автоматически." });
+                input.ToolTip = tooltip;
                 input.SetBinding(TextBox.TextProperty, new Binding("Text")
                 {
                     Source = originals[row], Mode = BindingMode.TwoWay,
                     UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged
                 });
-                Grid.SetRow(input, row);
+                Grid.SetRow(input, row * 2);
                 Grid.SetColumn(input, 1);
                 grid.Children.Add(input);
             }
             var save = Button("Сохранить", (_, __) => Safe(SaveCurrentDocument));
             save.ToolTip = "Сохранить CDR и данные карточки заказа";
-            save.MinWidth = 76;
-            save.Margin = new Thickness(5, 1, 0, 3);
+            save.MinWidth = 72; save.FontSize = 11;
+            save.Padding = new Thickness(4, 0, 4, 0);
+            save.Margin = new Thickness(0);
             save.VerticalAlignment = VerticalAlignment.Stretch;
             save.SetBinding(IsEnabledProperty, new Binding("IsEnabled") { Source = _saveDocument });
-            Grid.SetColumn(save, 2);
-            Grid.SetRowSpan(save, 2);
+            Grid.SetColumn(save, 3);
+            Grid.SetRowSpan(save, 3);
             grid.Children.Add(save);
             var border = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(218, 238, 218)),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(150, 192, 153)),
                 BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6),
-                Padding = new Thickness(8, 5, 8, 4), Margin = new Thickness(5, 4, 5, 5),
+                Padding = new Thickness(6, 4, 6, 4), Margin = new Thickness(5, 3, 5, 4),
                 Child = grid
             };
             border.SetBinding(IsEnabledProperty, new Binding("IsEnabled") { Source = _editor });

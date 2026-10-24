@@ -42,7 +42,8 @@ namespace VanyaTools.Native
             DockerHelp.Add(_panel, "Если есть выделение, PDF включает только его и получает размер по его габаритам, включая обводки. " +
                 "Если выделения нет, перед экспортом активной страницы целиком появится подтверждение «Да / Нет». Масштаб 1:1. " +
                 "Работает с любыми документами CorelDRAW. Векторы сохраняются, текст выводится кривыми, растры сжимаются JPEG 95% и ограничиваются выбранным DPI.");
-            _quickPanel = new StackPanel { Margin = new Thickness(0, 3, 0, 5) };
+            _quickPanel = DockerLayout.ToolGroup("Очередь печати", "Отправка файлов в очередь печати. " +
+                "DTF/UV — выделение, SUB — выделение или активный лист. Папки очередей задаются в настройках.");
             var quick = new System.Windows.Controls.Primitives.UniformGrid { Rows = 1, Columns = 5 };
             quick.Children.Add(CreateJobButton(1, "DTF · красная", Color.FromRgb(183, 48, 56), true));
             quick.Children.Add(CreateJobButton(2, "DTF · синяя", Color.FromRgb(35, 100, 190), true));
@@ -50,8 +51,6 @@ namespace VanyaTools.Native
             quick.Children.Add(CreateJobButton(4, "UV · жёлтая", Color.FromRgb(242, 201, 76), true));
             quick.Children.Add(CreateJobButton(0, "Сублимация", Color.FromRgb(88, 101, 116), true));
             _quickPanel.Children.Add(quick);
-            DockerHelp.Add(_quickPanel, "Отправка файлов в очередь печати. " +
-                "DTF/UV — выделение, SUB — выделение или активный лист. Папки очередей задаются в настройках.");
             _result = new TextBlock { FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
             _panel.Children.Add(_result);
             _settings.Changed += Refresh; Refresh();
@@ -85,7 +84,7 @@ namespace VanyaTools.Native
         private Button CreateJobButton(int index, string text, Color? color, bool compact = false)
         {
             var button = new Button { Content = text,
-                MinHeight = 34, IsEnabled = false, Margin = compact ? new Thickness(1) : new Thickness(0, 1, 0, 5) };
+                MinHeight = compact ? 30 : 34, IsEnabled = false, Margin = compact ? new Thickness(1) : new Thickness(0, 1, 0, 5) };
             if (compact)
             {
                 button.Padding = new Thickness(3, 2, 3, 2);
