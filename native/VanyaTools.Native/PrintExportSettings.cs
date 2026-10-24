@@ -52,7 +52,7 @@ namespace VanyaTools.Native
             string path = (value ?? "").Trim().Trim('"');
             if (path.Length == 0)
             {
-                if (requireAvailable) throw new InvalidOperationException("Укажите папку этой кнопки в «Настройки → Печать PDF, DTF и UV · папки и ICC».");
+                if (requireAvailable) throw new InvalidOperationException("Укажите папку этой кнопки в «Настройки → Печать PDF, DTF и UV».");
                 return "";
             }
             string root = Path.GetPathRoot(path) ?? "";
@@ -152,6 +152,34 @@ namespace VanyaTools.Native
                 mode.SelectionChanged += (_, __) => profileRow.Visibility = mode.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
                 panel.Children.Add(profileRow);
             }
+            var loadedFolders = new string[fields.Length];
+            var loadedProfiles = new string[fields.Length];
+            var loadedModes = new int[fields.Length];
+            for (int i = 0; i < fields.Length; i++)
+            {
+                loadedFolders[i] = fields[i].Text; loadedProfiles[i] = profiles[i].Text;
+                loadedModes[i] = modes[i].SelectedIndex;
+            }
+            void SyncValues(bool force)
+            {
+                for (int i = 0; i < fields.Length; i++)
+                {
+                    // A folder can change in the print tab while an ICC edit
+                    // is pending here. Synchronize these independent values.
+                    if (force || String.Equals(fields[i].Text, loadedFolders[i], StringComparison.Ordinal))
+                    {
+                        fields[i].Text = Folder(i); loadedFolders[i] = fields[i].Text;
+                    }
+                    if (force || (String.Equals(profiles[i].Text, loadedProfiles[i], StringComparison.Ordinal) &&
+                        modes[i].SelectedIndex == loadedModes[i]))
+                    {
+                        PrintIccOptions saved = IccFor(i);
+                        modes[i].SelectedIndex = Enum.IsDefined(typeof(PrintIccMode), saved.Mode) ? (int)saved.Mode : 0;
+                        profiles[i].Text = saved.ProfilePath;
+                        loadedProfiles[i] = profiles[i].Text; loadedModes[i] = modes[i].SelectedIndex;
+                    }
+                }
+            }
             var save = new Button { Content = "Сохранить папки и ICC", Margin = new Thickness(0, 4, 0, 2) };
             save.Click += (_, __) => Safe(() => {
                 var next = Snapshot();
@@ -164,7 +192,8 @@ namespace VanyaTools.Native
                         ProfilePath = profiles[i].Text.Trim().Trim('"') };
                     options.Validate(); next.Icc[i] = options;
                 }
-                Commit(next); status("Пять папок печати и индивидуальные режимы ICC сохранены на этом компьютере.", false);
+                Commit(next); SyncValues(true);
+                status("Пять папок печати и индивидуальные режимы ICC сохранены на этом компьютере.", false);
             });
             panel.Children.Add(save);
             DockerHelp.Add(panel, "На главной вкладке над корректировками находятся пять кнопок. «Сублимация» использует папку обычной печати PDF, " +
@@ -176,16 +205,12 @@ namespace VanyaTools.Native
                 "Значения цветов, растры, векторы, размер и DPI не пересчитываются; другие цветовые модели сохраняют свои профили. " +
                 "Назначение другого профиля может изменить интерпретацию цветов. Выбирайте входной профиль макета; профиль принтера/материала и преобразование задаются в RIP. " +
                 "В RIP нужно разрешить использование входных профилей. Проверка ICC завершается до появления PDF в папке печати.");
-            var expander = new Expander { Header = "Печать PDF, DTF и UV · папки и ICC", Content = panel, IsExpanded = false,
+            var expander = new Expander { Header = "Печать PDF, DTF и UV", Content = panel, IsExpanded = false,
                 Margin = new Thickness(0, 0, 0, 6) };
-            expander.Expanded += (_, __) => {
-                for (int i = 0; i < fields.Length; i++)
-                {
-                    fields[i].Text = Folder(i); PrintIccOptions saved = IccFor(i);
-                    modes[i].SelectedIndex = Enum.IsDefined(typeof(PrintIccMode), saved.Mode) ? (int)saved.Mode : 0;
-                    profiles[i].Text = saved.ProfilePath;
-                }
+            expander.Expanded += (_, e) => {
+                if (ReferenceEquals(e.Source, expander)) SyncValues(false);
             };
+            Changed += () => SyncValues(false);
             return expander;
         }
     }

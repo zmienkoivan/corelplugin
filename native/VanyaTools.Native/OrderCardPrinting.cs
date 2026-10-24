@@ -23,6 +23,7 @@ namespace VanyaTools.Native
         private ComboBox _printFormat, _fullNetworkPrinter, _miniNetworkPrinter;
         private TextBlock _printLabelResult, _networkPrinterStatus;
         private bool _loadingPrinterSettings;
+        private string _loadedNetworkPrinterServer, _loadedNetworkPrinterKey;
         private string _fullPrinterId = "", _miniPrinterId = "";
         private List<NetworkPrinterChoice> _networkPrinterChoices = new List<NetworkPrinterChoice>();
         private static string PrinterPreferencesPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VanyaTools", "order-printers.json");
@@ -61,7 +62,6 @@ namespace VanyaTools.Native
 
         private void AddNetworkPrinterSettings(StackPanel settings)
         {
-            settings.Children.Add(Title("Печать этикеток"));
             settings.Children.Add(Label("Формат этикетки"));
             _printFormat = new ComboBox { Margin = new Thickness(0, 0, 0, 5), SelectedValuePath = "Tag" };
             _printFormat.Items.Add(new ComboBoxItem { Content = "Полная · 80×120 мм", Tag = "full" });
@@ -86,7 +86,17 @@ namespace VanyaTools.Native
                 if (_loadingPrinterSettings) return;
                 _miniPrinterId = Convert.ToString(_miniNetworkPrinter.SelectedValue); SavePrinterPreferences();
             };
-            settings.Loaded += async (_, __) => await LoadNetworkPrinters();
+            settings.Loaded += async (_, __) => await EnsureNetworkPrinterSettings(settings);
+            settings.IsVisibleChanged += async (_, __) => await EnsureNetworkPrinterSettings(settings);
+        }
+
+        private async Task EnsureNetworkPrinterSettings(FrameworkElement content)
+        {
+            if (!content.IsLoaded || !content.IsVisible || _busy || !_refreshNetworkPrinters.IsEnabled) return;
+            string server = _server.Text.Trim(), key = _key.Password.Trim();
+            if (String.Equals(server, _loadedNetworkPrinterServer, StringComparison.Ordinal) &&
+                String.Equals(key, _loadedNetworkPrinterKey, StringComparison.Ordinal)) return;
+            await LoadNetworkPrinters();
         }
 
         private void LoadPrinterPreferences()
@@ -165,6 +175,7 @@ namespace VanyaTools.Native
                 }
                 finally { _loadingPrinterSettings = false; }
                 _networkPrinterStatus.Text = choices.Count == 0 ? "Нет зарегистрированных принтеров. Запустите модуль печати на ПК с принтером." : "Доступно профилей: " + choices.Count(choice => choice.Online) + " из " + choices.Count + ".";
+                _loadedNetworkPrinterServer = server; _loadedNetworkPrinterKey = key;
                 return true;
             }
             catch (Exception error) { _networkPrinterStatus.Text = "Принтеры: " + error.Message; return false; }

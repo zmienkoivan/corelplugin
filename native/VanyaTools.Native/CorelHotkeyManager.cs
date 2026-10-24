@@ -49,12 +49,6 @@ namespace VanyaTools.Native
             Load();
 
             var panel = new StackPanel { Margin = new Thickness(4, 7, 4, 7) };
-            panel.Children.Add(new TextBlock
-            {
-                Text = "Горячие клавиши",
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 0, 0, 5)
-            });
             AddRow(panel, 0, "Обрезать растр");
             AddRow(panel, 1, "Подогнать рамку");
             AddRow(panel, 2, "Копировать согласование");
@@ -66,7 +60,7 @@ namespace VanyaTools.Native
                 Margin = new Thickness(0, 3, 0, 0)
             };
             panel.Children.Add(_message);
-            SettingsView = panel;
+            SettingsView = DockerSettings.Section("Горячие клавиши", panel);
 
             _timer = new DispatcherTimer(DispatcherPriority.Background)
             {

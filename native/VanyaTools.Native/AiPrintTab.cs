@@ -71,8 +71,7 @@ namespace VanyaTools.Native
             sections.Children.Add(new Expander { Header = "Восстановление принта",
                 IsExpanded = true, Content = panel });
             var settingsPanel = new StackPanel { Margin = new Thickness(7) };
-            SettingsView = settingsPanel;
-            settingsPanel.Children.Add(Label("Replicate", true));
+            SettingsView = DockerSettings.Section("ИИ · Replicate", settingsPanel);
             settingsPanel.Children.Add(Button("Баланс / Billing ↗", (_, __) => OpenBilling()));
             DockerHelp.Add(panel, "Выделите объект и запустите. Результат появится на холсте.");
             DockerHelp.Add(fontPanel, "Выделите буквы. Результат — вероятные шрифты.");

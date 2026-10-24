@@ -422,15 +422,15 @@ namespace VanyaTools.Native
             _editor.Children.Add(new Expander { Header = "Ещё", Content = more,
                 Margin = new Thickness(0, 3, 0, 0) });
 
-            var settings = new StackPanel { Margin = new Thickness(4, 12, 4, 4) };
-            settings.Children.Add(Title("Сервер заказов"));
-            settings.Children.Add(Label("Адрес сервера"));
-            _server = Input(); _server.Text = "https://evpmerch.com:9443"; settings.Children.Add(_server);
-            settings.Children.Add(Label("Ключ публикации"));
+            var settings = new StackPanel { Margin = new Thickness(0) };
+            var serverSettings = new StackPanel();
+            serverSettings.Children.Add(Label("Адрес сервера"));
+            _server = Input(); _server.Text = "https://evpmerch.com:9443"; serverSettings.Children.Add(_server);
+            serverSettings.Children.Add(Label("Ключ публикации"));
             _key = new PasswordBox { Margin = new Thickness(0, 0, 0, 5) };
-            settings.Children.Add(_key);
-            settings.Children.Add(Button("Сохранить подключение", (_, __) => Safe(() => SaveServerSettings())));
-            settings.Children.Add(Button("Проверить сервер", async (_, __) =>
+            serverSettings.Children.Add(_key);
+            serverSettings.Children.Add(Button("Сохранить подключение", (_, __) => Safe(() => SaveServerSettings())));
+            serverSettings.Children.Add(Button("Проверить сервер", async (_, __) =>
             {
                 try
                 {
@@ -439,9 +439,11 @@ namespace VanyaTools.Native
                 }
                 catch (Exception error) { _status("Сервер заказов: " + error.Message, true); }
             }));
-            DockerHelp.Add(settings, "Токен бота хранится на сервере. Здесь нужен ключ публикации.");
-            AddNetworkPrinterSettings(settings);
-            settings.Children.Add(Label("Папка года"));
+            DockerHelp.Add(serverSettings, "Токен бота хранится на сервере. Здесь нужен ключ публикации.");
+            var printerSettings = new StackPanel();
+            AddNetworkPrinterSettings(printerSettings);
+            var fileSettings = new StackPanel();
+            fileSettings.Children.Add(Label("Папка года"));
             var folderRow = new DockPanel { Margin = new Thickness(0, 0, 0, 3) };
             var browseFolder = Button("", (_, __) => Safe(ChooseYearFolder));
             browseFolder.Width = 36;
@@ -462,8 +464,8 @@ namespace VanyaTools.Native
             _yearFolder.ToolTip = "Папка года, например \\\\EVP_NAS\\EVP_files\\Макеты\\2026";
             _yearFolder.Margin = new Thickness(0, 1, 4, 3);
             folderRow.Children.Add(_yearFolder);
-            settings.Children.Add(folderRow);
-            settings.Children.Add(Label("Версия сохранения CDR"));
+            fileSettings.Children.Add(folderRow);
+            fileSettings.Children.Add(Label("Версия сохранения CDR"));
             var saveVersion = new ComboBox { Margin = new Thickness(0, 0, 0, 4),
                 FontSize = 11, MinHeight = 26 };
             saveVersion.Items.Add(new ComboBoxItem { Content = "По умолчанию (как в CorelDRAW)", Tag = 0 });
@@ -484,8 +486,15 @@ namespace VanyaTools.Native
                 _status(version == 0 ? "CDR будет сохраняться по правилам CorelDRAW." :
                     "Версия сохранения CDR: " + CorelDocumentSaver.VersionLabel(version) + ".", false);
             });
-            settings.Children.Add(saveVersion);
-            DockerHelp.Add(settings, "Применяется к сохранению через Vanya Tools. При выборе старой версии новые эффекты Corel могут измениться. Ctrl+S работает по настройкам CorelDRAW.");
+            fileSettings.Children.Add(saveVersion);
+            DockerHelp.Add(fileSettings, "Применяется к сохранению через Vanya Tools. При выборе старой версии новые эффекты Corel могут измениться. Ctrl+S работает по настройкам CorelDRAW.");
+            settings.Children.Add(DockerSettings.Section("Сервер заказов", serverSettings));
+            var printerSection = DockerSettings.Section("Принтеры этикеток", printerSettings);
+            printerSection.Expanded += async (_, e) => {
+                if (ReferenceEquals(e.Source, printerSection)) await EnsureNetworkPrinterSettings(printerSettings);
+            };
+            settings.Children.Add(printerSection);
+            settings.Children.Add(DockerSettings.Section("Файлы заказов и CDR", fileSettings));
             SettingsView = settings;
             LoadServerSettings();
             LoadPrinterPreferences();

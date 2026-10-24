@@ -122,7 +122,7 @@ namespace VanyaTools.Native
                 Margin = new Thickness(0, 5, 0, 3) }; _panel.Children.Add(_ripFolder);
             AddButton("Отправить на печать в RIP", () => Output(true), true);
             DockerHelp.Add(_panel, "Выделение, масштаб 1:1, полосы и проверка цветов такие же, как при экспорте. " +
-                "PDF передаётся прямо в hot folder из «Настройки → Фотовывод · печать в RIP». Папка архива для отправки не требуется. " +
+                "PDF передаётся прямо в hot folder из «Настройки → Фотовывод · RIP». Папка архива для отправки не требуется. " +
                 "В режиме отдельных растров передаётся серия PDF. Успешный статус означает передачу в папку, а не завершение печати RIP.");
             _progress = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 3), FontSize = 11 };
             _panel.Children.Add(_progress);

@@ -37,8 +37,6 @@ namespace VanyaTools.Native
         {
             _status = status;
             var panel = new StackPanel { Margin = new Thickness(4, 9, 4, 5) };
-            panel.Children.Add(new TextBlock { Text = "Подпись согласования",
-                FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 4) });
             _caption = new TextBox { Text = DefaultCaption, AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap, MinHeight = 120,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -51,7 +49,7 @@ namespace VanyaTools.Native
                 catch (Exception error) { _status("Подпись: " + error.Message, true); }
             };
             panel.Children.Add(save);
-            SettingsView = panel;
+            SettingsView = DockerSettings.Section("Подпись согласования", panel);
             LoadSettings();
         }
 

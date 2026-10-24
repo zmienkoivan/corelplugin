@@ -118,8 +118,9 @@ namespace VanyaTools.Native
             var filmRipSettings = FilmRipSettings.Load();
             var printExportSettings = PrintExportSettings.Load();
             var printExport = new PrintExportTab(printExportSettings, SetStatus);
-            settings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
-            settings.Children.Add(Button("Восстановить кнопки на панели Corel", (_, __) =>
+            var interfaceSettings = new StackPanel();
+            interfaceSettings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
+            interfaceSettings.Children.Add(Button("Восстановить кнопки на панели Corel", (_, __) =>
             {
                 try { SetStatus(CorelToolbarInstaller.RestoreButtons(), false); }
                 catch (Exception error)
@@ -128,7 +129,7 @@ namespace VanyaTools.Native
                     SetStatus("Не удалось восстановить кнопки: " + error.Message, true);
                 }
             }));
-            settings.Children.Add(Button("Показать / скрыть кнопки действий", (_, __) =>
+            interfaceSettings.Children.Add(Button("Показать / скрыть кнопки действий", (_, __) =>
             {
                 try
                 {
@@ -148,15 +149,18 @@ namespace VanyaTools.Native
                 "Вертикально (слева)", "DockerTabsPlacement", tabsPlacement == Dock.Left);
             var rightTabsButton = AddRadioButton(tabsPlacementSettings,
                 "Вертикально (справа)", "DockerTabsPlacement", tabsPlacement == Dock.Right);
-            AddSettingsExpander(settings, "Расположение вкладок", tabsPlacementSettings);
+            interfaceSettings.Children.Add(new TextBlock { Text = "Расположение вкладок", FontSize = 11,
+                FontWeight = FontWeights.SemiBold, Margin = new Thickness(4, 6, 4, 2) });
+            interfaceSettings.Children.Add(tabsPlacementSettings);
+            settings.Children.Add(DockerSettings.Section("Обновление и интерфейс", interfaceSettings));
             _hotkeys = new CorelHotkeyManager(() => RunTrim(true), RunFitFrame,
                 approvalCopy.CopySelection,
                 (message, isError) => SetStatus(message, isError));
             settings.Children.Add(_hotkeys.SettingsView);
             settings.Children.Add(approvalCopy.SettingsView);
-            settings.Children.Add(outlineSettings.CreateSettingsView(SetStatus));
-            settings.Children.Add(filmRipSettings.CreateSettingsView(SetStatus));
-            settings.Children.Add(printExportSettings.CreateSettingsView(SetStatus));
+            settings.Children.Add(DockerSettings.Format(printExportSettings.CreateSettingsView(SetStatus), "Печать PDF, DTF и UV"));
+            settings.Children.Add(DockerSettings.Format(filmRipSettings.CreateSettingsView(SetStatus), "Фотовывод · RIP"));
+            settings.Children.Add(DockerSettings.Format(outlineSettings.CreateSettingsView(SetStatus), "Пресеты обводки ДТФ"));
             settings.Children.Add(aiTools.SettingsView);
             settings.Children.Add(orderCards.SettingsView);
             Loaded += (_, __) =>

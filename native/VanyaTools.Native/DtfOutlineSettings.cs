@@ -58,7 +58,7 @@ namespace VanyaTools.Native
                 "Иконки тонкого и толстого контура заполняют поле обводки; обработка запускается кнопкой «Обводка». " +
                 "Миллиметры пересчитываются по DPI захваченного изображения и округляются до целого пикселя. " +
                 "Положительное значение занимает хотя бы один пиксель. Радиус сглаживания задаётся отдельно.");
-            return new Expander { Header = "ДТФ · пресеты обводки", Content = panel, IsExpanded = false,
+            return new Expander { Header = "Пресеты обводки ДТФ", Content = panel, IsExpanded = false,
                 Margin = new Thickness(0, 0, 0, 6) };
         }
 

@@ -29,7 +29,7 @@ namespace VanyaTools.Native
         {
             string path = (value ?? "").Trim().Trim('"');
             if (String.IsNullOrWhiteSpace(path))
-                throw new InvalidOperationException("Укажите папку RIP: «Настройки → Фотовывод · печать в RIP → Hot folder».");
+                throw new InvalidOperationException("Укажите папку RIP: «Настройки → Фотовывод · RIP → Hot folder».");
             string root = Path.GetPathRoot(path) ?? "";
             bool drive = root.Length == 3 && Char.IsLetter(root[0]) && root[1] == ':' && (root[2] == '\\' || root[2] == '/');
             bool unc = path.StartsWith("\\\\", StringComparison.Ordinal) && root.IndexOf('\\', 2) > 2;
@@ -78,7 +78,7 @@ namespace VanyaTools.Native
                 "Укажите существующую папку, которую отслеживает RIP. Путь сохраняется на этом компьютере отдельно от папки архива. " +
                 "Задания получают уникальные имена; расширение PDF появляется после окончания записи. " +
                 "Дальнейшую обработку и запуск принтера выполняет RIP.");
-            return new Expander { Header = "Фотовывод · печать в RIP", Content = panel, IsExpanded = false,
+            return new Expander { Header = "Фотовывод · RIP", Content = panel, IsExpanded = false,
                 Margin = new Thickness(0, 0, 0, 6) };
         }
     }
