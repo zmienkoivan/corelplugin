@@ -149,7 +149,7 @@ namespace VanyaTools.Native
 
     // Named models retain their original cutting groups. Print containers are
     // separate curves built from silhouette, never from notches or other lines.
-    internal sealed class SportLayoutService
+    internal sealed partial class SportLayoutService
     {
         private sealed class Piece
         {
@@ -1082,12 +1082,9 @@ namespace VanyaTools.Native
 
         public SportLayoutResult GenerateReplacementPiece(SportLayoutPlayer row,
             IList<SportLayoutTemplate> templates, SportLayoutOptions options,
-            SportLayoutPart part)
+            SportLayoutPart part, string playerKey = null)
         {
-            if (row == null) throw new InvalidOperationException("Выберите игрока.");
-            return Generate(new[] { new SportLayoutPlayer { Size = row.Size,
-                Name = row.Name, Number = row.Number, Quantity = 1 } },
-                templates, options, null, part, false);
+            return AddReprintPiece(row, templates, options, part, playerKey);
         }
 
         private SportLayoutResult Generate(IList<SportLayoutPlayer> rows,

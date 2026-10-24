@@ -301,7 +301,7 @@ namespace VanyaTools.Native
                 "заголовка: размер, имя, номер, количество. Один столбец в пустой таблице " +
                 "или через кнопку добавления — имена; размеры можно назначить после вставки. " +
                 "Заголовки распознаются автоматически. " +
-                "Кнопка ↗ создаёт выбранную деталь для допечатки.");
+                "Кнопка ↗ добавляет выбранную деталь на общий рабочий лист допечатки.");
             _playerEditor = new Grid();
             _playerEditor.RowDefinitions.Add(new RowDefinition());
             _playerEditor.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -338,7 +338,7 @@ namespace VanyaTools.Native
             DockerHelp.Add(playerControls, "Галочки в столбцах деталей задают только печать этой детали. " +
                 "Снятые детали остаются в полном комплекте резки. Галочка в заголовке меняет эту деталь сразу у всех строк; " +
                 "в ячейке — только у одного игрока. Общая галочка «Печатать» выбирает строку заказа для печати и резки. " +
-                "Кнопка ↗ создаёт отдельную деталь для допечатки по вашему запросу, независимо от галочки детали.");
+                "Кнопка ↗ добавляет одну деталь в допечатку независимо от галочки детали.");
             var playerButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 3) };
             playerButtons.Children.Add(Button("Добавить строку", (_, __) =>
             {
@@ -372,9 +372,16 @@ namespace VanyaTools.Native
             DockerHelp.Add(playerControls, "Для группы одного размера выделите диапазон ячеек с Shift " +
                 "или несколько строк с Ctrl, выберите размер выше и нажмите «Назначить».");
             DockerHelp.Add(playerControls, "Этап 2 и резка включают только строки с галочкой «Печатать». " +
-                "Кнопка ↗ в строке по-прежнему создаёт одну деталь для допечатки.");
+                "Кнопки ↗ собирают отдельные детали для допечатки на одном рабочем листе текущего CDR.");
             _count = Note("");
             playerControls.Children.Add(_count);
+            playerControls.Children.Add(Title("Допечатка"));
+            _arrangeReprint = DockerTheme.Primary(Button("Расставить допечатку…", ArrangeReprint));
+            playerControls.Children.Add(_arrangeReprint);
+            DockerHelp.Add(playerControls, "Нажимайте ↗ у нужных деталей: реальные редактируемые объекты добавляются на один рабочий лист допечатки этого CDR. " +
+                "Каждое нажатие добавляет одну копию. Затем нажмите «Расставить допечатку», сравните варианты в окне подбора и примените выбранный. " +
+                "Используются уже добавленные объекты с вашими правками, без повторного создания рисунков. Отмена подбора сохраняет рабочий лист как есть. " +
+                "Сохраняйте внешнюю группу каждой детали; дополнительную графику добавляйте внутрь неё. Набор остаётся в CDR после сохранения.");
             panel.Children.Add(_playerEditor);
 
             panel = panels[3];
@@ -1416,15 +1423,18 @@ namespace VanyaTools.Native
             {
                 SportLayoutOptions options = ReadOptions();
                 SaveDraft();
-                _progress.Text = "Готовлю деталь для допечатки: " + row.Name + "…";
+                if (!_players.Contains(row)) throw new InvalidOperationException("Проект изменился. Выберите игрока в текущем CDR ещё раз.");
+                object reprintDocument = (object)CorelApp.Get().ActiveDocument;
+                _progress.Text = "Добавляю деталь на рабочий лист допечатки: " + row.Name + "…";
                 await Dispatcher.Yield(DispatcherPriority.Background);
+                if (!SportProjectPlayers.SameDocument(reprintDocument, (object)CorelApp.Get().ActiveDocument))
+                    throw new InvalidOperationException("Активный CDR изменился. Выберите нужный проект и повторите добавление детали.");
                 SportLayoutResult result = new SportLayoutService().GenerateReplacementPiece(
-                    row, _templates.ToList(), options, part);
+                    row, _templates.ToList(), options, part, _players.IndexOf(row).ToString(CultureInfo.InvariantCulture));
                 ClearCompletedSteps(4);
-                _progress.Text = "Деталь для допечатки на новой странице " +
-                    result.SheetHeightMm.ToString("0.#") + " × " +
-                    options.SheetWidthMm.ToString("0.#") + " мм. Сохраните CDR.";
-                _status("Деталь " + row.Name + " подготовлена для допечатки.", false);
+                _progress.Text = "На рабочем листе допечатки " + result.PieceCount + " деталей. " +
+                    "Добавьте остальные кнопками ↗, затем нажмите «Расставить допечатку». Сохраните CDR.";
+                _status("Деталь " + row.Name + " добавлена в общий набор допечатки.", false);
             }
             catch (Exception error)
             {
@@ -1451,6 +1461,7 @@ namespace VanyaTools.Native
             _combineCut.IsEnabled = enabled;
             _tagSamples.IsEnabled = enabled;
             _expandPlayers.IsEnabled = enabled;
+            _arrangeReprint.IsEnabled = enabled;
             _artworkLimit.IsEnabled = enabled;
             _artworkCapture.IsEnabled = enabled;
         }
@@ -2105,7 +2116,7 @@ namespace VanyaTools.Native
             var button = new FrameworkElementFactory(typeof(System.Windows.Controls.Button));
             button.SetValue(System.Windows.Controls.Button.ContentProperty, "↗");
             button.SetValue(System.Windows.Controls.Button.ToolTipProperty,
-                "Создать одну деталь для допечатки независимо от галочки: " + header);
+                "Добавить одну деталь на общий лист допечатки: " + header);
             button.SetValue(System.Windows.Controls.Button.MinHeightProperty, 23.0);
             button.SetValue(System.Windows.Controls.Button.PaddingProperty,
                 new Thickness(4, 0, 4, 0));
