@@ -55,7 +55,7 @@ namespace VanyaTools.Native
                 }
                 finally { doc.Unit = oldUnit; }
                 _correctionDocument = doc;
-                source = AiSelectionCapture.Capture();
+                source = AiSelectionCapture.CaptureForCorrection();
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
                 int.TryParse(_alphaThreshold.Text, out int threshold);
@@ -66,7 +66,7 @@ namespace VanyaTools.Native
                     sourceDpi = BitmapFrame.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None).DpiX;
                 double factor = _edgeLengthUnit.SelectedIndex == 0 ? 1 : 25.4 / sourceDpi;
                 TryUnderlayColor(out var color);
-                var initial = new DtfCorrectionOptions { RemoveSemiTransparent = true, Threshold = Math.Max(0, Math.Min(255, threshold)),
+                var initial = new DtfCorrectionOptions { RemoveSemiTransparent = false, Threshold = Math.Max(0, Math.Min(255, threshold)),
                     RadiusMm = radius * factor, ExpansionMm = expansion * factor, Color = color };
                 var dialog = new DtfCorrectionWindow(source, initial, _outlineSettings, ProcessCorrection);
                 var owner = PresentationSource.FromVisual(this) as HwndSource;
@@ -132,15 +132,22 @@ namespace VanyaTools.Native
                     RasterCaptureMemory.EnsureAvailable(pixels * scale * scale);
                     string next = Next();
                     SmoothOpaqueStairs(current, next, options.Threshold, cancellation, (crop, dpiX, dpiY) =>
-                    { offsetX -= crop.X * 25.4 / dpiX; offsetY -= crop.Y * 25.4 / dpiY; }, 32000000, scale);
+                    { offsetX -= crop.X * 25.4 / dpiX; offsetY -= crop.Y * 25.4 / dpiY; }, 32000000, scale,
+                        preserveAlpha: !options.RemoveSemiTransparent);
                     current = next;
                 }
                 if (options.Outline)
                 {
                     string next = Next();
-                    var edge = SmoothBinaryEdge(current, next, options.Threshold, options.RadiusMm,
+                    var edge = SmoothAlphaEdge(current, next, options.RadiusMm,
                         options.ExpansionMm, true, options.Color, cancellation);
                     offsetX += edge.Offset.Item1; offsetY += edge.Offset.Item2; current = next;
+                }
+                if (options.RemoveSemiTransparent && options.Outline)
+                {
+                    // The optional final threshold also applies to the new
+                    // soft pixels introduced by the outline, not just the source.
+                    string next = Next(); ThresholdAlpha(current, next, options.Threshold, cancellation); current = next;
                 }
                 cancellation.ThrowIfCancellationRequested();
                 File.Copy(current, output, true);

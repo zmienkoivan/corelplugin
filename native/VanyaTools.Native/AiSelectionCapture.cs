@@ -24,7 +24,18 @@ namespace VanyaTools.Native
                 restoreSelection, refreshWindow);
         }
 
-        public static int EstimateDefaultCaptureDpi()
+        public static string CaptureForCorrection()
+        {
+            // Large prints should retain 400 DPI when memory permits. The
+            // source is captured once; interactive previews use reduced copies.
+            return CaptureCore(CaptureDpi, ArtworkMaxSide, 70000000, false, true, true, true);
+        }
+
+        public static int EstimateDefaultCaptureDpi() => EstimateCaptureDpi(0, 32000000);
+
+        public static int EstimateCorrectionCaptureDpi() => EstimateCaptureDpi(ArtworkMaxSide, 70000000);
+
+        private static int EstimateCaptureDpi(int maxDimension, int maxPixels)
         {
             dynamic app = CorelApp.Get();
             dynamic doc = app.ActiveDocument;
@@ -32,7 +43,7 @@ namespace VanyaTools.Native
             dynamic selected = app.ActiveSelectionRange;
             if (selected == null || Convert.ToInt32(selected.Count) == 0)
                 throw new InvalidOperationException("Объект не выделен.");
-            return ChooseDpi(doc, selected, CaptureDpi, 0, 32000000);
+            return ChooseDpi(doc, selected, CaptureDpi, maxDimension, maxPixels);
         }
 
         public static string CaptureForPublish(int dpi = 300)

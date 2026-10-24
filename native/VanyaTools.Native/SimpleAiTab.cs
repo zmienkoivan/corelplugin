@@ -196,11 +196,12 @@ namespace VanyaTools.Native
             if (!styleOnly) correctionTools.Children.Add(_stairButton);
 
             var edgeRow = DockerLayout.ToolGroup("Обводка", "Единицы мм/px относятся к сглаживанию и наружной обводке. " +
+                "Исходные цвет и полупрозрачность сохраняются; удаление полупрозрачности запускается отдельно. " +
                 "При переключении значения пересчитываются по DPI захвата. Под полями показан размер в других единицах; " +
                 "подробный расчёт — в подсказке этой строки. Иконки тонкого и толстого контура заполняют только обводку; " +
                 "значения меняются в «Настройки → Пресеты обводки ДТФ».");
             _smoothButton = Button(styleOnly ? "Обводка" : "Применить", async (_, __) => await SmoothEdge());
-            _smoothButton.ToolTip = "Сгладить край и добавить наружную обводку с выбранными размером и цветом";
+            _smoothButton.ToolTip = "Добавить наружную обводку и сгладить её край, сохраняя цвет и прозрачность исходных пикселей";
             _edgeLengthUnit = new ComboBox { Width = 53, FontSize = 11, MinHeight = 24,
                 Margin = new Thickness(3, 1, 0, 1), ItemsSource = new[] { "мм", "px" }, SelectedIndex = 0 };
             _thinOutline = OutlinePreset(false, (_, __) => ApplyOutlinePreset(_outlineSettings.ThinMm));
@@ -397,7 +398,7 @@ namespace VanyaTools.Native
                     _upscaleButton, _alphaButton, _highlightButton, _stairButton, _smoothButton, _pipetteButton })
                 { button.MinHeight = 27; button.FontSize = 11; }
                 _backgroundHex.MinHeight = _underlayHex.MinHeight = 27;
-                _alphaThreshold.ToolTip = "Порог 0–255 · используется также для сглаживания края и обводки";
+                _alphaThreshold.ToolTip = "Порог 0–255 для удаления полупрозрачности и быстрой команды «Сгладить лесенку». На обводку не влияет.";
                 _edgeRadius.ToolTip = "Радиус сглаживания в выбранных единицах мм/px";
                 _edgeExpansion.ToolTip = "Наружная обводка в выбранных единицах мм/px";
                 _underlayHex.ToolTip = "Цвет обводки · HEX";
@@ -915,20 +916,20 @@ namespace VanyaTools.Native
 
         private static int SmoothOpaqueStairs(string source, string output, int threshold,
             CancellationToken cancellation, Action<Int32Rect, double, double> cropped = null,
-            int maximumOutputPixels = Int32.MaxValue, int fixedScale = 0)
+            int maximumOutputPixels = Int32.MaxValue, int fixedScale = 0, bool preserveAlpha = false)
         {
             BitmapSource input = AiPrintTab.Bitmap(source);
             var bgra = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
             int width = bgra.PixelWidth, height = bgra.PixelHeight;
             int length = checked(width * height), stride = checked(width * 4);
-            // The capture is limited to 8 MP. An integer grid keeps every
-            // generated pixel small and the final image within about 32 MP.
+            // Increase the grid only while it fits the requested output budget.
+            // A source larger than the budget keeps scale 1, without downsampling.
             int scale = length <= 2000000 ? 4 : length <= 3500000 ? 3 : 2;
             if (fixedScale > 0) scale = Math.Max(1, Math.Min(4, fixedScale));
             scale = Math.Min(scale, Math.Max(1, (int)Math.Sqrt((double)maximumOutputPixels / length)));
             int outWidth = checked(width * scale);
             int outHeight = checked(height * scale);
-            Log.Info("Opaque stair smoothing: " + width + "x" + height +
+            Log.Info("Stair smoothing (" + (preserveAlpha ? "preserve alpha" : "binary alpha") + "): " + width + "x" + height +
                 " -> " + outWidth + "x" + outHeight + ".");
             byte[] pixels = new byte[checked(stride * height)];
             byte[] mask = new byte[length], work = new byte[length];
@@ -936,15 +937,16 @@ namespace VanyaTools.Native
             for (int p = 0; p < length; p++)
             {
                 if ((p & 0xfffff) == 0) cancellation.ThrowIfCancellationRequested();
-                mask[p] = pixels[p * 4 + 3] >= threshold && pixels[p * 4 + 3] > 0
-                    ? (byte)255 : (byte)0;
+                mask[p] = preserveAlpha ? pixels[p * 4 + 3] :
+                    pixels[p * 4 + 3] >= threshold && pixels[p * 4 + 3] > 0 ? (byte)255 : (byte)0;
             }
             GaussianHorizontal(mask, work, width, height, 1, cancellation);
             GaussianVertical(work, mask, width, height, 1, cancellation);
             // Preserve original alpha separately while changing the blurred mask.
             for (int p = 0; p < length; p++)
             {
-                int original = pixels[p * 4 + 3] >= threshold && pixels[p * 4 + 3] > 0 ? 255 : 0;
+                int original = preserveAlpha ? pixels[p * 4 + 3] :
+                    pixels[p * 4 + 3] >= threshold && pixels[p * 4 + 3] > 0 ? 255 : 0;
                 work[p] = (byte)original;
                 mask[p] = (byte)((mask[p] * 65 + original * 35 + 50) / 100);
             }
@@ -970,30 +972,54 @@ namespace VanyaTools.Native
                     double coverage = mask[p00] * w00 + mask[p10] * w10 +
                         mask[p01] * w01 + mask[p11] * w11;
                     int destination = (y * outWidth + x) * 4;
-                    if (coverage < 128) continue;
+                    byte alpha = preserveAlpha ? (byte)Math.Max(0, Math.Min(255, Math.Round(coverage))) :
+                        coverage >= 128 ? (byte)255 : (byte)0;
+                    if (alpha == 0) continue;
                     // Sample color from the kept artwork, not from translucent
                     // fringe pixels that may contain a matte or white halo.
-                    double c00 = work[p00] != 0 ? w00 : 0;
-                    double c10 = work[p10] != 0 ? w10 : 0;
-                    double c01 = work[p01] != 0 ? w01 : 0;
-                    double c11 = work[p11] != 0 ? w11 : 0;
+                    double c00 = preserveAlpha ? work[p00] * w00 / 255.0 : work[p00] != 0 ? w00 : 0;
+                    double c10 = preserveAlpha ? work[p10] * w10 / 255.0 : work[p10] != 0 ? w10 : 0;
+                    double c01 = preserveAlpha ? work[p01] * w01 / 255.0 : work[p01] != 0 ? w01 : 0;
+                    double c11 = preserveAlpha ? work[p11] * w11 / 255.0 : work[p11] != 0 ? w11 : 0;
                     double total = c00 + c10 + c01 + c11;
+                    // Gaussian coverage may extend just outside the four color
+                    // samples. Take fringe color from visible artwork, never
+                    // from hidden RGB of a fully transparent pixel.
+                    int fallback = total == 0 && preserveAlpha ? NearestVisiblePixel(pixels, width, height, x0, y0) : p00;
+                    if (fallback < 0) continue;
                     for (int channel = 0; channel < 3; channel++)
                     {
                         double color = total > 0 ?
                             (pixels[p00 * 4 + channel] * c00 + pixels[p10 * 4 + channel] * c10 +
                              pixels[p01 * 4 + channel] * c01 + pixels[p11 * 4 + channel] * c11) / total :
-                            pixels[p00 * 4 + channel];
+                            pixels[fallback * 4 + channel];
                         resultPixels[destination + channel] = (byte)Math.Max(0, Math.Min(255, Math.Round(color)));
                     }
-                    resultPixels[destination + 3] = 255;
+                    resultPixels[destination + 3] = alpha;
                 }
             }
-            Log.Info("Opaque stair smoothing pixels ready; saving PNG.");
+            Log.Info("Stair smoothing pixels ready; saving PNG.");
             Int32Rect crop = SaveBinaryResult(output, resultPixels, outWidth, outHeight,
                 input.DpiX * scaleX, input.DpiY * scaleY, cancellation);
             cropped?.Invoke(crop, input.DpiX * scaleX, input.DpiY * scaleY);
             return scale;
+        }
+
+        private static int NearestVisiblePixel(byte[] pixels, int width, int height, int x, int y)
+        {
+            int found = -1, distance = Int32.MaxValue;
+            // A radius-one Gaussian plus bilinear interpolation reaches at
+            // most two source pixels beyond the nearest interpolation sample.
+            for (int dy = -2; dy <= 2; dy++)
+                for (int dx = -2; dx <= 2; dx++)
+                {
+                    int sx = x + dx, sy = y + dy;
+                    if (sx < 0 || sy < 0 || sx >= width || sy >= height) continue;
+                    int candidate = sy * width + sx, square = dx * dx + dy * dy;
+                    if (pixels[candidate * 4 + 3] == 0 || square >= distance) continue;
+                    found = candidate; distance = square;
+                }
+            return found;
         }
 
         private void RefreshOutlinePresets()
@@ -1021,7 +1047,7 @@ namespace VanyaTools.Native
 
         private void RefreshEdgeDpi()
         {
-            try { _edgeDpi = AiSelectionCapture.EstimateDefaultCaptureDpi(); _edgeDpiKnown = true; }
+            try { _edgeDpi = AiSelectionCapture.EstimateCorrectionCaptureDpi(); _edgeDpiKnown = true; }
             catch { _edgeDpiKnown = false; }
         }
 
@@ -1119,11 +1145,9 @@ namespace VanyaTools.Native
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
             { Report("Сначала вставьте готовый результат.", true); return; }
-            int threshold;
-            if (!Int32.TryParse(_alphaThreshold.Text, out threshold) || threshold < 0 || threshold > 255 ||
-                !DtfOutlineUnits.TryNumber(_edgeRadius.Text, out double radius) ||
+            if (!DtfOutlineUnits.TryNumber(_edgeRadius.Text, out double radius) ||
                 !DtfOutlineUnits.TryNumber(_edgeExpansion.Text, out double expansion))
-            { Report("Порог: 0–255; сглаживание и обводка — неотрицательные числа в выбранных единицах.", true); return; }
+            { Report("Сглаживание и обводка — неотрицательные числа в выбранных единицах.", true); return; }
             bool millimeters = _edgeLengthUnit.SelectedIndex == 0;
             Color fill;
             if (!TryUnderlayColor(out fill)) { Report("Введите цвет подложки в формате #RRGGBB.", true); return; }
@@ -1131,12 +1155,12 @@ namespace VanyaTools.Native
             try
             {
                 _importWarning = null;
-                string source = AiSelectionCapture.Capture();
+                string source = AiSelectionCapture.CaptureForCorrection();
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Edge-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
-                EdgeResult edge = await Task.Run(() => SmoothBinaryEdge(source, output, threshold, radius,
+                EdgeResult edge = await Task.Run(() => SmoothAlphaEdge(source, output, radius,
                     expansion, millimeters, fill, cancellation), cancellation);
                 _edgeDpi = edge.Metrics.DpiX; _edgeDpiKnown = true;
                 ShowEdgeMetrics(edge.Metrics);
@@ -1161,7 +1185,7 @@ namespace VanyaTools.Native
             finally { SetBusy(false, null); }
         }
 
-        private static EdgeResult SmoothBinaryEdge(string source, string output, int threshold,
+        private static EdgeResult SmoothAlphaEdge(string source, string output,
             double radius, double expansion, bool millimeters, Color fill, CancellationToken cancellation)
         {
             BitmapSource input = AiPrintTab.Bitmap(source);
@@ -1180,11 +1204,14 @@ namespace VanyaTools.Native
                 checked(canvasWidth * 4), checked(((paddingY * canvasWidth) + paddingX) * 4));
             cancellation.ThrowIfCancellationRequested();
             for (int p = 0; p < length; p++)
-                mask[p] = pixels[p * 4 + 3] > 0 && pixels[p * 4 + 3] >= threshold ? (byte)255 : (byte)0;
+            {
+                if ((p & 0xfffff) == 0) cancellation.ThrowIfCancellationRequested();
+                mask[p] = pixels[p * 4 + 3];
+            }
             if (expansion > 0)
             {
-                DilateHorizontal(mask, work, canvasWidth, canvasHeight, metrics.ExpansionX, cancellation);
-                DilateVertical(work, mask, canvasWidth, canvasHeight, metrics.ExpansionY, cancellation);
+                MaxAlphaHorizontal(mask, work, canvasWidth, canvasHeight, metrics.ExpansionX, cancellation);
+                MaxAlphaVertical(work, mask, canvasWidth, canvasHeight, metrics.ExpansionY, cancellation);
             }
             if (radius > 0)
             {
@@ -1195,18 +1222,13 @@ namespace VanyaTools.Native
             {
                 if ((p & 0xfffff) == 0) cancellation.ThrowIfCancellationRequested();
                 int i = p * 4;
-                // Blur changes only the outline. The exported alpha remains binary.
-                if (mask[p] < 128)
-                {
-                    pixels[i] = pixels[i + 1] = pixels[i + 2] = pixels[i + 3] = 0;
-                }
-                else if (pixels[i + 3] > 0 && pixels[i + 3] >= threshold)
-                    pixels[i + 3] = 255;
-                else
-                {
-                    pixels[i] = fill.B; pixels[i + 1] = fill.G; pixels[i + 2] = fill.R;
-                    pixels[i + 3] = 255;
-                }
+                // Existing artwork, including its soft alpha and RGB, remains
+                // byte-for-byte unchanged. A full underlay behind partial alpha
+                // would raise the visible opacity, so add only the outside ring.
+                if (pixels[i + 3] != 0) continue;
+                int underlayAlpha = (mask[p] * fill.A + 127) / 255;
+                if (underlayAlpha == 0) continue;
+                CompositeUnderlay(pixels, i, fill, underlayAlpha);
             }
             Int32Rect crop = SaveBinaryResult(output, pixels, canvasWidth, canvasHeight,
                 input.DpiX, input.DpiY, cancellation);
@@ -1214,6 +1236,68 @@ namespace VanyaTools.Native
             double dpiY = input.DpiY > 0 ? input.DpiY : 96.0;
             return new EdgeResult { Metrics = metrics, Offset = Tuple.Create((paddingX - crop.X) * 25.4 / dpiX,
                 (paddingY - crop.Y) * 25.4 / dpiY) };
+        }
+
+        private static void CompositeUnderlay(byte[] pixels, int index, Color fill, int underlayAlpha)
+        {
+            // Straight BGRA source-over. The caller limits the background to
+            // pixels outside the original support; this also handles fill alpha.
+            int sourceAlpha = pixels[index + 3], uncovered = 255 - sourceAlpha;
+            int alphaNumerator = sourceAlpha * 255 + underlayAlpha * uncovered;
+            if (alphaNumerator == 0) return;
+            int red = pixels[index + 2], green = pixels[index + 1], blue = pixels[index];
+            pixels[index] = (byte)((blue * sourceAlpha * 255 + fill.B * underlayAlpha * uncovered + alphaNumerator / 2) / alphaNumerator);
+            pixels[index + 1] = (byte)((green * sourceAlpha * 255 + fill.G * underlayAlpha * uncovered + alphaNumerator / 2) / alphaNumerator);
+            pixels[index + 2] = (byte)((red * sourceAlpha * 255 + fill.R * underlayAlpha * uncovered + alphaNumerator / 2) / alphaNumerator);
+            pixels[index + 3] = (byte)((alphaNumerator + 127) / 255);
+        }
+
+        private static void MaxAlphaHorizontal(byte[] source, byte[] target, int width,
+            int height, int radius, CancellationToken cancellation)
+        {
+            // Monotone deque: each input index is pushed and removed at most
+            // once, regardless of radius. Keep one row of indices, not one image.
+            var deque = new int[width];
+            for (int y = 0; y < height; y++)
+            {
+                if ((y & 63) == 0) cancellation.ThrowIfCancellationRequested();
+                int row = y * width, head = 0, tail = 0, next = 0;
+                for (int x = 0; x < width; x++)
+                {
+                    int right = Math.Min(width - 1, x + radius);
+                    while (next <= right)
+                    {
+                        byte value = source[row + next];
+                        while (tail > head && source[row + deque[tail - 1]] <= value) tail--;
+                        deque[tail++] = next++;
+                    }
+                    while (tail > head && deque[head] < x - radius) head++;
+                    target[row + x] = source[row + deque[head]];
+                }
+            }
+        }
+
+        private static void MaxAlphaVertical(byte[] source, byte[] target, int width,
+            int height, int radius, CancellationToken cancellation)
+        {
+            var deque = new int[height];
+            for (int x = 0; x < width; x++)
+            {
+                if ((x & 63) == 0) cancellation.ThrowIfCancellationRequested();
+                int head = 0, tail = 0, next = 0;
+                for (int y = 0; y < height; y++)
+                {
+                    int bottom = Math.Min(height - 1, y + radius);
+                    while (next <= bottom)
+                    {
+                        byte value = source[next * width + x];
+                        while (tail > head && source[deque[tail - 1] * width + x] <= value) tail--;
+                        deque[tail++] = next++;
+                    }
+                    while (tail > head && deque[head] < y - radius) head++;
+                    target[y * width + x] = source[deque[head] * width + x];
+                }
+            }
         }
 
         private static void MoveImportedEdge(Tuple<double, double> offsetMm)
