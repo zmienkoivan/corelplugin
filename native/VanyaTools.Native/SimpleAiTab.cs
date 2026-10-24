@@ -18,7 +18,7 @@ namespace VanyaTools.Native
 {
     internal enum SimpleAiMode { Raster, Prompt, AiStyles, LocalStyles }
 
-    internal sealed class SimpleAiTab : UserControl
+    internal sealed partial class SimpleAiTab : UserControl
     {
         private readonly Func<string> _capture;
         private readonly Func<string> _token;
@@ -169,14 +169,15 @@ namespace VanyaTools.Native
                 if (printButtons != null) panel.Children.Add(printButtons);
             }
             var correctionTools = DockerLayout.ToolGroup("Коррекция");
-            if (!styleOnly) panel.Children.Add(correctionTools);
+            _correctionButton = DockerTheme.Primary(Button("Коррекция и обводка…", async (_, __) => await OpenCorrection()));
+            _correctionButton.ToolTip = "Открыть выделение один раз и подбирать прозрачность, сглаживание и обводку с живым предпросмотром. Работает без интернета.";
+            if (!styleOnly) { correctionTools.Children.Add(_correctionButton); panel.Children.Add(correctionTools); }
             _alphaButton = Button("Убрать полупрозрачность", async (_, __) => await RemoveSemiTransparent());
             _alphaThreshold = new TextBox { Text = "130", Width = 50, MinHeight = 27, FontSize = 11,
                 VerticalContentAlignment = VerticalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
             var alphaRow = DockerLayout.Trailing(_alphaButton,
                 DockerLayout.FieldRow("Порог", _alphaThreshold, 50));
             alphaRow.Margin = new Thickness(0, 0, 0, 2);
-            if (!styleOnly) correctionTools.Children.Add(alphaRow);
 
             _highlightButton = Button(styleOnly ? "Подсветить полупрозрачные" : "Подсветить", async (_, __) => await HighlightSemiTransparent());
             _highlightButton.ToolTip = "Создаёт рядом с оригиналом копию с яркой отметкой пикселей, у которых прозрачность между 0 и 100%.";
@@ -187,11 +188,9 @@ namespace VanyaTools.Native
             _highlightColor.SelectedIndex = 0;
             var highlightRow = DockerLayout.Trailing(_highlightButton, _highlightColor);
             highlightRow.Margin = new Thickness(0, 0, 0, 2);
-            if (!styleOnly) correctionTools.Children.Add(highlightRow);
 
             _stairButton = Button("Сгладить лесенку", async (_, __) => await SmoothStairs());
             _stairButton.ToolTip = "Создаёт в 2–4 раза более плотную сетку пикселей и сглаживает край и цветовые границы рисунка. Прозрачность результата остаётся 0 или 100%.";
-            if (!styleOnly) correctionTools.Children.Add(_stairButton);
 
             var edgeRow = DockerLayout.ToolGroup("Обводка", "Единицы мм/px относятся к сглаживанию и наружной обводке. " +
                 "При переключении значения пересчитываются по DPI захвата. Под полями показан размер в других единицах; " +
@@ -240,20 +239,18 @@ namespace VanyaTools.Native
             Grid.SetColumn(_pipetteButton, 1); outlineColorRow.Children.Add(_pipetteButton);
             edgeRow.Children.Add(outlineColorRow);
             _underlayHex.TextChanged += (_, __) => UpdateUnderlaySwatch();
-            if (!styleOnly) panel.Children.Add(edgeRow);
             _edgeUnits = Note("");
             if (!styleOnly) edgeRow.Children.Add(_edgeUnits);
             RefreshOutlinePresets();
             if (!styleOnly)
             {
                 _outlineSettings.Changed += RefreshOutlinePresets;
-                Loaded += (_, __) => { RefreshOutlinePresets(); UpdateEdgeUnits(); };
+                Loaded += (_, __) => RefreshOutlinePresets();
             }
             _edgeLengthUnit.SelectionChanged += (_, __) => SwitchEdgeUnits();
             _edgeRadius.TextChanged += (_, __) => UpdateEdgeUnits(false);
             _edgeExpansion.TextChanged += (_, __) => UpdateEdgeUnits(false);
             edgeRow.MouseEnter += (_, __) => UpdateEdgeUnits();
-            if (!styleOnly) UpdateEdgeUnits();
 
             var localPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 5) };
             _localPreviewButton = Button("Загрузить выделение для предпросмотра",
@@ -912,7 +909,8 @@ namespace VanyaTools.Native
         }
 
         private static int SmoothOpaqueStairs(string source, string output, int threshold,
-            CancellationToken cancellation)
+            CancellationToken cancellation, Action<Int32Rect, double, double> cropped = null,
+            int maximumOutputPixels = Int32.MaxValue, int fixedScale = 0)
         {
             BitmapSource input = AiPrintTab.Bitmap(source);
             var bgra = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
@@ -921,6 +919,8 @@ namespace VanyaTools.Native
             // The capture is limited to 8 MP. An integer grid keeps every
             // generated pixel small and the final image within about 32 MP.
             int scale = length <= 2000000 ? 4 : length <= 3500000 ? 3 : 2;
+            if (fixedScale > 0) scale = Math.Max(1, Math.Min(4, fixedScale));
+            scale = Math.Min(scale, Math.Max(1, (int)Math.Sqrt((double)maximumOutputPixels / length)));
             int outWidth = checked(width * scale);
             int outHeight = checked(height * scale);
             Log.Info("Opaque stair smoothing: " + width + "x" + height +
@@ -985,8 +985,9 @@ namespace VanyaTools.Native
                 }
             }
             Log.Info("Opaque stair smoothing pixels ready; saving PNG.");
-            SaveBinaryResult(output, resultPixels, outWidth, outHeight,
+            Int32Rect crop = SaveBinaryResult(output, resultPixels, outWidth, outHeight,
                 input.DpiX * scaleX, input.DpiY * scaleY, cancellation);
+            cropped?.Invoke(crop, input.DpiX * scaleX, input.DpiY * scaleY);
             return scale;
         }
 
@@ -1523,7 +1524,10 @@ namespace VanyaTools.Native
             try
             {
                 string name = Path.GetFileName(_readyOutput);
-                bool alreadyCropped = name.StartsWith("Vanya-Edge-", StringComparison.OrdinalIgnoreCase) ||
+                bool correction = name.StartsWith("Vanya-Correction-", StringComparison.OrdinalIgnoreCase);
+                var placement = correction ? ReadCorrectionPlacement(_readyOutput) : null;
+                if (correction) VerifyCorrectionDocument(placement);
+                bool alreadyCropped = correction || name.StartsWith("Vanya-Edge-", StringComparison.OrdinalIgnoreCase) ||
                     name.StartsWith("Vanya-Stairs-", StringComparison.OrdinalIgnoreCase) ||
                     name.StartsWith("Vanya-Alpha-Highlight-", StringComparison.OrdinalIgnoreCase) ||
                     name.StartsWith("Vanya-Background-Ready-", StringComparison.OrdinalIgnoreCase) ||
@@ -1532,6 +1536,7 @@ namespace VanyaTools.Native
                     (alreadyCropped ? " (cropped PNG)" : ""));
                 string warning = (alreadyCropped ? _importDtf : _import)(_readyOutput,
                     OperationName(name));
+                if (correction) warning = PlaceCorrection(placement, warning);
                 Log.Info("Simple AI import finished: " + name);
                 _importWarning = warning;
                 _readyOutput = null; _lastInput = null; _lastSource = null;
@@ -1546,6 +1551,8 @@ namespace VanyaTools.Native
 
         private string OperationName(string filename)
         {
+            if (filename.StartsWith("Vanya-Correction-", StringComparison.OrdinalIgnoreCase))
+                return "Коррекция и обводка";
             if (filename.StartsWith("Vanya-Background-Ready-", StringComparison.OrdinalIgnoreCase))
                 return "Удаление фона · AI";
             if (filename.StartsWith("Vanya-Background-", StringComparison.OrdinalIgnoreCase))
@@ -1611,6 +1618,7 @@ namespace VanyaTools.Native
         private void SetBusy(bool busy, string stage)
         {
             _busy = busy;
+            _correctionButton.IsEnabled = !busy;
             _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _backgroundPipetteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
                 _highlightButton.IsEnabled = _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled = _underlayColorButton.IsEnabled =
                 _editButton.IsEnabled = _localApplyButton.IsEnabled = _localPreviewButton.IsEnabled = !busy;

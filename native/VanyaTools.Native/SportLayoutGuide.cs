@@ -82,38 +82,42 @@ namespace VanyaTools.Native
             bool pdfExported = _completedSteps != null && _completedSteps.Length > 4 && _completedSteps[4];
             bool cutCreated = _completedSteps != null && _completedSteps.Length > 5 && _completedSteps[5];
 
-            // Visual order: patterns, players, mockups, printing, cutting.
+            // Visual order: patterns, artwork, players, mockups, printing, cutting.
             // Completion state indices stay in their original persisted order.
             switch (_steps.SelectedIndex)
             {
                 case 0:
-                    if (modelsReady) ShowWorkflowGuide("Лекала назначены. Далее — список игроков.", 1, "К игрокам");
+                    if (modelsReady) ShowWorkflowGuide("Лекала назначены. Далее — рисунки деталей.", 1, "К рисункам");
                     else ShowWorkflowGuide("Выберите модель CDR и проверьте размеры.");
                     break;
                 case 1:
                     if (!modelsReady) ShowWorkflowGuide("Для новых комплектов сначала назначьте лекала.", 0, "К лекалам");
-                    else if (!playersReady) ShowWorkflowGuide("Добавьте строки «В заказ», проверьте размеры и количество.");
-                    else if (layoutsPrepared) ShowWorkflowGuide("Макеты подготовлены. Можно перейти к печати.", 3, "К печати");
-                    else ShowWorkflowGuide("Список готов. Далее — рисунки и макеты.", 2, "К макетам");
+                    else ShowWorkflowGuide("Назначьте нужные рисунки. Далее — игроки; пустой рисунок допустим.", 2, "К игрокам");
                     break;
                 case 2:
-                    if (!playersReady) ShowWorkflowGuide("Добавьте строки «В заказ», проверьте размеры и количество.", 1, "К игрокам");
-                    else if (!layoutsPrepared) ShowWorkflowGuide("Назначьте нужные рисунки и нажмите «Подготовить макеты».");
-                    else ShowWorkflowGuide("Проверьте макеты на холсте. Далее — печать или резка.", 3, "К печати");
+                    if (!modelsReady) ShowWorkflowGuide("Для новых комплектов сначала назначьте лекала.", 0, "К лекалам");
+                    else if (!playersReady) ShowWorkflowGuide("Добавьте строки «В заказ», проверьте размеры и количество.");
+                    else ShowWorkflowGuide("Список готов. Теперь подгоните макеты выбранных размеров.", 3, "К макетам");
                     break;
                 case 3:
-                    // A ready page can be exported even when an older CDR has
-                    // no workflow marks or saved roster. Never require rebuild.
-                    if (pdfExported) ShowWorkflowGuide("Экспорт PDF выполнен. Можно сохранить другой лист.", 4, "К резке");
-                    else if (printCreated) ShowWorkflowGuide("Откройте лист печати и сохраните PDF.", 4, "К резке");
-                    else if (!playersReady) ShowWorkflowGuide("Готовый лист → PDF. Для новой раскладки заполните игроков.", 1, "К игрокам");
-                    else if (!layoutsPrepared) ShowWorkflowGuide("Готовый лист → PDF. Для новой раскладки подготовьте макеты.", 2, "К макетам");
-                    else ShowWorkflowGuide("Подберите раскладку или сохраните PDF готового листа.", 4, "К резке");
+                    if (!modelsReady) ShowWorkflowGuide("Для новых макетов сначала назначьте лекала.", 0, "К лекалам");
+                    else if (!playersReady) ShowWorkflowGuide("Сначала заполните игроков: по ним выбираются размеры макетов.", 2, "К игрокам");
+                    else if (!layoutsPrepared) ShowWorkflowGuide("Нажмите «Подготовить макеты», затем подгоните рисунки и надписи на холсте.");
+                    else ShowWorkflowGuide("Подгоните макеты на холсте. Далее — печать; резка при необходимости.", 4, "К печати");
                     break;
                 case 4:
+                    // A ready page can be exported even when an older CDR has
+                    // no workflow marks or saved roster. Never require rebuild.
+                    if (pdfExported) ShowWorkflowGuide("PDF сохранён. Другой лист — здесь; резка при необходимости.", 5, "К резке");
+                    else if (printCreated) ShowWorkflowGuide("Откройте лист печати и сохраните PDF. Резка — при необходимости.", 5, "К резке");
+                    else if (!playersReady) ShowWorkflowGuide("Готовый лист → PDF. Для новой раскладки заполните игроков.", 2, "К игрокам");
+                    else if (!layoutsPrepared) ShowWorkflowGuide("Готовый лист → PDF. Для новой раскладки подготовьте макеты.", 3, "К макетам");
+                    else ShowWorkflowGuide("Подберите раскладку и сохраните PDF. Резка — при необходимости.", 5, "К резке");
+                    break;
+                case 5:
                     // Cutting is independent of the printing/PDF branch.
                     if (cutCreated) ShowWorkflowGuide("Откройте лист резки и сохраните DXF.");
-                    else if (!playersReady) ShowWorkflowGuide("Готовый лист → DXF. Для новой резки заполните игроков.", 1, "К игрокам");
+                    else if (!playersReady) ShowWorkflowGuide("Готовый лист → DXF. Для новой резки заполните игроков.", 2, "К игрокам");
                     else ShowWorkflowGuide("Подберите резку или сохраните DXF готового листа.");
                     break;
                 default:
