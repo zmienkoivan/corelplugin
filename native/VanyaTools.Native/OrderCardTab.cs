@@ -159,19 +159,8 @@ namespace VanyaTools.Native
             _unassignedTable.AddHandler(UIElement.MouseLeftButtonUpEvent,
                 new MouseButtonEventHandler(UnassignedRowClicked), true);
             openPanel.Children.Add(_unassignedTable);
-            _unassignedOpenExpander = new Expander { Header = UnassignedHeader("Заказы без карточки"), Content = openPanel,
-                Visibility = Visibility.Collapsed, HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                Margin = new Thickness(0, 1, 0, 2) };
-            _unassignedOpenExpander.Expanded += async (_, e) =>
-            {
-                if (!ReferenceEquals(e.Source, _unassignedOpenExpander)) return;
-                _unassignedOpenExpander.IsExpanded = false;
-                await ShowUnassignedPicker(openPanel);
-            };
+            _unassignedPickerContent = openPanel;
             var orderHeader = new Grid();
-            orderHeader.ColumnDefinitions.Add(new ColumnDefinition());
-            orderHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            Grid.SetColumn(_unassignedOpenExpander, 1); orderHeader.Children.Add(_unassignedOpenExpander);
             _orderInfo = Note(""); _orderInfo.Margin = new Thickness(0, 0, 5, 0);
             _orderInfo.VerticalAlignment = VerticalAlignment.Center; _orderInfo.TextWrapping = TextWrapping.NoWrap;
             _orderInfo.TextTrimming = TextTrimming.CharacterEllipsis;
@@ -383,11 +372,9 @@ namespace VanyaTools.Native
             _editor.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             Grid.SetRow(_editor, 3); panel.Children.Add(_editor);
             var body = new StackPanel(); _editor.Children.Add(body);
-            var identityAndDescription = new UniformGrid { Columns = 2, Margin = new Thickness(0, 1, 0, 4) };
-            var identity = new StackPanel();
-            identityAndDescription.Children.Add(identity);
+            var identity = new UniformGrid { Columns = 2, Margin = new Thickness(0, 1, 0, 4) };
             _customer = Input(); CompactCardField(identity, "Заказчик", _customer, false);
-            _designName = Input(); CompactCardField(identity, "Имя файла", _designName, false);
+            _designName = Input(); CompactCardField(identity, "Имя файла", _designName, true);
             _sourceOptions = new WrapPanel { Margin = new Thickness(0, 0, 0, 3) };
             var sourceLabel = Note("Источник");
             sourceLabel.VerticalAlignment = VerticalAlignment.Center;
@@ -452,9 +439,9 @@ namespace VanyaTools.Native
             addFrame.Height = 26; addFrame.Margin = new Thickness(0);
             frameTools.Children.Add(addFrame);
 
-            var descriptionColumn = new StackPanel(); identityAndDescription.Children.Add(descriptionColumn);
-            _description = Input(71); _description.Height = _description.MinHeight = _description.MaxHeight = 71;
-            CompactCardField(descriptionColumn, "Описание заказа", _description, true);
+            var descriptionColumn = new StackPanel { Margin = new Thickness(0, 0, 0, 4) };
+            _description = Input(42); _description.Height = _description.MinHeight = _description.MaxHeight = 42;
+            CompactCardField(descriptionColumn, "Описание заказа", _description, false);
             var itemDetails = new StackPanel { Margin = new Thickness(0, 0, 0, 3) };
             _items = Input(30); _items.Height = _items.MinHeight = _items.MaxHeight = 30;
             CompactCardField(itemDetails, "Изделия и количество", _items, false);
@@ -463,7 +450,8 @@ namespace VanyaTools.Native
             body.Children.Add(frameTools);
             body.Children.Add(production);
             body.Children.Add(_sourceOptions);
-            body.Children.Add(identityAndDescription);
+            body.Children.Add(identity);
+            body.Children.Add(descriptionColumn);
             orderHeader.Children.Add(CreateCardNumberRow());
             body.Children.Add(orderHeader);
             body.Children.Add(itemDetails);
@@ -2013,15 +2001,16 @@ namespace VanyaTools.Native
             ResetUnassignedContext(server, key);
             if (server.Length == 0 || key.Length == 0)
             {
-                _unassignedOpenExpander.Visibility = Visibility.Collapsed;
+                _unassignedCount.Text = "Укажите адрес сервера и ключ в настройках карточек.";
+                UpdateUnassignedButton();
                 return;
             }
             int snapshotVersion = _unassignedSnapshotVersion;
             _nextUnassignedRefreshUtc = DateTime.UtcNow.AddSeconds(30);
             _unassignedLoading = true;
             _unassignedRefresh.IsEnabled = false;
-            if (_unassignedOpenExpander.Visibility == Visibility.Visible)
-                _unassignedCount.Text = "Обновляю список…";
+            _unassignedCount.Text = "Обновляю список…";
+            UpdateUnassignedButton();
             try
             {
                 var response = await OrderServerClient.Unassigned(server, key);
@@ -2051,7 +2040,7 @@ namespace VanyaTools.Native
                 if (server == _server.Text.Trim() && key == _key.Password.Trim() &&
                     snapshotVersion == _unassignedSnapshotVersion) ShowUnassignedFailure(error);
             }
-            finally { _unassignedLoading = false; _unassignedRefresh.IsEnabled = true; }
+            finally { _unassignedLoading = false; _unassignedRefresh.IsEnabled = true; UpdateUnassignedButton(); }
         }
 
         private async void UnassignedRowClicked(object sender, MouseButtonEventArgs e)
@@ -3150,8 +3139,8 @@ namespace VanyaTools.Native
             if (_send == null) return;
             UpdateLabelPrinting();
             bool assigned = _data.ServerOrderId > 0;
-            if (_cardNumberCaption != null)
-                _cardNumberCaption.Text = assigned ? "№" + _data.ServerOrderNumber : "Заказ №";
+            if (_cardNumber != null)
+                _cardNumber.Text = assigned && !String.IsNullOrWhiteSpace(_data.ServerOrderNumber) ? _data.ServerOrderNumber : "Авто";
             bool draft = _data.ServerSendState == "draft";
             bool published = assigned && (_data.ServerSendState == "sent" || _data.ServerSendState == "local");
             bool pending = assigned && (_data.ServerSendState == "uncertain" || _data.ServerSendState == "sending");

@@ -136,9 +136,20 @@ namespace VanyaTools.Native
                 foreach (var scroll in new[] { _beforeScroll, _afterScroll })
                 {
                     Image target = ReferenceEquals(scroll, _beforeScroll) ? _before : _after;
+                    if (!(target.Source is BitmapSource)) continue;
                     scroll.ScrollToHorizontalOffset(target.Margin.Left + target.Width * x - viewport.X);
                     scroll.ScrollToVerticalOffset(target.Margin.Top + target.Height * y - viewport.Y);
                 }
+            }), DispatcherPriority.Loaded);
+        }
+
+        private void SyncResultPosition()
+        {
+            _ = Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (_closed || _after.Source == null) return;
+                _afterScroll.ScrollToHorizontalOffset(_beforeScroll.HorizontalOffset);
+                _afterScroll.ScrollToVerticalOffset(_beforeScroll.VerticalOffset);
             }), DispatcherPriority.Loaded);
         }
 

@@ -14,8 +14,9 @@ namespace VanyaTools.Native
     {
         private Expander _orderSelectionExpander;
         private TextBlock _orderSelectionLabel;
-        private TextBlock _cardNumberCaption;
-        private Expander _unassignedOpenExpander;
+        private TextBox _cardNumber;
+        private Button _unassignedButton;
+        private StackPanel _unassignedPickerContent;
         private int? _unassignedKnownCount;
         private int _unassignedSnapshotVersion;
         private string _unassignedContextServer, _unassignedContextKey, _lastUnassignedError;
@@ -70,34 +71,28 @@ namespace VanyaTools.Native
 
         private FrameworkElement CreateCardNumberRow()
         {
-            var row = new DockPanel { Margin = new Thickness(0, 0, 5, 2) };
-            var number = Input(); number.Margin = new Thickness(1, 0, 1, 0);
-            number.MaxLength = 10;
-            number.ToolTip = "Открыть карточку по номеру, например 10001 или 2026/10001.";
-            AutomationProperties.SetName(number, "Номер заказа для загрузки карточки");
-            var open = Button("↵", async (_, __) => await OpenServerOrder(number.Text.Trim()));
-            open.Width = 27; open.Margin = new Thickness(1, 0, 0, 0);
-            open.Padding = new Thickness(0);
-            open.ToolTip = "Загрузить карточку заказа по номеру";
-            DockPanel.SetDock(open, Dock.Right); row.Children.Add(open);
-            _cardNumberCaption = Label("Заказ №"); _cardNumberCaption.VerticalAlignment = VerticalAlignment.Center;
-            _cardNumberCaption.Margin = new Thickness(1, 0, 4, 0);
-            DockPanel.SetDock(_cardNumberCaption, Dock.Left); row.Children.Add(_cardNumberCaption);
-            row.Children.Add(number);
-            number.KeyDown += async (_, e) =>
-            {
-                if (e.Key != System.Windows.Input.Key.Enter || _busy) return;
-                e.Handled = true; await OpenServerOrder(number.Text.Trim());
-            };
+            var row = new DockPanel { Margin = new Thickness(0, 0, 0, 2) };
+            _unassignedButton = Button("Проверить заказы", async (_, __) => await ShowUnassignedPicker(_unassignedPickerContent));
+            _unassignedButton.FontSize = 10.5; _unassignedButton.MinWidth = 112;
+            _unassignedButton.Margin = new Thickness(5, 0, 0, 0); _unassignedButton.Padding = new Thickness(6, 2, 6, 2);
+            DockPanel.SetDock(_unassignedButton, Dock.Right); row.Children.Add(_unassignedButton);
+            var caption = Label("Заказ №"); caption.VerticalAlignment = VerticalAlignment.Center;
+            caption.Margin = new Thickness(1, 0, 4, 0);
+            DockPanel.SetDock(caption, Dock.Left); row.Children.Add(caption);
+            _cardNumber = Input(); _cardNumber.Text = "Авто"; _cardNumber.IsReadOnly = true;
+            _cardNumber.Margin = new Thickness(1, 0, 0, 0);
+            _cardNumber.ToolTip = "Номер назначается автоматически. Здесь его можно только просмотреть и скопировать.";
+            AutomationProperties.SetName(_cardNumber, "Автоматический номер заказа");
+            DockerTheme.UseTheme(_cardNumber, Control.BackgroundProperty, DockerTheme.PanelBackground);
+            DockerTheme.UseTheme(_cardNumber, Control.ForegroundProperty, DockerTheme.MutedTextBrush);
+            row.Children.Add(_cardNumber); UpdateUnassignedButton();
             return row;
         }
 
         private async Task ShowUnassignedPicker(StackPanel content)
         {
             if (_busy || _unassignedPicker != null) return;
-            await RefreshUnassignedIfDue();
-            if (_busy || _unassignedKnownCount == 0) return;
-            var window = new Window { Title = "Подтянуть существующий заказ", Width = 490,
+            var window = new Window { Title = "Выбрать заказ для привязки к CDR", Width = 490,
                 SizeToContent = SizeToContent.Height, MinWidth = 330,
                 MaxHeight = Math.Max(300, SystemParameters.WorkArea.Height - 80),
                 WindowStartupLocation = WindowStartupLocation.CenterScreen };
@@ -105,16 +100,17 @@ namespace VanyaTools.Native
             _unassignedPicker = window;
             try
             {
-                _unassignedOpenExpander.Content = null;
                 _unassignedTable.Height = 280;
                 content.Margin = new Thickness(8);
-                window.Content = content; DockerTheme.Apply(window); OwnCardWindow(window); window.ShowDialog();
+                window.Content = content; DockerTheme.Apply(window); OwnCardWindow(window);
+                window.Loaded += async (_, __) => await LoadUnassignedTable();
+                window.ShowDialog();
             }
             catch (Exception error) { Log.Error("Orders without cards picker failed.", error); _status(error.Message, true); }
             finally
             {
                 window.Content = null; content.Margin = new Thickness(0);
-                _unassignedTable.Height = height; _unassignedOpenExpander.Content = content; _unassignedPicker = null;
+                _unassignedTable.Height = height; _unassignedPicker = null;
             }
         }
 
@@ -126,8 +122,8 @@ namespace VanyaTools.Native
             _unassignedKnownCount = null; _unassignedSnapshotVersion++;
             _nextUnassignedRefreshUtc = DateTime.MinValue; _lastUnassignedError = null;
             _unassignedTable.ItemsSource = null; _unassignedTable.Visibility = Visibility.Collapsed;
-            _unassignedOpenExpander.Visibility = Visibility.Collapsed;
             _unassignedCount.Text = "";
+            UpdateUnassignedButton();
         }
 
         private async Task RefreshUnassignedIfDue()
@@ -138,7 +134,7 @@ namespace VanyaTools.Native
             string server = _server.Text.Trim(), key = _key.Password.Trim();
             ResetUnassignedContext(server, key);
             if (server.Length == 0 || key.Length == 0)
-            { _unassignedOpenExpander.Visibility = Visibility.Collapsed; return; }
+            { UpdateUnassignedButton(); return; }
             if (DateTime.UtcNow < _nextUnassignedRefreshUtc) return;
             await LoadUnassignedTable(true);
         }
@@ -147,13 +143,10 @@ namespace VanyaTools.Native
         {
             _unassignedKnownCount = rows.Count;
             _unassignedTable.ItemsSource = rows;
-            _unassignedTable.Visibility = rows.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-            _unassignedOpenExpander.Header = UnassignedHeader("Подтянуть заказ · " + rows.Count);
-            _unassignedOpenExpander.Visibility = rows.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-            _unassignedOpenExpander.ToolTip = rows.Count > 0
-                ? "Откройте список и выберите заказ для привязки к текущему CDR." : null;
-            _unassignedCount.Text = rows.Count > 0 ? "Выберите заказ для текущего CDR." : "";
+            _unassignedTable.Visibility = Visibility.Visible;
+            _unassignedCount.Text = rows.Count > 0 ? "Выберите заказ для текущего CDR." : "У всех заказов есть карточки. Непривязанных заказов нет.";
             _lastUnassignedError = null;
+            UpdateUnassignedButton();
         }
 
         private void ShowUnassignedFailure(Exception error)
@@ -166,16 +159,40 @@ namespace VanyaTools.Native
                 Log.Error("Orders without cards could not be refreshed.", error);
                 _lastUnassignedError = message; _lastUnassignedErrorUtc = DateTime.UtcNow;
             }
-            _unassignedOpenExpander.Header = UnassignedHeader(_unassignedKnownCount > 0
-                ? "Подтянуть заказ · " + _unassignedKnownCount.Value : "Подтянуть заказ · проверить");
-            _unassignedOpenExpander.Visibility = Visibility.Visible;
-            _unassignedOpenExpander.ToolTip = "Список не обновлён. Нажмите ↻, чтобы повторить проверку.";
             _unassignedCount.Text = "Не удалось обновить список: " + message;
             _unassignedTable.Visibility = _unassignedKnownCount > 0 ? Visibility.Visible : Visibility.Collapsed;
+            UpdateUnassignedButton();
         }
 
-        private static TextBlock UnassignedHeader(string text) => new TextBlock { Text = text, FontSize = 11,
-            FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap };
+        private void UpdateUnassignedButton()
+        {
+            if (_unassignedButton == null) return;
+            string tooltip;
+            if (!String.IsNullOrEmpty(_lastUnassignedError))
+            {
+                _unassignedButton.Content = "Нет связи";
+                tooltip = "Не удалось проверить карточки. Нажмите для повторной проверки и выбора заказа.";
+                DockerTheme.Accent(_unassignedButton, Color.FromRgb(161, 107, 32), preserveDisabledColor: true);
+            }
+            else if (_unassignedKnownCount.HasValue)
+            {
+                bool available = _unassignedKnownCount.Value > 0;
+                _unassignedButton.Content = available ? "Без карточки: " + _unassignedKnownCount.Value : "Все с карточками";
+                tooltip = available ? "Есть заказы без карточки. Нажмите, выберите заказ и привяжите его к текущему CDR."
+                    : "У всех заказов есть карточки. Нажмите для проверки списка заказов.";
+                DockerTheme.Accent(_unassignedButton, available ? Color.FromRgb(184, 60, 54) : Color.FromRgb(47, 119, 83),
+                    preserveDisabledColor: true);
+            }
+            else
+            {
+                _unassignedButton.Content = _unassignedLoading ? "Проверяю…" : "Проверить заказы";
+                tooltip = "Состояние карточек ещё не проверено. Нажмите, чтобы загрузить список для привязки.";
+                _unassignedButton.ClearValue(StyleProperty);
+            }
+            _unassignedButton.ToolTip = tooltip;
+            AutomationProperties.SetName(_unassignedButton, Convert.ToString(_unassignedButton.Content));
+            AutomationProperties.SetHelpText(_unassignedButton, tooltip);
+        }
 
         private static StackPanel CardGroup(Panel parent, string title, string help = null)
         {
