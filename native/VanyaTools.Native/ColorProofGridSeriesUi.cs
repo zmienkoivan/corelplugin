@@ -172,17 +172,19 @@ namespace VanyaTools.Native
         {
             if (_gridVisiblePlan == null) return "";
             ColorProofGridPlan plan = _gridVisiblePlan;
-            string location = "R" + (plan.ReferenceRow + 1) + " C" + (plan.ReferenceColumn + 1) +
-                (plan.Options.Compound ? " Q" + (plan.ReferenceQuadrant + 1) : "");
-            if (_gridVisibleSeries == null) return "Исходный эталон в сетке: " + location + ".";
-            return _gridSeriesPageIndex == _gridVisibleSeries.ReferencePageIndex ? "Исходный эталон в сетке: " + location + "."
+            int first = _gridVisibleSeries == null ? 1 : 1 + _gridVisibleSeries.Pages.Take(_gridSeriesPageIndex).Sum(page => page.Patches.Count);
+            int referenceIndex = plan.Patches.OrderBy(item => item.Ymm).ThenBy(item => item.Xmm).ToList().FindIndex(item =>
+                item.Row == plan.ReferenceRow && item.Column == plan.ReferenceColumn && item.Quadrant == plan.ReferenceQuadrant);
+            if (_gridVisibleSeries == null) return "Эталон — образец №" + (first + referenceIndex) + " в рамке.";
+            return _gridSeriesPageIndex == _gridVisibleSeries.ReferencePageIndex ? "Эталон — образец №" + (first + referenceIndex) + " в рамке."
                 : "На этом листе изменён канал серии. Исходный эталон показан отдельной плашкой для сравнения.";
         }
 
         private Canvas GridContextSketch(ColorProofGridPlan plan)
         {
             bool containsOriginal = _gridVisibleSeries == null || _gridSeriesPageIndex == _gridVisibleSeries.ReferencePageIndex;
-            Canvas grid = GridSketchWithReference(plan, containsOriginal);
+            int first = _gridVisibleSeries == null ? 1 : 1 + _gridVisibleSeries.Pages.Take(_gridSeriesPageIndex).Sum(page => page.Patches.Count);
+            Canvas grid = CreateManagedGridSketch(plan, containsOriginal, first);
             var canvas = new Canvas { Width = grid.Width, Height = grid.Height + 24, Background = Brushes.White };
             int[] original = _gridVisibleSeries?.OriginalBaseChannels ?? plan.BaseChannels;
             string[] names = GridChannelNames(plan.Options.Cmyk);
@@ -190,7 +192,7 @@ namespace VanyaTools.Native
                 FontSize = 6, Foreground = Brushes.Black, Width = Math.Max(20, grid.Width - 24), TextWrapping = TextWrapping.Wrap };
             canvas.Children.Add(text);
             var patch = new System.Windows.Shapes.Rectangle { Width = 12, Height = 12,
-                Fill = new SolidColorBrush(GridScreenColor(original, plan.Options.Cmyk)) };
+                Fill = new SolidColorBrush(GetDisplayColor(original, plan.Options.Cmyk)), Tag = new GridPatchColor(original, plan.Options.Cmyk) };
             Canvas.SetLeft(patch, grid.Width - 12); canvas.Children.Add(patch);
             var description = new TextBlock { Text = GridPageDescription(), FontSize = 4, Foreground = Brushes.Black,
                 Width = grid.Width, TextWrapping = TextWrapping.Wrap };

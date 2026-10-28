@@ -39,9 +39,11 @@ namespace VanyaTools.Native
             DockerHelp.Add(panel, "Возьмите цвет из выделения или палитры, выберите различия и создайте таблицу. Эталон отмечен рамкой. Pantone подбирается отдельной кнопкой.");
             var sources = new Grid { Margin = new Thickness(0, 0, 0, 7) };
             sources.ColumnDefinitions.Add(new ColumnDefinition()); sources.ColumnDefinitions.Add(new ColumnDefinition());
-            var fromObject = Button("Из выделения", (_, __) => ReadSelection()); fromObject.Margin = new Thickness(0, 0, 4, 0);
-            var fromPalette = Button("Из палитры", (_, __) => PickPalette()); Grid.SetColumn(fromPalette, 1);
-            sources.Children.Add(fromObject); sources.Children.Add(fromPalette); panel.Children.Add(sources);
+            sources.ColumnDefinitions.Add(new ColumnDefinition());
+            var fromObject = Button("Выделение", (_, __) => ReadSelection()); fromObject.Margin = new Thickness(0, 0, 3, 0);
+            var fromPalette = Button("Палитра", (_, __) => PickPalette()); fromPalette.Margin = new Thickness(0, 0, 3, 0); Grid.SetColumn(fromPalette, 1);
+            var byNumber = Button("По номеру", (_, __) => ShowColorProofNumber()); Grid.SetColumn(byNumber, 2);
+            sources.Children.Add(fromObject); sources.Children.Add(fromPalette); sources.Children.Add(byNumber); panel.Children.Add(sources);
             var source = new Grid { Margin = new Thickness(0, 0, 0, 5) };
             source.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) }); source.ColumnDefinitions.Add(new ColumnDefinition());
             _preview = new Border { Width = 22, Height = 22, BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Background = Brushes.White };
@@ -110,7 +112,7 @@ namespace VanyaTools.Native
             actions.Children.Add(pantone); panel.Children.Add(actions);
             panel.Children.Add(new Expander { Header = "Дополнительно", Content = advanced, IsExpanded = false,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 2, 0, 3) });
-            _model.SelectionChanged += (_, __) => { UpdateChannels(); DefaultOffsets(); RefreshGridModel(); };
+            _model.SelectionChanged += (_, __) => HandleGridModelChanged();
             _mode.SelectionChanged += (_, __) => UpdateForm();
             _layout.SelectionChanged += (_, __) => UpdateForm();
             _sampleShape.SelectionChanged += (_, __) => UpdateForm();
@@ -146,21 +148,11 @@ namespace VanyaTools.Native
 
         private void SetReference(ColorProofReference reference)
         {
-            _reference = reference;
-            UpdateReferenceLabel(); UpdateSampleCount(); RefreshGridModel();
+            AdoptGridReference(reference); UpdateSampleCount();
             _status("Эталонный цвет выбран. Все варианты будут рассчитаны относительно него.", false);
         }
 
-        private void UpdateReferenceLabel()
-        {
-            if (_reference == null) return;
-            int[] rgb = _service.Components(_reference, false);
-            _preview.Background = new SolidColorBrush(Color.FromRgb((byte)rgb[0], (byte)rgb[1], (byte)rgb[2]));
-            string[] names = _model.SelectedIndex == 0 ? new[] { "C", "M", "Y", "K" } : new[] { "R", "G", "B" };
-            int[] values = _service.Components(_reference, _model.SelectedIndex == 0);
-            _referenceLabel.Text = (_reference.IsSpot ? "Плашечный · " : "") + _reference.Name + " · " +
-                String.Join(" ", values.Select((value, i) => names[i] + ":" + value));
-        }
+        private void UpdateReferenceLabel() => UpdateGridReferenceLabel();
 
         private void UpdateChannels()
         {
@@ -219,7 +211,7 @@ namespace VanyaTools.Native
         {
             if (_reference == null) throw new InvalidOperationException("Выберите эталон, чтобы рассчитать варианты.");
             bool cmyk = _model.SelectedIndex == 0;
-            int[] center = _service.Components(_reference, cmyk); int limit = cmyk ? 100 : 255;
+            int[] center = CurrentGridBaseComponents(); int limit = cmyk ? 100 : 255;
             var levels = new int[center.Length][];
             for (int i = 0; i < center.Length; i++)
             {

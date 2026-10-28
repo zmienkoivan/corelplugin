@@ -33,7 +33,7 @@ namespace VanyaTools.Native
         public int PaletteColorCount { get; internal set; }
         public int SkippedCount { get; internal set; }
         public string Warning { get; internal set; }
-        internal object SourceDocument, NativeReference;
+        internal object SourceDocument, SourceColorContext, NativeReference;
         internal int SourceThread;
     }
 
@@ -91,6 +91,7 @@ namespace VanyaTools.Native
             int[] baseline = (int[])baseChannels.Clone();
             dynamic app = CorelApp.Get(), doc = app.ActiveDocument;
             if (doc == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
+            object sourceColorContext = (object)doc.ColorContext.GetCopy();
             PaletteInfo palette = ResolvePalette((object)app, palettePath);
             dynamic nativePalette = palette.Native;
             int paletteCount = Convert.ToInt32(nativePalette.ColorCount);
@@ -104,7 +105,7 @@ namespace VanyaTools.Native
                 PaletteName = palette.Name, PaletteIdentifier = palette.Identifier, Cmyk = cmyk,
                 BaseChannels = baseline, ReferenceLab = ReadLab((object)app, (object)reference),
                 ReferenceScreenRgb = ReadRgb((object)app, (object)reference), NativeReference = (object)reference,
-                SourceDocument = (object)doc, SourceThread = Thread.CurrentThread.ManagedThreadId,
+                SourceDocument = (object)doc, SourceColorContext = sourceColorContext, SourceThread = Thread.CurrentThread.ManagedThreadId,
                 PaletteColorCount = paletteCount, Warning = ""
             };
             return new Search { App = (object)app, Colors = colors, Palette = palette.Native, Count = count, Result = result };
@@ -112,6 +113,7 @@ namespace VanyaTools.Native
 
         private static bool ReadBatch(Search search, int batchSize, CancellationToken cancellation)
         {
+            cancellation.ThrowIfCancellationRequested();
             RequireSearchDocument(search);
             int stop = Math.Min(search.Result.PaletteColorCount + 1, search.Index + batchSize);
             for (; search.Index < stop; search.Index++)
@@ -346,10 +348,7 @@ namespace VanyaTools.Native
             return new ColorProofLab(rawL * 100.0 / 255.0, a, b);
         }
         private static int[] ReadRgb(object app, object color)
-        {
-            dynamic copy = CloneColor(app, color); copy.ConvertToRGB();
-            return new int[] { Convert.ToInt32((object)copy.RGBRed), Convert.ToInt32((object)copy.RGBGreen), Convert.ToInt32((object)copy.RGBBlue) };
-        }
+            => new ColorProofPreviewService().ConvertNative(color);
         private static void CheckSpot(object colorObject, string expected)
         {
             if (colorObject == null) throw new InvalidOperationException("Не сохранён исходный плашечный цвет.");
@@ -363,6 +362,8 @@ namespace VanyaTools.Native
             object active = (object)((dynamic)search.App).ActiveDocument;
             if (!SameObject(active, search.Result.SourceDocument))
                 throw new InvalidOperationException("Во время подбора изменился активный документ CorelDRAW. Вернитесь в нужный CDR и запустите подбор заново.");
+            if (search.Result.SourceColorContext == null || !Convert.ToBoolean(((dynamic)active).ColorContext.IsSame((dynamic)search.Result.SourceColorContext)))
+                throw new InvalidOperationException("Во время подбора изменились ICC-профили документа. Запустите подбор Pantone заново.");
         }
         private static void RequireSta()
         { if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA) throw new InvalidOperationException("Подбор Pantone должен выполняться в интерфейсе CorelDRAW, а не в фоновом потоке."); }

@@ -66,7 +66,7 @@ namespace VanyaTools.Native
                 string[] names = GridChannelNames(cmyk);
                 referenceLabel.Text = (cmyk ? "CMYK" : "RGB") + " · " +
                     String.Join(" ", values.Select((value, channel) => names[channel] + ":" + value));
-                referenceChip.Background = new SolidColorBrush(rgb == null ? GridScreenColor(values, cmyk)
+                referenceChip.Background = new SolidColorBrush(rgb == null ? GetDisplayColor(values, cmyk)
                     : Color.FromRgb((byte)rgb[0], (byte)rgb[1], (byte)rgb[2]));
             }
             try { bool cmyk = _model.SelectedIndex == 0; ShowReference(cmyk, ReadReference(cmyk)); }

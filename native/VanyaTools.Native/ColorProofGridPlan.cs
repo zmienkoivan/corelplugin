@@ -68,7 +68,8 @@ namespace VanyaTools.Native
     internal sealed class ColorProofGridPlan
     {
         public const double MarginMm = 8;
-        public const double AxisWidthMm = 24;
+        public const double AxisWidthMm = 0;
+        public const double NumberBandMm = 3.5;
         public const int MaxPatches = 3844;
         public const int MaxAxisCount = 31;
         public const double MaxGridHeightMm = 45000;
@@ -184,7 +185,9 @@ namespace VanyaTools.Native
 
             double size = snapshot.Compound ? snapshot.TileMm : snapshot.CellMm;
             double width = snapshot.Columns * size + (snapshot.Columns - 1) * snapshot.GapMm;
-            double height = snapshot.Rows * size + (snapshot.Rows - 1) * snapshot.GapMm;
+            double labelsPerRow = snapshot.Compound ? 2 : 1;
+            double rowPitch = size + labelsPerRow * NumberBandMm + snapshot.GapMm;
+            double height = snapshot.Rows * (size + labelsPerRow * NumberBandMm) + (snapshot.Rows - 1) * snapshot.GapMm;
             double required = 2 * MarginMm + AxisWidthMm + width;
             if (!Finite(width) || !Finite(height) || !Finite(required))
                 throw new InvalidOperationException("Габариты сетки слишком велики. Уменьшите размеры ячеек или промежутки.");
@@ -217,7 +220,7 @@ namespace VanyaTools.Native
                 }
                 double patchSize = snapshot.Compound ? size / 2 : size;
                 double x = column * (size + snapshot.GapMm) + (snapshot.Compound ? (quadrant % 2) * patchSize : 0);
-                double y = row * (size + snapshot.GapMm) + (snapshot.Compound ? (quadrant / 2) * patchSize : 0);
+                double y = row * rowPitch + (snapshot.Compound ? (quadrant / 2) * (patchSize + NumberBandMm) : 0);
                 patches.Add(new ColorProofGridPatch(row, column, quadrant, values, x, y, patchSize, patchSize));
             }
             int referenceQuadrant = 0;

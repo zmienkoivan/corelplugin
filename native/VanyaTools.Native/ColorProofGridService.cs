@@ -8,7 +8,8 @@ namespace VanyaTools.Native
     /// <summary>Renders exact vector patches. All Corel calls belong on the caller's UI thread.</summary>
     internal sealed class ColorProofGridService
     {
-        private const double HeaderHeightMm = 34, ColumnLabelsHeightMm = 8, FooterHeightMm = 25;
+        private const double HeaderHeightMm = 24, ColumnLabelsHeightMm = 0, FooterHeightMm = 14;
+        internal string LastCatalogId { get; private set; }
 
         public int Create(ColorProofReference reference, ColorProofGridOptions options)
         {
@@ -39,7 +40,7 @@ namespace VanyaTools.Native
             return effective;
         }
 
-        private static int Render(ColorProofReference reference, IReadOnlyList<ColorProofGridPlan> plans, ColorProofGridSeriesPlan series)
+        private int Render(ColorProofReference reference, IReadOnlyList<ColorProofGridPlan> plans, ColorProofGridSeriesPlan series)
         {
             foreach (ColorProofGridPlan plan in plans)
                 if (PageHeight(plan) > 45000)
@@ -48,6 +49,14 @@ namespace VanyaTools.Native
             if (doc == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
             int oldUnit = (int)doc.Unit;
             object originalPage = doc.ActivePage;
+            bool oldDirty = Convert.ToBoolean(doc.Dirty);
+            string previousCatalog = ColorProofCatalogStore.ReadEncoded((object)doc);
+            ColorProofCatalogStore.Load((object)doc);
+            string context = "";
+            try { context = new ColorProofPreviewService().DescribeContext(); }
+            catch (Exception error) { Log.Error("Could not describe proof document profiles.", error); }
+            var catalog = ColorProofCatalog.Build(plans, series?.OriginalBaseChannels ?? plans[0].BaseChannels, context);
+            bool catalogTouched = false, failed = false, rollbackComplete = true;
             bool started = false, oldOptimization = Convert.ToBoolean(app.Optimization);
             var createdPages = new List<object>();
             int total = 0;
@@ -64,126 +73,82 @@ namespace VanyaTools.Native
                     dynamic page = doc.AddPages(1);
                     createdPages.Add((object)page);
                     page.Activate(); page.SetSize(plan.Options.SheetWidthMm, PageHeight(plan));
-                    page.Name = (series == null ? "Сетка " : "Цветопроба " + (index + 1) + "/" + plans.Count + " · ") +
-                        (plan.Options.Cmyk ? "CMYK" : "RGB") + " · " + plan.Options.Columns + "×" + plan.Options.Rows;
-                    lastRange = DrawPage((object)app, (object)doc, (object)page, reference, plan, series, index);
+                    page.Name = catalog.Id + " · " + (index + 1) + "/" + plans.Count;
+                    lastRange = DrawPage((object)app, (object)doc, (object)page, plan, series, index, catalog);
+                    ColorProofCatalogStore.BindPage((object)page, catalog.Id, index + 1);
                     total += plan.Patches.Count;
                 }
+                catalogTouched = true;
+                ColorProofCatalogStore.Append((object)doc, catalog);
                 if (lastRange != null) ((dynamic)lastRange).CreateSelection();
+                LastCatalogId = catalog.Id;
                 Log.Info("Color proof grids created: pages=" + plans.Count + ", grid patches=" + total + ", series=" + (series != null));
                 return total;
             }
             catch
             {
+                failed = true;
                 for (int index = createdPages.Count - 1; index >= 0; index--)
                     try { ((dynamic)createdPages[index]).Delete(); }
-                    catch (Exception error) { Log.Error("Color proof grid page rollback failed.", error); }
+                    catch (Exception error) { rollbackComplete = false; Log.Error("Color proof grid page rollback failed.", error); }
+                if (catalogTouched)
+                    try { ColorProofCatalogStore.RestoreEncoded((object)doc, previousCatalog); }
+                    catch (Exception error) { rollbackComplete = false; Log.Error("Color proof catalog rollback failed.", error); }
                 try { ((dynamic)originalPage).Activate(); } catch { }
                 throw;
             }
             finally
             {
                 try { if (started) doc.EndCommandGroup(); } catch (Exception error) { Log.Error("Color proof grid command group failed.", error); }
-                try { doc.Unit = oldUnit; } catch { }
+                try { doc.Unit = oldUnit; } catch { rollbackComplete = false; }
                 try { app.Optimization = oldOptimization; } catch { }
+                try { doc.Dirty = failed && rollbackComplete ? oldDirty : true; } catch { }
             }
         }
 
         private static object DrawPage(object appObject, object documentObject, object pageObject,
-            ColorProofReference reference, ColorProofGridPlan plan, ColorProofGridSeriesPlan series, int pageIndex)
+            ColorProofGridPlan plan, ColorProofGridSeriesPlan series, int pageIndex, ColorProofCatalog catalog)
         {
             dynamic app = appObject, doc = documentObject, page = pageObject;
             ColorProofGridOptions options = plan.Options;
             dynamic layer = doc.ActiveLayer, range = app.CreateShapeRange();
-            double pageLeft = Convert.ToDouble(page.LeftX), pageTop = Convert.ToDouble(page.TopY);
-            double left = pageLeft + ColorProofGridPlan.MarginMm, top = pageTop - ColorProofGridPlan.MarginMm;
-            double usable = options.SheetWidthMm - 2 * ColorProofGridPlan.MarginMm;
-            double headerWidth = usable - 18;
-            double gridLeft = left + ColorProofGridPlan.AxisWidthMm;
-            double gridTop = top - HeaderHeightMm - ColumnLabelsHeightMm;
-            string[] names = ChannelNames(options.Cmyk);
-            int[] original = series == null ? plan.BaseChannels : series.OriginalBaseChannels;
-            string location = "R" + Id(plan.ReferenceRow) + " C" + Id(plan.ReferenceColumn) +
-                (options.Compound ? " Q" + (plan.ReferenceQuadrant + 1) : "");
+            double left = Convert.ToDouble(page.LeftX) + ColorProofGridPlan.MarginMm;
+            double top = Convert.ToDouble(page.TopY) - ColorProofGridPlan.MarginMm;
+            double usable = Math.Min(options.SheetWidthMm - 2 * ColorProofGridPlan.MarginMm, Math.Max(plan.WidthMm, 84));
+            double gridLeft = left, gridTop = top - HeaderHeightMm;
+            int[] original = catalog.ReferenceChannels;
             bool containsOriginal = series == null || pageIndex == series.ReferencePageIndex;
-            AddText(layer, range, left, top, "Сетка цветопробы " + (options.Cmyk ? "CMYK" : "RGB") +
-                " · " + options.Columns + " × " + options.Rows + " · плашек " + plan.Patches.Count, 10f, headerWidth);
-            AddText(layer, range, left, top - 5, "Исходный эталон · " + FormatValues(original, options.Cmyk), 7.5f, headerWidth);
-            string pageDescription;
-            if (series == null) pageDescription = "ЭТАЛОН в сетке: " + location + ".";
-            else
-            {
-                string channel = names[series.Options.Channel];
-                pageDescription = "Таблица " + (pageIndex + 1) + "/" + series.Pages.Count + " · " + channel + ":" +
-                    series.ChannelValues[pageIndex] + " · Δ" + channel + ":" + Delta(series.Offsets[pageIndex]) + ". " +
-                    (containsOriginal ? "ЭТАЛОН в сетке: " + location + "." : "Исходный эталон — плашка справа; в этой сетке его нет.");
-            }
-            AddText(layer, range, left, top - 10, pageDescription, 7.5f, headerWidth);
-            AddText(layer, range, left, top - 15, "X → " + names[options.HorizontalChannel] + " · шаг " + options.StepX +
-                " | Y ↓ " + names[options.VerticalChannel] + " · шаг " + options.StepY +
-                " | значения каналов " + (options.Cmyk ? "0–100%" : "0–255"), 7.5f, headerWidth);
-            string sizes = options.Compound
-                ? "Блок " + Mm(options.TileMm) + " × " + Mm(options.TileMm) + " мм; четыре плашки " +
-                    Mm(options.TileMm / 2) + " × " + Mm(options.TileMm / 2) + " мм без внутреннего зазора"
-                : "Плашка " + Mm(options.CellMm) + " × " + Mm(options.CellMm) + " мм";
-            AddText(layer, range, left, top - 20, sizes + "; между блоками " + Mm(options.GapMm) + " мм.", 7f, usable);
-            AddText(layer, range, left, top - 25,
-                "R — строка; C — столбец; Q — квадрант. * — исходное значение только канала оси; полный эталон указан отдельно.", 7f, usable);
-            dynamic referenceColor = CreateColor((object)app, original, options.Cmyk);
+            var recipes = catalog.Patches.Where(item => item.PageNumber == pageIndex + 1)
+                .ToDictionary(item => item.Row + ":" + item.Column + ":" + item.Quadrant);
+            AddText(layer, range, left, top, "Цветопроба " + catalog.Id + " · " + (options.Cmyk ? "CMYK" : "RGB"), 12f, usable - 18);
+            AddText(layer, range, left, top - 6, "Выберите цвет и сообщите код таблицы и номер под образцом.", 8f, usable - 18);
+            AddText(layer, range, left, top - 11, "Лист " + (pageIndex + 1) + " из " + catalog.Patches.Max(item => item.PageNumber) +
+                " · образцы №" + recipes.Values.Min(item => item.Number) + "–" + recipes.Values.Max(item => item.Number) +
+                (containsOriginal ? " · эталон отмечен рамкой." : " · эталон — справа вверху."), 8f, usable - 18);
+            AddText(layer, range, left, top - 16, "Эталон: " + FormatValues(original, options.Cmyk), 7f, usable - 18);
             dynamic referencePatch = layer.CreateRectangle2(left + usable - 12, top - 12, 12, 12);
-            range.Add(referencePatch); referencePatch.Fill.ApplyUniformFill(referenceColor); referencePatch.Outline.SetNoOutline();
-            referencePatch.Name = "Исходный эталон " + FormatValues(original, options.Cmyk);
+            range.Add(referencePatch); referencePatch.Fill.ApplyUniformFill(CreateColor((object)app, original, options.Cmyk));
+            referencePatch.Outline.SetNoOutline(); referencePatch.Name = catalog.Id + " · исходный эталон";
             AddText(layer, range, left + usable - 15, top - 13, "Эталон", 6f, 18, true);
-
-            double cell = options.Compound ? options.TileMm : options.CellMm, pitch = cell + options.GapMm;
-            for (int column = 0; column < options.Columns; column++)
-            {
-                string label = "C" + Id(column) + " " + names[options.HorizontalChannel] + ":" + plan.AxisX[column] +
-                    (column == plan.ReferenceColumn ? "*" : "");
-                AddText(layer, range, gridLeft + column * pitch, gridTop + ColumnLabelsHeightMm - 2, label, 7f, cell, true);
-            }
-            for (int row = 0; row < options.Rows; row++)
-            {
-                string label = "R" + Id(row) + " " + names[options.VerticalChannel] + ":" + plan.AxisY[row] +
-                    (row == plan.ReferenceRow ? "*" : "");
-                AddText(layer, range, left, gridTop - row * pitch - cell / 2, label, 7f, ColorProofGridPlan.AxisWidthMm - 2, false, true);
-            }
             foreach (ColorProofGridPatch patch in plan.Patches)
             {
+                ColorProofCatalogPatch recipe = recipes[patch.Row + ":" + patch.Column + ":" + patch.Quadrant];
                 dynamic color = CreateColor((object)app, patch.Values, options.Cmyk);
                 dynamic shape = layer.CreateRectangle2(gridLeft + patch.Xmm,
                     gridTop - patch.Ymm - patch.HeightMm, patch.WidthMm, patch.HeightMm);
                 range.Add(shape); shape.Fill.ApplyUniformFill(color); shape.Outline.SetNoOutline();
-                shape.Name = "Проба R" + Id(patch.Row) + " C" + Id(patch.Column) +
-                    (options.Compound ? " Q" + (patch.Quadrant + 1) : "") + " " + FormatValues(patch.Values, options.Cmyk);
+                shape.Name = catalog.Id + " №" + recipe.Number + " " + FormatValues(patch.Values, options.Cmyk);
+                AddText(layer, range, gridLeft + patch.Xmm, gridTop - patch.Ymm - patch.HeightMm - .4,
+                    recipe.Number.ToString(CultureInfo.InvariantCulture), 6.5f, patch.WidthMm, true);
                 if (containsOriginal && patch.Row == plan.ReferenceRow && patch.Column == plan.ReferenceColumn &&
                     patch.Quadrant == plan.ReferenceQuadrant && patch.Values.SequenceEqual(original))
                     AddReferenceFrame((object)app, (object)layer, (object)range, gridLeft, gridTop, patch);
             }
-            double footerTop = gridTop - plan.HeightMm - 4;
-            if (options.Compound)
-            {
-                int[] remaining = Enumerable.Range(0, plan.BaseChannels.Length)
-                    .Where(channel => channel != options.HorizontalChannel && channel != options.VerticalChannel).ToArray();
-                AddText(layer, range, left, footerTop,
-                    "Квадранты: Q1 — слева сверху; Q2 — справа сверху; Q3 — слева снизу; Q4 — справа снизу.", 7f, usable);
-                var legend = plan.Patches.Where(p => p.Row == plan.ReferenceRow && p.Column == plan.ReferenceColumn)
-                    .OrderBy(p => p.Quadrant).Select(p => "Q" + (p.Quadrant + 1) + ": " +
-                        String.Join(" ", remaining.Select(channel => names[channel] + ":" + p.Values[channel])));
-                AddText(layer, range, left, footerTop - 4, String.Join("   |   ", legend), 7f, usable);
-            }
-            else
-            {
-                string fixedChannels = String.Join(" ", Enumerable.Range(0, plan.BaseChannels.Length)
-                    .Where(channel => channel != options.HorizontalChannel && channel != options.VerticalChannel)
-                    .Select(channel => names[channel] + ":" + plan.BaseChannels[channel]));
-                AddText(layer, range, left, footerTop, "Фиксированные каналы этой таблицы: " + fixedChannels + ".", 7f, usable);
-            }
-            AddText(layer, range, left, footerTop - 9,
-                "Заливки — " + (options.Cmyk ? "CMYK" : "RGB") + "; плашки без обводки. Печатайте без масштабирования, 1:1.", 7f, usable);
+            double footer = gridTop - plan.HeightMm - 3;
+            AddText(layer, range, left, footer, catalog.Id + " · выбранный образец № __________________", 8f, usable);
+            AddText(layer, range, left, footer - 5, "Для повторного заказа укажите этот код и номер. Сравнивайте цвета по напечатанным образцам.", 7f, usable);
             return (object)range;
         }
-
         private static void AddReferenceFrame(object appObject, object layerObject, object rangeObject,
             double gridLeft, double gridTop, ColorProofGridPatch patch)
         {
