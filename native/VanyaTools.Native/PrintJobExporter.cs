@@ -30,16 +30,17 @@ namespace VanyaTools.Native
                 // method first yields. All modes prepare locally, so no network
                 // folder operation can block Corel's dispatcher.
                 result = SportPrintExporter.Export(workspace, dpi, true, button != 0, processName: process, confirmPage: confirmPage);
-                string prepared = result.Path;
                 if (options.Mode != PrintIccMode.Preserve)
                 {
                     await Task.Run(() => {
                         options.Validate();
                         if (options.Mode == PrintIccMode.Assign) File.WriteAllBytes(profile, IccProfileFile.Read(options.ProfilePath).Data);
                     });
-                    await ProcessPdf(result.Path, ready, result.WidthMm, result.HeightMm, options.Mode, profile);
-                    prepared = ready;
                 }
+                // Preserve also validates page size and actual painting content;
+                // its helper route copies the original PDF byte-for-byte.
+                await ProcessPdf(result.Path, ready, result.WidthMm, result.HeightMm, options.Mode, profile);
+                string prepared = ready;
                 // Keep the exported filename even when the ICC tool used ready.pdf.
                 string delivery = Path.Combine(workspace, Path.GetFileName(result.Path));
                 if (prepared != delivery) File.Copy(prepared, delivery, true);
@@ -65,7 +66,8 @@ namespace VanyaTools.Native
             string tool = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "FilmPdf", "VanyaTools.FilmPdf.exe");
             if (!File.Exists(tool)) throw new InvalidOperationException("Не найден модуль ICC PDF. Установите полный пакет Vanya Tools.");
             string[] arguments = { input, output, width.ToString("R", CultureInfo.InvariantCulture), height.ToString("R", CultureInfo.InvariantCulture),
-                mode == PrintIccMode.Assign ? "assign" : "remove", mode == PrintIccMode.Assign ? profile : "-" };
+                mode == PrintIccMode.Assign ? "assign" : mode == PrintIccMode.Remove ? "remove" : "preserve",
+                mode == PrintIccMode.Assign ? profile : "-" };
             var command = new StringBuilder();
             foreach (string argument in arguments) { if (command.Length > 0) command.Append(' '); command.Append(Quote(argument)); }
             var start = new ProcessStartInfo(tool) { Arguments = command.ToString(), UseShellExecute = false,
@@ -80,7 +82,9 @@ namespace VanyaTools.Native
                 await completed.Task;
                 string detail = await error; await text;
                 if (process.ExitCode != 0 || !File.Exists(output))
-                    throw new InvalidOperationException("PDF не отправлен: обработка ICC не завершена. " + detail.Trim());
+                    throw new InvalidOperationException(process.ExitCode == 2
+                        ? "PDF не отправлен: размер страницы не соответствует заданию 1:1. " + detail.Trim()
+                        : "PDF не отправлен: проверка или подготовка содержимого PDF не завершена. " + detail.Trim());
             }
         }
 

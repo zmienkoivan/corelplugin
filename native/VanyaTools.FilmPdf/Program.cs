@@ -18,49 +18,72 @@ namespace VanyaTools.FilmPdf
 
         private static int Main(string[] args)
         {
+            string ownedOutput = null;
+            bool completed = false;
             try
             {
                 Console.OutputEncoding = System.Text.Encoding.UTF8;
                 bool printJob = args.Length == 6;
                 if (args.Length != 4 && !printJob) throw new ArgumentException("Expected input PDF, output PDF, width and height in mm, optionally ICC mode and profile.");
                 string mode = printJob ? args[4] : "remove";
-                if (mode != "remove" && mode != "assign") throw new ArgumentException("Unsupported ICC mode.");
+                if (mode != "remove" && mode != "assign" && mode != "preserve") throw new ArgumentException("Unsupported ICC mode.");
                 IccProfileFile selected = mode == "assign" ? IccProfileFile.Read(args[5]) : null;
                 string input = Path.GetFullPath(args[0]), output = Path.GetFullPath(args[1]);
                 if (String.Equals(input, output, StringComparison.OrdinalIgnoreCase) || File.Exists(output))
                     throw new IOException("The output must be a new file distinct from the input.");
                 double width = Double.Parse(args[2], CultureInfo.InvariantCulture) * 72 / 25.4;
                 double height = Double.Parse(args[3], CultureInfo.InvariantCulture) * 72 / 25.4;
-                using (PdfDocument document = PdfReader.Open(input, PdfDocumentOpenMode.Modify))
+                using (PdfDocument document = PdfReader.Open(input, mode == "preserve" ? PdfDocumentOpenMode.Import : PdfDocumentOpenMode.Modify))
                 {
                     if (document.PageCount != 1) throw new InvalidDataException("Expected one film page.");
                     CheckSize(document.Pages[0], width, height);
-                    if (selected != null) ProfileAttachment.Apply(document, selected);
-                    else
+                    PdfPrintContentGuard.Check(document.Pages[0]);
+                    if (mode != "preserve")
                     {
-                        var visited = new HashSet<PdfObject>();
-                        foreach (PdfObject item in document.Internals.GetAllObjects()) Rewrite(item, visited);
+                        if (selected != null) ProfileAttachment.Apply(document, selected);
+                        else
+                        {
+                            var visited = new HashSet<PdfObject>();
+                            foreach (PdfObject item in document.Internals.GetAllObjects()) Rewrite(item, visited);
+                        }
+                        document.Version = 17;
+                        document.Options.CompressContentStreams = printJob;
                     }
-                    document.Version = 17;
-                    document.Options.CompressContentStreams = printJob;
-                    document.Save(output);
+                    // Claim a new local output only after input validation. An
+                    // ICC-preserving job is copied byte for byte, never re-saved.
+                    using (var target = new FileStream(output, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    {
+                        ownedOutput = output;
+                        if (mode == "preserve")
+                        {
+                            using (var source = File.OpenRead(input)) source.CopyTo(target);
+                        }
+                        else document.Save(target, false);
+                    }
                 }
                 // Read back the finished graph, not the discarded ICC stream bytes.
                 using (PdfDocument document = PdfReader.Open(output, printJob ? PdfDocumentOpenMode.Modify : PdfDocumentOpenMode.Import))
                 {
                     if (document.PageCount != 1) throw new InvalidDataException("Film page count changed.");
                     CheckSize(document.Pages[0], width, height);
+                    PdfPrintContentGuard.Check(document.Pages[0]);
                     if (selected != null) ProfileAttachment.Check(document, selected);
-                    else
+                    else if (mode != "preserve")
                     {
                         var visited = new HashSet<PdfObject>();
                         foreach (PdfObject item in document.Internals.GetAllObjects()) Check(item, visited);
                     }
                 }
+                completed = true;
                 return 0;
             }
             catch (FilmSizeException error) { Console.Error.WriteLine(error.Message); return 2; }
             catch (Exception error) { Console.Error.WriteLine(error.Message); return 1; }
+            finally
+            {
+                if (!completed && ownedOutput != null)
+                    try { File.Delete(ownedOutput); } catch { }
+            }
         }
 
         private static void CheckSize(PdfPage page, double width, double height)
@@ -75,12 +98,15 @@ namespace VanyaTools.FilmPdf
             // Compare physical dimensions after PDF rotation and UserUnit. Accept
             // up to 0.2 mm of page-box rounding; never resize content to make it fit.
             double tolerance = .2 * 72 / 25.4;
-            if (unit <= 0 || Double.IsNaN(unit) || Double.IsInfinity(unit) || rotation % 90 != 0 ||
+            if (width <= 0 || height <= 0 || Double.IsNaN(width + height) || Double.IsInfinity(width + height) ||
+                unit <= 0 || Double.IsNaN(unit) || Double.IsInfinity(unit) || rotation % 90 != 0 ||
                 Double.IsNaN(actualWidth + actualHeight + cropWidth + cropHeight) ||
                 Double.IsInfinity(actualWidth + actualHeight + cropWidth + cropHeight) ||
                 Math.Min(Math.Min(actualWidth, actualHeight), Math.Min(cropWidth, cropHeight)) <= 0 ||
                 Math.Abs(actualWidth - width) > tolerance || Math.Abs(actualHeight - height) > tolerance ||
-                Math.Abs(cropWidth - width) > tolerance || Math.Abs(cropHeight - height) > tolerance)
+                Math.Abs(cropWidth - width) > tolerance || Math.Abs(cropHeight - height) > tolerance ||
+                (page.HasCropBox && (Math.Abs(page.CropBox.X1 - page.MediaBox.X1) * unit > tolerance ||
+                    Math.Abs(page.CropBox.Y1 - page.MediaBox.Y1) * unit > tolerance)))
                 throw new FilmSizeException(String.Format(CultureInfo.InvariantCulture,
                     "Expected {0:0.###} x {1:0.###} mm; PDF {2:0.###} x {3:0.###} mm; crop {4:0.###} x {5:0.###} mm; rotation {6}; UserUnit {7:0.######}.",
                     width * 25.4 / 72, height * 25.4 / 72, actualWidth * 25.4 / 72, actualHeight * 25.4 / 72,

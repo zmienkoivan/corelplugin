@@ -31,11 +31,11 @@ namespace VanyaTools.Native
             if (String.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
                 throw new InvalidOperationException("Выберите доступную папку для листов печати.");
             folder = System.IO.Path.GetFullPath(folder);
-            dynamic document = CorelApp.Get().ActiveDocument;
+            dynamic app = CorelApp.Get(), document = app.ActiveDocument;
             if (document == null)
                 throw new InvalidOperationException("Откройте документ CorelDRAW для печати.");
             dynamic page = document.ActivePage;
-            dynamic selection = CorelApp.Get().ActiveSelectionRange;
+            dynamic selection = app.ActiveSelectionRange;
             bool selected = (selectionOrPage || selectionOnly) && selection != null && Convert.ToInt32(selection.Count) > 0;
             if (selectionOnly && !selected)
                 throw new InvalidOperationException("Для " + processName + " выделите объекты, которые нужно напечатать. Целая страница без выделения не отправляется.");
@@ -55,7 +55,7 @@ namespace VanyaTools.Native
             bool printPage = pageName.StartsWith("Спортформа · ", StringComparison.OrdinalIgnoreCase) ||
                 pageName.StartsWith("Допечатка · ", StringComparison.OrdinalIgnoreCase);
             int shapeCount = 0;
-            foreach (dynamic layer in page.Layers)
+            if (!selected || sportPage) foreach (dynamic layer in page.Layers)
             {
                 int count = Convert.ToInt32(layer.Shapes.Count);
                 shapeCount += count;
@@ -68,38 +68,41 @@ namespace VanyaTools.Native
 
             int oldUnit = Convert.ToInt32(document.Unit);
             bool oldDirty = Convert.ToBoolean(document.Dirty);
-            object settings = document.PDFSettings;
-            var values = Settings(dpi, selected, selectionOnly);
+            bool oldOptimization = Convert.ToBoolean(app.Optimization);
+            object settings = null;
+            // Selected objects are exported from an ordinary, explicitly sized
+            // temporary page. PDF's selection mode is unreliable in Focus mode.
+            var values = Settings(dpi, false, selectionOnly);
             var previous = new List<KeyValuePair<string, object>>();
             int applied = 0;
             string temporary = null, staging = null;
+            PrintSelectionWorkspace selectionWorkspace = null;
             var result = new Result();
             try
             {
                 document.Unit = CorelConstants.CdrMillimeter;
+                dynamic publisher = document;
                 if (selected)
                 {
-                    double left, bottom, width, height;
-                    selection.GetBoundingBox(out left, out bottom, out width, out height, true);
-                    result.WidthMm = width; result.HeightMm = height;
+                    app.Optimization = true;
+                    selectionWorkspace = PrintSelectionWorkspace.Create((object)app, (object)document, (object)page, (object)selection);
+                    publisher = selectionWorkspace.Document;
+                    result.WidthMm = selectionWorkspace.Bounds.Width;
+                    result.HeightMm = selectionWorkspace.Bounds.Height;
                 }
                 else
                 {
                     result.WidthMm = Convert.ToDouble(page.SizeWidth);
                     result.HeightMm = Convert.ToDouble(page.SizeHeight);
                 }
-                if (result.WidthMm <= 0 || result.HeightMm <= 0 ||
-                    Double.IsNaN(result.WidthMm + result.HeightMm) || Double.IsInfinity(result.WidthMm + result.HeightMm))
-                    throw new InvalidOperationException("У страницы нет корректного размера.");
-                // Stay within the conventional 200-inch PDF page size. Never
-                // silently scale a roll-printing job to fit a smaller PDF page.
-                if (Math.Max(result.WidthMm, result.HeightMm) > 5080.01)
-                    throw new InvalidOperationException("Для PDF в масштабе 1:1 размер страницы должен быть не более 5,08 м. " +
-                        "Разделите задание на меньшие листы или выделения.");
+                PrintExportBounds.RequirePage(result.WidthMm, result.HeightMm, selected ? "Выделение" : "Активная страница");
 
+                // Acquire settings only after Unit=mm and SetSize. A fresh CDR
+                // initially has default paper dimensions, often A4.
+                settings = (object)publisher.PDFSettings;
                 // Snapshot everything before changing anything. PDF settings
                 // belong to the document and must not affect the next export.
-                foreach (var value in values)
+                if (!selected) foreach (var value in values)
                     previous.Add(new KeyValuePair<string, object>(value.Key, Get(settings, value.Key)));
                 foreach (var value in values)
                 {
@@ -122,7 +125,7 @@ namespace VanyaTools.Native
                 Log.Info("Print PDF export: selection=" + selected + ", lossless=" + selectionOnly + ", page=" + page.Index + ", " +
                     result.WidthMm.ToString("0.###", CultureInfo.InvariantCulture) + "x" +
                     result.HeightMm.ToString("0.###", CultureInfo.InvariantCulture) + " mm, " + dpi + " DPI, PDF.");
-                document.PublishToPDF(temporary);
+                publisher.PublishToPDF(temporary);
                 using (var stream = File.OpenRead(temporary))
                 {
                     byte[] header = new byte[5];
@@ -147,14 +150,26 @@ namespace VanyaTools.Native
                 bool restoreFailed = false;
                 // Restore compatibility first, since changing it can reset or
                 // constrain the remaining PDF options in Corel.
-                for (int i = 0; i < applied; i++)
+                for (int i = 0; !selected && i < applied; i++)
                     try { Set(settings, previous[i].Key, previous[i].Value); }
                     catch (Exception error)
                     { restoreFailed = true; Log.Error("Could not restore PDF setting " + previous[i].Key + ".", error); }
-                try { document.Unit = oldUnit; document.Dirty = oldDirty; }
+                selectionWorkspace?.Dispose();
+                if (!String.IsNullOrWhiteSpace(selectionWorkspace?.Warning))
+                    result.Warning = selectionWorkspace.Warning;
+                try { document.Unit = oldUnit; }
                 catch (Exception error)
                 { restoreFailed = true; Log.Error("Could not restore document state after print export.", error); }
-                if (restoreFailed) result.Warning = "PDF сохранён, но не все прежние настройки экспорта Corel удалось восстановить.";
+                try { document.Dirty = oldDirty; }
+                catch (Exception error)
+                { restoreFailed = true; Log.Error("Could not restore document dirty flag after print export.", error); }
+                // Optimization is application-wide. Always restore it even if
+                // the source document cannot restore a property or was closed.
+                try { app.Optimization = oldOptimization; }
+                catch (Exception error)
+                { restoreFailed = true; Log.Error("Could not restore Corel optimization after print export.", error); }
+                if (restoreFailed) result.Warning = (result.Warning == null ? "" : result.Warning + " ") +
+                    "PDF сохранён, но не все прежние настройки экспорта Corel удалось восстановить.";
                 if (temporary != null)
                     try { if (File.Exists(temporary)) File.Delete(temporary); }
                     catch (Exception error) { Log.Error("Could not remove incomplete print PDF.", error); }

@@ -23,6 +23,7 @@ namespace VanyaTools.Native
         private readonly TextBlock[] _rangeLabels = new TextBlock[4];
         private readonly TextBox[] _ranges = new TextBox[4];
         private readonly TextBox _step, _hueStep, _lightStep, _saturationStep, _sheetWidth;
+        private readonly Button _createProof;
         private ColorProofReference _reference;
         private ColorProofArtwork _artwork;
         private static readonly string WidthPath = Path.Combine(Environment.GetFolderPath(
@@ -103,8 +104,8 @@ namespace VanyaTools.Native
             _sampleCount = Note(""); _combinationPanel.Children.Add(_sampleCount); panel.Children.Add(_combinationPanel);
             _step = Field("1"); _stepRow = Row("Шаг канала, % / 0–255", _step); panel.Children.Add(_stepRow);
             panel.Children.Add(CreateGridControls());
-            var create = DockerTheme.Primary(Button("Создать отдельный лист цветопробы", (_, __) => Create()));
-            create.Margin = new Thickness(0, 7, 0, 5); panel.Children.Add(create);
+            _createProof = DockerTheme.Primary(Button("Создать отдельный лист цветопробы", (_, __) => Create()));
+            _createProof.Margin = new Thickness(0, 7, 0, 5); panel.Children.Add(_createProof);
             DockerHelp.Add(panel, "В новой сетке размеры и число клеток задаются отдельно. Подписи каналов и значения находятся снаружи; сами плашки не содержат текста. " +
                 "В прежних режимах 21 позиция: 10 шагов влево, эталон, 10 шагов вправо. " +
                 "На границах диапазона и при повторе округлённого цвета остаётся пустое место; эталон не сдвигается. " +
@@ -207,6 +208,8 @@ namespace VanyaTools.Native
             if (_reference == null) _referenceLabel.Text = grid ? "Задайте базовый цвет ниже или возьмите его из объекта." : "Цвет не выбран";
             if (!grid)
             {
+                _createProof.Content = "Создать отдельный лист цветопробы";
+                _createProof.IsEnabled = true;
                 if (_reference != null) UpdateReferenceLabel(); else _preview.Background = Brushes.White;
                 _preview.ToolTip = null;
             }
