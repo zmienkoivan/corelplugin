@@ -9,14 +9,14 @@ using System.Windows.Media;
 
 namespace VanyaTools.Native
 {
-    internal sealed class ColorProofTab : UserControl
+    internal sealed partial class ColorProofTab : UserControl
     {
         private readonly Action<string, bool> _status;
         private readonly ColorProofService _service = new ColorProofService();
         private readonly TextBlock _referenceLabel, _sampleCount, _artworkLabel;
         private readonly Border _preview;
         private readonly ComboBox _model, _mode, _layout, _horizontal, _vertical, _sampleShape;
-        private readonly Grid _layoutRow, _horizontalRow, _verticalRow, _stepRow;
+        private readonly Grid _layoutRow, _horizontalRow, _verticalRow, _stepRow, _sampleShapeRow;
         private readonly StackPanel _artworkPanel;
         private readonly StackPanel _combinationPanel, _visualPanel;
         private readonly Grid[] _rangeRows = new Grid[4];
@@ -33,8 +33,8 @@ namespace VanyaTools.Native
             _status = status;
             var panel = new StackPanel { Margin = new Thickness(8) };
             Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-            panel.Children.Add(Title("Цветопроба относительно эталона"));
-            DockerHelp.Add(panel, "Выберите заливку объекта или цвет из палитры. Варианты всегда рассчитываются от этого цвета.");
+            panel.Children.Add(Title("Цветопроба"));
+            DockerHelp.Add(panel, "Выберите заливку объекта или цвет из палитры. В новой сетке базовые значения каналов также можно ввести вручную.");
             var sources = new Grid { Margin = new Thickness(0, 0, 0, 7) };
             sources.ColumnDefinitions.Add(new ColumnDefinition()); sources.ColumnDefinitions.Add(new ColumnDefinition());
             var fromObject = Button("Из выделения", (_, __) => ReadSelection()); fromObject.Margin = new Thickness(0, 0, 4, 0);
@@ -46,8 +46,12 @@ namespace VanyaTools.Native
             _referenceLabel = Note("Цвет не выбран"); Grid.SetColumn(_referenceLabel, 1);
             source.Children.Add(_preview); source.Children.Add(_referenceLabel); panel.Children.Add(source);
 
+            _mode = Combo("Наглядный", "Каналы CMYK/RGB", "Сетка по каналам");
+            _mode.SelectedIndex = 2;
+            panel.Children.Add(Row("Режим", _mode));
+            _model = Combo("CMYK", "RGB"); panel.Children.Add(Row("Цветовая модель", _model));
             _sampleShape = Combo("Квадраты", "Покрасить логотип");
-            panel.Children.Add(Row("Образец", _sampleShape));
+            _sampleShapeRow = Row("Образец", _sampleShape); panel.Children.Add(_sampleShapeRow);
             _artworkPanel = new StackPanel();
             _artworkPanel.Children.Add(Button("Взять логотип из выделения", (_, __) => CaptureArtwork()));
             _artworkLabel = Note("Логотип не выбран."); _artworkPanel.Children.Add(_artworkLabel);
@@ -59,13 +63,11 @@ namespace VanyaTools.Native
             try { if (File.Exists(WidthPath)) _sheetWidth.Text = File.ReadAllText(WidthPath).Trim(); }
             catch (Exception ex) { Log.Error("Could not read color proof sheet width.", ex); }
             panel.Children.Add(Row("Ширина листа, мм", _sheetWidth));
-            DockerHelp.Add(panel, "Квадраты: 21 ячейка на всю ширину между полями по 8 мм; эталон в 11-й. " +
+            DockerHelp.Add(panel, "Новая сетка сохраняет заданные размеры плашек в миллиметрах и должна поместиться на листе вместе с осями и полями. " +
+                "В прежних режимах квадраты: 21 ячейка на всю ширину между полями по 8 мм; эталон в 11-й. " +
                 "Логотип сохраняет размер 1:1: в ряду помещается максимально возможное нечётное число копий, " +
                 "по центру — эталон. Остальные варианты продолжаются ниже.");
 
-            _mode = Combo("Наглядный", "Каналы CMYK/RGB");
-            panel.Children.Add(Row("Поиск", _mode));
-            _model = Combo("CMYK", "RGB"); panel.Children.Add(Row("Цветовая модель", _model));
             _visualPanel = new StackPanel();
             _lightStep = Field("1"); _hueStep = Field("1"); _saturationStep = Field("1");
             _visualPanel.Children.Add(Row("Шаг светлоты, %", _lightStep));
@@ -100,18 +102,20 @@ namespace VanyaTools.Native
                 "отличающемуся каналу, ближайшие — рядом с эталоном.");
             _sampleCount = Note(""); _combinationPanel.Children.Add(_sampleCount); panel.Children.Add(_combinationPanel);
             _step = Field("1"); _stepRow = Row("Шаг канала, % / 0–255", _step); panel.Children.Add(_stepRow);
+            panel.Children.Add(CreateGridControls());
             var create = DockerTheme.Primary(Button("Создать отдельный лист цветопробы", (_, __) => Create()));
             create.Margin = new Thickness(0, 7, 0, 5); panel.Children.Add(create);
-            DockerHelp.Add(panel, "21 позиция: 10 шагов влево, эталон, 10 шагов вправо. " +
+            DockerHelp.Add(panel, "В новой сетке размеры и число клеток задаются отдельно. Подписи каналов и значения находятся снаружи; сами плашки не содержат текста. " +
+                "В прежних режимах 21 позиция: 10 шагов влево, эталон, 10 шагов вправо. " +
                 "На границах диапазона и при повторе округлённого цвета остаётся пустое место; эталон не сдвигается. " +
                 "CMYK/RGB меняются целыми значениями, минимальный шаг — 1. " +
                 "Под каждым образцом цвет указан одной строкой. В режиме двух каналов эталон находится " +
                 "в ряду с нулевым изменением второго канала.");
-            _model.SelectionChanged += (_, __) => { UpdateChannels(); DefaultOffsets(); };
+            _model.SelectionChanged += (_, __) => { UpdateChannels(); DefaultOffsets(); RefreshGridModel(); };
             _mode.SelectionChanged += (_, __) => UpdateForm();
             _layout.SelectionChanged += (_, __) => UpdateForm();
             _sampleShape.SelectionChanged += (_, __) => UpdateForm();
-            UpdateChannels(); DefaultOffsets(); UpdateForm();
+            UpdateChannels(); DefaultOffsets(); RefreshGridModel(); UpdateForm();
         }
 
         private void CaptureArtwork()
@@ -144,7 +148,7 @@ namespace VanyaTools.Native
         private void SetReference(ColorProofReference reference)
         {
             _reference = reference;
-            UpdateReferenceLabel(); UpdateSampleCount();
+            UpdateReferenceLabel(); UpdateSampleCount(); RefreshGridModel();
             _status("Эталонный цвет выбран. Все варианты будут рассчитаны относительно него.", false);
         }
 
@@ -188,15 +192,25 @@ namespace VanyaTools.Native
 
         private void UpdateForm()
         {
+            bool grid = _mode.SelectedIndex == 2;
             bool artwork = _sampleShape.SelectedIndex == 1;
-            _artworkPanel.Visibility = artwork ? Visibility.Visible : Visibility.Collapsed;
-            bool visual = _mode.SelectedIndex == 0, combinations = !visual && _layout.SelectedIndex == 0;
-            bool two = !visual && _layout.SelectedIndex == 2;
+            _sampleShapeRow.Visibility = grid ? Visibility.Collapsed : Visibility.Visible;
+            _artworkPanel.Visibility = !grid && artwork ? Visibility.Visible : Visibility.Collapsed;
+            bool visual = !grid && _mode.SelectedIndex == 0, combinations = !grid && !visual && _layout.SelectedIndex == 0;
+            bool two = !grid && !visual && _layout.SelectedIndex == 2;
             _visualPanel.Visibility = visual ? Visibility.Visible : Visibility.Collapsed;
-            _layoutRow.Visibility = visual ? Visibility.Collapsed : Visibility.Visible;
+            _layoutRow.Visibility = visual || grid ? Visibility.Collapsed : Visibility.Visible;
             _horizontalRow.Visibility = _verticalRow.Visibility = two ? Visibility.Visible : Visibility.Collapsed;
             _combinationPanel.Visibility = combinations ? Visibility.Visible : Visibility.Collapsed;
-            _stepRow.Visibility = visual || combinations ? Visibility.Collapsed : Visibility.Visible;
+            _stepRow.Visibility = visual || combinations || grid ? Visibility.Collapsed : Visibility.Visible;
+            _gridPanel.Visibility = grid ? Visibility.Visible : Visibility.Collapsed;
+            if (_reference == null) _referenceLabel.Text = grid ? "Задайте базовый цвет ниже или возьмите его из объекта." : "Цвет не выбран";
+            if (!grid)
+            {
+                if (_reference != null) UpdateReferenceLabel(); else _preview.Background = Brushes.White;
+                _preview.ToolTip = null;
+            }
+            UpdateGridPreview();
         }
 
         private int[][] ReadLevels()
@@ -241,6 +255,7 @@ namespace VanyaTools.Native
         {
             try
             {
+                if (_mode.SelectedIndex == 2) { CreateGridSheet(); return; }
                 if (_sampleShape.SelectedIndex == 1 && _artwork == null)
                 {
                     CaptureArtwork();

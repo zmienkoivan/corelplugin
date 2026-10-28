@@ -1,0 +1,315 @@
+using System;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Threading;
+
+namespace VanyaTools.Native
+{
+    internal sealed partial class ColorProofTab
+    {
+        private StackPanel _gridPanel, _gridExtras;
+        private ComboBox _gridKind, _gridX, _gridY;
+        private TextBox _gridColumns, _gridRows, _gridCell, _gridTile, _gridGap, _gridStepX, _gridStepY, _gridExtraStep;
+        private readonly TextBox[] _gridBase = new TextBox[4], _gridExtraLevels = new TextBox[4];
+        private readonly TextBlock[] _gridBaseLabels = new TextBlock[4], _gridExtraLabels = new TextBlock[4];
+        private readonly FrameworkElement[] _gridBaseFields = new FrameworkElement[4], _gridExtraRows = new FrameworkElement[4];
+        private FrameworkElement _gridCellField, _gridTileField;
+        private TextBlock _gridSummary;
+        private Expander _gridSketchExpander;
+        private Viewbox _gridSketch, _gridWindowSketch;
+        private Window _gridPreviewWindow;
+        private bool _gridUpdating;
+        private readonly DispatcherTimer _gridDelay = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(140) };
+
+        private FrameworkElement CreateGridControls()
+        {
+            _gridUpdating = true;
+            _gridPanel = new StackPanel();
+            _gridKind = Combo("Один цвет в клетке", "4 цвета · блок 2×2");
+            _gridPanel.Children.Add(Row("Тип сетки", _gridKind));
+
+            _gridPanel.Children.Add(GridCaption("Базовый цвет"));
+            var bases = new UniformGrid { Columns = 4 };
+            for (int channel = 0; channel < 4; channel++)
+            {
+                _gridBase[channel] = Field(channel == 3 ? "0" : "50");
+                _gridBaseLabels[channel] = GridCaption(new[] { "C", "M", "Y", "K" }[channel]);
+                var field = new StackPanel { Margin = new Thickness(1, 0, 3, 3) };
+                field.Children.Add(_gridBaseLabels[channel]); field.Children.Add(_gridBase[channel]);
+                _gridBaseFields[channel] = field; bases.Children.Add(field);
+                _gridBase[channel].TextChanged += (_, __) => QueueGridPreview();
+            }
+            _gridPanel.Children.Add(bases);
+
+            _gridX = Combo(); _gridY = Combo();
+            _gridPanel.Children.Add(GridPair("Горизонталь X", _gridX, "Вертикаль Y", _gridY));
+            _gridStepX = Field("1"); _gridStepY = Field("1");
+            _gridStepX.ToolTip = _gridStepY.ToolTip = "Целый шаг: процентные пункты CMYK или значения RGB 0–255.";
+            _gridPanel.Children.Add(GridPair("Шаг X", _gridStepX, "Шаг Y", _gridStepY));
+
+            var dimensions = new StackPanel();
+            _gridColumns = Field("15"); _gridRows = Field("15");
+            dimensions.Children.Add(GridPair("Столбцов", _gridColumns, "Строк", _gridRows));
+            _gridCell = Field("20"); _gridTile = Field("30"); _gridGap = Field("1");
+            _gridCellField = DockerLayout.LabeledField("Квадрат, мм", _gridCell);
+            _gridTileField = DockerLayout.LabeledField("Блок 2×2, мм", _gridTile);
+            var sizes = new Grid { Margin = new Thickness(0, 2, 0, 3) };
+            sizes.ColumnDefinitions.Add(new ColumnDefinition()); sizes.ColumnDefinitions.Add(new ColumnDefinition());
+            _gridCellField.Margin = _gridTileField.Margin = new Thickness(0, 0, 3, 0);
+            sizes.Children.Add(_gridCellField); sizes.Children.Add(_gridTileField);
+            var gap = DockerLayout.LabeledField("Между клетками, мм", _gridGap);
+            gap.Margin = new Thickness(3, 0, 0, 0); Grid.SetColumn(gap, 1); sizes.Children.Add(gap);
+            dimensions.Children.Add(sizes);
+            dimensions.Children.Add(Note("Размеры плашек сохраняются 1:1. Внутри составного блока зазора нет: 30 мм = четыре квадрата по 15 мм."));
+            _gridPanel.Children.Add(new Expander { Header = "Размеры сетки", Content = dimensions,
+                IsExpanded = false, HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 3, 0, 5) });
+
+            _gridExtras = new StackPanel();
+            _gridExtras.Children.Add(GridCaption("Каналы внутри блока"));
+            _gridExtraStep = Field("1"); _gridExtras.Children.Add(Row("Шаг автоуровней", _gridExtraStep));
+            for (int channel = 0; channel < 4; channel++)
+            {
+                _gridExtraLabels[channel] = GridCaption("");
+                _gridExtraLevels[channel] = Field("");
+                _gridExtraLevels[channel].ToolTip = "Абсолютные значения через пробел, включая базовое. Пусто — подобрать автоматически.";
+                var row = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+                row.ColumnDefinitions.Add(new ColumnDefinition()); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.2, GridUnitType.Star) });
+                row.Children.Add(_gridExtraLabels[channel]); Grid.SetColumn(_gridExtraLevels[channel], 1); row.Children.Add(_gridExtraLevels[channel]);
+                _gridExtraRows[channel] = row; _gridExtras.Children.Add(row);
+                _gridExtraLevels[channel].TextChanged += (_, __) => QueueGridPreview();
+            }
+            _gridExtras.Children.Add(Note("Пустые поля — авто. CMYK: по 2 уровня двух каналов либо 1 фиксированный и 4 уровня другого. RGB: 4 уровня оставшегося канала."));
+            _gridPanel.Children.Add(_gridExtras);
+            _gridSummary = Note(""); _gridSummary.Margin = new Thickness(0, 3, 0, 5); _gridPanel.Children.Add(_gridSummary);
+            _gridSketch = new Viewbox { Height = 140, Stretch = Stretch.Uniform };
+            var sketchContent = new StackPanel();
+            sketchContent.Children.Add(new Border { Background = Brushes.White, Child = _gridSketch, Padding = new Thickness(4) });
+            sketchContent.Children.Add(Button("Открыть схему крупно…", (_, __) => ShowGridSketch()));
+            sketchContent.Children.Add(Note("Схема расположения. Экранные цвета ориентировочные; итог оценивайте по печатной пробе."));
+            _gridSketchExpander = new Expander { Header = "Схема сетки", Content = sketchContent, IsExpanded = false,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 2, 0, 3) };
+            _gridSketchExpander.Expanded += (_, __) => UpdateGridPreview();
+            _gridPanel.Children.Add(_gridSketchExpander);
+            foreach (var field in new[] { _gridColumns, _gridRows, _gridCell, _gridTile, _gridGap, _gridStepX, _gridStepY, _gridExtraStep, _sheetWidth })
+                field.TextChanged += (_, __) => QueueGridPreview();
+            _gridKind.SelectionChanged += (_, __) => { UpdateGridRoles(); QueueGridPreview(); };
+            _gridX.SelectionChanged += (_, __) => { UpdateGridRoles(); QueueGridPreview(); };
+            _gridY.SelectionChanged += (_, __) => { UpdateGridRoles(); QueueGridPreview(); };
+            _gridDelay.Tick += (_, __) => { _gridDelay.Stop(); UpdateGridPreview(); };
+            Unloaded += (_, __) => { _gridDelay.Stop(); _gridPreviewWindow?.Close(); };
+            _gridUpdating = false;
+            return _gridPanel;
+        }
+
+        private void RefreshGridModel()
+        {
+            if (_gridPanel == null) return;
+            _gridUpdating = true;
+            try
+            {
+                bool cmyk = _model.SelectedIndex == 0;
+                string[] names = GridChannelNames(cmyk);
+                int x = _gridX.SelectedIndex, y = _gridY.SelectedIndex;
+                _gridX.Items.Clear(); _gridY.Items.Clear();
+                foreach (string name in names) { _gridX.Items.Add(name); _gridY.Items.Add(name); }
+                _gridX.SelectedIndex = x >= 0 && x < names.Length ? x : 0;
+                _gridY.SelectedIndex = y >= 0 && y < names.Length && y != _gridX.SelectedIndex ? y : (_gridX.SelectedIndex == 0 ? 1 : 0);
+                int[] values = _reference == null ? (cmyk ? new[] { 50, 50, 50, 0 } : new[] { 128, 128, 128 })
+                    : _service.Components(_reference, cmyk);
+                for (int channel = 0; channel < 4; channel++)
+                {
+                    _gridBaseFields[channel].Visibility = channel < names.Length ? Visibility.Visible : Visibility.Collapsed;
+                    _gridBaseLabels[channel].Text = channel < names.Length ? names[channel] : "";
+                    _gridBase[channel].Text = channel < values.Length ? values[channel].ToString(CultureInfo.InvariantCulture) : "";
+                    _gridExtraLevels[channel].Text = "";
+                }
+            }
+            catch (Exception error) { _status("Не удалось перенести базовый цвет в сетку: " + error.GetBaseException().Message, true); }
+            finally { _gridUpdating = false; }
+            UpdateGridRoles(); UpdateGridPreview();
+        }
+
+        private void UpdateGridRoles()
+        {
+            if (_gridPanel == null) return;
+            bool compound = _gridKind.SelectedIndex == 1, cmyk = _model.SelectedIndex == 0;
+            string[] names = GridChannelNames(cmyk);
+            _gridCellField.Visibility = compound ? Visibility.Collapsed : Visibility.Visible;
+            _gridTileField.Visibility = compound ? Visibility.Visible : Visibility.Collapsed;
+            _gridExtras.Visibility = compound ? Visibility.Visible : Visibility.Collapsed;
+            for (int channel = 0; channel < 4; channel++)
+            {
+                bool extra = channel < names.Length && channel != _gridX.SelectedIndex && channel != _gridY.SelectedIndex;
+                _gridExtraRows[channel].Visibility = extra ? Visibility.Visible : Visibility.Collapsed;
+                _gridExtraLabels[channel].Text = channel < names.Length ? names[channel] + (cmyk ? " · 1 / 2 / 4 уровня" : " · 4 уровня") : "";
+                if (channel < names.Length) _gridBase[channel].ToolTip = names[channel] + (channel == _gridX.SelectedIndex
+                    ? " — базовое значение горизонтальной оси" : channel == _gridY.SelectedIndex
+                    ? " — базовое значение вертикальной оси" : compound ? " — база дополнительного канала" : " — фиксированное значение");
+            }
+        }
+
+        private void QueueGridPreview()
+        {
+            if (_gridUpdating || _gridPanel == null) return;
+            _gridDelay.Stop(); _gridDelay.Start();
+        }
+
+        private ColorProofGridOptions ReadGridOptions()
+        {
+            bool cmyk = _model.SelectedIndex == 0, compound = _gridKind.SelectedIndex == 1;
+            int limit = cmyk ? 100 : 255; string[] names = GridChannelNames(cmyk);
+            var values = new int[names.Length]; var levels = new int[names.Length][];
+            for (int channel = 0; channel < names.Length; channel++)
+            {
+                values[channel] = GridInteger(_gridBase[channel], 0, limit, names[channel]);
+                if (!compound || channel == _gridX.SelectedIndex || channel == _gridY.SelectedIndex) continue;
+                string[] parts = _gridExtraLevels[channel].Text.Split(new[] { ' ', ',', ';', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 0) continue;
+                if (parts.Length != 1 && parts.Length != 2 && parts.Length != 4)
+                    throw new InvalidOperationException(names[channel] + ": укажите 1, 2 или 4 уровня через пробел либо оставьте поле пустым.");
+                levels[channel] = parts.Select(part => {
+                    if (!Int32.TryParse(part, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value) || value < 0 || value > limit)
+                        throw new InvalidOperationException(names[channel] + ": уровни должны быть целыми числами от 0 до " + limit + ".");
+                    return value;
+                }).ToArray();
+            }
+            return new ColorProofGridOptions { Cmyk = cmyk, Compound = compound, BaseChannels = values,
+                HorizontalChannel = _gridX.SelectedIndex, VerticalChannel = _gridY.SelectedIndex,
+                Columns = GridInteger(_gridColumns, 1, 31, "Столбцов"), Rows = GridInteger(_gridRows, 1, 31, "Строк"),
+                StepX = GridInteger(_gridStepX, 1, limit, "Шаг X"), StepY = GridInteger(_gridStepY, 1, limit, "Шаг Y"),
+                ExtraStep = compound ? GridInteger(_gridExtraStep, 1, limit, "Шаг автоуровней") : 1,
+                CellMm = compound ? 20 : Number(_gridCell, 5, 100, "Размер квадрата, мм"),
+                TileMm = compound ? Number(_gridTile, 10, 200, "Размер блока, мм") : 30,
+                GapMm = Number(_gridGap, 0, 10, "Между клетками, мм"),
+                SheetWidthMm = Number(_sheetWidth, 100, 4000, "Ширина листа, мм"), ExtraLevels = levels };
+        }
+
+        private void UpdateGridPreview()
+        {
+            if (_gridUpdating || _gridSummary == null || _mode.SelectedIndex != 2) return;
+            try
+            {
+                ColorProofGridPlan plan = ColorProofGridPlan.Build(ReadGridOptions());
+                var options = plan.Options; string[] names = GridChannelNames(options.Cmyk);
+                int[] remaining = Enumerable.Range(0, plan.BaseChannels.Length)
+                    .Where(channel => channel != options.HorizontalChannel && channel != options.VerticalChannel).ToArray();
+                string channels = options.Compound
+                    ? String.Join("; ", remaining.Select(channel => names[channel] + ": " + String.Join(" / ", plan.ExtraLevels[channel])))
+                    : "Фиксированы " + String.Join(" ", remaining.Select(channel => names[channel] + ":" + plan.BaseChannels[channel]));
+                _referenceLabel.Text = "База сетки · " + String.Join(" ", plan.BaseChannels.Select((value, channel) => names[channel] + ":" + value));
+                _preview.Background = new SolidColorBrush(GridScreenColor(plan.BaseChannels, options.Cmyk));
+                _preview.ToolTip = "Экранный цвет базы ориентировочный. В печатных плашках используются указанные значения каналов.";
+                _gridSummary.Text = options.Columns + " × " + options.Rows + " · " + plan.Patches.Count + " цветов · сетка " +
+                    GridMm(plan.WidthMm) + " × " + GridMm(plan.HeightMm) + " мм.\n" +
+                    "X " + names[options.HorizontalChannel] + ": " + plan.AxisX.First() + "…" + plan.AxisX.Last() +
+                    "; Y " + names[options.VerticalChannel] + ": " + plan.AxisY.First() + "…" + plan.AxisY.Last() + ".\n" + channels;
+                DockerTheme.UseTheme(_gridSummary, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
+                if (_gridSketchExpander.IsExpanded) _gridSketch.Child = GridSketch(plan);
+                if (_gridWindowSketch != null) _gridWindowSketch.Child = GridSketch(plan);
+            }
+            catch (Exception error)
+            {
+                _gridSummary.Text = error.GetBaseException().Message;
+                DockerTheme.UseTheme(_gridSummary, TextBlock.ForegroundProperty, DockerTheme.ErrorTextBrush);
+                _gridSketch.Child = null;
+                if (_gridWindowSketch != null) _gridWindowSketch.Child = null;
+            }
+        }
+
+        private void CreateGridSheet()
+        {
+            ColorProofGridOptions options = ReadGridOptions();
+            ColorProofGridPlan plan = ColorProofGridPlan.Build(options);
+            int count = new ColorProofGridService().Create(_reference, options);
+            try { Directory.CreateDirectory(Path.GetDirectoryName(WidthPath)); File.WriteAllText(WidthPath, options.SheetWidthMm.ToString(CultureInfo.InvariantCulture)); }
+            catch (Exception error) { Log.Error("Could not save color proof sheet width.", error); }
+            _status("Создана сетка " + options.Columns + " × " + options.Rows + ": " + count + " плашек, " +
+                GridMm(plan.WidthMm) + " × " + GridMm(plan.HeightMm) + " мм · " + (options.Cmyk ? "CMYK" : "RGB") + ".", false);
+        }
+
+        private void ShowGridSketch()
+        {
+            try
+            {
+                ColorProofGridPlan plan = ColorProofGridPlan.Build(ReadGridOptions());
+                if (_gridPreviewWindow != null) { _gridPreviewWindow.Activate(); return; }
+                var window = new Window { Title = "Схема цветопробы · Vanya Tools", Width = Math.Min(1000, SystemParameters.WorkArea.Width - 50),
+                    Height = Math.Min(850, SystemParameters.WorkArea.Height - 50), MinWidth = 420, MinHeight = 420,
+                    WindowStartupLocation = WindowStartupLocation.CenterOwner };
+                DockerTheme.Apply(window);
+                var root = new DockPanel { Margin = new Thickness(10) }; window.Content = root;
+                var note = Note("Схема расположения; экранные цвета ориентировочные. Параметры можно менять в докере — схема обновится.");
+                DockPanel.SetDock(note, Dock.Top); root.Children.Add(note);
+                _gridWindowSketch = new Viewbox { Stretch = Stretch.Uniform, Child = GridSketch(plan) };
+                root.Children.Add(new Border { Background = Brushes.White, Padding = new Thickness(8), Child = _gridWindowSketch });
+                Window owner = Window.GetWindow(this);
+                if (owner != null) window.Owner = owner;
+                else if (PresentationSource.FromVisual(this) is HwndSource host) new WindowInteropHelper(window).Owner = host.Handle;
+                _gridPreviewWindow = window;
+                window.Closed += (_, __) => { _gridPreviewWindow = null; _gridWindowSketch = null; };
+                window.Show();
+            }
+            catch (Exception error) { Fail("Could not preview color proof grid.", error); }
+        }
+
+        private static Canvas GridSketch(ColorProofGridPlan plan)
+        {
+            const double left = 28, top = 24;
+            var canvas = new Canvas { Width = plan.WidthMm + 36, Height = plan.HeightMm + 54, Background = Brushes.White };
+            var options = plan.Options; string[] names = GridChannelNames(options.Cmyk);
+            GridSketchText(canvas, left, 0, options.Columns + " × " + options.Rows + " · " + plan.Patches.Count + " плашек", 7);
+            double size = options.Compound ? options.TileMm : options.CellMm;
+            for (int column = 0; column < options.Columns; column++)
+                GridSketchText(canvas, left + column * (size + options.GapMm), top - 8, names[options.HorizontalChannel] + plan.AxisX[column], 4);
+            for (int row = 0; row < options.Rows; row++)
+                GridSketchText(canvas, 0, top + row * (size + options.GapMm) + size / 2 - 2, names[options.VerticalChannel] + plan.AxisY[row], 4);
+            foreach (ColorProofGridPatch patch in plan.Patches)
+            {
+                var rectangle = new System.Windows.Shapes.Rectangle { Width = patch.WidthMm, Height = patch.HeightMm,
+                    Fill = new SolidColorBrush(GridScreenColor(patch.Values, options.Cmyk)),
+                    ToolTip = "R" + (patch.Row + 1) + " C" + (patch.Column + 1) + (options.Compound ? " Q" + (patch.Quadrant + 1) : "") + " · " +
+                        String.Join(" ", patch.Values.Select((value, channel) => names[channel] + ":" + value)) };
+                RenderOptions.SetEdgeMode(rectangle, EdgeMode.Aliased);
+                Canvas.SetLeft(rectangle, left + patch.Xmm); Canvas.SetTop(rectangle, top + patch.Ymm); canvas.Children.Add(rectangle);
+            }
+            var remaining = Enumerable.Range(0, plan.BaseChannels.Length)
+                .Where(channel => channel != options.HorizontalChannel && channel != options.VerticalChannel).ToArray();
+            string legend = options.Compound
+                ? String.Join(" | ", plan.Patches.Where(patch => patch.Row == plan.ReferenceRow && patch.Column == plan.ReferenceColumn)
+                    .OrderBy(patch => patch.Quadrant).Select(patch => "Q" + (patch.Quadrant + 1) + ": " +
+                        String.Join(" ", remaining.Select(channel => names[channel] + ":" + patch.Values[channel]))))
+                : "Фиксированы " + String.Join(" ", remaining.Select(channel => names[channel] + ":" + plan.BaseChannels[channel]));
+            var footer = new TextBlock { Text = legend, FontSize = 4, Foreground = Brushes.Black,
+                Width = Math.Max(60, plan.WidthMm), TextWrapping = TextWrapping.Wrap };
+            Canvas.SetLeft(footer, left); Canvas.SetTop(footer, top + plan.HeightMm + 4); canvas.Children.Add(footer);
+            return canvas;
+        }
+
+        private static Color GridScreenColor(int[] values, bool cmyk)
+        {
+            if (!cmyk) return Color.FromRgb((byte)values[0], (byte)values[1], (byte)values[2]);
+            double black = 1 - values[3] / 100.0;
+            return Color.FromRgb((byte)Math.Round(255 * (1 - values[0] / 100.0) * black),
+                (byte)Math.Round(255 * (1 - values[1] / 100.0) * black), (byte)Math.Round(255 * (1 - values[2] / 100.0) * black));
+        }
+        private static void GridSketchText(Canvas canvas, double x, double y, string value, double size)
+        { var text = new TextBlock { Text = value, FontSize = size, Foreground = Brushes.Black }; Canvas.SetLeft(text, x); Canvas.SetTop(text, y); canvas.Children.Add(text); }
+        private static string[] GridChannelNames(bool cmyk) => cmyk ? new[] { "C", "M", "Y", "K" } : new[] { "R", "G", "B" };
+        private static string GridMm(double value) => value.ToString("0.##", CultureInfo.CurrentCulture);
+        private static int GridInteger(TextBox field, int min, int max, string label)
+        { if (Int32.TryParse(field.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int value) && value >= min && value <= max) return value;
+            throw new InvalidOperationException(label + ": целое число от " + min + " до " + max + "."); }
+        private static TextBlock GridCaption(string text) => new TextBlock { Text = text, FontSize = 11,
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 2) };
+        private static FrameworkElement GridPair(string first, FrameworkElement firstField, string second, FrameworkElement secondField)
+        { var row = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 3) };
+            var a = DockerLayout.LabeledField(first, firstField); a.Margin = new Thickness(0, 0, 3, 0);
+            var b = DockerLayout.LabeledField(second, secondField); b.Margin = new Thickness(3, 0, 0, 0); row.Children.Add(a); row.Children.Add(b); return row; }
+    }
+}
