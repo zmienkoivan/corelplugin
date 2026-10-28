@@ -314,7 +314,8 @@ namespace VanyaTools.Native
         private static Button Button(string label, RoutedEventHandler click)
         {
             var button = new Button { Content = label, MinHeight = 29, FontSize = 11, Padding = new Thickness(5, 1, 5, 1) };
-            button.Click += click; return button;
+            if (click != null) button.Click += click;
+            return button;
         }
         private static TextBlock Title(string text) => new TextBlock { Text = text, FontSize = 14,
             FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) };

@@ -18,7 +18,24 @@ namespace VanyaTools.Native
 
         private void ShowPantoneMatches()
         {
-            if (_pantoneWindow != null) { _pantoneWindow.Activate(); return; }
+            try
+            {
+                if (_pantoneWindow != null) { _pantoneWindow.Activate(); return; }
+                Window window = BuildPantoneWindow();
+                _pantoneWindow = window;
+                window.Show();
+            }
+            catch (Exception error)
+            {
+                _pantoneWindow = null;
+                Fail("Could not open Pantone matching window.", error);
+            }
+        }
+
+        // Construct the actual content independently of Show and of Corel COM.
+        // This also lets the opening path be verified without starting Corel.
+        private Window BuildPantoneWindow()
+        {
             var window = new Window { Title = "Близкие Pantone · Vanya Tools", Width = 570, Height = 660,
                 MinWidth = 420, MinHeight = 440, WindowStartupLocation = WindowStartupLocation.CenterOwner };
             DockerTheme.Apply(window);
@@ -29,9 +46,13 @@ namespace VanyaTools.Native
             var palettePath = Field(""); palettePath.IsReadOnly = true; palettePath.ToolTip = "Пусто — найти установленную палитру автоматически.";
             var paletteRow = new DockPanel { Margin = new Thickness(0, 4, 0, 4) };
             var browse = Button("Палитра…", (_, __) => {
-                var dialog = new OpenFileDialog { Title = "Палитра Pantone Solid Coated из Corel",
-                    Filter = "Палитры Corel (*.xml;*.cpl)|*.xml;*.cpl|Все файлы (*.*)|*.*", CheckFileExists = true };
-                if (dialog.ShowDialog(window) == true) palettePath.Text = dialog.FileName;
+                try
+                {
+                    var dialog = new OpenFileDialog { Title = "Палитра Pantone Solid Coated из Corel",
+                        Filter = "Палитры Corel (*.xml;*.cpl)|*.xml;*.cpl|Все файлы (*.*)|*.*", CheckFileExists = true };
+                    if (dialog.ShowDialog(window) == true) palettePath.Text = dialog.FileName;
+                }
+                catch (Exception error) { Fail("Could not choose Pantone palette file.", error); }
             });
             DockPanel.SetDock(browse, Dock.Right); paletteRow.Children.Add(browse);
             var automatic = Button("Авто", (_, __) => palettePath.Text = "");
@@ -114,9 +135,8 @@ namespace VanyaTools.Native
             Window owner = Window.GetWindow(this);
             if (owner != null) window.Owner = owner;
             else if (PresentationSource.FromVisual(this) is HwndSource host) new WindowInteropHelper(window).Owner = host.Handle;
-            _pantoneWindow = window;
             window.Closed += (_, __) => { cancellation.Cancel(); _pantoneWindow = null; };
-            window.Show();
+            return window;
         }
 
         private static Border PantoneChip(int[] rgb) => new Border { Width = 44, Height = 34, Margin = new Thickness(0, 0, 9, 0),

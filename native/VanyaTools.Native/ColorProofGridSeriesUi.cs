@@ -32,7 +32,7 @@ namespace VanyaTools.Native
             var settings = new StackPanel();
             _gridSeriesChannel = Combo();
             settings.Children.Add(Row("Между листами", _gridSeriesChannel));
-            _gridSeriesCount = Field("5"); _gridSeriesStep = Field("1");
+            _gridSeriesCount = Field("5"); _gridSeriesStep = Field("3");
             settings.Children.Add(GridPair("Таблиц · 1–9", _gridSeriesCount, "Шаг канала", _gridSeriesStep));
             _gridSeriesOffsets = Field("");
             _gridSeriesOffsets.ToolTip = "Отклонения в единицах канала, включая 0: например -4 -2 0 +2 +4. Пусто — по числу таблиц и шагу.";
@@ -49,7 +49,7 @@ namespace VanyaTools.Native
                 _gridSeriesPageIndex = -1; UpdateGridRoles(); QueueGridPreview();
             };
             _gridSeriesCount.TextChanged += (_, __) => QueueGridPreview();
-            _gridSeriesStep.TextChanged += (_, __) => QueueGridPreview();
+            _gridSeriesStep.TextChanged += (_, __) => GridStepChanged();
             _gridSeriesOffsets.TextChanged += (_, __) => {
                 bool automatic = String.IsNullOrWhiteSpace(_gridSeriesOffsets.Text);
                 _gridSeriesCount.IsEnabled = _gridSeriesStep.IsEnabled = automatic;
@@ -94,8 +94,7 @@ namespace VanyaTools.Native
                 _gridX.SelectedIndex = 1; _gridY.SelectedIndex = 0;
                 _gridKind.SelectedIndex = _model.SelectedIndex == 0 ? 1 : 0;
                 _gridSeriesEnabled.IsChecked = true;
-                _gridSeriesCount.Text = "5"; _gridSeriesStep.Text = "1"; _gridSeriesOffsets.Text = "";
-                _gridStepX.Text = _gridStepY.Text = _gridExtraStep.Text = "1";
+                _gridSeriesCount.Text = "5"; _gridSeriesOffsets.Text = "";
                 _gridLevelsMode.SelectedIndex = 0;
                 foreach (TextBox field in _gridExtraLevels) field.Text = "";
                 _gridSeriesPageIndex = -1;

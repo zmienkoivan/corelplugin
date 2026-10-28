@@ -14,7 +14,7 @@ namespace VanyaTools.Native
     internal sealed partial class ColorProofTab
     {
         private StackPanel _gridPanel, _gridExtras;
-        private ComboBox _gridKind, _gridX, _gridY;
+        private ComboBox _gridKind, _gridX, _gridY, _gridDifference;
         private TextBox _gridColumns, _gridRows, _gridCell, _gridTile, _gridGap, _gridStepX, _gridStepY, _gridExtraStep;
         private readonly TextBox[] _gridBase = new TextBox[4], _gridExtraLevels = new TextBox[4];
         private readonly TextBlock[] _gridBaseLabels = new TextBlock[4], _gridExtraLabels = new TextBlock[4];
@@ -33,6 +33,10 @@ namespace VanyaTools.Native
             _gridPanel = new StackPanel();
             _gridKind = Combo("Один цвет в клетке", "4 цвета · блок 2×2");
             _gridPanel.Children.Add(Row("Тип сетки", _gridKind));
+            _gridDifference = Combo("Мягко", "Средне", "Контрастно", "Свой шаг");
+            _gridDifference.SelectedIndex = 1;
+            _gridDifference.ToolTip = "Шаги X, Y, автоуровней и серии: CMYK — 1 / 3 / 5; RGB — 3 / 8 / 16. Введённые вручную уровни сохраняются.";
+            _gridPanel.Children.Add(Row("Различия", _gridDifference));
             _gridPanel.Children.Add(CreateGridSeriesControls());
 
             _gridPanel.Children.Add(GridCaption("Базовый цвет"));
@@ -51,7 +55,7 @@ namespace VanyaTools.Native
 
             _gridX = Combo(); _gridY = Combo();
             _gridPanel.Children.Add(GridPair("Горизонталь X", _gridX, "Вертикаль Y", _gridY));
-            _gridStepX = Field("1"); _gridStepY = Field("1");
+            _gridStepX = Field("3"); _gridStepY = Field("3");
             _gridStepX.ToolTip = _gridStepY.ToolTip = "Целый шаг: процентные пункты CMYK или значения RGB 0–255.";
             _gridPanel.Children.Add(GridPair("Шаг X", _gridStepX, "Шаг Y", _gridStepY));
 
@@ -76,7 +80,7 @@ namespace VanyaTools.Native
             _gridExtras.Children.Add(GridCaption("Каналы внутри блока"));
             _gridLevelsMode = Combo("Отклонения от эталона", "Абсолютные значения");
             _gridExtras.Children.Add(Row("Уровни", _gridLevelsMode));
-            _gridExtraStep = Field("1"); _gridExtras.Children.Add(Row("Шаг автоуровней", _gridExtraStep));
+            _gridExtraStep = Field("3"); _gridExtras.Children.Add(Row("Шаг автоуровней", _gridExtraStep));
             for (int channel = 0; channel < 4; channel++)
             {
                 _gridExtraLabels[channel] = GridCaption("");
@@ -101,14 +105,21 @@ namespace VanyaTools.Native
                 HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 2, 0, 3) };
             _gridSketchExpander.Expanded += (_, __) => UpdateGridPreview();
             _gridPanel.Children.Add(_gridSketchExpander);
-            foreach (var field in new[] { _gridColumns, _gridRows, _gridCell, _gridTile, _gridGap, _gridStepX, _gridStepY, _gridExtraStep, _sheetWidth })
+            foreach (var field in new[] { _gridColumns, _gridRows, _gridCell, _gridTile, _gridGap, _sheetWidth })
                 field.TextChanged += (_, __) => QueueGridPreview();
+            foreach (var field in new[] { _gridStepX, _gridStepY, _gridExtraStep })
+                field.TextChanged += (_, __) => GridStepChanged();
+            _gridDifference.SelectionChanged += (_, __) => {
+                if (_gridUpdating) return;
+                ApplyGridDifferencePreset(); QueueGridPreview();
+            };
             _gridKind.SelectionChanged += (_, __) => { UpdateGridRoles(); QueueGridPreview(); };
             _gridLevelsMode.SelectionChanged += (_, __) => { UpdateGridRoles(); QueueGridPreview(); };
             _gridX.SelectionChanged += (_, __) => { RefreshGridSeriesChannels(); UpdateGridRoles(); QueueGridPreview(); };
             _gridY.SelectionChanged += (_, __) => { RefreshGridSeriesChannels(); UpdateGridRoles(); QueueGridPreview(); };
             _gridDelay.Tick += (_, __) => { _gridDelay.Stop(); UpdateGridPreview(); };
             Unloaded += (_, __) => { _gridDelay.Stop(); _gridPreviewWindow?.Close(); _pantoneWindow?.Close(); };
+            ApplyGridDifferencePreset();
             _gridUpdating = false;
             return _gridPanel;
         }
@@ -135,6 +146,7 @@ namespace VanyaTools.Native
                     _gridBase[channel].Text = channel < values.Length ? values[channel].ToString(CultureInfo.InvariantCulture) : "";
                     _gridExtraLevels[channel].Text = "";
                 }
+                ApplyGridDifferencePreset();
             }
             catch (Exception error) { _status("Не удалось перенести базовый цвет в сетку: " + error.GetBaseException().Message, true); }
             finally { _gridUpdating = false; }
@@ -176,6 +188,29 @@ namespace VanyaTools.Native
         {
             if (_gridUpdating || _gridPanel == null) return;
             _gridDelay.Stop(); _gridDelay.Start();
+        }
+
+        private void ApplyGridDifferencePreset()
+        {
+            int strength = _gridDifference?.SelectedIndex ?? -1;
+            if (strength < 0 || strength > 2) return;
+            int step = (_model.SelectedIndex == 0 ? new[] { 1, 3, 5 } : new[] { 3, 8, 16 })[strength];
+            bool updating = _gridUpdating; _gridUpdating = true;
+            try
+            {
+                foreach (TextBox field in new[] { _gridStepX, _gridStepY, _gridExtraStep, _gridSeriesStep })
+                    if (field != null) field.Text = step.ToString(CultureInfo.InvariantCulture);
+            }
+            finally { _gridUpdating = updating; }
+        }
+
+        private void GridStepChanged()
+        {
+            if (_gridUpdating) return;
+            bool updating = _gridUpdating; _gridUpdating = true;
+            try { _gridDifference.SelectedIndex = 3; }
+            finally { _gridUpdating = updating; }
+            QueueGridPreview();
         }
 
         private ColorProofGridOptions ReadGridOptions()
