@@ -156,6 +156,9 @@ namespace VanyaTools.Native
                 range.Add(shape); shape.Fill.ApplyUniformFill(color); shape.Outline.SetNoOutline();
                 shape.Name = "Проба R" + Id(patch.Row) + " C" + Id(patch.Column) +
                     (options.Compound ? " Q" + (patch.Quadrant + 1) : "") + " " + FormatValues(patch.Values, options.Cmyk);
+                if (containsOriginal && patch.Row == plan.ReferenceRow && patch.Column == plan.ReferenceColumn &&
+                    patch.Quadrant == plan.ReferenceQuadrant && patch.Values.SequenceEqual(original))
+                    AddReferenceFrame((object)app, (object)layer, (object)range, gridLeft, gridTop, patch);
             }
             double footerTop = gridTop - plan.HeightMm - 4;
             if (options.Compound)
@@ -179,6 +182,23 @@ namespace VanyaTools.Native
             AddText(layer, range, left, footerTop - 9,
                 "Заливки — " + (options.Cmyk ? "CMYK" : "RGB") + "; плашки без обводки. Печатайте без масштабирования, 1:1.", 7f, usable);
             return (object)range;
+        }
+
+        private static void AddReferenceFrame(object appObject, object layerObject, object rangeObject,
+            double gridLeft, double gridTop, ColorProofGridPatch patch)
+        {
+            dynamic app = appObject, layer = layerObject, range = rangeObject;
+            dynamic white = app.CreateCMYKColor(0, 0, 0, 0), black = app.CreateCMYKColor(0, 0, 0, 100);
+            int index = 0;
+            foreach (ColorProofReferenceFrameRect band in ColorProofReferenceFrame.Build(
+                patch.Xmm, patch.Ymm, patch.WidthMm, patch.HeightMm))
+            {
+                dynamic strip = layer.CreateRectangle2(gridLeft + band.Xmm,
+                    gridTop - band.Ymm - band.HeightMm, band.WidthMm, band.HeightMm);
+                range.Add(strip); strip.Fill.ApplyUniformFill(band.White ? white : black); strip.Outline.SetNoOutline();
+                strip.Name = "Рамка исходного эталона R" + Id(patch.Row) + " C" + Id(patch.Column) +
+                    " Q" + (patch.Quadrant + 1) + " · " + (++index);
+            }
         }
 
         private static dynamic CreateColor(object appObject, int[] values, bool cmyk)

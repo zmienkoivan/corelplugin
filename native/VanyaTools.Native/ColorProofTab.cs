@@ -5,6 +5,7 @@ using System.Linq;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 
 namespace VanyaTools.Native
@@ -35,39 +36,36 @@ namespace VanyaTools.Native
             var panel = new StackPanel { Margin = new Thickness(8) };
             Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             panel.Children.Add(Title("Цветопроба"));
-            DockerHelp.Add(panel, "Выберите заливку объекта или цвет из палитры. В новой сетке базовые значения каналов также можно ввести вручную.");
+            DockerHelp.Add(panel, "Возьмите цвет из выделения или палитры, выберите различия и создайте таблицу. Эталон отмечен рамкой. Pantone подбирается отдельной кнопкой.");
             var sources = new Grid { Margin = new Thickness(0, 0, 0, 7) };
             sources.ColumnDefinitions.Add(new ColumnDefinition()); sources.ColumnDefinitions.Add(new ColumnDefinition());
             var fromObject = Button("Из выделения", (_, __) => ReadSelection()); fromObject.Margin = new Thickness(0, 0, 4, 0);
-            var fromPalette = Button("Выбрать в палитре", (_, __) => PickPalette()); Grid.SetColumn(fromPalette, 1);
+            var fromPalette = Button("Из палитры", (_, __) => PickPalette()); Grid.SetColumn(fromPalette, 1);
             sources.Children.Add(fromObject); sources.Children.Add(fromPalette); panel.Children.Add(sources);
-            var source = new Grid { Margin = new Thickness(0, 0, 0, 12) };
+            var source = new Grid { Margin = new Thickness(0, 0, 0, 5) };
             source.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) }); source.ColumnDefinitions.Add(new ColumnDefinition());
             _preview = new Border { Width = 22, Height = 22, BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Background = Brushes.White };
             _referenceLabel = Note("Цвет не выбран"); Grid.SetColumn(_referenceLabel, 1);
             source.Children.Add(_preview); source.Children.Add(_referenceLabel); panel.Children.Add(source);
 
-            _mode = Combo("Наглядный", "Каналы CMYK/RGB", "Сетка по каналам");
+            var advanced = new StackPanel();
+            _mode = Combo("Наглядный", "Каналы CMYK/RGB", "Таблица");
             _mode.SelectedIndex = 2;
-            panel.Children.Add(Row("Режим", _mode));
-            _model = Combo("CMYK", "RGB"); panel.Children.Add(Row("Цветовая модель", _model));
+            advanced.Children.Add(Row("Другие способы", _mode));
+            _model = Combo("CMYK", "RGB"); panel.Children.Add(Row("Модель", _model));
             _sampleShape = Combo("Квадраты", "Покрасить логотип");
-            _sampleShapeRow = Row("Образец", _sampleShape); panel.Children.Add(_sampleShapeRow);
+            _sampleShapeRow = Row("Образец", _sampleShape); advanced.Children.Add(_sampleShapeRow);
             _artworkPanel = new StackPanel();
             _artworkPanel.Children.Add(Button("Взять логотип из выделения", (_, __) => CaptureArtwork()));
             _artworkLabel = Note("Логотип не выбран."); _artworkPanel.Children.Add(_artworkLabel);
             DockerHelp.Add(_artworkPanel, "Выделите одноцветный векторный логотип, текст или группу. " +
                 "Каждая копия сохраняет размер 1:1; окрашиваются все её заливки и обводки. " +
                 "Параметры цвета печатаются под копией.");
-            panel.Children.Add(_artworkPanel);
+            advanced.Children.Add(_artworkPanel);
             _sheetWidth = Field("570");
             try { if (File.Exists(WidthPath)) _sheetWidth.Text = File.ReadAllText(WidthPath).Trim(); }
             catch (Exception ex) { Log.Error("Could not read color proof sheet width.", ex); }
-            panel.Children.Add(Row("Ширина листа, мм", _sheetWidth));
-            DockerHelp.Add(panel, "Новая сетка сохраняет заданные размеры плашек в миллиметрах и должна поместиться на листе вместе с осями и полями. " +
-                "В прежних режимах квадраты: 21 ячейка на всю ширину между полями по 8 мм; эталон в 11-й. " +
-                "Логотип сохраняет размер 1:1: в ряду помещается максимально возможное нечётное число копий, " +
-                "по центру — эталон. Остальные варианты продолжаются ниже.");
+            advanced.Children.Insert(0, Row("Ширина листа, мм", _sheetWidth));
 
             _visualPanel = new StackPanel();
             _lightStep = Field("1"); _hueStep = Field("1"); _saturationStep = Field("1");
@@ -78,14 +76,14 @@ namespace VanyaTools.Native
                 "В каждом ряду меняется одно свойство эталона. Поиск идёт в HSL на основе RGB; " +
                 "для CMYK результат преобразует Corel. Можно задать дробный шаг от 0,1 — например 0,5. " +
                 "Для точной работы с красками выберите режим каналов.");
-            panel.Children.Add(_visualPanel);
+            advanced.Children.Add(_visualPanel);
 
             _layout = Combo("Все сочетания отклонений", "По одному каналу", "Сетка по двум каналам");
             _layout.SelectedIndex = 1;
-            _layoutRow = Row("Варианты каналов", _layout); panel.Children.Add(_layoutRow);
+            _layoutRow = Row("Варианты каналов", _layout); advanced.Children.Add(_layoutRow);
             _horizontal = Combo(); _vertical = Combo();
             _horizontalRow = Row("По горизонтали ±", _horizontal); _verticalRow = Row("По вертикали ±", _vertical);
-            panel.Children.Add(_horizontalRow); panel.Children.Add(_verticalRow);
+            advanced.Children.Add(_horizontalRow); advanced.Children.Add(_verticalRow);
             _combinationPanel = new StackPanel();
             for (int i = 0; i < 4; i++)
             {
@@ -101,17 +99,17 @@ namespace VanyaTools.Native
                 "Например, при C=40 это даст C=35,40,45. Нулевое отклонение включается всегда. " +
                 "В каждом ряду эталон по центру; сочетания распределяются по сторонам по первому " +
                 "отличающемуся каналу, ближайшие — рядом с эталоном.");
-            _sampleCount = Note(""); _combinationPanel.Children.Add(_sampleCount); panel.Children.Add(_combinationPanel);
-            _step = Field("1"); _stepRow = Row("Шаг канала, % / 0–255", _step); panel.Children.Add(_stepRow);
+            _sampleCount = Note(""); _combinationPanel.Children.Add(_sampleCount); advanced.Children.Add(_combinationPanel);
+            _step = Field("1"); _stepRow = Row("Шаг канала, % / 0–255", _step); advanced.Children.Add(_stepRow);
             panel.Children.Add(CreateGridControls());
-            _createProof = DockerTheme.Primary(Button("Создать отдельный лист цветопробы", (_, __) => Create()));
-            _createProof.Margin = new Thickness(0, 7, 0, 5); panel.Children.Add(_createProof);
-            DockerHelp.Add(panel, "В новой сетке размеры и число клеток задаются отдельно. Подписи каналов и значения находятся снаружи; сами плашки не содержат текста. " +
-                "В прежних режимах 21 позиция: 10 шагов влево, эталон, 10 шагов вправо. " +
-                "На границах диапазона и при повторе округлённого цвета остаётся пустое место; эталон не сдвигается. " +
-                "CMYK/RGB меняются целыми значениями, минимальный шаг — 1. " +
-                "Под каждым образцом цвет указан одной строкой. В режиме двух каналов эталон находится " +
-                "в ряду с нулевым изменением второго канала.");
+            advanced.Children.Insert(1, _gridAdvanced);
+            var actions = new UniformGrid { Columns = 2, Margin = new Thickness(0, 5, 0, 5) };
+            _createProof = DockerTheme.Primary(Button("Создать таблицу", (_, __) => Create()));
+            _createProof.Margin = new Thickness(0, 0, 3, 0); actions.Children.Add(_createProof);
+            var pantone = Button("Pantone", (_, __) => ShowPantoneMatches()); pantone.Margin = new Thickness(3, 0, 0, 0);
+            actions.Children.Add(pantone); panel.Children.Add(actions);
+            panel.Children.Add(new Expander { Header = "Дополнительно", Content = advanced, IsExpanded = false,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 2, 0, 3) });
             _model.SelectionChanged += (_, __) => { UpdateChannels(); DefaultOffsets(); RefreshGridModel(); };
             _mode.SelectionChanged += (_, __) => UpdateForm();
             _layout.SelectionChanged += (_, __) => UpdateForm();
@@ -205,10 +203,11 @@ namespace VanyaTools.Native
             _combinationPanel.Visibility = combinations ? Visibility.Visible : Visibility.Collapsed;
             _stepRow.Visibility = visual || combinations || grid ? Visibility.Collapsed : Visibility.Visible;
             _gridPanel.Visibility = grid ? Visibility.Visible : Visibility.Collapsed;
+            _gridAdvanced.Visibility = grid ? Visibility.Visible : Visibility.Collapsed;
             if (_reference == null) _referenceLabel.Text = grid ? "Задайте базовый цвет ниже или возьмите его из объекта." : "Цвет не выбран";
             if (!grid)
             {
-                _createProof.Content = "Создать отдельный лист цветопробы";
+                _createProof.Content = "Создать цветопробу";
                 _createProof.IsEnabled = true;
                 if (_reference != null) UpdateReferenceLabel(); else _preview.Background = Brushes.White;
                 _preview.ToolTip = null;

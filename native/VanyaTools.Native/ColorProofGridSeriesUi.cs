@@ -25,9 +25,7 @@ namespace VanyaTools.Native
         private FrameworkElement CreateGridSeriesControls()
         {
             var panel = new StackPanel();
-            panel.Children.Add(GridPair("", Button("Локальная серия", (_, __) => ApplySwatchPreset()), "",
-                Button("Одна сетка", (_, __) => { _gridSeriesEnabled.IsChecked = false; })));
-            _gridSeriesEnabled = new CheckBox { Content = "Серия таблиц вокруг эталона", Margin = new Thickness(0, 2, 0, 4) };
+            _gridSeriesEnabled = new CheckBox { Content = "Несколько таблиц", Margin = new Thickness(0, 2, 0, 4) };
             panel.Children.Add(_gridSeriesEnabled);
             var settings = new StackPanel();
             _gridSeriesChannel = Combo();
@@ -183,7 +181,8 @@ namespace VanyaTools.Native
 
         private Canvas GridContextSketch(ColorProofGridPlan plan)
         {
-            Canvas grid = GridSketch(plan);
+            bool containsOriginal = _gridVisibleSeries == null || _gridSeriesPageIndex == _gridVisibleSeries.ReferencePageIndex;
+            Canvas grid = GridSketchWithReference(plan, containsOriginal);
             var canvas = new Canvas { Width = grid.Width, Height = grid.Height + 24, Background = Brushes.White };
             int[] original = _gridVisibleSeries?.OriginalBaseChannels ?? plan.BaseChannels;
             string[] names = GridChannelNames(plan.Options.Cmyk);

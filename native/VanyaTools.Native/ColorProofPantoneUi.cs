@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -34,7 +35,10 @@ namespace VanyaTools.Native
 
         // Construct the actual content independently of Show and of Corel COM.
         // This also lets the opening path be verified without starting Corel.
-        private Window BuildPantoneWindow()
+        private Window BuildPantoneWindow() => BuildPantoneWindowCore(null);
+
+        private Window BuildPantoneWindowCore(Func<bool, int[], int, string, CancellationToken,
+            Action<int, int>, Task<ColorProofPantoneResult>> findOverride)
         {
             var window = new Window { Title = "Близкие Pantone · Vanya Tools", Width = 570, Height = 660,
                 MinWidth = 420, MinHeight = 440, WindowStartupLocation = WindowStartupLocation.CenterOwner };
@@ -42,7 +46,32 @@ namespace VanyaTools.Native
             var root = new DockPanel { Margin = new Thickness(12) }; window.Content = root;
             var header = new StackPanel(); DockPanel.SetDock(header, Dock.Top); root.Children.Add(header);
             header.Children.Add(Title("Pantone Solid Coated"));
-            header.Children.Add(Note("Поиск по ΔE00 в Lab среди плашечных цветов установленной палитры Corel. Меньшее ΔE — ближе к эталону."));
+            var referenceRow = new DockPanel { Margin = new Thickness(0, 5, 0, 4) };
+            var search = Button("Обновить", null);
+            search.ToolTip = "Повторить поиск по текущему эталону вкладки «Цветопроба».";
+            DockPanel.SetDock(search, Dock.Right); referenceRow.Children.Add(search);
+            var referenceChip = PantoneChip(new[] { 255, 255, 255 });
+            DockPanel.SetDock(referenceChip, Dock.Left); referenceRow.Children.Add(referenceChip);
+            var referenceLabel = Note("Эталон из вкладки «Цветопроба»");
+            referenceLabel.VerticalAlignment = VerticalAlignment.Center; referenceLabel.Margin = new Thickness(0, 0, 8, 0);
+            referenceRow.Children.Add(referenceLabel); header.Children.Add(referenceRow);
+            int[] ReadReference(bool cmyk)
+            {
+                string[] names = GridChannelNames(cmyk);
+                return Enumerable.Range(0, names.Length).Select(channel => GridInteger(_gridBase[channel], 0,
+                    cmyk ? 100 : 255, names[channel])).ToArray();
+            }
+            void ShowReference(bool cmyk, int[] values, int[] rgb = null)
+            {
+                string[] names = GridChannelNames(cmyk);
+                referenceLabel.Text = (cmyk ? "CMYK" : "RGB") + " · " +
+                    String.Join(" ", values.Select((value, channel) => names[channel] + ":" + value));
+                referenceChip.Background = new SolidColorBrush(rgb == null ? GridScreenColor(values, cmyk)
+                    : Color.FromRgb((byte)rgb[0], (byte)rgb[1], (byte)rgb[2]));
+            }
+            try { bool cmyk = _model.SelectedIndex == 0; ShowReference(cmyk, ReadReference(cmyk)); }
+            catch { referenceLabel.Text = "Проверьте эталон на вкладке «Цветопроба»."; }
+            var parametersContent = new StackPanel();
             var palettePath = Field(""); palettePath.IsReadOnly = true; palettePath.ToolTip = "Пусто — найти установленную палитру автоматически.";
             var paletteRow = new DockPanel { Margin = new Thickness(0, 4, 0, 4) };
             var browse = Button("Палитра…", (_, __) => {
@@ -57,21 +86,29 @@ namespace VanyaTools.Native
             DockPanel.SetDock(browse, Dock.Right); paletteRow.Children.Add(browse);
             var automatic = Button("Авто", (_, __) => palettePath.Text = "");
             DockPanel.SetDock(automatic, Dock.Right); paletteRow.Children.Add(automatic);
-            paletteRow.Children.Add(palettePath); header.Children.Add(paletteRow);
+            paletteRow.Children.Add(palettePath); parametersContent.Children.Add(paletteRow);
             var count = Combo("3 цвета", "5 цветов", "8 цветов", "12 цветов"); count.SelectedIndex = 1;
-            var search = Button("Подобрать от эталона", null);
-            header.Children.Add(GridPair("Показать", count, "", search));
-            var status = Note("Эталон берётся из полей CMYK/RGB вкладки «Цветопроба» при нажатии «Подобрать». Цвета печати проверяйте по пробе.");
+            parametersContent.Children.Add(Row("Показать", count));
+            parametersContent.Children.Add(Note("Изменения параметров применяются по кнопке «Обновить»."));
+            var parameters = new Expander { Header = "Параметры", Content = parametersContent,
+                IsExpanded = false, HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                Margin = new Thickness(0, 2, 0, 5) };
+            header.Children.Add(parameters);
+            var status = Note("Ищу ближайшие плашечные цвета…");
             header.Children.Add(status);
             var footer = new StackPanel(); DockPanel.SetDock(footer, Dock.Bottom); root.Children.Add(footer);
-            footer.Children.Add(Note("В Corel создаётся отдельный лист: исходный эталон и выбранные плашечные заливки из палитры, с именами и ΔE00."));
-            var create = DockerTheme.Primary(Button("Создать лист с выбранными цветами", null)); create.IsEnabled = false;
+            footer.Children.Add(Note("Выберите цвета для пробного листа. Заливки сохраняются плашечными; меньшее ΔE00 — ближе к эталону."));
+            var create = DockerTheme.Primary(Button("Создать плашки", null)); create.IsEnabled = false;
             footer.Children.Add(create);
             var list = new StackPanel(); root.Children.Add(new ScrollViewer { Content = list, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
             ColorProofPantoneResult result = null;
             var choices = new List<Tuple<CheckBox, ColorProofPantoneMatch>>();
             var cancellation = new CancellationTokenSource();
-            search.Click += async (_, __) => {
+            bool searching = false, closed = false, loadedSearchStarted = false;
+            async Task SearchAsync()
+            {
+                if (searching || closed) return;
+                searching = true;
                 search.IsEnabled = browse.IsEnabled = automatic.IsEnabled = count.IsEnabled = create.IsEnabled = false;
                 list.Children.Clear(); choices.Clear(); result = null;
                 status.Text = "Ищу плашечные цвета в палитре Corel…";
@@ -79,19 +116,24 @@ namespace VanyaTools.Native
                 try
                 {
                     bool cmyk = _model.SelectedIndex == 0;
-                    string[] names = GridChannelNames(cmyk);
-                    int[] values = Enumerable.Range(0, names.Length).Select(channel => GridInteger(_gridBase[channel], 0,
-                        cmyk ? 100 : 255, names[channel])).ToArray();
+                    int[] values = ReadReference(cmyk);
                     int amount = new[] { 3, 5, 8, 12 }[Math.Max(0, count.SelectedIndex)];
+                    string selectedPalette = palettePath.Text.Trim();
+                    ShowReference(cmyk, values);
+                    // Capture every input before yielding. Editing the source
+                    // tab cannot silently change this window's active search.
                     await Dispatcher.Yield(DispatcherPriority.Background);
-                    if (!window.IsVisible) return;
+                    if (closed || cancellation.IsCancellationRequested || (findOverride == null && !window.IsVisible)) return;
+                    Action<int, int> progress = (done, total) => {
+                        if (!closed) status.Text = "Проверяю цвета Pantone: " + done + " / " + total + "…";
+                    };
                     // Corel objects stay on this UI thread. Only cloned colors are converted for comparison.
-                    result = await new ColorProofPantoneService().FindAsync(cmyk, values, amount, palettePath.Text.Trim(),
-                        cancellation.Token, (done, total) => status.Text = "Проверяю цвета Pantone: " + done + " / " + total + "…");
-                    var reference = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 8) };
-                    reference.Children.Add(PantoneChip(result.ReferenceScreenRgb));
-                    reference.Children.Add(Note("Эталон · " + String.Join(" ", values.Select((value, channel) => names[channel] + ":" + value))));
-                    list.Children.Add(reference);
+                    result = findOverride == null
+                        ? await new ColorProofPantoneService().FindAsync(cmyk, values, amount, selectedPalette, cancellation.Token, progress)
+                        : await findOverride(cmyk, values, amount, selectedPalette, cancellation.Token, progress);
+                    cancellation.Token.ThrowIfCancellationRequested();
+                    if (closed) return;
+                    ShowReference(cmyk, values, result.ReferenceScreenRgb);
                     foreach (ColorProofPantoneMatch match in result.Matches)
                     {
                         var row = new DockPanel { Margin = new Thickness(0, 3, 0, 3) };
@@ -106,14 +148,27 @@ namespace VanyaTools.Native
                         (String.IsNullOrWhiteSpace(result.Warning) ? "" : "\n" + result.Warning);
                     create.IsEnabled = result.Matches.Count > 0;
                 }
-                catch (OperationCanceledException) { status.Text = "Поиск отменён."; }
+                catch (OperationCanceledException) { if (!closed) status.Text = "Поиск отменён."; }
                 catch (Exception error)
                 {
+                    if (closed) return;
                     status.Text = error.GetBaseException().Message;
+                    parameters.IsExpanded = true;
                     DockerTheme.UseTheme(status, TextBlock.ForegroundProperty, DockerTheme.ErrorTextBrush);
                     Log.Error("Pantone matching failed.", error);
                 }
-                finally { search.IsEnabled = browse.IsEnabled = automatic.IsEnabled = count.IsEnabled = true; }
+                finally
+                {
+                    searching = false;
+                    if (closed) cancellation.Dispose();
+                    else search.IsEnabled = browse.IsEnabled = automatic.IsEnabled = count.IsEnabled = true;
+                }
+            }
+            search.Click += async (_, __) => await SearchAsync();
+            window.Loaded += async (_, __) => {
+                if (loadedSearchStarted || closed) return;
+                loadedSearchStarted = true;
+                await SearchAsync();
             };
             create.Click += (_, __) => {
                 try
@@ -135,7 +190,11 @@ namespace VanyaTools.Native
             Window owner = Window.GetWindow(this);
             if (owner != null) window.Owner = owner;
             else if (PresentationSource.FromVisual(this) is HwndSource host) new WindowInteropHelper(window).Owner = host.Handle;
-            window.Closed += (_, __) => { cancellation.Cancel(); _pantoneWindow = null; };
+            window.Closed += (_, __) => {
+                closed = true; cancellation.Cancel();
+                if (!searching) cancellation.Dispose();
+                if (ReferenceEquals(_pantoneWindow, window)) _pantoneWindow = null;
+            };
             return window;
         }
 

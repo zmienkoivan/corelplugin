@@ -13,7 +13,7 @@ namespace VanyaTools.Native
 {
     internal sealed partial class ColorProofTab
     {
-        private StackPanel _gridPanel, _gridExtras;
+        private StackPanel _gridPanel, _gridExtras, _gridAdvanced;
         private ComboBox _gridKind, _gridX, _gridY, _gridDifference;
         private TextBox _gridColumns, _gridRows, _gridCell, _gridTile, _gridGap, _gridStepX, _gridStepY, _gridExtraStep;
         private readonly TextBox[] _gridBase = new TextBox[4], _gridExtraLevels = new TextBox[4];
@@ -31,15 +31,14 @@ namespace VanyaTools.Native
         {
             _gridUpdating = true;
             _gridPanel = new StackPanel();
+            _gridAdvanced = new StackPanel();
             _gridKind = Combo("Один цвет в клетке", "4 цвета · блок 2×2");
-            _gridPanel.Children.Add(Row("Тип сетки", _gridKind));
+            _gridAdvanced.Children.Add(Row("Плашки", _gridKind));
             _gridDifference = Combo("Мягко", "Средне", "Контрастно", "Свой шаг");
             _gridDifference.SelectedIndex = 1;
             _gridDifference.ToolTip = "Шаги X, Y, автоуровней и серии: CMYK — 1 / 3 / 5; RGB — 3 / 8 / 16. Введённые вручную уровни сохраняются.";
-            _gridPanel.Children.Add(Row("Различия", _gridDifference));
-            _gridPanel.Children.Add(CreateGridSeriesControls());
+            _gridAdvanced.Children.Add(CreateGridSeriesControls());
 
-            _gridPanel.Children.Add(GridCaption("Базовый цвет"));
             var bases = new UniformGrid { Columns = 4 };
             for (int channel = 0; channel < 4; channel++)
             {
@@ -51,30 +50,29 @@ namespace VanyaTools.Native
                 _gridBase[channel].TextChanged += (_, __) => QueueGridPreview();
             }
             _gridPanel.Children.Add(bases);
-            _gridPanel.Children.Add(Button("Близкие Pantone Solid Coated…", (_, __) => ShowPantoneMatches()));
 
             _gridX = Combo(); _gridY = Combo();
-            _gridPanel.Children.Add(GridPair("Горизонталь X", _gridX, "Вертикаль Y", _gridY));
+            _gridAdvanced.Children.Add(GridPair("Горизонталь X", _gridX, "Вертикаль Y", _gridY));
             _gridStepX = Field("3"); _gridStepY = Field("3");
             _gridStepX.ToolTip = _gridStepY.ToolTip = "Целый шаг: процентные пункты CMYK или значения RGB 0–255.";
-            _gridPanel.Children.Add(GridPair("Шаг X", _gridStepX, "Шаг Y", _gridStepY));
+            _gridAdvanced.Children.Add(GridPair("Шаг X", _gridStepX, "Шаг Y", _gridStepY));
 
             var dimensions = new StackPanel();
             _gridColumns = Field("15"); _gridRows = Field("15");
             dimensions.Children.Add(GridPair("Столбцов", _gridColumns, "Строк", _gridRows));
             _gridCell = Field("20"); _gridTile = Field("30"); _gridGap = Field("1");
-            _gridCellField = DockerLayout.LabeledField("Квадрат, мм", _gridCell);
+            _gridCellField = DockerLayout.LabeledField("Плашка, мм", _gridCell);
             _gridTileField = DockerLayout.LabeledField("Блок 2×2, мм", _gridTile);
             var sizes = new Grid { Margin = new Thickness(0, 2, 0, 3) };
             sizes.ColumnDefinitions.Add(new ColumnDefinition()); sizes.ColumnDefinitions.Add(new ColumnDefinition());
-            _gridCellField.Margin = _gridTileField.Margin = new Thickness(0, 0, 3, 0);
+            var difference = DockerLayout.LabeledField("Различия", _gridDifference);
+            difference.Margin = new Thickness(0, 0, 3, 0); sizes.Children.Add(difference);
+            _gridCellField.Margin = _gridTileField.Margin = new Thickness(3, 0, 0, 0);
+            Grid.SetColumn(_gridCellField, 1); Grid.SetColumn(_gridTileField, 1);
             sizes.Children.Add(_gridCellField); sizes.Children.Add(_gridTileField);
-            var gap = DockerLayout.LabeledField("Между клетками, мм", _gridGap);
-            gap.Margin = new Thickness(3, 0, 0, 0); Grid.SetColumn(gap, 1); sizes.Children.Add(gap);
-            dimensions.Children.Add(sizes);
-            dimensions.Children.Add(Note("Размеры плашек сохраняются 1:1. Внутри составного блока зазора нет: 30 мм = четыре квадрата по 15 мм."));
-            _gridPanel.Children.Add(new Expander { Header = "Размеры сетки", Content = dimensions,
-                IsExpanded = false, HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 3, 0, 5) });
+            _gridPanel.Children.Add(sizes);
+            dimensions.Children.Add(Row("Между плашками, мм", _gridGap));
+            _gridAdvanced.Children.Add(dimensions);
 
             _gridExtras = new StackPanel();
             _gridExtras.Children.Add(GridCaption("Каналы внутри блока"));
@@ -93,15 +91,15 @@ namespace VanyaTools.Native
                 _gridExtraLevels[channel].TextChanged += (_, __) => QueueGridPreview();
             }
             _gridExtras.Children.Add(Note("Пусто — авто. Отклонения прибавляются к эталону, например −2 0 +2 +4. В серии один канал меняется между листами, второй — в четырёх частях клетки."));
-            _gridPanel.Children.Add(_gridExtras);
+            _gridAdvanced.Children.Add(_gridExtras);
             _gridSummary = Note(""); _gridSummary.Margin = new Thickness(0, 3, 0, 5); _gridPanel.Children.Add(_gridSummary);
-            _gridSketch = new Viewbox { Height = 140, Stretch = Stretch.Uniform };
+            _gridSketch = new Viewbox { Height = 180, Stretch = Stretch.Uniform,
+                ToolTip = "Экранные цвета ориентировочные. Эталон выделен рамкой; окончательное сравнение — по печати." };
             var sketchContent = new StackPanel();
             sketchContent.Children.Add(CreateGridPageChoice(false));
             sketchContent.Children.Add(new Border { Background = Brushes.White, Child = _gridSketch, Padding = new Thickness(4) });
-            sketchContent.Children.Add(Button("Открыть схему крупно…", (_, __) => ShowGridSketch()));
-            sketchContent.Children.Add(Note("Схема расположения. Экранные цвета ориентировочные; итог оценивайте по печатной пробе."));
-            _gridSketchExpander = new Expander { Header = "Схема сетки", Content = sketchContent, IsExpanded = false,
+            sketchContent.Children.Add(Button("Крупнее…", (_, __) => ShowGridSketch()));
+            _gridSketchExpander = new Expander { Header = "Предпросмотр", Content = sketchContent, IsExpanded = true,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 2, 0, 3) };
             _gridSketchExpander.Expanded += (_, __) => UpdateGridPreview();
             _gridPanel.Children.Add(_gridSketchExpander);
@@ -271,19 +269,19 @@ namespace VanyaTools.Native
                     ? String.Join("; ", remaining.Select(channel => names[channel] + ": " + String.Join(" / ", plan.ExtraLevels[channel])))
                     : "Фиксированы " + String.Join(" ", remaining.Select(channel => names[channel] + ":" + plan.BaseChannels[channel]));
                 int[] original = _gridVisibleSeries?.OriginalBaseChannels ?? plan.BaseChannels;
-                _referenceLabel.Text = "Эталон · " + String.Join(" ", original.Select((value, channel) => names[channel] + ":" + value));
+                _referenceLabel.Text = "Эталон " + (options.Cmyk ? "CMYK" : "RGB");
+                _referenceLabel.ToolTip = String.Join(" ", original.Select((value, channel) => names[channel] + ":" + value));
                 _preview.Background = new SolidColorBrush(GridScreenColor(original, options.Cmyk));
                 _preview.ToolTip = "Экранный цвет базы ориентировочный. В печатных плашках используются указанные значения каналов.";
-                string seriesInfo = _gridVisibleSeries == null ? "" : "Серия: " + _gridVisibleSeries.Pages.Count + " таблиц × " + plan.Patches.Count +
-                    " = " + _gridVisibleSeries.TotalPatchCount + " плашек.\n" + names[_gridVisibleSeries.Options.Channel] + " между листами: " +
-                    String.Join(" / ", _gridVisibleSeries.ChannelValues) + ".\n";
-                _gridSummary.Text = seriesInfo + options.Columns + " × " + options.Rows + " · " + plan.Patches.Count + " цветов · сетка " +
-                    GridMm(plan.WidthMm) + " × " + GridMm(plan.HeightMm) + " мм.\n" +
+                _gridSummary.Text = (_gridVisibleSeries == null ? plan.Patches.Count + " плашек" :
+                    _gridVisibleSeries.Pages.Count + " таблиц · " + _gridVisibleSeries.TotalPatchCount + " плашек") + " · " +
+                    GridMm(plan.WidthMm) + " × " + GridMm(plan.HeightMm) + " мм";
+                _gridSummary.ToolTip = options.Columns + " × " + options.Rows + ". " +
                     "X " + names[options.HorizontalChannel] + ": " + plan.AxisX.First() + "…" + plan.AxisX.Last() +
                     "; Y " + names[options.VerticalChannel] + ": " + plan.AxisY.First() + "…" + plan.AxisY.Last() + ".\n" + channels;
                 DockerTheme.UseTheme(_gridSummary, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
                 if (_createProof != null) { _createProof.IsEnabled = true; _createProof.Content = _gridVisibleSeries == null
-                    ? "Создать лист цветопробы" : "Создать серию · " + _gridVisibleSeries.Pages.Count + " таблиц"; }
+                    ? "Создать таблицу" : "Создать " + _gridVisibleSeries.Pages.Count + " таблиц"; }
                 SyncGridPageChoices(); DisplayGridPage();
             }
             catch (Exception error)
@@ -318,12 +316,12 @@ namespace VanyaTools.Native
                 UpdateGridPreview();
                 if (_gridVisiblePlan == null) throw new InvalidOperationException(_gridSummary.Text);
                 if (_gridPreviewWindow != null) { _gridPreviewWindow.Activate(); return; }
-                var window = new Window { Title = "Схема цветопробы · Vanya Tools", Width = Math.Min(1000, SystemParameters.WorkArea.Width - 50),
+                var window = new Window { Title = "Цветопроба · Vanya Tools", Width = Math.Min(1000, SystemParameters.WorkArea.Width - 50),
                     Height = Math.Min(850, SystemParameters.WorkArea.Height - 50), MinWidth = 420, MinHeight = 420,
                     WindowStartupLocation = WindowStartupLocation.CenterOwner };
                 DockerTheme.Apply(window);
                 var root = new DockPanel { Margin = new Thickness(10) }; window.Content = root;
-                var note = Note("Схема расположения; экранные цвета ориентировочные. Параметры можно менять в докере — схема обновится.");
+                var note = Note("Эталон отмечен рамкой. Экранные цвета ориентировочные.");
                 DockPanel.SetDock(note, Dock.Top); root.Children.Add(note);
                 FrameworkElement pages = CreateGridPageChoice(true); DockPanel.SetDock(pages, Dock.Top); root.Children.Add(pages);
                 _gridWindowPageInfo = Note(""); DockPanel.SetDock(_gridWindowPageInfo, Dock.Top); root.Children.Add(_gridWindowPageInfo);
@@ -340,7 +338,9 @@ namespace VanyaTools.Native
             catch (Exception error) { Fail("Could not preview color proof grid.", error); }
         }
 
-        private static Canvas GridSketch(ColorProofGridPlan plan)
+        private static Canvas GridSketch(ColorProofGridPlan plan) => GridSketchWithReference(plan, true);
+
+        private static Canvas GridSketchWithReference(ColorProofGridPlan plan, bool showReference)
         {
             const double left = 28, top = 24;
             var canvas = new Canvas { Width = plan.WidthMm + 36, Height = plan.HeightMm + 54, Background = Brushes.White };
@@ -359,6 +359,31 @@ namespace VanyaTools.Native
                         String.Join(" ", patch.Values.Select((value, channel) => names[channel] + ":" + value)) };
                 RenderOptions.SetEdgeMode(rectangle, EdgeMode.Aliased);
                 Canvas.SetLeft(rectangle, left + patch.Xmm); Canvas.SetTop(rectangle, top + patch.Ymm); canvas.Children.Add(rectangle);
+            }
+            if (showReference)
+            {
+                ColorProofGridPatch reference = plan.Patches.First(patch => patch.Row == plan.ReferenceRow &&
+                    patch.Column == plan.ReferenceColumn && patch.Quadrant == plan.ReferenceQuadrant);
+                foreach (ColorProofReferenceFrameRect part in ColorProofReferenceFrame.Build(reference.Xmm, reference.Ymm,
+                    reference.WidthMm, reference.HeightMm))
+                {
+                    var marker = new System.Windows.Shapes.Rectangle { Width = part.WidthMm, Height = part.HeightMm,
+                        Fill = part.White ? Brushes.White : Brushes.Black, IsHitTestVisible = false, Tag = "ReferenceFrame" };
+                    RenderOptions.SetEdgeMode(marker, EdgeMode.Aliased);
+                    Canvas.SetLeft(marker, left + part.Xmm); Canvas.SetTop(marker, top + part.Ymm); canvas.Children.Add(marker);
+                }
+                // Emphasize the selection in a small on-screen overview. The
+                // printed frame keeps its actual millimetre geometry above.
+                double accent = Math.Min(2, Math.Min(reference.WidthMm, reference.HeightMm) / 8);
+                foreach (bool white in new[] { true, false })
+                {
+                    var marker = new System.Windows.Shapes.Rectangle { Width = reference.WidthMm - 2 * accent,
+                        Height = reference.HeightMm - 2 * accent, Fill = Brushes.Transparent,
+                        Stroke = white ? Brushes.White : Brushes.Black, StrokeThickness = white ? 2 * accent : accent,
+                        IsHitTestVisible = false, SnapsToDevicePixels = true, Tag = "ReferenceFrameAccent" };
+                    Canvas.SetLeft(marker, left + reference.Xmm + accent); Canvas.SetTop(marker, top + reference.Ymm + accent);
+                    canvas.Children.Add(marker);
+                }
             }
             var remaining = Enumerable.Range(0, plan.BaseChannels.Length)
                 .Where(channel => channel != options.HorizontalChannel && channel != options.VerticalChannel).ToArray();
