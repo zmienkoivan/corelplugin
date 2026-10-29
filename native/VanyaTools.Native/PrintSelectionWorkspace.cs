@@ -49,21 +49,27 @@ namespace VanyaTools.Native
                 PrintExportBounds.RequireSameSize(workspace.Bounds.Width, workspace.Bounds.Height,
                     pasted.Width, pasted.Height, "После переноса выделения");
                 targetPage.SetSize(workspace.Bounds.Width, workspace.Bounds.Height);
+                // Resizing a Corel page can move its origin and its objects.
+                // The pre-SetSize pasted bounds are no longer safe to use for placement.
+                pasted = ReadBounds((object)copied);
                 PrintExportBounds.RequireSameSize(workspace.Bounds.Width, workspace.Bounds.Height,
                     Convert.ToDouble(targetPage.SizeWidth), Convert.ToDouble(targetPage.SizeHeight), "Страница Corel");
                 double left = Convert.ToDouble(targetPage.LeftX), bottom = Convert.ToDouble(targetPage.BottomY);
                 if (!PrintExportBounds.Finite(left) || !PrintExportBounds.Finite(bottom))
-                    throw new InvalidOperationException("Corel вернул некорректные координаты временной страницы. PDF не отправлен.");
+                    throw new InvalidOperationException("Corel вернул некорректные координаты временной страницы: " +
+                        PrintExportBounds.Position(left, bottom, workspace.Bounds.Width, workspace.Bounds.Height) + ". PDF не отправлен.");
+                var expected = new PrintExportBounds { Left = left, Bottom = bottom,
+                    Width = workspace.Bounds.Width, Height = workspace.Bounds.Height };
+                RequirePlacementSize(expected, pasted, "После изменения размера временной страницы");
                 copied.Move(left - pasted.Left, bottom - pasted.Bottom);
                 PrintExportBounds placed = ReadBounds((object)copied);
-                PrintExportBounds.RequireSameSize(workspace.Bounds.Width, workspace.Bounds.Height,
-                    placed.Width, placed.Height, "После размещения выделения");
+                RequirePlacementSize(expected, placed, "После размещения выделения");
                 if (Math.Abs(placed.Left - left) > PrintExportBounds.TransferToleranceMm ||
                     Math.Abs(placed.Bottom - bottom) > PrintExportBounds.TransferToleranceMm)
-                    throw new InvalidOperationException("Не удалось совместить выделение с границами временной страницы. PDF не отправлен.");
+                    throw PlacementError(expected, placed, "Не удалось совместить выделение с границами временной страницы");
                 copied.CreateSelection();
                 Log.Info("Print selection transferred: objects=" + Convert.ToInt32(copied.Count) + ", " +
-                    PrintExportBounds.Size(workspace.Bounds.Width, workspace.Bounds.Height) + " mm, explicit page bounds.");
+                    PrintExportBounds.Position(placed.Left, placed.Bottom, placed.Width, placed.Height) + ", explicit page bounds.");
                 return workspace;
             }
             catch { workspace.Dispose(); throw; }
@@ -74,10 +80,25 @@ namespace VanyaTools.Native
             double left, bottom, width, height;
             ((dynamic)range).GetBoundingBox(out left, out bottom, out width, out height, true);
             if (!PrintExportBounds.Finite(left) || !PrintExportBounds.Finite(bottom))
-                throw new InvalidOperationException("У выделения нет корректных координат. PDF не отправлен.");
+                throw new InvalidOperationException("У выделения нет корректных координат: " +
+                    PrintExportBounds.Position(left, bottom, width, height) + ". PDF не отправлен.");
             PrintExportBounds.RequirePage(width, height, "Выделение");
             return new PrintExportBounds { Left = left, Bottom = bottom, Width = width, Height = height };
         }
+
+        private static void RequirePlacementSize(PrintExportBounds expected, PrintExportBounds actual, string context)
+        {
+            if (Math.Abs(actual.Width - expected.Width) > PrintExportBounds.TransferToleranceMm ||
+                Math.Abs(actual.Height - expected.Height) > PrintExportBounds.TransferToleranceMm)
+                throw PlacementError(expected, actual, context + ": масштаб 1:1 не сохранён");
+        }
+
+        private static InvalidOperationException PlacementError(PrintExportBounds expected, PrintExportBounds actual, string context)
+            => new InvalidOperationException(context + ". Ожидалось: " +
+                PrintExportBounds.Position(expected.Left, expected.Bottom, expected.Width, expected.Height) +
+                "; получено: " + PrintExportBounds.Position(actual.Left, actual.Bottom, actual.Width, actual.Height) +
+                ". Допуск " + PrintExportBounds.TransferToleranceMm.ToString("0.###", CultureInfo.InvariantCulture) +
+                " мм. PDF не отправлен.");
 
         public void Dispose()
         {
@@ -107,6 +128,9 @@ namespace VanyaTools.Native
         internal static bool Finite(double value) => !Double.IsNaN(value) && !Double.IsInfinity(value);
         internal static string Size(double width, double height) =>
             width.ToString("0.###", CultureInfo.InvariantCulture) + " × " + height.ToString("0.###", CultureInfo.InvariantCulture);
+        internal static string Position(double left, double bottom, double width, double height) =>
+            "X=" + left.ToString("0.###", CultureInfo.InvariantCulture) + " мм, Y=" + bottom.ToString("0.###", CultureInfo.InvariantCulture) +
+            " мм, размер " + Size(width, height) + " мм";
         internal static void RequirePage(double width, double height, string context)
         {
             if (!Finite(width) || !Finite(height) || width <= 0 || height <= 0)
