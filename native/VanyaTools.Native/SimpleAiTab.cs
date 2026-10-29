@@ -135,7 +135,7 @@ namespace VanyaTools.Native
                 backgroundTools.Children.Add(_backgroundModel);
                 panel.Children.Add(backgroundTools);
                 if (printButtons != null) panel.Children.Add(printButtons);
-                panel.Children.Add(BuildRasterOutputTools());
+                BuildRasterOutputTools();
             }
             var correctionTools = DockerLayout.ToolGroup("Коррекция");
             _correctionButton = DockerTheme.Primary(Button("Коррекция и обводка…", async (_, __) => await OpenCorrection()));
@@ -689,7 +689,7 @@ namespace VanyaTools.Native
                 _backgroundOptions = dialog.Options;
                 if (!accepted || String.IsNullOrEmpty(dialog.OutputPath))
                 { Report("Удаление фона отменено.", false); return; }
-                Color[] backgroundColors = BackgroundVariants(dialog.Options.Color);
+                Color[] backgroundColors = dialog.RemovalColors;
                 await Task.Run(() => NativeRasterCorrection.AttachProcessedAlpha(source, dialog.OutputPath, _cancellation.Token, backgroundColors), _cancellation.Token);
                 PrepareRasterInsertion(dialog.OutputPath);
                 _readyOutput = dialog.OutputPath;
@@ -1699,7 +1699,6 @@ namespace VanyaTools.Native
             if (!busy) ReleaseNativeRasterInput();
             _busy = busy;
             if (_rasterInsertionMode != null) _rasterInsertionMode.IsEnabled = !busy;
-            if (_colorSummaryButton != null) _colorSummaryButton.IsEnabled = !busy;
             _correctionButton.IsEnabled = !busy;
             _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
                 _highlightButton.IsEnabled = _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled = _underlayColorButton.IsEnabled =

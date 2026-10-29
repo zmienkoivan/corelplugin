@@ -1,21 +1,19 @@
 using System;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Threading;
 
 namespace VanyaTools.Native
 {
     internal sealed partial class SimpleAiTab
     {
         private ComboBox _rasterInsertionMode;
-        private Button _colorSummaryButton;
         internal FrameworkElement RasterSettingsView { get; private set; }
 
         private RasterInsertionMode SelectedRasterInsertionMode =>
             _rasterInsertionMode == null ? RasterInsertionMode.NewAside :
             (RasterInsertionMode)Math.Max(0, Math.Min(2, _rasterInsertionMode.SelectedIndex));
 
-        private FrameworkElement BuildRasterOutputTools()
+        private void BuildRasterOutputTools()
         {
             var tools = DockerLayout.ToolGroup("Результат обработки");
             _rasterInsertionMode = new ComboBox
@@ -48,28 +46,6 @@ namespace VanyaTools.Native
             };
             tools.Children.Add(_rasterInsertionMode);
             RasterSettingsView = DockerSettings.Section("Обработка растра", tools);
-            _colorSummaryButton = Button("Сводка цветов", async (_, __) => await InsertColorSummary());
-            _colorSummaryButton.ToolTip = "Список цветов выделения снизу слева, с отступом 5 мм, 14 пт. " +
-                "Вектор: цвета заливок и обводок. Растр: основные оттенки, приблизительно.";
-            return _colorSummaryButton;
-        }
-
-        private async System.Threading.Tasks.Task InsertColorSummary()
-        {
-            if (_busy) return;
-            SetBusy(true, "Собираю цвета выделения…");
-            try
-            {
-                await Dispatcher.Yield(DispatcherPriority.Background);
-                var result = new SelectionColorSummaryService().InsertSummary();
-                Report(result.Message, false);
-            }
-            catch (Exception error)
-            {
-                Log.Error("Selection color summary failed.", error);
-                Report(error.GetBaseException().Message, true);
-            }
-            finally { SetBusy(false, null); }
         }
     }
 }

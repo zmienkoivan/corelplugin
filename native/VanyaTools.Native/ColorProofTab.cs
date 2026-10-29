@@ -110,6 +110,10 @@ namespace VanyaTools.Native
             _createProof.Margin = new Thickness(0, 0, 3, 0); actions.Children.Add(_createProof);
             var pantone = Button("Pantone", (_, __) => ShowPantoneMatches()); pantone.Margin = new Thickness(3, 0, 0, 0);
             actions.Children.Add(pantone); panel.Children.Add(actions);
+            var summary = Button("Сводка цветов выделения", (_, __) => InsertColorSummary());
+            summary.ToolTip = "Добавить список цветов снизу слева от выделения: отступ 5 мм, 14 пт. " +
+                "Заливки и контуры — отдельными текстами. Цвета растра определяются приблизительно.";
+            panel.Children.Add(summary);
             panel.Children.Add(new Expander { Header = "Дополнительно", Content = advanced, IsExpanded = false,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 2, 0, 3) });
             _model.SelectionChanged += (_, __) => HandleGridModelChanged();
@@ -138,6 +142,12 @@ namespace VanyaTools.Native
         {
             try { SetReference(_service.FromSelection()); }
             catch (Exception ex) { Fail("Color proof source selection failed.", ex); }
+        }
+
+        private void InsertColorSummary()
+        {
+            try { _status(new SelectionColorSummaryService().InsertSummary().Message, false); }
+            catch (Exception error) { Fail("Selection color summary failed.", error); }
         }
 
         private void PickPalette()

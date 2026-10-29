@@ -26,11 +26,11 @@ namespace VanyaTools.Native
     //   * No built-in Trim/AutoCrop API exists, so content bounds are found by reading pixels.
     //   * Pixel[x, y] is BOTTOM-origin (y=0 is the image bottom), 0-based, size Width x Height.
     //     This matches the Y-up document, so the crop maps Y directly with no inversion.
-    //   * Alpha image is grayscale (Type 9): Gray = 0 transparent .. 255 opaque.
+    //   * Alpha image is grayscale (Type 2): Gray = 0 transparent .. 255 opaque.
     //   * Crop uses CropEnvelope + Crop() with ReferencePoint = cdrBottomLeft (from the VBA macro).
     //
-    // Speed: a coarse grid pass brackets the content box, then each of the four edges is refined
-    // to 1px within a narrow band. That is thousands of reads instead of millions.
+    // Byte images use tiles. One-bit images use exact native boundary reads because their
+    // packed tile layout has not been verified; small disconnected marks must not be missed.
     internal sealed class BitmapTrimService
     {
         private const int AlphaThreshold = 10;    // alpha Gray > this counts as content
@@ -124,6 +124,11 @@ namespace VanyaTools.Native
         private static bool TrimOneCore(dynamic shape, TrimMode mode, TrimSides sides, int paddingPx, bool useTiles)
         {
             dynamic bitmap = shape.Bitmap;
+            // One-bit transparency can be set by painting the bitmap background
+            // "No fill". It does not necessarily set Bitmap.Transparent or create
+            // ImageAlpha, so this branch must precede the ordinary alpha guard.
+            if (Convert.ToInt32(bitmap.Mode) == 0)
+                return TrimMonochrome(shape, mode, sides, paddingPx);
             var test = new ContentTest();
             int w = 0, h = 0;
 
@@ -204,6 +209,109 @@ namespace VanyaTools.Native
                 return false;
             }
 
+            return FinishCrop(shape, sides, paddingPx, w, h, left, top, right, bottom, sw.ElapsedMilliseconds);
+        }
+
+        private static bool TrimMonochrome(dynamic shape, TrimMode mode, TrimSides sides, int paddingPx)
+        {
+            dynamic bitmap = shape.Bitmap;
+            object imageObject = (object)bitmap.Image;
+            if (imageObject == null) throw new InvalidOperationException("Corel не вернул данные однобитового растра.");
+            dynamic image = imageObject;
+            int width = Convert.ToInt32(image.Width), height = Convert.ToInt32(image.Height);
+            if (width <= 0 || height <= 0) return false;
+
+            // In a Corel monochrome bitmap Fill paints the original white pixels
+            // (background); Outline paints its original black pixels (foreground).
+            // Keep these settings intact: only CropEnvelope/Crop changes geometry.
+            bool whiteVisible = Convert.ToInt32(shape.Fill.Type) != 0;
+            bool blackVisible = Convert.ToInt32(shape.Outline.Type) != 0;
+            if (!whiteVisible && !blackVisible) return false;
+
+            object alphaObject = null;
+            if (Convert.ToBoolean(bitmap.Transparent))
+            {
+                alphaObject = (object)bitmap.ImageAlpha;
+                if (alphaObject == null || Convert.ToInt32(((dynamic)alphaObject).Width) != width ||
+                    Convert.ToInt32(((dynamic)alphaObject).Height) != height)
+                    throw new InvalidOperationException("Corel не вернул полный альфа-канал однобитового растра.");
+            }
+            if (mode == TrimMode.TransparentPixels && whiteVisible && blackVisible && alphaObject == null)
+                return false;
+
+            // Read only; do not ConvertToRGB, export/import or reinterpret packed
+            // mono bytes. Fail closed if Corel cannot supply a source pixel.
+            Func<int, int, bool> white = (x, y) => ReadMonochromeWhite(imageObject, x, y);
+            Func<int, int, int> alpha = (x, y) => alphaObject == null ? 255 : ReadMonochromeAlpha(alphaObject, x, y);
+            bool? cornerWhite = null;
+            if (mode != TrimMode.TransparentPixels && whiteVisible && blackVisible)
+            {
+                bool topLeft = mode == TrimMode.TopLeftColor;
+                int limit = Math.Min(200, Math.Min(width, height));
+                for (int distance = 0; distance < limit; distance++)
+                {
+                    int x = topLeft ? distance : width - 1 - distance;
+                    int y = topLeft ? height - 1 - distance : distance;
+                    if (alpha(x, y) <= AlphaThreshold) continue;
+                    cornerWhite = white(x, y);
+                    break;
+                }
+            }
+            Func<int, int, bool> content = (x, y) =>
+            {
+                int coverage = alpha(x, y);
+                if (coverage <= AlphaThreshold) return false;
+                if (whiteVisible && blackVisible && !cornerWhite.HasValue) return true;
+                bool isWhite = white(x, y);
+                return MonochromeBitmapTrim.Visible(isWhite, whiteVisible, blackVisible, coverage) &&
+                    (!cornerWhite.HasValue || isWhite != cornerWhite.Value);
+            };
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            MonochromeBitmapTrim.Bounds bounds;
+            if (!MonochromeBitmapTrim.FindBounds(width, height, content, out bounds))
+            {
+                Log.Info("Monochrome trim: no visible content, skipped.");
+                return false;
+            }
+            Log.Info("Monochrome trim: native Pixel boundary scan; white=" + whiteVisible + ", black=" + blackVisible +
+                ", alpha=" + (alphaObject != null) + ", model remains 1-bit.");
+            return FinishCrop(shape, sides, paddingPx, width, height, bounds.Left, bounds.Top,
+                bounds.Right, bounds.Bottom, stopwatch.ElapsedMilliseconds);
+        }
+
+        private static bool ReadMonochromeWhite(object imageObject, int x, int y)
+        {
+            try
+            {
+                dynamic color = ((dynamic)imageObject).Pixel[x, y];
+                int red = Convert.ToInt32(color.RGBRed), green = Convert.ToInt32(color.RGBGreen), blue = Convert.ToInt32(color.RGBBlue);
+                if ((red != 0 && red != 255) || red != green || red != blue)
+                    throw new InvalidOperationException("Corel вернул окрашенный пиксель вместо исходной однобитовой маски.");
+                return red >= 128;
+            }
+            catch (Exception error)
+            {
+                throw new InvalidOperationException("Не удалось прочитать исходную маску однобитового растра. Обрезка отменена.", error);
+            }
+        }
+
+        private static int ReadMonochromeAlpha(object alphaObject, int x, int y)
+        {
+            try
+            {
+                int value = Convert.ToInt32(((dynamic)alphaObject).Pixel[x, y].Gray);
+                if (value < 0 || value > 255) throw new InvalidOperationException("Некорректный альфа-канал.");
+                return value;
+            }
+            catch (Exception error)
+            {
+                throw new InvalidOperationException("Не удалось прочитать прозрачность однобитового растра. Обрезка отменена.", error);
+            }
+        }
+
+        private static bool FinishCrop(dynamic shape, TrimSides sides, int paddingPx, int w, int h,
+            int left, int top, int right, int bottom, long elapsedMilliseconds)
+        {
             // Apply padding, clamped.
             if (paddingPx < 0) paddingPx = 0;
             left   = Math.Max(0, left - paddingPx);
@@ -218,7 +326,7 @@ namespace VanyaTools.Native
             if (!sides.HasFlag(TrimSides.Top))    top    = h - 1;
             if (!sides.HasFlag(TrimSides.Bottom)) bottom = 0;
 
-            Log.Info($"Trim bounds (bottom-origin px): L={left} T={top} R={right} B={bottom} on {w}x{h} ({sw.ElapsedMilliseconds} ms)");
+            Log.Info($"Trim bounds (bottom-origin px): L={left} T={top} R={right} B={bottom} on {w}x{h} ({elapsedMilliseconds} ms)");
 
             if (left == 0 && bottom == 0 && right == w - 1 && top == h - 1)
             {

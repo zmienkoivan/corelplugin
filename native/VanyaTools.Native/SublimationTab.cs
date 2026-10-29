@@ -21,9 +21,10 @@ namespace VanyaTools.Native
     internal sealed class SublimationTab : UserControl
     {
         private const string AnalysisModel = "anthropic/claude-4.5-sonnet";
-        private readonly Func<string, string, string> _import;
+        private readonly Func<string, string, RasterInsertionSource, int, int, string> _import;
         private readonly Action<string, bool> _status;
-        private readonly Func<string> _captureSelection, _token;
+        private readonly Func<SublimationCapture> _captureSelection;
+        private readonly Func<string> _token;
         private readonly ComboBox _part, _imageModel;
         private readonly TextBox _width, _height, _hint, _analysis;
         private readonly CheckBox _upscale;
@@ -31,6 +32,8 @@ namespace VanyaTools.Native
         private readonly TextBlock _activity, _size, _price;
         private readonly ProgressBar _progress;
         private readonly Button _run, _cancel, _retry;
+        private readonly StackPanel _history;
+        private readonly Expander _historyExpander;
         private readonly DispatcherTimer _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         private readonly Stopwatch _elapsed = new Stopwatch();
         private CancellationTokenSource _cancellation;
@@ -40,7 +43,11 @@ namespace VanyaTools.Native
 
         private sealed class Job
         {
-            public string Directory, Source, Part, Hint, ReadyPath;
+            public string Directory, Source, Part, Hint, ReadyPath, AnalysisKey;
+            public RasterInsertionSource SourceContext;
+            public DateTime CreatedUtc = DateTime.UtcNow;
+            public DateTime? InsertedUtc;
+            public string InsertionError;
             public string ModelId = SublimationModels.DefaultId;
             public int Width, Height;
             public bool Upscale, ProviderBlocked;
@@ -53,8 +60,8 @@ namespace VanyaTools.Native
             public string TilePath(int index) { return Path.Combine(Directory, "upscale-" + index + ".png"); }
         }
 
-        public SublimationTab(Func<string, string, string> import, Action<string, bool> status,
-            Func<string> captureSelection, Func<string> token)
+        public SublimationTab(Func<string, string, RasterInsertionSource, int, int, string> import, Action<string, bool> status,
+            Func<SublimationCapture> captureSelection, Func<string> token)
         {
             _import = import; _status = status; _captureSelection = captureSelection; _token = token;
             var panel = new StackPanel { Margin = new Thickness(6) };
@@ -121,8 +128,15 @@ namespace VanyaTools.Native
             _analysis = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MinHeight = 70, MaxHeight = 180,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 10, Text = "Анализ появится здесь." };
             panel.Children.Add(new Expander { Header = "Анализ AI", Content = _analysis });
+            _history = new StackPanel();
+            _historyExpander = new Expander { Header = "Последние результаты", IsExpanded = true,
+                Content = new ScrollViewer { Content = _history, MaxHeight = 220,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto } };
+            panel.Children.Add(_historyExpander);
             _timer.Tick += (_, __) => _activity.Text = _stage + " · " + (int)_elapsed.Elapsed.TotalSeconds + " с";
             RestorePending();
+            RestoreRecentResults();
+            RefreshHistory();
         }
 
         private async Task Start()
@@ -134,7 +148,7 @@ namespace VanyaTools.Native
             string model = (_imageModel.SelectedItem as SublimationModels.Choice)?.Id;
             try { SublimationModels.Plan(model, width, height); }
             catch (Exception error) { Report(error.GetBaseException().Message, true); return; }
-            string selected;
+            SublimationCapture selected;
             try { selected = _captureSelection(); }
             catch (Exception ex) { Log.Error("Sublimation selection capture failed.", ex); Report(ex.GetBaseException().Message, true); return; }
             try
@@ -142,17 +156,26 @@ namespace VanyaTools.Native
                 string directory = Path.Combine(Path.GetTempPath(), "Vanya-Sublimation-" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(directory);
                 string source = Path.Combine(directory, "selected-mockup.png");
-                File.Copy(selected, source, true);
+                File.Copy(selected.Path, source, true);
+                CleanupCapturedSelection(selected.Path);
                 _job = new Job { Directory = directory, Source = source, Part = Convert.ToString(_part.SelectedItem),
-                    Hint = _hint.Text.Trim(), Width = width, Height = height, Upscale = _upscale.IsChecked == true, ModelId = model };
+                    Hint = _hint.Text.Trim(), Width = width, Height = height, Upscale = _upscale.IsChecked == true,
+                    ModelId = model, SourceContext = selected.Source };
+                _job.AnalysisKey = AnalysisKey(_job);
+                bool reused = false;
+                try { reused = ReuseAnalysis(_job); }
+                catch (Exception error) { Log.Error("Saved sublimation analysis is unavailable; a fresh analysis is required.", error); }
                 SaveJob(_job);
                 _sourcePreview.Source = AiPrintTab.Bitmap(source);
                 UpdatePrice(AiPrintTab.Bitmap(source));
+                if (reused) _price.Text += " Анализ готов — повторно не оплачивается.";
                 _resultPreview.Source = null;
-                _analysis.Text = "Анализирую выбранную деталь…";
+                _analysis.Text = reused ? File.ReadAllText(_job.AnalysisPath) : "Анализирую выбранную деталь…";
+                if (reused) Report("Использую готовый анализ этого исходника. Новый запрос — только к выбранной модели изображения.", false);
                 await Execute(key);
             }
             catch (Exception ex) { Log.Error("Sublimation setup failed.", ex); Report(ex.GetBaseException().Message, true); }
+            finally { CleanupCapturedSelection(selected.Path); }
         }
 
         private async Task Resume()
@@ -171,6 +194,7 @@ namespace VanyaTools.Native
             SetBusy(true);
             _cancellation = new CancellationTokenSource();
             CancellationToken cancellation = _cancellation.Token;
+            bool inserted = false;
             try
             {
                 if (!File.Exists(_job.FinalPath))
@@ -252,20 +276,51 @@ namespace VanyaTools.Native
                 _resultPreview.Source = AiPrintTab.Bitmap(_job.FinalPath);
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), _job.FinalPath);
+                try { RememberResult(); }
+                catch (Exception historyError) { Log.Error("Could not record ready sublimation PNG.", historyError); }
                 SetStage("Вставляю результат в CorelDRAW");
-                string warning = _import(_job.FinalPath, "Развёртка формы · " + _job.Part);
-                try { File.Delete(PendingPath()); } catch { }
-                try { File.Delete(_job.MetadataPath); } catch { }
-                _job = null;
+                string warning = _import(_job.FinalPath, "Развёртка формы · " + _job.Part,
+                    _job.SourceContext, _job.Width, _job.Height);
+                _job.InsertionError = String.IsNullOrWhiteSpace(warning) ? null : warning;
+                if (String.IsNullOrWhiteSpace(warning))
+                {
+                    inserted = true;
+                    _job.InsertedUtc = DateTime.UtcNow;
+                    try { File.Delete(PendingPath()); } catch { }
+                }
+                SaveJob(_job);
+                RememberResult();
                 Report(String.IsNullOrWhiteSpace(warning)
-                    ? "Развёртка вставлена на холст. Проверьте надписи, стыки и размер перед печатью."
+                    ? "Развёртка вставлена на исходную страницу. PNG сохранён в «Последних результатах»; вставку можно повторить бесплатно."
                     : warning, !String.IsNullOrWhiteSpace(warning));
             }
-            catch (OperationCanceledException) { Report("Операция остановлена. Можно продолжить с готового этапа.", false); }
+            catch (OperationCanceledException)
+            {
+                if (_job != null && File.Exists(_job.FinalPath))
+                {
+                    try { RememberResult(); }
+                    catch (Exception historyError) { Log.Error("Could not record ready PNG after cancellation.", historyError); }
+                    Report("Запрос остановлен. Готовый PNG сохранён; его можно вставить без новой генерации.", false);
+                }
+                else Report("Операция остановлена. Можно продолжить с готового этапа.", false);
+            }
             catch (Exception ex)
             {
                 Log.Error("Sublimation panel failed.", ex);
-                if (_job != null && SublimationFailure.IsSensitiveRejection(ex) && !File.Exists(_job.FinalPath))
+                if (inserted)
+                {
+                    Report("Развёртка вставлена на исходную страницу, но не удалось обновить журнал: " +
+                        ex.GetBaseException().Message + " PNG сохранён. Повтор вставки создаст дополнительную копию.", true);
+                }
+                else if (_job != null && File.Exists(_job.FinalPath))
+                {
+                    _job.InsertionError = ex.GetBaseException().Message;
+                    try { SaveJob(_job); RememberResult(); }
+                    catch (Exception saveError) { Log.Error("Could not save completed sublimation result.", saveError); }
+                    Report("Развёртка готова, но вставка не удалась: " + _job.InsertionError +
+                        " PNG сохранён. «Повторить вставку» не запускает генерацию.", true);
+                }
+                else if (_job != null && SublimationFailure.IsSensitiveRejection(ex) && !File.Exists(_job.FinalPath))
                 {
                     _job.ProviderBlocked = true;
                     try { SaveJob(_job); }
@@ -509,6 +564,7 @@ namespace VanyaTools.Native
             _width.IsEnabled = _height.IsEnabled = _hint.IsEnabled = _upscale.IsEnabled = !value;
             _cancel.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
             _cancel.IsEnabled = value;
+            _history.IsEnabled = !value;
             UpdateRetry(value);
             _progress.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
             if (value) { _activity.Visibility = Visibility.Visible; _elapsed.Restart(); _timer.Start(); }
@@ -518,8 +574,10 @@ namespace VanyaTools.Native
         private void UpdateRetry(bool busy)
         {
             bool ready = _job != null && File.Exists(_job.FinalPath);
-            bool available = !busy && _job != null && !SublimationFailure.BlocksResume(_job.ProviderBlocked, ready);
-            _retry.Content = SublimationFailure.RetryCaption(ready);
+            bool available = !busy && _job != null && (!ready || _job.SourceContext != null) &&
+                !SublimationFailure.BlocksResume(_job.ProviderBlocked, ready);
+            _retry.Content = ready && _job.InsertedUtc.HasValue && String.IsNullOrWhiteSpace(_job.InsertionError)
+                ? "Вставить ещё · бесплатно" : SublimationFailure.RetryCaption(ready);
             _retry.ToolTip = _job == null ? null : "Продолжение сохранённого задания · " + SublimationModels.Find(_job.ModelId).Name;
             _retry.IsEnabled = available;
             _retry.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
@@ -527,9 +585,15 @@ namespace VanyaTools.Native
 
         private void SetStage(string stage) { _stage = stage; _activity.Text = stage; Report(stage, false); }
         private void Cancel() { if (_busy && _cancellation != null) { _cancellation.Cancel(); _cancel.IsEnabled = false; SetStage("Останавливаю запрос…"); } }
-        private void Report(string message, bool error) { _status(message, error); }
+        private void Report(string message, bool error)
+        {
+            _activity.Visibility = Visibility.Visible;
+            _activity.Text = message;
+            _status(message, error);
+        }
         private static string ProgressName(string value) { return value == "sending" ? "отправка" : value == "processing" ? "обработка" : value == "cancelling" ? "отмена" : value == "retrying-download" ? "повтор скачивания готового файла" : value == "retrying-upload" ? "повтор загрузки входного фрагмента" : value == "retrying-status" ? "повтор проверки запроса" : "получение"; }
         private static string PendingPath() { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VanyaTools", "pending-sublimation-result.txt"); }
+        private static string HistoryPath() { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VanyaTools", "sublimation-results.json"); }
 
         private static void SaveJob(Job job)
         {
@@ -537,9 +601,202 @@ namespace VanyaTools.Native
             {
                 ["part"] = job.Part, ["hint"] = job.Hint, ["width"] = job.Width,
                 ["height"] = job.Height, ["upscale"] = job.Upscale,
-                ["provider_blocked"] = job.ProviderBlocked, ["image_model"] = job.ModelId
+                ["provider_blocked"] = job.ProviderBlocked, ["image_model"] = job.ModelId,
+                ["source_context"] = job.SourceContext, ["analysis_key"] = job.AnalysisKey,
+                ["created_utc"] = job.CreatedUtc, ["inserted_utc"] = job.InsertedUtc,
+                ["insertion_error"] = job.InsertionError
             };
             File.WriteAllText(job.MetadataPath, new JavaScriptSerializer().Serialize(details));
+        }
+
+        private static void ReadMetadata(Job job)
+        {
+            var serializer = new JavaScriptSerializer();
+            var details = serializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(job.MetadataPath));
+            job.Part = Convert.ToString(details["part"]);
+            job.Hint = Convert.ToString(details["hint"]);
+            job.Width = Convert.ToInt32(details["width"]);
+            job.Height = Convert.ToInt32(details["height"]);
+            job.Upscale = Convert.ToBoolean(details["upscale"]);
+            job.ModelId = SublimationModels.StoredModel(details.ContainsKey("image_model") ? Convert.ToString(details["image_model"]) : null);
+            job.ProviderBlocked = details.ContainsKey("provider_blocked") && Convert.ToBoolean(details["provider_blocked"]);
+            job.AnalysisKey = details.ContainsKey("analysis_key") ? Convert.ToString(details["analysis_key"]) : null;
+            job.InsertionError = details.ContainsKey("insertion_error") ? Convert.ToString(details["insertion_error"]) : null;
+            if (details.TryGetValue("source_context", out object context) && context != null)
+                job.SourceContext = serializer.Deserialize<RasterInsertionSource>(serializer.Serialize(context));
+            if (details.TryGetValue("created_utc", out object created) && created != null)
+                job.CreatedUtc = Convert.ToDateTime(created).ToUniversalTime();
+            if (details.TryGetValue("inserted_utc", out object inserted) && inserted != null)
+                job.InsertedUtc = Convert.ToDateTime(inserted).ToUniversalTime();
+        }
+
+        private bool ReuseAnalysis(Job job)
+        {
+            string[] directories = Directory.GetDirectories(Path.GetTempPath(), "Vanya-Sublimation-*");
+            Array.Sort(directories, (a, b) => Directory.GetLastWriteTimeUtc(b).CompareTo(Directory.GetLastWriteTimeUtc(a)));
+            foreach (string directory in directories)
+            {
+                if (String.Equals(directory, job.Directory, StringComparison.OrdinalIgnoreCase) ||
+                    DateTime.UtcNow - Directory.GetLastWriteTimeUtc(directory) > TimeSpan.FromDays(7)) continue;
+                var candidate = new Job { Directory = directory, Source = Path.Combine(directory, "selected-mockup.png") };
+                if (!File.Exists(candidate.MetadataPath) || !File.Exists(candidate.Source)) continue;
+                try
+                {
+                    ReadMetadata(candidate);
+                    string key = candidate.AnalysisKey ?? AnalysisKey(candidate);
+                    if (key == job.AnalysisKey && SublimationAnalysisCache.Copy(directory, job.Directory, IsSleeve(job.Part)))
+                        return true;
+                }
+                catch (Exception error) { Log.Error("Could not reuse saved sublimation analysis.", error); }
+            }
+            return false;
+        }
+
+        private static string AnalysisKey(Job job)
+        {
+            BitmapSource source = AiPrintTab.Bitmap(job.Source);
+            var image = new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
+            int stride = checked(image.PixelWidth * 4);
+            byte[] pixels = new byte[checked(stride * image.PixelHeight)];
+            image.CopyPixels(pixels, stride, 0);
+            return SublimationAnalysisCache.PixelKey(pixels, image.PixelWidth, image.PixelHeight,
+                job.Part, job.Hint, job.Width, job.Height);
+        }
+
+        private static void CleanupCapturedSelection(string path)
+        {
+            try
+            {
+                string full = Path.GetFullPath(path);
+                if (String.Equals(Path.GetDirectoryName(full), Path.GetFullPath(Path.GetTempPath()).TrimEnd('\\'),
+                    StringComparison.OrdinalIgnoreCase) && Regex.IsMatch(Path.GetFileName(full),
+                        @"^Vanya-AI-Selection-[a-fA-F0-9]{32}\.png$")) File.Delete(full);
+            }
+            catch (Exception error) { Log.Error("Could not remove temporary sublimation selection capture.", error); }
+        }
+
+        private void RememberResult()
+        {
+            SublimationHistory.Remember(HistoryPath(), new SublimationResult { Path = _job.FinalPath,
+                MetadataPath = _job.MetadataPath, Part = _job.Part, ModelId = _job.ModelId,
+                Width = _job.Width, Height = _job.Height, CreatedUtc = _job.CreatedUtc,
+                InsertedUtc = _job.InsertedUtc, InsertionError = _job.InsertionError,
+                CanReinsert = _job.SourceContext != null });
+            RefreshHistory();
+        }
+
+        private void RefreshHistory()
+        {
+            _history.Children.Clear();
+            var rows = SublimationHistory.Load(HistoryPath());
+            _historyExpander.Header = "Последние результаты (" + rows.Count + ")";
+            _historyExpander.Visibility = rows.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+            foreach (SublimationResult row in rows)
+            {
+                var line = new Grid { Margin = new Thickness(0, 2, 0, 3), ToolTip = row.Path };
+                line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(48) });
+                line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                line.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                var thumbnail = new Image { Width = 44, Height = 48, Stretch = Stretch.Uniform };
+                try
+                {
+                    using (var stream = File.OpenRead(row.Path))
+                    {
+                        var image = new BitmapImage(); image.BeginInit();
+                        image.CacheOption = BitmapCacheOption.OnLoad; image.DecodePixelWidth = 80;
+                        image.StreamSource = stream; image.EndInit(); image.Freeze(); thumbnail.Source = image;
+                    }
+                }
+                catch (Exception error) { Log.Error("Could not show sublimation history thumbnail.", error); }
+                line.Children.Add(thumbnail);
+                string modelName;
+                try { modelName = String.IsNullOrWhiteSpace(row.ModelId) ? "Модель не сохранена"
+                    : SublimationModels.Find(SublimationModels.StoredModel(row.ModelId)).Name; }
+                catch { modelName = "Сохранённая модель"; }
+                var description = Note(row.CreatedUtc.ToLocalTime().ToString("dd.MM HH:mm") + " · " + row.Part + "\n" +
+                    modelName + " · " + row.Width + " × " + row.Height + " мм\n" +
+                    (!row.CanReinsert ? "PNG для ручного импорта" : !String.IsNullOrWhiteSpace(row.InsertionError)
+                        ? "Вставка не удалась" : row.InsertedUtc.HasValue ? "Вставлен на исходную страницу" : "Готов к вставке"));
+                description.Margin = new Thickness(4, 0, 4, 0); Grid.SetColumn(description, 1); line.Children.Add(description);
+                var actions = new StackPanel();
+                var insert = Button("Вставить ещё", async (_, __) => await RepeatResult(row));
+                insert.IsEnabled = row.CanReinsert;
+                insert.ToolTip = row.CanReinsert ? "Вставить готовый PNG на исходную страницу без новой генерации."
+                    : "Старый результат без привязки к странице: откройте PNG для ручного импорта.";
+                actions.Children.Add(insert);
+                actions.Children.Add(Button("PNG ↗", (_, __) => {
+                    try { Process.Start(new ProcessStartInfo(row.Path) { UseShellExecute = true }); }
+                    catch (Exception error) { Report("Не удалось открыть PNG: " + error.GetBaseException().Message, true); }
+                }));
+                Grid.SetColumn(actions, 2); line.Children.Add(actions); _history.Children.Add(line);
+            }
+        }
+
+        private async Task RepeatResult(SublimationResult row)
+        {
+            if (_busy) return;
+            try
+            {
+                if (!File.Exists(row.Path)) throw new FileNotFoundException("Сохранённый PNG удалён.", row.Path);
+                if (_job == null || !String.Equals(_job.FinalPath, row.Path, StringComparison.OrdinalIgnoreCase))
+                {
+                    var restored = new Job { Directory = Path.GetDirectoryName(row.Path), ReadyPath = row.Path,
+                        Source = Path.Combine(Path.GetDirectoryName(row.Path), "selected-mockup.png") };
+                    if (File.Exists(restored.MetadataPath)) ReadMetadata(restored);
+                    else throw new InvalidOperationException("Данные исходной страницы не найдены. Откройте PNG и импортируйте его вручную.");
+                    _job = restored;
+                }
+                _resultPreview.Source = AiPrintTab.Bitmap(row.Path);
+                if (File.Exists(_job.Source)) _sourcePreview.Source = AiPrintTab.Bitmap(_job.Source);
+                await Execute(null);
+            }
+            catch (Exception error) { Report("Повтор вставки: " + error.GetBaseException().Message, true); }
+        }
+
+        private void RestoreRecentResults()
+        {
+            // Releases before the journal deleted job.json after a successful insertion.
+            // Their finished PNGs can still be opened, but must never be placed against
+            // whichever document happens to be active now without saved provenance.
+            if (File.Exists(HistoryPath())) return;
+            try
+            {
+                var ready = new List<string>();
+                foreach (string directory in Directory.GetDirectories(Path.GetTempPath(), "Vanya-Sublimation-*"))
+                {
+                    string path = Path.Combine(directory, "panel-300dpi.png");
+                    if (File.Exists(path) && DateTime.UtcNow - File.GetLastWriteTimeUtc(path) <= TimeSpan.FromDays(7))
+                        ready.Add(path);
+                }
+                ready.Sort((a, b) => File.GetLastWriteTimeUtc(b).CompareTo(File.GetLastWriteTimeUtc(a)));
+                if (ready.Count > SublimationHistory.Limit) ready.RemoveRange(SublimationHistory.Limit, ready.Count - SublimationHistory.Limit);
+                ready.Reverse();
+                foreach (string path in ready)
+                {
+                    try
+                    {
+                        var saved = new Job { Directory = Path.GetDirectoryName(path), ReadyPath = path,
+                            CreatedUtc = File.GetLastWriteTimeUtc(path), Part = "Сохранённая развёртка", ModelId = null };
+                        if (File.Exists(saved.MetadataPath)) ReadMetadata(saved);
+                        else
+                        {
+                            using (var stream = File.OpenRead(path))
+                            {
+                                BitmapFrame image = BitmapFrame.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
+                                saved.Width = (int)Math.Round(image.PixelWidth * 25.4 / (image.DpiX > 0 ? image.DpiX : 300));
+                                saved.Height = (int)Math.Round(image.PixelHeight * 25.4 / (image.DpiY > 0 ? image.DpiY : 300));
+                            }
+                        }
+                        SublimationHistory.Remember(HistoryPath(), new SublimationResult { Path = path,
+                            MetadataPath = saved.MetadataPath, Part = saved.Part, ModelId = saved.ModelId,
+                            Width = saved.Width, Height = saved.Height, CreatedUtc = saved.CreatedUtc,
+                            InsertedUtc = saved.InsertedUtc, InsertionError = saved.InsertionError,
+                            CanReinsert = saved.SourceContext != null });
+                    }
+                    catch (Exception error) { Log.Error("Could not recover completed sublimation PNG.", error); }
+                }
+            }
+            catch (Exception error) { Log.Error("Could not inspect earlier sublimation results.", error); }
         }
 
         private void RestorePending()
@@ -551,7 +808,9 @@ namespace VanyaTools.Native
                     string path = File.ReadAllText(PendingPath()).Trim();
                     if (File.Exists(path))
                     {
-                        _job = new Job { Directory = Path.GetDirectoryName(path), ReadyPath = path };
+                        _job = new Job { Directory = Path.GetDirectoryName(path), ReadyPath = path,
+                            Source = Path.Combine(Path.GetDirectoryName(path), "selected-mockup.png") };
+                        if (File.Exists(_job.MetadataPath)) ReadMetadata(_job);
                         _resultPreview.Source = AiPrintTab.Bitmap(path);
                         UpdateRetry(false);
                         _activity.Visibility = Visibility.Visible;
@@ -571,15 +830,7 @@ namespace VanyaTools.Native
                         Job candidate = new Job { Directory = directory, Source = source };
                         if (File.Exists(candidate.MetadataPath))
                         {
-                            var details = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
-                                File.ReadAllText(candidate.MetadataPath));
-                            candidate.Part = Convert.ToString(details["part"]);
-                            candidate.Hint = Convert.ToString(details["hint"]);
-                            candidate.Width = Convert.ToInt32(details["width"]);
-                            candidate.Height = Convert.ToInt32(details["height"]);
-                            candidate.Upscale = Convert.ToBoolean(details["upscale"]);
-                            candidate.ModelId = SublimationModels.StoredModel(details.ContainsKey("image_model") ? Convert.ToString(details["image_model"]) : null);
-                            candidate.ProviderBlocked = details.ContainsKey("provider_blocked") && Convert.ToBoolean(details["provider_blocked"]);
+                            ReadMetadata(candidate);
                         }
                         else if (!File.Exists(candidate.FinalPath) && File.Exists(candidate.GeneratedPath) && File.Exists(candidate.AnalysisPath))
                         {
@@ -615,7 +866,8 @@ namespace VanyaTools.Native
                         if (File.Exists(candidate.FinalPath)) _resultPreview.Source = AiPrintTab.Bitmap(candidate.FinalPath);
                         UpdateRetry(false);
                         _activity.Visibility = Visibility.Visible;
-                        _activity.Text = SublimationFailure.BlocksResume(candidate.ProviderBlocked, File.Exists(candidate.FinalPath))
+                        _activity.Text = File.Exists(candidate.FinalPath) ? "Готовый результат сохранён. Можно повторить вставку без генерации."
+                            : SublimationFailure.BlocksResume(candidate.ProviderBlocked, File.Exists(candidate.FinalPath))
                             ? SublimationFailure.SensitiveMessage
                             : "Развёртка не завершена. Нажмите «Продолжить».";
                         return;

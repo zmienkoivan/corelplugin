@@ -119,7 +119,10 @@ namespace VanyaTools.Native
         public readonly FakeDocument Document;
         public readonly FakePage Page;
         public readonly List<FakeShape> Items = new List<FakeShape>();
-        public readonly string Name;
+        public string Name { get; set; }
+        public bool Visible { get; set; } = true;
+        public bool Printable { get; set; } = true;
+        public bool Editable { get; set; } = true;
         public bool Deleted;
         public FakeLayer(FakeDocument document, FakePage page, string name) { Document = document; Page = page; Name = name; }
         public FakeRange Shapes { get { var range = new FakeRange(Document.App); range.Items.AddRange(Items.Where(shape => !shape.Deleted)); return range; } }
@@ -303,6 +306,41 @@ namespace VanyaTools.Native
             Root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cases"); Directory.CreateDirectory(Root);
             Run("SaveResult offsets and physical size", () => { var f = New("geometry"); f.Save(RasterInsertionMode.ReplaceOriginal); var p = f.Placement(); Eq(p.LeftMm, 95); Eq(p.TopMm, 205); Eq(p.WidthMm, 110); Eq(p.HeightMm, 60); Check(!File.ReadAllText(f.Output + ".insertion.json").Contains("NativeShapes"), "Native refs leaked into JSON"); });
             Run("Preserve source canvas overrides output DPI/size", () => { var f = New("preserve"); Png(f.Output, 800, 400, 300, 150); f.Save(RasterInsertionMode.ReplaceOriginal, true); var p = f.Placement(); Eq(p.WidthMm, 100); Eq(p.HeightMm, 50); });
+            Run("Generated panel uses requested millimetres independent of mockup DPI", () => {
+                var f = New("panel size"); Png(f.Output, 800, 1100, 72, 400);
+                RasterResultInsertion.SaveSizedResult(f.Output, f.Source, 650, 850);
+                RasterResultInsertion.Import(f.Output, "Развёртка", null, f.Source, keepResultLayer: true);
+                Eq(f.Imported.Width, 650); Eq(f.Imported.Height, 850); Eq(f.Imported.Left, 110); Eq(f.Imported.Top, 210);
+                Check(!f.A.Deleted && !f.B.Deleted && f.A.Left == 100, "Panel altered mockup");
+            });
+            Run("Panel remains visible when the operator hid the current layer", () => {
+                var f = New("hidden layer panel"); f.Layer.Visible = false; f.Layer.Editable = false; f.Layer.Printable = false;
+                RasterResultInsertion.SaveSizedResult(f.Output, f.Source, 550, 750); f.SelectOther();
+                RasterResultInsertion.Import(f.Output, "Развёртка", null, f.Source, keepResultLayer: true);
+                var owner = f.Imported.Layer;
+                Check(owner != f.Layer && owner.Visible && owner.Printable && owner.Editable, "Panel inherited hidden layer");
+                Check(!f.Layer.Visible && !f.Layer.Editable && !f.Layer.Printable, "Original layer settings changed");
+                Check(f.Page.Layers.Count == 2 && f.Document.BeginCount == 1 && f.Document.EndCount == 1, "Wrong result transaction");
+                Check(!f.App.Events.Contains("MoveToLayer") && !f.App.Events.Contains("DeleteTemp"), "Visible result layer was deleted");
+            });
+            Run("Panel rejects changed document instead of silently importing elsewhere", () => {
+                var captured = New("panel captured"); RasterResultInsertion.SaveSizedResult(captured.Output, captured.Source, 550, 750);
+                var current = New("panel foreign");
+                Throws(() => RasterResultInsertion.Import(captured.Output, "Развёртка", null, captured.Source, keepResultLayer: true));
+                NoMutation(current); NoMutation(captured); Check(File.Exists(captured.Output), "Ready panel lost after failed insert");
+            });
+            Run("Panel insertion failure rolls back only the new result", () => {
+                var f = New("panel rollback"); RasterResultInsertion.SaveSizedResult(f.Output, f.Source, 550, 750);
+                f.App.Failure = "CreateSelection";
+                Throws(() => RasterResultInsertion.Import(f.Output, "Развёртка", null, f.Source, keepResultLayer: true));
+                Restored(f); Check(f.Document.UndoCount == 1 && File.Exists(f.Output), "Ready panel not recoverable");
+            });
+            Run("Missing panel source or invalid dimensions rejected before mutation", () => {
+                var f = New("panel invalid");
+                Throws(() => RasterResultInsertion.SaveSizedResult(f.Output, null, 550, 750));
+                Throws(() => RasterResultInsertion.SaveSizedResult(f.Output, f.Source, 0, 750));
+                Throws(() => RasterResultInsertion.SaveSizedResult(f.Output, f.Source, 550, Double.NaN)); NoMutation(f);
+            });
             Run("Anisotropic captured scale compensates physical output and offsets", () => { var f = New("scale"); Png(f.Input, 400, 200, 100, 200); RasterResultInsertion.SetInputRaster(f.Source, f.Input); Png(f.Output, 200, 100, 200, 100); RasterResultInsertion.SaveResult(f.Output, f.Source, RasterInsertionMode.ReplaceOriginal, 2, 3); var p = f.Placement(); Eq(p.WidthMm, 25, .002); Eq(p.HeightMm, 50, .002); Eq(p.LeftMm, 100 - 2 * (100 / 101.6), .002); Eq(p.TopMm, 200 + 3 * (50 / 25.4), .002); });
             foreach (RasterInsertionMode mode in new[] { RasterInsertionMode.ReplaceOriginal, RasterInsertionMode.MoveOriginalAside, RasterInsertionMode.NewAside })
                 Run("Mode " + mode + " uses captured source and one Undo group", () => {

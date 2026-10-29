@@ -77,6 +77,18 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.SublimationModelsChecks/VanyaTools.SublimationModelsChecks.csproj --configuration Release
 
+      - name: Check monochrome bitmap trim
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.MonochromeTrimChecks/VanyaTools.MonochromeTrimChecks.csproj --configuration Release
+
+      - name: Check background region selection
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.BackgroundRegionChecks/VanyaTools.BackgroundRegionChecks.csproj --configuration Release
+
+      - name: Check sublimation result history
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.SublimationHistoryChecks/VanyaTools.SublimationHistoryChecks.csproj --configuration Release
+
       - name: Build installer package
         shell: pwsh
         run: .\package-native.ps1

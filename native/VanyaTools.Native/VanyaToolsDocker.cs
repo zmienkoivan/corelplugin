@@ -207,8 +207,8 @@ namespace VanyaTools.Native
                     HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = stickerTools }));
             tabs.Items.Add(ThumbnailTabs.Create("Развёртка формы", ThumbnailTabs.Shirt,
                 Color.FromRgb(74, 114, 174),
-                new SublimationTab(ImportAiResult, (message, isError) => SetStatus(message, isError),
-                    () => AiSelectionCapture.Capture(2048, 4000000), () => aiTools.GetToken())));
+                new SublimationTab(SublimationInsertion.Import, (message, isError) => SetStatus(message, isError),
+                    SublimationInsertion.Capture, () => aiTools.GetToken())));
             tabs.Items.Add(ThumbnailTabs.Create("Раскладка спортформы", ThumbnailTabs.SportLayout,
                 Color.FromRgb(54, 126, 132),
                 new SportLayoutTab((message, isError) => SetStatus(message, isError))));

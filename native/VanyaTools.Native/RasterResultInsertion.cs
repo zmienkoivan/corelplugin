@@ -134,6 +134,19 @@ namespace VanyaTools.Native
 
         internal static bool HasPlacement(string output) => File.Exists(Sidecar(output));
 
+        // Generated print panels have their own physical size. Scaling this by the
+        // mockup's capture DPI would turn, for example, 650 x 850 mm into a miniature.
+        internal static void SaveSizedResult(string output, RasterInsertionSource source, double widthMm, double heightMm)
+        {
+            if (source == null) throw new InvalidOperationException("Не сохранены исходный документ и страница развёртки. Готовый PNG сохранён.");
+            if (!File.Exists(output)) throw new FileNotFoundException("Файл готовой развёртки не найден.", output);
+            RequireBounds(source.LeftMm, source.TopMm, source.WidthMm, source.HeightMm);
+            RequireBounds(source.LeftMm, source.TopMm, widthMm, heightMm);
+            var placement = new RasterInsertionPlacement { Source = source, Mode = RasterInsertionMode.NewAside,
+                LeftMm = source.LeftMm, TopMm = source.TopMm, WidthMm = widthMm, HeightMm = heightMm };
+            File.WriteAllText(Sidecar(output), new JavaScriptSerializer().Serialize(placement));
+        }
+
         internal static void SaveResult(string output, RasterInsertionSource source, RasterInsertionMode mode,
             double offsetX = 0, double offsetY = 0, bool preserveSourceSize = false, bool diagnostic = false)
         {
@@ -161,7 +174,7 @@ namespace VanyaTools.Native
         }
 
         internal static string Import(string output, string operation, RasterInsertionMode? requestedMode = null,
-            RasterInsertionSource liveSource = null)
+            RasterInsertionSource liveSource = null, bool keepResultLayer = false)
         {
             RequireSta();
             if (!File.Exists(output)) throw new FileNotFoundException("Файл готового изображения не найден.", output);
@@ -192,6 +205,13 @@ namespace VanyaTools.Native
                 temporary = page.CreateLayer("Vanya-Result-" + Guid.NewGuid().ToString("N"));
                 if (temporary == null) throw new InvalidOperationException("Corel не создал временный слой для вставки.");
                 touched = true;
+                if (keepResultLayer)
+                {
+                    // A job finishing while another tab is open must not inherit
+                    // a hidden or nonprinting active layer. Do not alter user layers.
+                    temporary.Visible = true; temporary.Editable = true; temporary.Printable = true;
+                    temporary.Name = "Vanya Tools · Развёртка · " + DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+                }
                 object layer = (object)temporary, options = (object)app.CreateStructImportOptions();
                 dynamic filter = layer.GetType().InvokeMember("ImportEx", BindingFlags.InvokeMethod, null, layer,
                     new object[] { new BStrWrapper(Path.GetFullPath(output)), 0, options });
@@ -214,8 +234,11 @@ namespace VanyaTools.Native
                 RequirePlaced((object)imported, left, top, placement.WidthMm, placement.HeightMm);
                 imported.Name = "Vanya Tools · " + (String.IsNullOrWhiteSpace(operation) ? "Обработка растра" : operation.Trim()) +
                     " · " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
-                imported.MoveToLayer((dynamic)resolved.Layer);
-                temporary.Delete(); temporary = null;
+                if (!keepResultLayer)
+                {
+                    imported.MoveToLayer((dynamic)resolved.Layer);
+                    temporary.Delete(); temporary = null;
+                }
                 if (mode == RasterInsertionMode.MoveOriginalAside)
                 {
                     double dx = RasterInsertionGeometry.OriginalShift(source.LeftMm, source.WidthMm, left, placement.WidthMm);
@@ -228,7 +251,13 @@ namespace VanyaTools.Native
                     originals.Delete();
                 }
                 imported.CreateSelection();
+                RequirePlaced((object)imported, left, top, placement.WidthMm, placement.HeightMm);
+                if (keepResultLayer && (!Convert.ToBoolean(temporary.Visible) || !Convert.ToBoolean(temporary.Printable)))
+                    throw new InvalidOperationException("Слой развёртки остался скрытым. Готовый PNG сохранён для повторной вставки.");
                 doc.EndCommandGroup(); started = false;
+                if (keepResultLayer)
+                    try { app.ActiveWindow.ActiveView.ToFitShape(imported); }
+                    catch (Exception viewError) { Log.Error("Result inserted, but could not fit the Corel view to the new panel.", viewError); }
                 try { app.ActiveWindow.Refresh(); } catch { }
                 Log.Info("Processed raster inserted: mode=" + mode + ", source=" + source.CaptureId + ", objects=" + source.Shapes.Count + ".");
                 return null;

@@ -9,54 +9,40 @@ namespace VanyaTools.Native
 {
     internal static class BackgroundRemovalProcessor
     {
-        // Only pixels connected to the image border are background. The capture is
-        // RGB even when the original artwork contains CMYK objects.
         public static void RemoveColor(string source, string output, Color[] colors, int tolerance, int cutPixels,
             CancellationToken cancellation)
+            => RemoveColor(source, output, colors, tolerance, cutPixels, true, null, cancellation);
+
+        // Mask selection uses the RGB preview; native color channels are restored
+        // by NativeRasterCorrection.AttachProcessedAlpha after the dialog closes.
+        internal static void RemoveColor(string source, string output, Color[] colors, int tolerance, int cutPixels,
+            bool fromBorder, BackgroundRemovalSeed[] seeds, CancellationToken cancellation)
         {
             BitmapSource input = AiPrintTab.Bitmap(source);
             var bitmap = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
             int width = bitmap.PixelWidth, height = bitmap.PixelHeight;
             int length = checked(width * height), stride = checked(width * 4);
             var pixels = new byte[checked(stride * height)];
-            var background = new byte[length];
             bitmap.CopyPixels(pixels, stride, 0);
-
-            var pending = new Stack<int>(Math.Min(checked(2 * (width + height)), 100000));
-            for (int x = 0; x < width; x++)
+            int[] packed = new int[colors.Length];
+            for (int n = 0; n < colors.Length; n++) packed[n] = colors[n].R << 16 | colors[n].G << 8 | colors[n].B;
+            byte[] background = BackgroundRegionMask.Create(pixels, width, height, packed,
+                tolerance, fromBorder, seeds, cancellation);
+            var fringeColors = new List<Color>();
+            if (fromBorder) fringeColors.AddRange(colors);
+            if (seeds != null) foreach (var seed in seeds)
             {
-                pending.Push(x);
-                if (height > 1) pending.Push((height - 1) * width + x);
+                int i = (seed.Y * width + seed.X) * 4;
+                if (pixels[i + 3] > 8) fringeColors.Add(Color.FromRgb(pixels[i + 2], pixels[i + 1], pixels[i]));
             }
-            for (int y = 1; y < height - 1; y++)
-            {
-                pending.Push(y * width);
-                if (width > 1) pending.Push(y * width + width - 1);
-            }
-
-            int removed = 0, steps = 0;
-            while (pending.Count > 0)
-            {
-                if ((steps++ & 4095) == 0) cancellation.ThrowIfCancellationRequested();
-                int seed = pending.Pop();
-                if (background[seed] != 0 || !IsBackground(pixels, seed, colors, tolerance)) continue;
-                int y = seed / width, left = seed % width, right = left;
-                while (left > 0 && background[y * width + left - 1] == 0 &&
-                    IsBackground(pixels, y * width + left - 1, colors, tolerance)) left--;
-                while (right + 1 < width && background[y * width + right + 1] == 0 &&
-                    IsBackground(pixels, y * width + right + 1, colors, tolerance)) right++;
-                for (int x = left; x <= right; x++)
-                {
-                    background[y * width + x] = 1;
-                    removed++;
-                }
-                if (y > 0) PushRuns(y - 1, left, right, width, colors, tolerance,
-                    pixels, background, pending);
-                if (y + 1 < height) PushRuns(y + 1, left, right, width, colors, tolerance,
-                    pixels, background, pending);
-            }
+            if (fringeColors.Count == 0) fringeColors.AddRange(colors);
+            colors = fringeColors.ToArray();
+            int removed = 0;
+            for (int p = 0; p < length; p++) if (background[p] != 0) removed++;
             if (removed == 0)
-                throw new InvalidOperationException("Цвет фона не найден у края изображения. Увеличьте допуск или используйте AI.");
+                throw new InvalidOperationException(fromBorder
+                    ? "Цвет фона не найден у края изображения. Выберите фон на исходнике или увеличьте допуск."
+                    : "Щёлкните по области, которую нужно удалить.");
             if (cutPixels > 0)
                 background = ExpandBackground(background, width, height, cutPixels, cancellation);
 
@@ -234,28 +220,6 @@ namespace VanyaTools.Native
                 result.PixelWidth + "x" + result.PixelHeight + ".");
         }
 
-        private static bool IsBackground(byte[] pixels, int p, Color[] colors, int tolerance)
-        {
-            int i = p * 4;
-            if (pixels[i + 3] <= 8) return true;
-            int min = Math.Min(pixels[i], Math.Min(pixels[i + 1], pixels[i + 2]));
-            int max = Math.Max(pixels[i], Math.Max(pixels[i + 1], pixels[i + 2]));
-            Color color = colors[0];
-            // Recognize neutral RGB endpoints without deleting colored highlights.
-            // Profile-converted CMYK equivalents are checked below as extra targets.
-            if (color.R >= 240 && color.G >= 240 && color.B >= 240)
-            {
-                if (min >= 255 - tolerance && max - min <= 20) return true;
-            }
-            if (color.R <= 24 && color.G <= 24 && color.B <= 24)
-            {
-                if (max <= tolerance && max - min <= 20) return true;
-            }
-            for (int n = 0; n < colors.Length; n++)
-                if (ColorDistance(pixels, i, colors[n]) <= tolerance) return true;
-            return false;
-        }
-
         private static Color NearestColor(byte[] pixels, int i, Color[] colors)
         {
             Color best = colors[0];
@@ -272,20 +236,6 @@ namespace VanyaTools.Native
         {
             return Math.Max(Math.Abs(pixels[i] - color.B),
                 Math.Max(Math.Abs(pixels[i + 1] - color.G), Math.Abs(pixels[i + 2] - color.R)));
-        }
-
-        private static void PushRuns(int y, int left, int right, int width, Color[] colors, int tolerance,
-            byte[] pixels, byte[] background, Stack<int> pending)
-        {
-            int x = left;
-            while (x <= right)
-            {
-                int p = y * width + x;
-                if (background[p] != 0 || !IsBackground(pixels, p, colors, tolerance)) { x++; continue; }
-                pending.Push(p);
-                do { x++; p++; }
-                while (x <= right && background[p] == 0 && IsBackground(pixels, p, colors, tolerance));
-            }
         }
 
         private static bool TouchesBackground(byte[] background, int width, int height, int x, int y)
