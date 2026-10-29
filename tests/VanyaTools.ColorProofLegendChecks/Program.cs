@@ -50,5 +50,58 @@ internal static class Program
         } catch (InvalidOperationException error) {Require(error.Message.Contains("легендой"), "Width error does not explain the legend");}
         try {ColorProofGridLegendPlan.Build(null); throw new Exception("Accepted null plan");}
         catch (ArgumentException) {}
+        CheckLegendToggle();
+    }
+
+    private static void CheckLegendToggle()
+    {
+        Require(new ColorProofGridOptions().PrintLegend, "Printed formulas must be enabled by default");
+        foreach (bool cmyk in new[] {true, false})
+        foreach (bool compound in new[] {false, true}) {
+            var options = new ColorProofGridOptions {Cmyk=cmyk, Compound=compound,
+                BaseChannels=cmyk ? new[] {35,76,80,25} : new[] {70,100,130},
+                Columns=15, Rows=15, SheetWidthMm=570};
+            var enabled=ColorProofGridPlan.Build(options);
+            options.PrintLegend=false;
+            Require(!options.Copy().PrintLegend && !options.Clone().PrintLegend, "Options copy lost disabled legend");
+            var disabled=ColorProofGridPlan.Build(options);
+            Require(enabled.Options.PrintLegend && !disabled.Options.PrintLegend, "Plan snapshot did not preserve its own legend setting");
+            Require(Math.Abs(enabled.RequiredWidthMm-disabled.RequiredWidthMm-ColorProofGridLegendPlan.SideWidthMm)<.000001,
+                "Disabled formulas still reserve the side strip");
+            Require(ColorProofGridLegendPlan.ContentHeight(disabled)==disabled.HeightMm,
+                "Disabled formulas still reserve their long footer height");
+            Require(enabled.WidthMm==disabled.WidthMm && enabled.HeightMm==disabled.HeightMm,
+                "Legend toggle changed patch geometry");
+            Require(enabled.Patches.Count==disabled.Patches.Count && enabled.Patches.Zip(disabled.Patches,
+                (a,b)=>a.Values.SequenceEqual(b.Values)&&a.Xmm==b.Xmm&&a.Ymm==b.Ymm&&a.WidthMm==b.WidthMm&&a.HeightMm==b.HeightMm).All(value=>value),
+                "Legend toggle changed patch colors or numbering positions");
+            var catalog=ColorProofCatalog.Build(new[]{disabled});
+            Require(catalog.Patches.Count==disabled.Patches.Count && catalog.FindPatch(catalog.Patches.Count).Values.SequenceEqual(
+                ColorProofGridLegendPlan.Build(disabled).Entries.Count==catalog.Patches.Count ? catalog.Patches.Last().Values : new int[0]),
+                "Turning off printing discarded saved recipes");
+            options.SheetWidthMm=Math.Max(100,disabled.RequiredWidthMm);
+            Require(ColorProofGridPlan.Build(options).RequiredWidthMm<=options.SheetWidthMm,
+                "A fitting grid was rejected after disabling formulas");
+            options.PrintLegend=true;
+            try {ColorProofGridPlan.Build(options); throw new Exception("Narrow sheet accepted with formulas on");}
+            catch (InvalidOperationException error) {Require(error.Message.Contains("легендой"),"On error must explain side formulas");}
+        }
+        foreach (bool cmyk in new[] {true,false})
+        foreach (bool compound in cmyk ? new[] {false,true} : new[] {false}) {
+            var grid=new ColorProofGridOptions {Cmyk=cmyk,Compound=compound,PrintLegend=false,
+                BaseChannels=cmyk?new[]{35,76,80,25}:new[]{70,100,130},SheetWidthMm=570};
+            var seriesOptions=new ColorProofGridSeriesOptions {Grid=grid,Channel=2,Count=3};
+            Require(!seriesOptions.Copy().Grid.PrintLegend,"Series copy lost disabled formulas");
+            var series=ColorProofGridSeriesPlan.Build(seriesOptions);
+            Require(series.Pages.All(page=>!page.Options.PrintLegend&&ColorProofGridLegendPlan.ContentHeight(page)==page.HeightMm),
+                "Some series pages print or reserve disabled formulas");
+            var catalog=ColorProofCatalog.Build(series.Pages,series.OriginalBaseChannels);
+            Require(catalog.Patches.Count==series.TotalPatchCount&&catalog.Patches.Last().Number==series.TotalPatchCount,
+                "Series formulas were not catalogued when printing was off");
+            seriesOptions.Grid.PrintLegend=true;
+            var withLegend=ColorProofGridSeriesPlan.Build(seriesOptions);
+            Require(withLegend.Pages.All(page=>page.Options.PrintLegend)&&withLegend.TotalPatchCount==series.TotalPatchCount,
+                "Enabled formulas changed series count or failed to reach every page");
+        }
     }
 }

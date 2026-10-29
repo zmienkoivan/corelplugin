@@ -144,13 +144,16 @@ namespace VanyaTools.Native
                     patch.Quadrant == plan.ReferenceQuadrant && patch.Values.SequenceEqual(original))
                     AddReferenceFrame((object)app, (object)layer, (object)range, gridLeft, gridTop, patch);
             }
-            ColorProofGridLegendPlan legend = ColorProofGridLegendPlan.Build(plan, recipes.Values.Min(item => item.Number));
-            double legendLeft = gridLeft + plan.WidthMm + ColorProofGridLegendPlan.GapMm;
-            AddText(layer, range, legendLeft, gridTop, "Рецептуры " + (options.Cmyk ? "CMYK" : "RGB"),
-                8f, ColorProofGridLegendPlan.WidthMm);
-            foreach (ColorProofGridLegendPlan.Entry entry in legend.Entries)
-                AddText(layer, range, legendLeft + entry.Xmm, gridTop - entry.Ymm,
-                    entry.Text, ColorProofGridLegendPlan.FontPoints, ColorProofGridLegendPlan.ColumnWidthMm);
+            if (options.PrintLegend)
+            {
+                ColorProofGridLegendPlan legend = ColorProofGridLegendPlan.Build(plan, recipes.Values.Min(item => item.Number));
+                double legendLeft = gridLeft + plan.WidthMm + ColorProofGridLegendPlan.GapMm;
+                AddText(layer, range, legendLeft, gridTop, "Рецептуры " + (options.Cmyk ? "CMYK" : "RGB"),
+                    8f, ColorProofGridLegendPlan.WidthMm);
+                foreach (ColorProofGridLegendPlan.Entry entry in legend.Entries)
+                    AddText(layer, range, legendLeft + entry.Xmm, gridTop - entry.Ymm,
+                        entry.Text, ColorProofGridLegendPlan.FontPoints, ColorProofGridLegendPlan.ColumnWidthMm);
+            }
             double footer = gridTop - ColorProofGridLegendPlan.ContentHeight(plan) - 3;
             AddText(layer, range, left, footer, catalog.Id + " · выбранный образец № __________________", 8f, usable);
             AddText(layer, range, left, footer - 5, "Для повторного заказа укажите этот код и номер. Сравнивайте цвета по напечатанным образцам.", 7f, usable);

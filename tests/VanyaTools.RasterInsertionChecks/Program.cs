@@ -60,7 +60,8 @@ namespace VanyaTools.Native
     {
         internal readonly FakeDocument Document;
         internal double Left, Top, Width, Height;
-        internal bool Deleted, Imported;
+        internal bool Deleted, Imported, ThrowOnRead;
+        internal int ReadAttempts;
         internal FakeLayer Owner;
         internal string RawName;
         public int StaticID { get; }
@@ -77,7 +78,12 @@ namespace VanyaTools.Native
         }
         public FakeShape(FakeDocument document, FakeLayer layer, int id, string name, double left, double top, double width, double height, bool imported = false)
         { Document = document; Owner = layer; StaticID = id; RawName = name; Left = left; Top = top; Width = width; Height = height; Imported = imported; layer.Items.Add(this); }
-        private void Live() { if (Deleted) throw new InvalidOperationException("Object deleted"); }
+        private void Live()
+        {
+            ReadAttempts++;
+            if (ThrowOnRead) throw new InvalidOperationException("Original properties must not be read");
+            if (Deleted) throw new InvalidOperationException("Object deleted");
+        }
         private void Fail(string stage)
         { if (Imported && Document.App.Failure == stage) throw new InvalidOperationException("Injected " + stage); }
         public void SetSize(double width, double height)
@@ -149,10 +155,15 @@ namespace VanyaTools.Native
     public sealed class FakePage
     {
         public readonly FakeDocument Document;
-        public readonly int Index;
+        public int IndexValue;
+        public bool IndexThrows;
+        public int Index
+        {
+            get { if (IndexThrows) throw new InvalidOperationException("Captured page deleted"); return IndexValue; }
+        }
         public readonly List<FakeLayer> Layers = new List<FakeLayer>();
         public bool HideFindResults;
-        public FakePage(FakeDocument document, int index) { Document = document; Index = index; }
+        public FakePage(FakeDocument document, int index) { Document = document; IndexValue = index; }
         public FakeLayer CreateLayer(string name)
         {
             Document.App.Events.Add("CreateLayer");
@@ -165,6 +176,31 @@ namespace VanyaTools.Native
             Document.App.Events.Add("Find:" + id);
             return HideFindResults ? null : Layers.SelectMany(layer => layer.Items).FirstOrDefault(shape => !shape.Deleted && shape.StaticID == id);
         }
+    }
+    // An automation facade may represent the same page without sharing managed/COM identity.
+    public sealed class FakeCapturedPageFacade
+    {
+        private readonly FakePage Page;
+        public FakeCapturedPageFacade(FakePage page) { Page = page; }
+        public int Index => Page.Index;
+    }
+    // Destructive insertion must validate this captured reference but mutate the object
+    // resolved on the active page by StaticID, rather than a possibly stale wrapper.
+    public sealed class FakeCapturedShapeFacade
+    {
+        private readonly FakeShape Shape;
+        public string NameOverride;
+        public FakeCapturedShapeFacade(FakeShape shape) { Shape = shape; }
+        public int StaticID => Shape.StaticID;
+        public int Type => Shape.Type;
+        public string Name => NameOverride ?? Shape.Name;
+        public double LeftX => Shape.LeftX;
+        public double TopY => Shape.TopY;
+        public double SizeWidth => Shape.SizeWidth;
+        public double SizeHeight => Shape.SizeHeight;
+        public object Layer => Shape.Layer;
+        public void Move(double x, double y) { throw new Exception("Captured wrapper was mutated instead of active-page result"); }
+        public void Delete() { throw new Exception("Captured wrapper was deleted instead of active-page result"); }
     }
     public sealed class FakeDocument
     {
@@ -292,7 +328,7 @@ namespace VanyaTools.Native
             Run("CreateLayer throw never undoes previous user command", () => { var f = New("layer throw"); f.Save(RasterInsertionMode.ReplaceOriginal); f.App.Failure = "CreateLayer"; Throws(() => RasterResultInsertion.Import(f.Output, "QA", null, f.Source)); Check(f.Document.UndoCount == 0 && f.Document.EndCount == 1, "Unowned Undo"); Restored(f); });
             Run("CreateLayer null never undoes previous user command", () => { var f = New("layer null"); f.Save(RasterInsertionMode.ReplaceOriginal); f.App.Failure = "CreateLayerNull"; Throws(() => RasterResultInsertion.Import(f.Output, "QA", null, f.Source)); Check(f.Document.UndoCount == 0, "Unowned Undo after null layer"); Restored(f); });
             Run("Changed document identity rejected before mutation", () => { var f = New("wrong doc"); f.Save(RasterInsertionMode.ReplaceOriginal); var replacement = new FakeDocument(f.App, f.Document.FullFileName) { ActivePage = f.Page, ActiveLayer = f.Layer }; f.App.ActiveDocument = replacement; Throws(() => RasterResultInsertion.Import(f.Output, "QA", null, f.Source)); NoMutation(f); });
-            Run("Changed page identity same index rejected before mutation", () => { var f = New("wrong page"); f.Save(RasterInsertionMode.ReplaceOriginal); f.Document.ActivePage = new FakePage(f.Document, 1); Throws(() => RasterResultInsertion.Import(f.Output, "QA", null, f.Source)); NoMutation(f); });
+            Run("Different active page index rejected before mutation", () => { var f = New("wrong page"); f.Save(RasterInsertionMode.ReplaceOriginal); f.Document.ActivePage = new FakePage(f.Document, 2); Throws(() => RasterResultInsertion.Import(f.Output, "QA", null, f.Source)); NoMutation(f); });
             foreach (string change in new[] { "bounds", "name", "deleted" })
                 Run("Destructive changed source " + change + " rejected before mutation", () => { var f = New(change); f.Save(RasterInsertionMode.ReplaceOriginal); if (change == "bounds") f.A.Left += 1; else if (change == "name") f.A.RawName = "changed"; else { f.A.Deleted = true; f.Layer.Items.Remove(f.A); } Throws(() => RasterResultInsertion.Import(f.Output, "QA", null, f.Source)); NoMutation(f); });
             Run("Live NewAside tolerates deleted source and ignores current selection", () => { var f = New("live aside"); f.Save(RasterInsertionMode.NewAside); f.A.Deleted = true; f.Layer.Items.Remove(f.A); f.SelectOther(); RasterResultInsertion.Import(f.Output, "QA", null, f.Source); Eq(f.Imported.Left, 105); Eq(f.Other.Left, 800); Check(!f.Other.Deleted, "Today's selection modified"); });
@@ -311,6 +347,92 @@ namespace VanyaTools.Native
                 Check(f.A.Deleted && !f.B.Deleted && !f.Other.Deleted, "Safe retry moved/deleted remaining originals or selection");
                 Check(f.Document.BeginCount == 2 && f.Document.EndCount == 2 && f.Document.UndoCount == 1, "Unexpected retry Undo behavior");
                 Check(f.Page.Layers.Count == 1, "Retry leaked temporary layer");
+            });
+            foreach (RasterInsertionMode mode in new[] { RasterInsertionMode.NewAside, RasterInsertionMode.ReplaceOriginal })
+                Run("Fresh wrapper for same runtime page allowed: " + mode, () => {
+                    var f = New("same page wrapper " + mode); f.Save(mode); f.Source.NativePage = new FakeCapturedPageFacade(f.Page);
+                    RasterResultInsertion.Import(f.Output, "QA page wrapper", null, f.Source);
+                    Eq(f.Imported.Left, mode == RasterInsertionMode.NewAside ? 105 : 95);
+                    Check(f.A.Deleted == (mode == RasterInsertionMode.ReplaceOriginal), "Wrong wrapper-case insertion mode");
+                });
+            Run("Same native page identity permits a readable reordered page", () => {
+                var f = New("same page reordered"); f.Save(RasterInsertionMode.ReplaceOriginal);
+                Check(f.Source.Page == 1, "Fixture captured index changed"); f.Page.IndexValue = 2;
+                RasterResultInsertion.Import(f.Output, "QA same reordered page", null, f.Source);
+                Check(f.A.Deleted && f.B.Deleted, "Same original page rejected after reordering");
+            });
+            Run("Following page facade cannot alias a changed captured index", () => {
+                var f = New("page proxy alias"); f.Save(RasterInsertionMode.ReplaceOriginal);
+                Check(f.Source.Page == 1, "Fixture captured index changed");
+                f.Page.IndexValue = 2; f.Source.NativePage = new FakeCapturedPageFacade(f.Page);
+                Throws(() => RasterResultInsertion.Import(f.Output, "QA page alias", null, f.Source)); NoMutation(f);
+            });
+            Run("Deleted captured page rejects even identical object reference", () => {
+                var f = New("deleted page getter"); f.Save(RasterInsertionMode.NewAside); f.Page.IndexThrows = true;
+                Throws(() => RasterResultInsertion.Import(f.Output, "QA deleted page", null, f.Source)); NoMutation(f);
+            });
+            Run("Different captured UI thread rejected before mutation", () => {
+                var f = New("wrong captured thread"); f.Save(RasterInsertionMode.NewAside); f.Source.ThreadId++;
+                Throws(() => RasterResultInsertion.Import(f.Output, "QA wrong thread", null, f.Source)); NoMutation(f);
+            });
+            Run("Destructive lookup mutates active-page results rather than captured wrappers", () => {
+                var f = New("shape wrappers"); f.Save(RasterInsertionMode.ReplaceOriginal);
+                f.Source.NativeShapes[0] = new FakeCapturedShapeFacade(f.A); f.Source.NativeShapes[1] = new FakeCapturedShapeFacade(f.B);
+                RasterResultInsertion.Import(f.Output, "QA shape wrappers", null, f.Source);
+                Check(f.A.Deleted && f.B.Deleted, "Active-page source not replaced");
+                Check(f.App.Events.Contains("Find:11") && f.App.Events.Contains("Find:12"), "StaticID lookup was skipped");
+            });
+            Run("Destructive lookup rejects source moved to foreign page", () => {
+                var f = New("foreign original"); f.Save(RasterInsertionMode.ReplaceOriginal);
+                var foreignPage = new FakePage(f.Document, 2); var foreignLayer = new FakeLayer(f.Document, foreignPage, "foreign"); foreignPage.Layers.Add(foreignLayer);
+                f.Layer.Items.Remove(f.A); foreignLayer.Items.Add(f.A); f.A.Owner = foreignLayer;
+                Throws(() => RasterResultInsertion.Import(f.Output, "QA moved source", null, f.Source)); NoMutation(f);
+                Check(!f.A.Deleted && f.A.Owner == foreignLayer, "Foreign source changed");
+            });
+            Run("Destructive lookup also rejects changed captured-reference metadata", () => {
+                var f = New("captured metadata"); f.Save(RasterInsertionMode.ReplaceOriginal);
+                f.Source.NativeShapes[0] = new FakeCapturedShapeFacade(f.A) { NameOverride = "changed captured reference" };
+                Throws(() => RasterResultInsertion.Import(f.Output, "QA metadata", null, f.Source)); NoMutation(f);
+            });
+            foreach (bool missing in new[] { true, false })
+                Run("Destructive lookup rejects " + (missing ? "null" : "incomplete") + " captured shape refs", () => {
+                    var f = New("missing captured refs " + missing); f.Save(RasterInsertionMode.ReplaceOriginal);
+                    if (missing) f.Source.NativeShapes = null; else f.Source.NativeShapes.RemoveAt(1);
+                    Throws(() => RasterResultInsertion.Import(f.Output, "QA missing refs", null, f.Source)); NoMutation(f);
+                });
+            Run("NewAside never reads source originals and uses current active layer", () => {
+                var f = New("aside source not read"); f.Save(RasterInsertionMode.NewAside); f.SelectOther();
+                var currentLayer = new FakeLayer(f.Document, f.Page, "current target"); f.Page.Layers.Add(currentLayer); f.Document.ActiveLayer = currentLayer;
+                f.A.ReadAttempts = f.B.ReadAttempts = 0; f.A.ThrowOnRead = f.B.ThrowOnRead = true; f.Source.NativeShapes = null;
+                RasterResultInsertion.Import(f.Output, "QA non-reading aside", null, f.Source);
+                Eq(f.Imported.Left, 105); Eq(f.Imported.Top, 215);
+                Check(f.Imported.Owner == currentLayer, "NewAside used captured layer");
+                Check(f.A.ReadAttempts == 0 && f.B.ReadAttempts == 0, "NewAside accessed source properties");
+                Check(!f.A.Deleted && !f.B.Deleted && !f.Other.Deleted, "NewAside altered originals or current selection");
+            });
+            Run("NewAside allows fresh document automation identity for exact saved path", () => {
+                var captured = New("same file captured"); captured.Save(RasterInsertionMode.NewAside);
+                var current = New("same file current"); current.Document.FullFileName = captured.Document.FullFileName; current.SelectOther();
+                RasterResultInsertion.Import(captured.Output, "QA same-path facade", null, captured.Source);
+                Eq(current.Imported.Left, 105); Eq(current.Imported.Top, 215);
+                Check(current.Document.BeginCount == 1 && captured.Document.BeginCount == 0, "Wrong document was mutated");
+                Check(!current.A.Deleted && !current.B.Deleted && !current.Other.Deleted && !captured.A.Deleted && !captured.B.Deleted, "NewAside changed originals");
+            });
+            foreach (RasterInsertionMode mode in new[] { RasterInsertionMode.ReplaceOriginal, RasterInsertionMode.MoveOriginalAside })
+                Run("Same file path never relaxes destructive document identity: " + mode, () => {
+                    var captured = New("strict doc captured " + mode); captured.Save(mode);
+                    var current = New("strict doc current " + mode); current.Document.FullFileName = captured.Document.FullFileName;
+                    Throws(() => RasterResultInsertion.Import(captured.Output, "QA strict document", null, captured.Source)); NoMutation(current); NoMutation(captured);
+                });
+            Run("NewAside rejects different document path despite matching page index", () => {
+                var captured = New("different path captured"); captured.Save(RasterInsertionMode.NewAside);
+                var current = New("different path current");
+                Throws(() => RasterResultInsertion.Import(captured.Output, "QA different path", null, captured.Source)); NoMutation(current); NoMutation(captured);
+            });
+            Run("NewAside never matches two empty document paths", () => {
+                var captured = New("empty path captured"); captured.Source.DocumentPath = ""; captured.Save(RasterInsertionMode.NewAside);
+                var current = New("empty path current"); current.Document.FullFileName = "";
+                Throws(() => RasterResultInsertion.Import(captured.Output, "QA empty path", null, captured.Source)); NoMutation(current); NoMutation(captured);
             });
             Run("Preexisting Optimization true restored", () => { var f = New("optimization"); f.Save(RasterInsertionMode.NewAside); f.App.Optimization = true; RasterResultInsertion.Import(f.Output, "QA", null, f.Source); Check(f.App.Optimization, "Optimization not restored"); });
             var report = new { Passed = Passed.Count, Failed = Failed.Count, PassedChecks = Passed, Failures = Failed, Runtime = Environment.Version.ToString(), Apartment = Thread.CurrentThread.GetApartmentState().ToString(), FakeOnly = true };

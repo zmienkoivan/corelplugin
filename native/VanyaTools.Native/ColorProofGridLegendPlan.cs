@@ -48,6 +48,8 @@ namespace VanyaTools.Native
         }
 
         public static double ContentHeight(ColorProofGridPlan plan) =>
-            Math.Max(plan.HeightMm, HeadingHeightMm + (plan.Patches.Count + 1) / 2 * RowPitchMm);
+            plan.Options.PrintLegend
+                ? Math.Max(plan.HeightMm, HeadingHeightMm + (plan.Patches.Count + 1) / 2 * RowPitchMm)
+                : plan.HeightMm;
     }
 }

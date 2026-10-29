@@ -8,6 +8,7 @@ namespace VanyaTools.Native
     {
         public bool Cmyk = true;
         public bool Compound;
+        public bool PrintLegend { get; set; } = true;
         public int[] BaseChannels;
         public int HorizontalChannel;
         public int VerticalChannel = 1;
@@ -85,7 +86,8 @@ namespace VanyaTools.Native
         public int ReferenceQuadrant { get; private set; }
         public double WidthMm { get; private set; }
         public double HeightMm { get; private set; }
-        public double RequiredWidthMm => 2 * MarginMm + AxisWidthMm + WidthMm + ColorProofGridLegendPlan.SideWidthMm;
+        public double RequiredWidthMm => 2 * MarginMm + AxisWidthMm + WidthMm +
+            (Options.PrintLegend ? ColorProofGridLegendPlan.SideWidthMm : 0);
 
         public static ColorProofGridPlan Build(ColorProofGridOptions options)
         {
@@ -188,11 +190,12 @@ namespace VanyaTools.Native
             double labelsPerRow = snapshot.Compound ? 2 : 1;
             double rowPitch = size + labelsPerRow * NumberBandMm + snapshot.GapMm;
             double height = snapshot.Rows * (size + labelsPerRow * NumberBandMm) + (snapshot.Rows - 1) * snapshot.GapMm;
-            double required = 2 * MarginMm + AxisWidthMm + width + ColorProofGridLegendPlan.SideWidthMm;
+            double required = 2 * MarginMm + AxisWidthMm + width +
+                (snapshot.PrintLegend ? ColorProofGridLegendPlan.SideWidthMm : 0);
             if (!Finite(width) || !Finite(height) || !Finite(required))
                 throw new InvalidOperationException("Габариты сетки слишком велики. Уменьшите размеры ячеек или промежутки.");
             if (required > snapshot.SheetWidthMm + 0.000001)
-                throw new InvalidOperationException("Сетка с полями и легендой справа требует ширину " +
+                throw new InvalidOperationException((snapshot.PrintLegend ? "Сетка с полями и легендой справа требует ширину " : "Сетка с полями требует ширину ") +
                     required.ToString("0.###", CultureInfo.CurrentCulture) + " мм. Увеличьте ширину листа или уменьшите сетку.");
             if (height > MaxGridHeightMm)
                 throw new InvalidOperationException("Высота сетки цветопробы превышает 45 м. Уменьшите число строк или размер ячейки.");

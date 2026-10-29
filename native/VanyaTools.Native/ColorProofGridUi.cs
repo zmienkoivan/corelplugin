@@ -21,6 +21,7 @@ namespace VanyaTools.Native
         private readonly FrameworkElement[] _gridBaseFields = new FrameworkElement[4], _gridExtraRows = new FrameworkElement[4];
         private FrameworkElement _gridCellField, _gridTileField;
         private TextBlock _gridSummary;
+        private CheckBox _gridPrintLegend;
         private Expander _gridSketchExpander;
         private Viewbox _gridSketch, _gridWindowSketch;
         private Window _gridPreviewWindow;
@@ -93,6 +94,12 @@ namespace VanyaTools.Native
             _gridExtras.Children.Add(Note("Пусто — авто. Отклонения прибавляются к эталону, например −2 0 +2 +4. В серии один канал меняется между листами, второй — в четырёх частях клетки."));
             _gridAdvanced.Children.Add(_gridExtras);
             _gridSummary = Note(""); _gridSummary.Margin = new Thickness(0, 3, 0, 5); _gridPanel.Children.Add(_gridSummary);
+            _gridPrintLegend = new CheckBox { Content = "Формулы справа на листе", Name = "ProofPrintLegend", IsChecked = true,
+                Margin = new Thickness(0, 2, 0, 5),
+                ToolTip = "Печатается справа на новых таблицах; ранее созданные страницы не меняются." };
+            _gridPrintLegend.Checked += (_, __) => QueueGridPreview();
+            _gridPrintLegend.Unchecked += (_, __) => QueueGridPreview();
+            _gridPanel.Children.Add(_gridPrintLegend);
             _gridSketch = new Viewbox { Height = 180, Stretch = Stretch.Uniform,
                 ToolTip = "Экранные цвета ориентировочные. Эталон выделен рамкой; окончательное сравнение — по печати." };
             var sketchContent = new StackPanel();
@@ -232,6 +239,7 @@ namespace VanyaTools.Native
                 }).ToArray();
             }
             return new ColorProofGridOptions { Cmyk = cmyk, Compound = compound, BaseChannels = values,
+                PrintLegend = _gridPrintLegend.IsChecked == true,
                 HorizontalChannel = _gridX.SelectedIndex, VerticalChannel = _gridY.SelectedIndex,
                 Columns = GridInteger(_gridColumns, 1, 31, "Столбцов"), Rows = GridInteger(_gridRows, 1, 31, "Строк"),
                 StepX = GridInteger(_gridStepX, 1, limit, "Шаг X"), StepY = GridInteger(_gridStepY, 1, limit, "Шаг Y"),
@@ -273,7 +281,9 @@ namespace VanyaTools.Native
                     GridMm(plan.WidthMm) + " × " + GridMm(plan.HeightMm) + " мм";
                 _gridSummary.ToolTip = options.Columns + " × " + options.Rows + ". " +
                     "X " + names[options.HorizontalChannel] + ": " + plan.AxisX.First() + "…" + plan.AxisX.Last() +
-                    "; Y " + names[options.VerticalChannel] + ": " + plan.AxisY.First() + "…" + plan.AxisY.Last() + ".\n" + channels;
+                    "; Y " + names[options.VerticalChannel] + ": " + plan.AxisY.First() + "…" + plan.AxisY.Last() + ".\n" + channels +
+                    "\nФормулы справа: " + (options.PrintLegend ? "включены" : "выключены") +
+                    ". Ширина с полями: " + GridMm(plan.RequiredWidthMm) + " мм.";
                 _gridColorBaseTip = _gridSummary.ToolTip as string ?? "";
                 DockerTheme.UseTheme(_gridSummary, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
                 if (_createProof != null) { _createProof.IsEnabled = true; _createProof.Content = _gridVisibleSeries == null
@@ -302,7 +312,8 @@ namespace VanyaTools.Native
             try { Directory.CreateDirectory(Path.GetDirectoryName(WidthPath)); File.WriteAllText(WidthPath, options.SheetWidthMm.ToString(CultureInfo.InvariantCulture)); }
             catch (Exception error) { Log.Error("Could not save color proof sheet width.", error); }
             _status("Создана " + renderer.LastCatalogId + ": " + count + " образцов · " + (options.Cmyk ? "CMYK" : "RGB") +
-                ". Сохраните CDR — в нём записаны номера и точные составы цветов.", false);
+                (options.PrintLegend ? ". Формулы напечатаны справа." : ". Формулы на листе выключены.") +
+                " Сохраните CDR — в нём записаны номера и точные составы цветов.", false);
         }
 
         private void ShowGridSketch()
@@ -384,12 +395,15 @@ namespace VanyaTools.Native
                     canvas.Children.Add(marker);
                 }
             }
-            ColorProofGridLegendPlan legend = ColorProofGridLegendPlan.Build(plan, firstNumber);
-            double legendLeft = left + plan.WidthMm + ColorProofGridLegendPlan.GapMm;
-            GridSketchText(canvas, legendLeft, top, "Рецептуры " + (options.Cmyk ? "CMYK" : "RGB"), 8 * 25.4 / 72);
-            foreach (ColorProofGridLegendPlan.Entry entry in legend.Entries)
-                GridSketchText(canvas, legendLeft + entry.Xmm, top + entry.Ymm, entry.Text,
-                    ColorProofGridLegendPlan.FontPoints * 25.4 / 72);
+            if (options.PrintLegend)
+            {
+                ColorProofGridLegendPlan legend = ColorProofGridLegendPlan.Build(plan, firstNumber);
+                double legendLeft = left + plan.WidthMm + ColorProofGridLegendPlan.GapMm;
+                GridSketchText(canvas, legendLeft, top, "Рецептуры " + (options.Cmyk ? "CMYK" : "RGB"), 8 * 25.4 / 72);
+                foreach (ColorProofGridLegendPlan.Entry entry in legend.Entries)
+                    GridSketchText(canvas, legendLeft + entry.Xmm, top + entry.Ymm, entry.Text,
+                        ColorProofGridLegendPlan.FontPoints * 25.4 / 72);
+            }
             var footer = new TextBlock { Text = "Выберите цвет и сообщите номер под образцом.", FontSize = 3.5, Foreground = Brushes.Black,
                 Width = Math.Max(60, plan.WidthMm), TextWrapping = TextWrapping.Wrap };
             Canvas.SetLeft(footer, left); Canvas.SetTop(footer, top + ColorProofGridLegendPlan.ContentHeight(plan) + 4); canvas.Children.Add(footer);

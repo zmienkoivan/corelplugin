@@ -171,7 +171,10 @@ namespace VanyaTools.Native
             RequireBounds(placement.LeftMm, placement.TopMm, placement.WidthMm, placement.HeightMm);
             RasterInsertionMode mode = placement.Diagnostic ? RasterInsertionMode.NewAside : requestedMode ?? placement.Mode;
             if (!RasterInsertionSettings.Valid(mode)) throw new InvalidOperationException("Неизвестный режим вставки.");
-            RasterInsertionSource source = liveSource != null && liveSource.CaptureId == placement.Source.CaptureId ? liveSource : placement.Source;
+            bool captureMatches = liveSource != null && liveSource.CaptureId == placement.Source.CaptureId;
+            RasterInsertionSource source = captureMatches ? liveSource : placement.Source;
+            Log.Info("Raster insertion source: liveProvided=" + (liveSource != null) + ", captureMatches=" + captureMatches +
+                ", runtimeDocument=" + (source.Document != null) + ", mode=" + mode + ", capture=" + source.CaptureId + ".");
             ResolvedSource resolved = Resolve(source, mode);
             dynamic app = resolved.App, doc = resolved.Document, page = resolved.Page;
             int oldUnit = Convert.ToInt32(doc.Unit);
@@ -251,14 +254,51 @@ namespace VanyaTools.Native
             if (doc == null || source == null || source.Page < 1)
                 throw new InvalidOperationException("Откройте исходный документ для вставки готового изображения.");
             bool live = source.Document != null;
+            object activePage = (object)doc.ActivePage;
             if (live)
             {
-                if (source.ThreadId != Thread.CurrentThread.ManagedThreadId || !SameObject((object)doc, source.Document) ||
-                    !SameObject((object)doc.ActivePage, source.NativePage)) throw WrongDocument(source);
+                bool sameThread = source.ThreadId == Thread.CurrentThread.ManagedThreadId;
+                bool sameDocument = SameObject((object)doc, source.Document);
+                string activePath = DocumentPath((object)doc);
+                bool pathFallback = !sameDocument && mode == RasterInsertionMode.NewAside &&
+                    !String.IsNullOrEmpty(source.DocumentPath) && String.Equals(activePath, source.DocumentPath, StringComparison.OrdinalIgnoreCase);
+                bool samePageObject = SameObject(activePage, source.NativePage);
+                int activeIndex = -1, sourceIndex = -1;
+                bool readablePage = false;
+                try
+                {
+                    activeIndex = Convert.ToInt32(((dynamic)activePage).Index);
+                    sourceIndex = Convert.ToInt32(((dynamic)source.NativePage).Index);
+                    readablePage = activeIndex > 0 && sourceIndex > 0;
+                }
+                catch { }
+                // Another automation wrapper may represent the same Page. The fallback
+                // also requires the captured number: an ActivePage facade which follows
+                // the current page must not authorise a switch to another page.
+                bool samePage = readablePage && (samePageObject || activeIndex == sourceIndex && activeIndex == source.Page);
+                Log.Info("Raster insertion context: sameThread=" + sameThread + ", sourceThread=" + source.ThreadId +
+                    ", currentThread=" + Thread.CurrentThread.ManagedThreadId + ", sameDocument=" + sameDocument + ", pathFallback=" + pathFallback +
+                    ", pageIUnknown=" + samePageObject + ", readablePage=" + readablePage +
+                    ", activePage=" + activeIndex + ", sourceRuntimePage=" + sourceIndex + ", capturedPage=" + source.Page +
+                    ", app=" + ObjectKind((object)app) + ", activeDocument=" + ObjectKind((object)doc) +
+                    ", sourceDocument=" + ObjectKind(source.Document) + ".");
+                if (!sameThread) throw WrongDocument(source, "другой поток интерфейса", sourceIndex);
+                if (!sameDocument && !pathFallback) throw WrongDocument(source, "другой документ", sourceIndex);
+                if (pathFallback) Log.Info("Raster insertion nondestructive document-path fallback: " + activePath + ".");
+                if (!samePage) throw WrongDocument(source, readablePage ? "другая страница" : "исходная страница недоступна", sourceIndex);
             }
             else if (String.IsNullOrEmpty(source.DocumentPath) || !String.Equals(DocumentPath((object)doc), source.DocumentPath, StringComparison.OrdinalIgnoreCase) ||
-                Convert.ToInt32(doc.ActivePage.Index) != source.Page) throw WrongDocument(source);
-            var result = new ResolvedSource { App = (object)app, Document = (object)doc, Page = (object)doc.ActivePage };
+                Convert.ToInt32(((dynamic)activePage).Index) != source.Page)
+            {
+                Log.Info("Raster insertion restored context mismatch: sourcePath=" + source.DocumentPath +
+                    ", activePath=" + DocumentPath((object)doc) + ", capturedPage=" + source.Page + ".");
+                throw WrongDocument(source, "исходный файл или страница не открыты");
+            }
+            var result = new ResolvedSource { App = (object)app, Document = (object)doc, Page = activePage };
+            // This mode is nondestructive and only needs the proven document/page.
+            // It must not depend on the old artwork still existing or being unchanged.
+            if (mode == RasterInsertionMode.NewAside)
+            { result.Layer = (object)doc.ActiveLayer; return result; }
             if (!live && mode != RasterInsertionMode.NewAside)
             {
                 bool unchanged = false;
@@ -279,22 +319,26 @@ namespace VanyaTools.Native
                 if (source.Shapes == null || source.Shapes.Count == 0) throw ChangedSource();
                 for (int index = 0; index < source.Shapes.Count; index++)
                 {
+                    RasterInsertionShape expected = source.Shapes[index];
                     object shape;
-                    try { shape = live ? source.NativeShapes[index] : (object)doc.ActivePage.FindShape(null, 0, source.Shapes[index].Id, true); }
+                    try { shape = (object)((dynamic)activePage).FindShape(null, 0, expected.Id, true); }
                     catch { throw ChangedSource(); }
                     if (shape == null) throw ChangedSource();
                     RasterInsertionShape current;
                     try { current = ReadShape(shape); } catch { throw ChangedSource(); }
-                    if (!SameShape(source.Shapes[index], current)) throw ChangedSource();
+                    if (!SameShape(expected, current)) throw ChangedSource();
+                    if (live)
+                    {
+                        // Prove both that the captured original is still unchanged and that
+                        // this document's unique StaticID is present on the active page.
+                        // Native wrapper equality is not required for a Shape returned anew.
+                        RasterInsertionShape original;
+                        try { original = ReadShape(source.NativeShapes[index]); } catch { throw ChangedSource(); }
+                        if (!SameShape(expected, original)) throw ChangedSource();
+                    }
                     result.Shapes.Add(shape);
                 }
                 result.Layer = live ? source.TargetLayer : (object)((dynamic)result.Shapes[0]).Layer;
-            }
-            catch (InvalidOperationException) when (mode == RasterInsertionMode.NewAside)
-            {
-                // A nondestructive retry can still use the recorded canvas location even if
-                // the old objects cannot be proven. It never moves/deletes today's selection.
-                result.Shapes.Clear(); result.Layer = (object)doc.ActiveLayer;
             }
             finally { doc.Unit = oldUnit; }
             return result;
@@ -344,18 +388,26 @@ namespace VanyaTools.Native
         }
         private static InvalidOperationException ChangedSource() => new InvalidOperationException(
             "Исходные объекты удалены или изменены после захвата. Готовый PNG сохранён; исходник не заменён.");
-        private static InvalidOperationException WrongDocument(RasterInsertionSource source) => new InvalidOperationException(
-            "Вернитесь в исходный документ и страницу " + source.Page + " перед вставкой. Готовый PNG сохранён." +
+        private static InvalidOperationException WrongDocument(RasterInsertionSource source, string reason = null, int runtimePage = -1) => new InvalidOperationException(
+            "Вернитесь в исходный документ и страницу " + (runtimePage > 0 ? runtimePage : source.Page) +
+            " перед вставкой" + (String.IsNullOrEmpty(reason) ? "" : " (" + reason + ")") + ". Готовый PNG сохранён." +
             (String.IsNullOrEmpty(source.DocumentPath) ? "" : "\n" + source.DocumentPath));
         private static string Sidecar(string output) => output + ".insertion.json";
         private static void RequireSta()
         { if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA) throw new InvalidOperationException("Вставка изображения должна выполняться в интерфейсе CorelDRAW."); }
+        private static string ObjectKind(object value)
+        {
+            if (value == null) return "null";
+            try { return value.GetType().FullName + "/COM=" + Marshal.IsComObject(value); }
+            catch { return "unavailable"; }
+        }
         private static bool SameObject(object a, object b)
         {
             if (ReferenceEquals(a, b)) return true;
-            if (a == null || b == null || !Marshal.IsComObject(a) || !Marshal.IsComObject(b)) return false;
+            if (a == null || b == null) return false;
             IntPtr first = IntPtr.Zero, second = IntPtr.Zero;
             try { first = Marshal.GetIUnknownForObject(a); second = Marshal.GetIUnknownForObject(b); return first == second; }
+            catch { return false; }
             finally { if (first != IntPtr.Zero) Marshal.Release(first); if (second != IntPtr.Zero) Marshal.Release(second); }
         }
     }
