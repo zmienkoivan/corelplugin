@@ -339,7 +339,8 @@ namespace VanyaTools.Native
         private static Canvas GridSketchWithReference(ColorProofGridPlan plan, bool showReference, int firstNumber = 1)
         {
             const double left = 8, top = 14;
-            var canvas = new Canvas { Width = plan.WidthMm + 16, Height = plan.HeightMm + 30, Background = Brushes.White };
+            var canvas = new Canvas { Width = plan.RequiredWidthMm,
+                Height = ColorProofGridLegendPlan.ContentHeight(plan) + 30, Background = Brushes.White };
             var options = plan.Options; string[] names = GridChannelNames(options.Cmyk);
             GridSketchText(canvas, left, 0, "Образцы №" + firstNumber + "–" + (firstNumber + plan.Patches.Count - 1), 5);
             int number = firstNumber;
@@ -383,9 +384,15 @@ namespace VanyaTools.Native
                     canvas.Children.Add(marker);
                 }
             }
+            ColorProofGridLegendPlan legend = ColorProofGridLegendPlan.Build(plan, firstNumber);
+            double legendLeft = left + plan.WidthMm + ColorProofGridLegendPlan.GapMm;
+            GridSketchText(canvas, legendLeft, top, "Рецептуры " + (options.Cmyk ? "CMYK" : "RGB"), 8 * 25.4 / 72);
+            foreach (ColorProofGridLegendPlan.Entry entry in legend.Entries)
+                GridSketchText(canvas, legendLeft + entry.Xmm, top + entry.Ymm, entry.Text,
+                    ColorProofGridLegendPlan.FontPoints * 25.4 / 72);
             var footer = new TextBlock { Text = "Выберите цвет и сообщите номер под образцом.", FontSize = 3.5, Foreground = Brushes.Black,
                 Width = Math.Max(60, plan.WidthMm), TextWrapping = TextWrapping.Wrap };
-            Canvas.SetLeft(footer, left); Canvas.SetTop(footer, top + plan.HeightMm + 4); canvas.Children.Add(footer);
+            Canvas.SetLeft(footer, left); Canvas.SetTop(footer, top + ColorProofGridLegendPlan.ContentHeight(plan) + 4); canvas.Children.Add(footer);
             return canvas;
         }
 

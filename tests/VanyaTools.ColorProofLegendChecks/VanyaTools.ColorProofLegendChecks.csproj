@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../native/VanyaTools.Native/ColorProofGridPlan.cs" Link="ColorProofGridPlan.cs" />
+    <Compile Include="../../native/VanyaTools.Native/ColorProofGridLegendPlan.cs" Link="ColorProofGridLegendPlan.cs" />
+    <Compile Include="../../native/VanyaTools.Native/ColorProofGridSeriesPlan.cs" Link="ColorProofGridSeriesPlan.cs" />
+    <Compile Include="../../native/VanyaTools.Native/ColorProofCatalog.cs" Link="ColorProofCatalog.cs" />
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+</Project>
