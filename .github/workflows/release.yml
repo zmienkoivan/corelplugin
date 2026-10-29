@@ -29,6 +29,14 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.ColorProofLegendChecks/VanyaTools.ColorProofLegendChecks.csproj --configuration Release
 
+      - name: Check raster insertion
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.RasterInsertionChecks/VanyaTools.RasterInsertionChecks.csproj --configuration Release
+
+      - name: Check selection color summary
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.SelectionColorSummaryChecks/VanyaTools.SelectionColorSummaryChecks.csproj --configuration Release
+
       - name: Build installer package
         shell: pwsh
         run: .\package-native.ps1

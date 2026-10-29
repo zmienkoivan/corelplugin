@@ -55,7 +55,9 @@ namespace VanyaTools.Native
                 }
                 finally { doc.Unit = oldUnit; }
                 _correctionDocument = doc;
+                CaptureRasterInsertion();
                 source = AiSelectionCapture.CaptureForCorrection();
+                SetRasterInsertionInput(source);
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
                 int.TryParse(_alphaThreshold.Text, out int threshold);
@@ -78,7 +80,9 @@ namespace VanyaTools.Native
                 placement.OffsetX = result.OffsetMm.Item1; placement.OffsetY = result.OffsetMm.Item2;
                 // Keep the placement with the ready PNG so a failed import can
                 // be retried without recapture, recomputation or lost offsets.
-                File.WriteAllText(result.OutputPath + ".placement.json", new JavaScriptSerializer().Serialize(placement));
+                PrepareRasterInsertion(result.OutputPath, placement.OffsetX, placement.OffsetY);
+                if (_mode != SimpleAiMode.Raster)
+                    File.WriteAllText(result.OutputPath + ".placement.json", new JavaScriptSerializer().Serialize(placement));
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), result.OutputPath);
                 _readyOutput = result.OutputPath;

@@ -156,7 +156,7 @@ namespace VanyaTools.Native
         // A model may return a much smaller PNG. Use its alpha as a mask and keep
         // full-size color pixels from the original Corel capture.
         public static void ApplyModelMask(string source, string modelOutput, string output,
-            CancellationToken cancellation)
+            CancellationToken cancellation, bool preserveCanvas = false)
         {
             BitmapSource original = AiPrintTab.Bitmap(source);
             BitmapSource model = AiPrintTab.Bitmap(modelOutput);
@@ -223,14 +223,14 @@ namespace VanyaTools.Native
             int bottomEdge = Math.Min(height - 1, maxY + padding);
             BitmapSource bitmap = BitmapSource.Create(width, height, original.DpiX, original.DpiY,
                 PixelFormats.Bgra32, null, pixels, stride);
-            BitmapSource result = left == 0 && topEdge == 0 && right == width - 1 && bottomEdge == height - 1
+            BitmapSource result = preserveCanvas || left == 0 && topEdge == 0 && right == width - 1 && bottomEdge == height - 1
                 ? bitmap : new CroppedBitmap(bitmap,
                     new System.Windows.Int32Rect(left, topEdge, right - left + 1, bottomEdge - topEdge + 1));
             cancellation.ThrowIfCancellationRequested();
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(result));
             using (var stream = File.Create(output)) encoder.Save(stream);
-            Log.Info("Background mask cropped: " + width + "x" + height + " -> " +
+            Log.Info("Background mask " + (preserveCanvas ? "canvas preserved: " : "cropped: ") + width + "x" + height + " -> " +
                 result.PixelWidth + "x" + result.PixelHeight + ".");
         }
 

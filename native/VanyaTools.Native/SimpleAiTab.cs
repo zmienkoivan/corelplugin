@@ -135,6 +135,7 @@ namespace VanyaTools.Native
                 backgroundTools.Children.Add(_backgroundModel);
                 panel.Children.Add(backgroundTools);
                 if (printButtons != null) panel.Children.Add(printButtons);
+                panel.Children.Add(BuildRasterOutputTools());
             }
             var correctionTools = DockerLayout.ToolGroup("Коррекция");
             _correctionButton = DockerTheme.Primary(Button("Коррекция и обводка…", async (_, __) => await OpenCorrection()));
@@ -632,7 +633,9 @@ namespace VanyaTools.Native
                 // Corel COM capture must run on the UI thread. It duplicates the selection,
                 // rasterizes the temporary copy, then restores the original objects.
                 Log.Info("Simple AI capture starting: " + action);
+                CaptureRasterInsertion();
                 string source = action == "background" ? AiSelectionCapture.Capture() : _capture();
+                SetRasterInsertionInput(source);
                 Log.Info("Simple AI capture finished: " + action);
                 _lastSource = action == "background" ? source : null;
                 _sourcePreview.Source = PreviewBitmap(source);
@@ -673,7 +676,9 @@ namespace VanyaTools.Native
             {
                 await Dispatcher.Yield(DispatcherPriority.Background);
                 _importWarning = null;
+                CaptureRasterInsertion();
                 source = AiSelectionCapture.CaptureForCorrection();
+                SetRasterInsertionInput(source);
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
                 var dialog = new BackgroundRemovalWindow(source, _backgroundOptions, BackgroundVariants);
@@ -684,6 +689,7 @@ namespace VanyaTools.Native
                 _backgroundOptions = dialog.Options;
                 if (!accepted || String.IsNullOrEmpty(dialog.OutputPath))
                 { Report("Удаление фона отменено.", false); return; }
+                PrepareRasterInsertion(dialog.OutputPath);
                 _readyOutput = dialog.OutputPath;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), _readyOutput);
@@ -716,13 +722,16 @@ namespace VanyaTools.Native
                 _importWarning = null;
                 // Local processing can retain the full capture resolution; the AI
                 // actions above limit pixels to each remote model's practical range.
+                CaptureRasterInsertion();
                 string source = AiSelectionCapture.Capture();
+                SetRasterInsertionInput(source);
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Alpha-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
                 await Task.Run(() => ThresholdAlpha(source, output, threshold, cancellation), cancellation);
                 cancellation.ThrowIfCancellationRequested();
+                PrepareRasterInsertion(output);
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), output);
@@ -766,7 +775,9 @@ namespace VanyaTools.Native
             try
             {
                 _importWarning = null;
+                CaptureRasterInsertion();
                 string source = AiSelectionCapture.Capture();
+                SetRasterInsertionInput(source);
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(),
@@ -779,6 +790,7 @@ namespace VanyaTools.Native
                     Report("Полупрозрачных пикселей не найдено в подготовленном растре.", false);
                     return;
                 }
+                PrepareRasterInsertion(output, diagnostic: true);
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), output);
@@ -858,15 +870,20 @@ namespace VanyaTools.Native
                 _importWarning = null;
                 Log.Info("Opaque stair smoothing capture starting.");
                 // Leave room for at least a 2x result, including on large prints.
+                CaptureRasterInsertion();
                 string source = AiSelectionCapture.Capture(8000, 8000000);
+                SetRasterInsertionInput(source);
                 Log.Info("Opaque stair smoothing capture finished.");
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Stairs-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
-                int scale = await Task.Run(() => SmoothOpaqueStairs(source, output, threshold, cancellation), cancellation);
+                double cropOffsetX = 0, cropOffsetY = 0;
+                int scale = await Task.Run(() => SmoothOpaqueStairs(source, output, threshold, cancellation,
+                    (crop, dpiX, dpiY) => { cropOffsetX = -crop.X * 25.4 / dpiX; cropOffsetY = -crop.Y * 25.4 / dpiY; }), cancellation);
                 Log.Info("Opaque stair smoothing PNG finished.");
                 cancellation.ThrowIfCancellationRequested();
+                PrepareRasterInsertion(output, cropOffsetX, cropOffsetY);
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), output);
@@ -875,7 +892,7 @@ namespace VanyaTools.Native
                 InsertReady();
                 string warning = _importWarning;
                 Report(String.IsNullOrEmpty(warning)
-                    ? "Готово: рисунок сглажен, пиксельная сетка ×" + scale + ". Результат вставлен рядом."
+                    ? "Готово: рисунок сглажен, пиксельная сетка ×" + scale + "."
                     : warning, !String.IsNullOrEmpty(warning));
                 _importWarning = null;
             }
@@ -1126,7 +1143,9 @@ namespace VanyaTools.Native
             try
             {
                 _importWarning = null;
+                CaptureRasterInsertion();
                 string source = AiSelectionCapture.CaptureForCorrection();
+                SetRasterInsertionInput(source);
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Edge-" + Guid.NewGuid().ToString("N") + ".png");
@@ -1136,13 +1155,14 @@ namespace VanyaTools.Native
                 _edgeDpi = edge.Metrics.DpiX; _edgeDpiKnown = true;
                 ShowEdgeMetrics(edge.Metrics);
                 cancellation.ThrowIfCancellationRequested();
+                PrepareRasterInsertion(output, edge.Offset.Item1, edge.Offset.Item2);
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), output);
                 _resultPreview.Source = PreviewBitmap(output);
                 SetStage("Вставляю результат в Corel…");
                 InsertReady();
-                try { MoveImportedEdge(edge.Offset); }
+                try { if (_mode != SimpleAiMode.Raster) MoveImportedEdge(edge.Offset); }
                 catch (Exception placementError)
                 {
                     Log.Error("Edge result inserted but placement correction failed.", placementError);
@@ -1523,11 +1543,12 @@ namespace VanyaTools.Native
                 SetStage("Совмещаю маску с исходником…");
                 Log.Info("AI background mask application starting.");
                 await Task.Run(() => BackgroundRemovalProcessor.ApplyModelMask(
-                    _lastSource, _lastOutput, png, cancellation), cancellation);
+                    _lastSource, _lastOutput, png, cancellation, preserveCanvas: _mode == SimpleAiMode.Raster), cancellation);
                 Log.Info("AI background mask application finished.");
             }
             else
                 await Task.Run(() => SaveAsPng(_lastOutput, png), cancellation);
+            PrepareRasterInsertion(png, preserveSourceSize: true);
             _readyOutput = png;
             Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
             File.WriteAllText(PendingPath(), png);
@@ -1545,14 +1566,15 @@ namespace VanyaTools.Native
             using (var stream = File.Create(destination)) encoder.Save(stream);
         }
 
-        private void InsertReady()
+        private void InsertReady(bool retry = false)
         {
             try
             {
                 string name = Path.GetFileName(_readyOutput);
                 bool correction = name.StartsWith("Vanya-Correction-", StringComparison.OrdinalIgnoreCase);
-                var placement = correction ? ReadCorrectionPlacement(_readyOutput) : null;
-                if (correction) VerifyCorrectionDocument(placement);
+                bool recorded = _mode == SimpleAiMode.Raster && RasterResultInsertion.HasPlacement(_readyOutput);
+                var placement = correction && !recorded ? ReadCorrectionPlacement(_readyOutput) : null;
+                if (correction && !recorded) VerifyCorrectionDocument(placement);
                 bool alreadyCropped = correction || name.StartsWith("Vanya-Edge-", StringComparison.OrdinalIgnoreCase) ||
                     name.StartsWith("Vanya-Stairs-", StringComparison.OrdinalIgnoreCase) ||
                     name.StartsWith("Vanya-Alpha-Highlight-", StringComparison.OrdinalIgnoreCase) ||
@@ -1560,12 +1582,12 @@ namespace VanyaTools.Native
                     name.StartsWith("Vanya-Local-Style-", StringComparison.OrdinalIgnoreCase);
                 Log.Info("Simple AI import starting: " + name +
                     (alreadyCropped ? " (cropped PNG)" : ""));
-                string warning = (alreadyCropped ? _importDtf : _import)(_readyOutput,
-                    OperationName(name));
-                if (correction) warning = PlaceCorrection(placement, warning);
+                string warning = recorded ? RasterResultInsertion.Import(_readyOutput, OperationName(name),
+                    requestedMode: retry ? SelectedRasterInsertionMode : (RasterInsertionMode?)null, liveSource: _rasterInsertionSource) : (alreadyCropped ? _importDtf : _import)(_readyOutput, OperationName(name));
+                if (correction && !recorded) warning = PlaceCorrection(placement, warning);
                 Log.Info("Simple AI import finished: " + name);
                 _importWarning = warning;
-                _readyOutput = null; _lastInput = null; _lastSource = null;
+                _readyOutput = null; _lastInput = null; _lastSource = null; _rasterInsertionSource = null;
                 try { if (File.Exists(PendingPath())) File.Delete(PendingPath()); } catch { }
             }
             catch (Exception ex)
@@ -1613,7 +1635,7 @@ namespace VanyaTools.Native
             try
             {
                 _importWarning = null;
-                if (ready) InsertReady();
+                if (ready) InsertReady(true);
                 else await Execute(key);
                 ReportOutcome();
             }
@@ -1644,6 +1666,8 @@ namespace VanyaTools.Native
         private void SetBusy(bool busy, string stage)
         {
             _busy = busy;
+            if (_rasterInsertionMode != null) _rasterInsertionMode.IsEnabled = !busy;
+            if (_colorSummaryButton != null) _colorSummaryButton.IsEnabled = !busy;
             _correctionButton.IsEnabled = !busy;
             _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
                 _highlightButton.IsEnabled = _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled = _underlayColorButton.IsEnabled =
