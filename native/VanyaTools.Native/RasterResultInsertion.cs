@@ -202,6 +202,11 @@ namespace VanyaTools.Native
                 foreach (dynamic shape in shapes) { imported = shape; break; }
                 if (imported == null || Convert.ToInt32(imported.Type) != CorelConstants.CdrBitmapShape)
                     throw new InvalidOperationException("Corel не вернул вставленный растр.");
+                if (File.Exists(output + NativeRasterFiles.Suffix))
+                {
+                    var native = NativeRasterFiles.Read(output + NativeRasterFiles.Suffix, output);
+                    NativeRasterModelIO.Apply((object)doc, (object)imported.Bitmap, native);
+                }
                 imported.SetSize(placement.WidthMm, placement.HeightMm);
                 double shift = mode == RasterInsertionMode.NewAside ? RasterInsertionGeometry.LegacyShiftMm : 0;
                 double left = placement.LeftMm + shift, top = placement.TopMm + shift;

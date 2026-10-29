@@ -85,6 +85,8 @@ namespace VanyaTools.Native
             _threshold.IsEnabled = _thresholdSlider.IsEnabled = available && _remove.IsChecked == true;
             bool outline = available && _outline.IsChecked == true;
             _radius.IsEnabled = _expansion.IsEnabled = _hex.IsEnabled = _swatch.IsEnabled = outline;
+            _nearWhiteTolerance.IsEnabled = available;
+            _nearWhiteSwatch.IsEnabled = available && _highlightWhite.IsChecked == true;
         }
 
         private void ChangePreviewBackground()

@@ -4,6 +4,7 @@ namespace VanyaTools.Native
     {
         private RasterInsertionSource _rasterInsertionSource;
         private RasterInsertionMode _rasterOperationMode = RasterInsertionMode.NewAside;
+        private string _localNativeRasterInput;
 
         private void CaptureRasterInsertion()
         {
@@ -15,8 +16,15 @@ namespace VanyaTools.Native
 
         private void SetRasterInsertionInput(string source)
         {
+            _localNativeRasterInput = source;
             if (_mode == SimpleAiMode.Raster && _rasterInsertionSource != null)
                 RasterResultInsertion.SetInputRaster(_rasterInsertionSource, source);
+        }
+
+        private void ReleaseNativeRasterInput()
+        {
+            string path = _localNativeRasterInput; _localNativeRasterInput = null;
+            NativeRasterCorrection.CleanupCapture(path);
         }
 
         private void PrepareRasterInsertion(string output, double offsetX = 0, double offsetY = 0,

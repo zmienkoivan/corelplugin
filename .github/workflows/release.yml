@@ -57,6 +57,26 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.DockerWatchdogChecks/VanyaTools.DockerWatchdogChecks.csproj --configuration Release
 
+      - name: Check near white pixels
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.NearWhitePixelChecks/VanyaTools.NearWhitePixelChecks.csproj --configuration Release
+
+      - name: Check native raster models
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.NativeRasterModelChecks/VanyaTools.NativeRasterModelChecks.csproj --configuration Release
+
+      - name: Check native raster filters
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.NativeRasterFilterChecks/VanyaTools.NativeRasterFilterChecks.csproj --configuration Release
+
+      - name: Check native raster pipeline
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.NativeRasterPipelineChecks/VanyaTools.NativeRasterPipelineChecks.csproj --configuration Release
+
+      - name: Check sublimation models
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.SublimationModelsChecks/VanyaTools.SublimationModelsChecks.csproj --configuration Release
+
       - name: Build installer package
         shell: pwsh
         run: .\package-native.ps1

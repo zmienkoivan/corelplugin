@@ -9,6 +9,7 @@ namespace VanyaTools.Native
     {
         private ComboBox _rasterInsertionMode;
         private Button _colorSummaryButton;
+        internal FrameworkElement RasterSettingsView { get; private set; }
 
         private RasterInsertionMode SelectedRasterInsertionMode =>
             _rasterInsertionMode == null ? RasterInsertionMode.NewAside :
@@ -46,11 +47,11 @@ namespace VanyaTools.Native
                 }
             };
             tools.Children.Add(_rasterInsertionMode);
+            RasterSettingsView = DockerSettings.Section("Обработка растра", tools);
             _colorSummaryButton = Button("Сводка цветов", async (_, __) => await InsertColorSummary());
             _colorSummaryButton.ToolTip = "Список цветов выделения снизу слева, с отступом 5 мм, 14 пт. " +
                 "Вектор: цвета заливок и обводок. Растр: основные оттенки, приблизительно.";
-            tools.Children.Add(_colorSummaryButton);
-            return tools;
+            return _colorSummaryButton;
         }
 
         private async System.Threading.Tasks.Task InsertColorSummary()

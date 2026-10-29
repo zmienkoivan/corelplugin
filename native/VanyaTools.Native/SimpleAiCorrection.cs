@@ -111,6 +111,8 @@ namespace VanyaTools.Native
         private static DtfCorrectionResult ProcessCorrection(string source, string output,
             DtfCorrectionOptions options, CancellationToken cancellation)
         {
+            if (NativeRasterCorrection.HasSource(source))
+                return NativeRasterCorrection.Process(source, output, options, cancellation);
             var temporary = new List<string>();
             string current = source;
             double offsetX = 0, offsetY = 0;
@@ -122,6 +124,10 @@ namespace VanyaTools.Native
             try
             {
                 cancellation.ThrowIfCancellationRequested();
+                if (options.WhitenNearWhite)
+                {
+                    string next = Next(); DtfNearWhiteFilter.Process(current, next, options.NearWhiteTolerance, cancellation); current = next;
+                }
                 if (options.RemoveSemiTransparent)
                 {
                     string next = Next(); ThresholdAlpha(current, next, options.Threshold, cancellation); current = next;
@@ -152,6 +158,10 @@ namespace VanyaTools.Native
                     // The optional final threshold also applies to the new
                     // soft pixels introduced by the outline, not just the source.
                     string next = Next(); ThresholdAlpha(current, next, options.Threshold, cancellation); current = next;
+                }
+                if (options.WhitenNearWhite && (options.SmoothStairs || options.Outline))
+                {
+                    string next = Next(); DtfNearWhiteFilter.Process(current, next, options.NearWhiteTolerance, cancellation); current = next;
                 }
                 cancellation.ThrowIfCancellationRequested();
                 File.Copy(current, output, true);

@@ -303,10 +303,12 @@ namespace VanyaTools.Native
             trimSettings.Children.Add(sidesGrid);
             _trimPaddingPx = AddRow(trimSettings, "Отступ, px", "2");
 
-            root.Children.Add(new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
+            var rasterEditor = new SimpleAiTab(() => AiSelectionCapture.Capture(4096, 16000000),
                 () => aiTools.GetToken(), ImportAiResult,
                 (message, isError) => SetStatus(message, isError), SimpleAiMode.Raster, ImportDtfResult, outlineSettings,
-                printExport.QuickButtons));
+                printExport.QuickButtons);
+            root.Children.Add(rasterEditor);
+            settings.Children.Insert(1, rasterEditor.RasterSettingsView);
 
             root = stickerTools;
             var sizeTools = DockerLayout.ToolGroup("1. Размер и метки", "Выделите весь пак и нажмите его размер. " +

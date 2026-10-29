@@ -10,8 +10,12 @@
   <ItemGroup>
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.IO.Compression" />
     <Compile Include="..\..\native\VanyaTools.Native\RasterResultInsertion.cs" Link="RasterResultInsertion.cs" />
     <Compile Include="..\..\native\VanyaTools.Native\RasterInsertionSettings.cs" Link="RasterInsertionSettings.cs" />
     <Compile Include="..\..\native\VanyaTools.Native\CorelConstants.cs" Link="CorelConstants.cs" />
+    <Compile Include="..\..\native\VanyaTools.Native\NativeRasterBuffer.cs" Link="NativeRasterBuffer.cs" />
+    <Compile Include="..\..\native\VanyaTools.Native\NativeRasterModelIO.cs" Link="NativeRasterModelIO.cs" />
+    <Compile Include="..\..\native\VanyaTools.Native\NativeRasterFiles.cs" Link="NativeRasterFiles.cs" />
   </ItemGroup>
 </Project>

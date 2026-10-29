@@ -689,6 +689,8 @@ namespace VanyaTools.Native
                 _backgroundOptions = dialog.Options;
                 if (!accepted || String.IsNullOrEmpty(dialog.OutputPath))
                 { Report("Удаление фона отменено.", false); return; }
+                Color[] backgroundColors = BackgroundVariants(dialog.Options.Color);
+                await Task.Run(() => NativeRasterCorrection.AttachProcessedAlpha(source, dialog.OutputPath, _cancellation.Token, backgroundColors), _cancellation.Token);
                 PrepareRasterInsertion(dialog.OutputPath);
                 _readyOutput = dialog.OutputPath;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
@@ -723,7 +725,7 @@ namespace VanyaTools.Native
                 // Local processing can retain the full capture resolution; the AI
                 // actions above limit pixels to each remote model's practical range.
                 CaptureRasterInsertion();
-                string source = AiSelectionCapture.Capture();
+                string source = AiSelectionCapture.CaptureForCorrection();
                 SetRasterInsertionInput(source);
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
@@ -746,6 +748,12 @@ namespace VanyaTools.Native
 
         private static void ThresholdAlpha(string source, string output, int threshold, CancellationToken cancellation)
         {
+            if (NativeRasterCorrection.HasSource(source))
+            {
+                NativeRasterCorrection.Process(source, output, new DtfCorrectionOptions {
+                    RemoveSemiTransparent = true, Threshold = threshold }, cancellation);
+                return;
+            }
             BitmapSource input = AiPrintTab.Bitmap(source);
             var bgra = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
             int stride = checked(bgra.PixelWidth * 4);
@@ -776,7 +784,7 @@ namespace VanyaTools.Native
             {
                 _importWarning = null;
                 CaptureRasterInsertion();
-                string source = AiSelectionCapture.Capture();
+                string source = AiSelectionCapture.CaptureForCorrection();
                 SetRasterInsertionInput(source);
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
@@ -790,6 +798,7 @@ namespace VanyaTools.Native
                     Report("Полупрозрачных пикселей не найдено в подготовленном растре.", false);
                     return;
                 }
+                await Task.Run(() => NativeRasterCorrection.AttachDiagnostic(source, output, cancellation), cancellation);
                 PrepareRasterInsertion(output, diagnostic: true);
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
@@ -871,7 +880,7 @@ namespace VanyaTools.Native
                 Log.Info("Opaque stair smoothing capture starting.");
                 // Leave room for at least a 2x result, including on large prints.
                 CaptureRasterInsertion();
-                string source = AiSelectionCapture.Capture(8000, 8000000);
+                string source = AiSelectionCapture.CaptureForCorrection();
                 SetRasterInsertionInput(source);
                 Log.Info("Opaque stair smoothing capture finished.");
                 _sourcePreview.Source = PreviewBitmap(source);
@@ -905,6 +914,18 @@ namespace VanyaTools.Native
             CancellationToken cancellation, Action<Int32Rect, double, double> cropped = null,
             int maximumOutputPixels = Int32.MaxValue, int fixedScale = 0, bool preserveAlpha = false)
         {
+            if (NativeRasterCorrection.HasSource(source))
+            {
+                var inputNative = NativeRasterFiles.Read(source + NativeRasterFiles.Suffix, source, cancellation);
+                var native = NativeRasterCorrection.Process(source, output, new DtfCorrectionOptions {
+                    SmoothStairs = true, StairsScale = fixedScale, Threshold = threshold,
+                    RemoveSemiTransparent = !preserveAlpha }, cancellation);
+                var resultNative = NativeRasterFiles.Read(output + NativeRasterFiles.Suffix, output, cancellation);
+                int left = Math.Max(0, (int)Math.Round(-native.OffsetMm.Item1 * resultNative.DpiX / 25.4));
+                int top = Math.Max(0, (int)Math.Round(-native.OffsetMm.Item2 * resultNative.DpiY / 25.4));
+                cropped?.Invoke(new Int32Rect(left, top, resultNative.Width, resultNative.Height), resultNative.DpiX, resultNative.DpiY);
+                return Math.Max(1, (int)Math.Round(resultNative.DpiX / inputNative.DpiX));
+            }
             BitmapSource input = AiPrintTab.Bitmap(source);
             var bgra = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
             int width = bgra.PixelWidth, height = bgra.PixelHeight;
@@ -1179,6 +1200,15 @@ namespace VanyaTools.Native
         private static EdgeResult SmoothAlphaEdge(string source, string output,
             double radius, double expansion, bool millimeters, Color fill, CancellationToken cancellation)
         {
+            if (NativeRasterCorrection.HasSource(source))
+            {
+                var nativeInput = NativeRasterFiles.Read(source + NativeRasterFiles.Suffix, source, cancellation);
+                double factor = millimeters ? 1 : 25.4 / nativeInput.DpiX;
+                var native = NativeRasterCorrection.Process(source, output, new DtfCorrectionOptions {
+                    Outline = true, RadiusMm = radius * factor, ExpansionMm = expansion * factor, Color = fill }, cancellation);
+                return new EdgeResult { Offset = native.OffsetMm,
+                    Metrics = EdgeMetrics.Measure(radius, expansion, millimeters, nativeInput.DpiX, nativeInput.DpiY) };
+            }
             BitmapSource input = AiPrintTab.Bitmap(source);
             EdgeMetrics metrics = EdgeMetrics.Measure(radius, expansion, millimeters, input.DpiX, input.DpiY);
             var bgra = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
@@ -1587,6 +1617,7 @@ namespace VanyaTools.Native
                 if (correction && !recorded) warning = PlaceCorrection(placement, warning);
                 Log.Info("Simple AI import finished: " + name);
                 _importWarning = warning;
+                NativeRasterCorrection.CleanupResultCompanion(_readyOutput);
                 _readyOutput = null; _lastInput = null; _lastSource = null; _rasterInsertionSource = null;
                 try { if (File.Exists(PendingPath())) File.Delete(PendingPath()); } catch { }
             }
@@ -1665,6 +1696,7 @@ namespace VanyaTools.Native
 
         private void SetBusy(bool busy, string stage)
         {
+            if (!busy) ReleaseNativeRasterInput();
             _busy = busy;
             if (_rasterInsertionMode != null) _rasterInsertionMode.IsEnabled = !busy;
             if (_colorSummaryButton != null) _colorSummaryButton.IsEnabled = !busy;

@@ -21,11 +21,10 @@ namespace VanyaTools.Native
     internal sealed class SublimationTab : UserControl
     {
         private const string AnalysisModel = "anthropic/claude-4.5-sonnet";
-        private const string ImageModel = "black-forest-labs/flux-2-pro";
         private readonly Func<string, string, string> _import;
         private readonly Action<string, bool> _status;
         private readonly Func<string> _captureSelection, _token;
-        private readonly ComboBox _part;
+        private readonly ComboBox _part, _imageModel;
         private readonly TextBox _width, _height, _hint, _analysis;
         private readonly CheckBox _upscale;
         private readonly Image _sourcePreview, _resultPreview;
@@ -42,6 +41,7 @@ namespace VanyaTools.Native
         private sealed class Job
         {
             public string Directory, Source, Part, Hint, ReadyPath;
+            public string ModelId = SublimationModels.DefaultId;
             public int Width, Height;
             public bool Upscale, ProviderBlocked;
             public string AnalysisPath { get { return Path.Combine(Directory, "analysis.txt"); } }
@@ -66,12 +66,26 @@ namespace VanyaTools.Native
             previews.Children.Add(Preview("Выделение", out _sourcePreview));
             previews.Children.Add(Preview("Развёртка", out _resultPreview));
             panel.Children.Add(previews);
-            panel.Children.Add(Label("Какую деталь развернуть", false));
+            var choices = new Grid();
+            choices.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            choices.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.5, GridUnitType.Star) });
+            var detail = new StackPanel { Margin = new Thickness(0, 0, 4, 0) };
+            detail.Children.Add(Label("Деталь", false)); choices.Children.Add(detail);
             _part = new ComboBox { FontSize = 11, Margin = new Thickness(0, 0, 0, 5) };
             foreach (string name in new[] { "Спинка", "Перед", "Правый рукав", "Левый рукав" }) _part.Items.Add(name);
             _part.SelectedIndex = 0;
             _part.SelectionChanged += (_, __) => SetDefaultSize();
-            panel.Children.Add(_part);
+            detail.Children.Add(_part);
+            var model = new StackPanel(); model.Children.Add(Label("Модель", false));
+            _imageModel = new ComboBox { FontSize = 10, Margin = new Thickness(0, 0, 0, 5) };
+            foreach (var choice in SublimationModels.Choices) _imageModel.Items.Add(choice);
+            _imageModel.SelectedIndex = 0;
+            _imageModel.ToolTip = "Модель для нового задания. Продолжение использует модель сохранённого задания; смена выбора не повторяет запрос.";
+            _imageModel.SelectionChanged += (_, __) => {
+                UpdateSize();
+                if (_price != null) _price.Text = "Replicate · цена зависит от выбранной модели. Новый запуск — новый запрос.";
+            };
+            model.Children.Add(_imageModel); Grid.SetColumn(model, 1); choices.Children.Add(model); panel.Children.Add(choices);
             DockerHelp.Add(panel, "Спереди: правый рукав слева, левый справа.");
 
             panel.Children.Add(Label("Размер прямоугольника, мм: ширина × высота", false));
@@ -92,7 +106,7 @@ namespace VanyaTools.Native
             _upscale = new CheckBox { Content = "Детальное увеличение ×4 по 4 фрагментам", IsChecked = true,
                 FontSize = 10, Margin = new Thickness(0, 3, 0, 4) };
             panel.Children.Add(_upscale);
-            _price = Note("Цена: ~$0.11–0.16 за запуск.");
+            _price = Note("Replicate · цена зависит от выбранной модели. Новый запуск — новый запрос.");
             panel.Children.Add(_price);
 
             _run = DockerTheme.Primary(Button("Создать развёртку из выделения", async (_, __) => await Start()));
@@ -117,6 +131,9 @@ namespace VanyaTools.Native
             string key = _token();
             if (String.IsNullOrWhiteSpace(key) || key.Length < 8) { Report("Сначала сохраните ключ Replicate во вкладке «Настройки».", true); return; }
             if (!TryDimensions(out int width, out int height)) return;
+            string model = (_imageModel.SelectedItem as SublimationModels.Choice)?.Id;
+            try { SublimationModels.Plan(model, width, height); }
+            catch (Exception error) { Report(error.GetBaseException().Message, true); return; }
             string selected;
             try { selected = _captureSelection(); }
             catch (Exception ex) { Log.Error("Sublimation selection capture failed.", ex); Report(ex.GetBaseException().Message, true); return; }
@@ -127,7 +144,7 @@ namespace VanyaTools.Native
                 string source = Path.Combine(directory, "selected-mockup.png");
                 File.Copy(selected, source, true);
                 _job = new Job { Directory = directory, Source = source, Part = Convert.ToString(_part.SelectedItem),
-                    Hint = _hint.Text.Trim(), Width = width, Height = height, Upscale = _upscale.IsChecked == true };
+                    Hint = _hint.Text.Trim(), Width = width, Height = height, Upscale = _upscale.IsChecked == true, ModelId = model };
                 SaveJob(_job);
                 _sourcePreview.Source = AiPrintTab.Bitmap(source);
                 UpdatePrice(AiPrintTab.Bitmap(source));
@@ -198,17 +215,11 @@ namespace VanyaTools.Native
                     _analysis.Text = analysis;
                     if (!File.Exists(_job.GeneratedPath))
                     {
-                        SetStage("2/4 · Создание плоской развёртки");
+                        SetStage("2/4 · " + SublimationModels.Find(_job.ModelId).Name + " · Создание плоской развёртки");
                         string referencePath = sleeve ? _job.ReferencePath : _job.Source;
                         string reference = await Task.Run(() => AiPrintTab.DataUri(AiPrintTab.Bitmap(referencePath), 2048, 4000000), cancellation);
-                        PixelSize modelSize = ModelSize(_job.Width, _job.Height);
-                        var imageInput = new Dictionary<string, object>
-                        {
-                            ["input_images"] = new[] { reference }, ["prompt"] = GenerationPrompt(_job, analysis),
-                            ["aspect_ratio"] = "custom", ["width"] = modelSize.Width, ["height"] = modelSize.Height,
-                            ["output_format"] = "png", ["safety_tolerance"] = 2
-                        };
-                        await Predict(ImageModel, key, imageInput, _job.GeneratedPath, cancellation);
+                        var imageInput = SublimationModels.Input(_job.ModelId, reference, GenerationPrompt(_job, analysis), _job.Width, _job.Height);
+                        await Predict(_job.ModelId, key, imageInput, _job.GeneratedPath, cancellation);
                     }
                     cancellation.ThrowIfCancellationRequested();
                     string[] tiles = null;
@@ -439,17 +450,6 @@ namespace VanyaTools.Native
             return "back body panel";
         }
 
-        private static PixelSize ModelSize(int widthMm, int heightMm)
-        {
-            double ratio = (double)widthMm / heightMm;
-            double longSide = Math.Min(2048.0, Math.Sqrt(3800000.0 * Math.Max(ratio, 1.0 / ratio)));
-            int width = Math.Max(256, (int)Math.Floor((ratio >= 1 ? longSide : longSide * ratio) / 16) * 16);
-            int height = Math.Max(256, (int)Math.Floor((ratio >= 1 ? longSide / ratio : longSide) / 16) * 16);
-            return new PixelSize { Width = width, Height = height };
-        }
-
-        private struct PixelSize { public int Width, Height; }
-
         private bool TryDimensions(out int width, out int height)
         {
             width = height = 0;
@@ -477,18 +477,23 @@ namespace VanyaTools.Native
             { _size.Text = "Укажите размер в миллиметрах."; return; }
             int pixelsWide = (int)Math.Round(w * 300.0 / 25.4);
             int pixelsHigh = (int)Math.Round(h * 300.0 / 25.4);
-            PixelSize model = ModelSize(w, h);
+            SublimationModels.ImagePlan model;
+            try { model = SublimationModels.Plan((_imageModel.SelectedItem as SublimationModels.Choice)?.Id, w, h); }
+            catch (Exception error) { _size.Text = error.GetBaseException().Message; return; }
             int detailDpi = Math.Min(300, (int)Math.Floor(300.0 * Math.Min(
                 model.Width * 4.0 / pixelsWide, model.Height * 4.0 / pixelsHigh)));
-            _size.Text = pixelsWide + " × " + pixelsHigh + " px · 300 dpi. AI ×4: ~" + detailDpi + " dpi.";
+            _size.Text = pixelsWide + " × " + pixelsHigh + " px · 300 dpi.\nAI: " + model.Description +
+                " → " + w + " × " + h + " мм · ×4: ~" + detailDpi + " dpi.";
         }
 
         private void UpdatePrice(BitmapSource source)
         {
+            if (_job.ModelId != SublimationModels.DefaultId)
+            { _price.Text = "Replicate · цена зависит от выбранной модели. Новый запуск — новый запрос."; return; }
             double scale = Math.Min(1.0, Math.Min(2048.0 / Math.Max(source.PixelWidth, source.PixelHeight),
                 Math.Sqrt(4000000.0 / ((double)source.PixelWidth * source.PixelHeight))));
             double inputMp = source.PixelWidth * source.PixelHeight * scale * scale / 1000000.0;
-            PixelSize output = ModelSize(_job.Width, _job.Height);
+            SublimationModels.ImagePlan output = SublimationModels.Plan(_job.ModelId, _job.Width, _job.Height);
             double outputMp = (double)output.Width * output.Height / 1000000.0;
             double flux = 0.015 + 0.015 * (inputMp + outputMp);
             double upscale = _job.Upscale ? 0.008 : 0;
@@ -500,7 +505,7 @@ namespace VanyaTools.Native
         private void SetBusy(bool value)
         {
             _busy = value; _run.IsEnabled = !value;
-            _part.IsEnabled = !value;
+            _part.IsEnabled = _imageModel.IsEnabled = !value;
             _width.IsEnabled = _height.IsEnabled = _hint.IsEnabled = _upscale.IsEnabled = !value;
             _cancel.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
             _cancel.IsEnabled = value;
@@ -515,6 +520,7 @@ namespace VanyaTools.Native
             bool ready = _job != null && File.Exists(_job.FinalPath);
             bool available = !busy && _job != null && !SublimationFailure.BlocksResume(_job.ProviderBlocked, ready);
             _retry.Content = SublimationFailure.RetryCaption(ready);
+            _retry.ToolTip = _job == null ? null : "Продолжение сохранённого задания · " + SublimationModels.Find(_job.ModelId).Name;
             _retry.IsEnabled = available;
             _retry.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
         }
@@ -531,7 +537,7 @@ namespace VanyaTools.Native
             {
                 ["part"] = job.Part, ["hint"] = job.Hint, ["width"] = job.Width,
                 ["height"] = job.Height, ["upscale"] = job.Upscale,
-                ["provider_blocked"] = job.ProviderBlocked
+                ["provider_blocked"] = job.ProviderBlocked, ["image_model"] = job.ModelId
             };
             File.WriteAllText(job.MetadataPath, new JavaScriptSerializer().Serialize(details));
         }
@@ -572,6 +578,7 @@ namespace VanyaTools.Native
                             candidate.Width = Convert.ToInt32(details["width"]);
                             candidate.Height = Convert.ToInt32(details["height"]);
                             candidate.Upscale = Convert.ToBoolean(details["upscale"]);
+                            candidate.ModelId = SublimationModels.StoredModel(details.ContainsKey("image_model") ? Convert.ToString(details["image_model"]) : null);
                             candidate.ProviderBlocked = details.ContainsKey("provider_blocked") && Convert.ToBoolean(details["provider_blocked"]);
                         }
                         else if (!File.Exists(candidate.FinalPath) && File.Exists(candidate.GeneratedPath) && File.Exists(candidate.AnalysisPath))
@@ -598,6 +605,7 @@ namespace VanyaTools.Native
                         }
                         _job = candidate;
                         _part.SelectedItem = candidate.Part;
+                        _imageModel.SelectedItem = SublimationModels.Find(candidate.ModelId);
                         _width.Text = candidate.Width.ToString(CultureInfo.InvariantCulture);
                         _height.Text = candidate.Height.ToString(CultureInfo.InvariantCulture);
                         _hint.Text = candidate.Hint ?? "";

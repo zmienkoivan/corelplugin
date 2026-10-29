@@ -30,15 +30,28 @@ internal static class Program
         var cmyk = FakeColor.Cmyk(10, 20, 30, 40); var rgb = FakeColor.Rgb(100, 120, 140);
         var a = new FakeShape(1, new FakeFill(cmyk)) { Outline = new FakeOutline(rgb) };
         var b = new FakeShape(2, new FakeFill(cmyk)); var app = new FakeApp(a, b);
-        var result = Run(app); var text = app.Document.ActiveLayer.Created.Single();
+        var result = Run(app); var text = app.Document.ActiveLayer.Created[0];
+        var usage = app.Document.ActiveLayer.Created[1];
         Check(result.ColorCount == 2 && result.ApproximateRasterCount == 0 && !result.Incomplete, "Exact dedup failed");
         Check(result.Text.Contains("CMYK C10 M20 Y30 K40") && result.Text.Contains("RGB R100 G120 B140"), "Native recipes missing");
         Check(text.LeftX == 10 && text.TopY == 15, "Summary not anchored 5mm below left edge");
         Check(text.Points == 14 && text.Value == result.Text, "Not14pt multiline text");
+        Check(result.Text.Split('\n').Length == 2 && !result.Text.Contains("Цвета выделения") && !result.Text.Contains("заливка") && !result.Text.Contains("контур"),
+            "Primary list must contain one formula per line without header or role annotations");
+        Check(app.Document.ActiveLayer.Created.Count == 2 && usage.Value == result.UsageText && usage.Points == 14,
+            "Role information must be a second independent 14pt text object");
+        Check(usage.LeftX == text.LeftX && Math.Abs(usage.TopY - (text.BottomY - 2)) < 1e-9, "Role block must be 2mm below measured formula bounds");
+        Check(usage.Value.Contains("CMYK C10 M20 Y30 K40 — заливка") && usage.Value.Contains("RGB R100 G120 B140 — контур"),
+            "Fill and outline roles do not match source colors");
         Check(app.Document.Unit == 2 && app.Document.Begins == 1 && app.Document.Ends == 1, "Units or Undo group not restored");
         Check(a.Fill.UniformColor == cmyk && cmyk.Conversions == 0 && rgb.Conversions == 0, "Source colors changed");
         Check(app.Selection.Count == 2 && app.Selection[1] == a, "Source selection changed");
         Check(app.Exports == 0 && app.Copies == 0, "Unexpected export or source copy");
+        usage.Delete();
+        Check(usage.Deleted && !text.Deleted && app.Selection[1] == a, "Deleting role block must leave formulas and source artwork independent");
+        var shared = FakeColor.Rgb(1, 2, 3);
+        var both = Run(new FakeApp(new FakeShape(3, new FakeFill(shared)) { Outline = new FakeOutline(shared) }));
+        Check(both.ColorCount == 1 && both.UsageText.Contains("RGB R1 G2 B3 — заливка и контур"), "Same color used by both roles lost a role or duplicated its formula");
     }
 
     private static void TraversalAndText()
@@ -55,7 +68,7 @@ internal static class Program
         var second = Run(new FakeApp(text, curve, group));
         Check(first.ColorCount == 4 && !first.Incomplete, "Nested group/PowerClip/text colors lost");
         Check(first.Text == second.Text, "Output depends on selection order");
-        Check(first.Text.Contains("Градиенты: перечислены цвета узлов"), "Gradient limitation not stated");
+        Check(first.UsageText == second.UsageText && first.UsageText.Contains("Градиенты: перечислены цвета узлов"), "Gradient limitation or stable role order lost");
         Check(first.Text.Contains("C0 M0 Y0 K100"), "Character outline missing");
     }
 
@@ -83,17 +96,17 @@ internal static class Program
         var raster = new FakeShape(20, null) { Type = 5, Bitmap = new FakeBitmap(image, alpha) };
         var app = new FakeApp(raster); var result = Run(app);
         Check(result.ColorCount == 0 && result.ApproximateRasterCount == 1, "Transparent pixels counted as colors");
-        Check(result.Text.Contains("Основные цвета исходного растра, приблизительно") && result.Text.Contains("≈ RGB R255 G0 B0") && !result.Text.Contains("RGB R0 G0 B255"), "Raster sampling inaccurate or unlabeled");
+        Check(result.UsageText.Contains("основной цвет растра, приблизительно") && result.Text == "≈ RGB R255 G0 B0", "Raster sampling inaccurate or unlabeled");
         Check(image.Reads == 96 && alpha.Reads == 144, "Raster sample size unexpectedly unbounded");
         Check(app.Exports == 0 && app.Copies == 0 && image.Mutations == 0, "Raster sampling mutated/exported sources");
         var brokenAlpha = new FakeImage(24, 24, (x, y) => { throw new InvalidOperationException("Alpha unavailable"); });
         var broken = new FakeShape(21, null) { Type = 5, Bitmap = new FakeBitmap(image, brokenAlpha) };
         var vector = new FakeShape(22, new FakeFill(red));
         var incomplete = Run(new FakeApp(vector, broken));
-        Check(incomplete.Incomplete && incomplete.ApproximateRasterCount == 0 && incomplete.Text.Contains("Не удалось прочитать основные цвета растра"), "Broken alpha silently treated as opaque");
+        Check(incomplete.Incomplete && incomplete.ApproximateRasterCount == 0 && incomplete.UsageText.Contains("Не удалось прочитать основные цвета растра"), "Broken alpha silently treated as opaque");
         var pixels = new FakeImage(30, 30, (x, y) => FakeColor.Rgb((x * 19) % 256, (y * 19) % 256, (x * y) % 256));
         var many = Run(new FakeApp(new FakeShape(23, null) { Type = 5, Bitmap = new FakeBitmap(pixels) }));
-        Check(many.ApproximateRasterCount == 8 && many.Text.Contains("Показаны 8 основных групп"), "Raster dominant colors not capped");
+        Check(many.ApproximateRasterCount == 8 && many.UsageText.Contains("Показаны 8 основных групп"), "Raster dominant colors not capped");
         Check(pixels.Reads == 144, "Large raster sampled too many pixels");
         var monochrome = new FakeImage(24, 24, (x, y) => new FakeColor { Type = 8, BW = x < 12 });
         Check(Run(new FakeApp(new FakeShape(24, null) { Type = 5, Bitmap = new FakeBitmap(monochrome) })).ApproximateRasterCount == 2,
@@ -104,18 +117,18 @@ internal static class Program
     {
         var shapes = Enumerable.Range(1, 30).Select(i => (object)new FakeShape(100 + i, new FakeFill(FakeColor.Rgb(i, 0, 0)))).ToArray();
         var result = Run(new FakeApp(shapes));
-        Check(result.ColorCount == 30 && result.Text.Contains("Ещё 6 векторных цветов"), "Vector display limit is silent or wrong");
+        Check(result.ColorCount == 30 && result.UsageText.Contains("Ещё 6 векторных цветов"), "Vector display limit is silent or wrong");
         Check(result.Text.Split('\n').Count(line => line.StartsWith("RGB ")) == 24, "Vector list is not compact");
         var unsupported = new FakeShape(150, new FakeFill { Type = 3 });
         var known = new FakeShape(151, new FakeFill(FakeColor.Rgb(50, 60, 70)));
         var partial = Run(new FakeApp(unsupported, known));
-        Check(partial.Incomplete && partial.Text.Contains("Сложные заливки не включены"), "Unsupported fill silently ignored");
+        Check(partial.Incomplete && partial.UsageText.Contains("Сложные заливки не включены"), "Unsupported fill silently ignored");
         var chars = Enumerable.Range(0, 5001).Select(_ => (object)new FakeCharacter(new FakeFill(FakeColor.Rgb(1, 2, 3)))).ToArray();
         var longText = new FakeShape(152, null) { Type = 6, Text = new FakeText(chars) };
-        Check(Run(new FakeApp(longText)).Text.Contains("часть символов не проверена"), "Text safety cap not disclosed");
+        Check(Run(new FakeApp(longText)).UsageText.Contains("часть символов не проверена"), "Text safety cap not disclosed");
         var duplicates = Enumerable.Range(0, 10001).Select(i => (object)new FakeShape(1000 + i, new FakeFill(FakeColor.Rgb(1, 2, 3)))).ToArray();
         var capped = Run(new FakeApp(duplicates));
-        Check(capped.Incomplete && capped.Text.Contains("часть выделения не проверена"), "Object safety cap not disclosed");
+        Check(capped.Incomplete && capped.UsageText.Contains("часть выделения не проверена"), "Object safety cap not disclosed");
         var good = new FakeShape(30000, new FakeFill(FakeColor.Rgb(100, 1, 2)));
         var bad = new BrokenShape(); var nested = new FakeShape(30001, null) { Type = 7, Shapes = new FakeCollection(bad, good) };
         var partialGroup = Run(new FakeApp(nested));
@@ -137,8 +150,23 @@ internal static class Program
         Reject(() => Run(fail), "не удалось прочитать цвета"); Check(fail.Document.Unit == 2 && fail.Document.Begins == 0 && !fail.Document.Dirty, "Read failure changed document");
         var endFail = new FakeApp(new FakeShape(204, new FakeFill(FakeColor.Rgb(1, 2, 3)))); endFail.Document.FailFirstEnd = true;
         Reject(() => Run(endFail), "End failed");
-        Check(endFail.Document.ActiveLayer.Created.Single().Deleted && endFail.Document.Unit == 2 && !endFail.Document.Dirty,
+        Check(endFail.Document.ActiveLayer.Created.Count == 2 && endFail.Document.ActiveLayer.Created.All(value => value.Deleted) && endFail.Document.Unit == 2 && !endFail.Document.Dirty,
             "EndCommandGroup failure left summary/source state behind");
+        var secondCreate = new FakeApp(new FakeShape(206, new FakeFill(FakeColor.Rgb(1, 2, 3))));
+        secondCreate.Document.ActiveLayer.FailCreateAt = 2;
+        Reject(() => Run(secondCreate), "Create failed");
+        Check(secondCreate.Document.ActiveLayer.Created.Single().Deleted && secondCreate.Document.Unit == 2 && !secondCreate.Document.Dirty,
+            "Secondary text creation failure did not remove the primary owned text");
+        var secondMove = new FakeApp(new FakeShape(207, new FakeFill(FakeColor.Rgb(1, 2, 3))));
+        secondMove.Document.ActiveLayer.FailMoveAt = 2;
+        Reject(() => Run(secondMove), "Move failed");
+        Check(secondMove.Document.ActiveLayer.Created.Count == 2 && secondMove.Document.ActiveLayer.Created.All(value => value.Deleted) && !secondMove.Document.Dirty,
+            "Secondary placement failure did not remove both owned texts");
+        var between = new FakeApp(new FakeShape(208, new FakeFill(FakeColor.Rgb(1, 2, 3))));
+        between.Document.ActiveLayer.OnCreate = index => { if (index == 1) between.ActiveDocument = new FakeDoc(); };
+        Reject(() => Run(between), "Активный документ изменился");
+        Check(between.Document.ActiveLayer.Created.Single().Deleted && !between.Document.Dirty && between.Document.Unit == 2,
+            "Document change between texts left the primary text behind");
         var deleteFail = new FakeApp(new FakeShape(205, new FakeFill(FakeColor.Rgb(1, 2, 3))));
         deleteFail.Document.ActiveLayer.FailMove = deleteFail.Document.ActiveLayer.FailDelete = true;
         Reject(() => Run(deleteFail), "Move failed");
@@ -244,13 +272,21 @@ public sealed class FakeColor
 public sealed class FakeLayer
 {
     public readonly List<FakeInsertedText> Created = new List<FakeInsertedText>(); public bool FailMove, FailDelete;
+    public int FailCreateAt, FailMoveAt;
+    public Action<int> OnCreate;
     public FakeInsertedText CreateArtisticTextWide(double x, double y, string text, int a, int b, string font, float points)
-    { var shape = new FakeInsertedText(text, points) { FailMove = FailMove, FailDelete = FailDelete }; Created.Add(shape); return shape; }
+    {
+        int index = Created.Count + 1;
+        if (index == FailCreateAt) throw new InvalidOperationException("Create failed");
+        var shape = new FakeInsertedText(text, points) { FailMove = FailMove || index == FailMoveAt, FailDelete = FailDelete };
+        Created.Add(shape); OnCreate?.Invoke(index); return shape;
+    }
 }
 public sealed class FakeInsertedText
 {
     public string Value { get; } public float Points { get; } public string Name { get; set; }
     public double LeftX { get; private set; } = 99; public double TopY { get; private set; } = 88;
+    public double BottomY => TopY - Value.Split('\n').Length * Points * 25.4 / 72;
     public FakeFill Fill { get; } = new FakeFill(FakeColor.Rgb(0, 0, 0)); public FakeOutline Outline { get; } = new FakeOutline();
     public bool Deleted, FailMove, FailDelete;
     public FakeInsertedText(string value, float points) { Value = value; Points = points; }

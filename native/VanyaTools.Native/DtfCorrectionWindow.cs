@@ -15,8 +15,9 @@ namespace VanyaTools.Native
 {
     internal sealed class DtfCorrectionOptions
     {
-        internal bool RemoveSemiTransparent, SmoothStairs, Outline;
+        internal bool RemoveSemiTransparent, SmoothStairs, Outline, WhitenNearWhite;
         internal int Threshold = 130;
+        internal int NearWhiteTolerance = 6;
         internal int StairsScale = 1;
         internal double RadiusMm = 2 * 25.4 / 400, ExpansionMm = 0.175;
         internal Color Color = Colors.White;
@@ -35,12 +36,13 @@ namespace VanyaTools.Native
         private readonly string _sourcePath;
         private readonly string _workspace = Path.Combine(Path.GetTempPath(), "Vanya-Correction-" + Guid.NewGuid().ToString("N"));
         private readonly Func<string, string, DtfCorrectionOptions, CancellationToken, DtfCorrectionResult> _processor;
-        private readonly CheckBox _remove, _stairs, _outline, _highlight;
+        private readonly CheckBox _remove, _stairs, _outline, _highlight, _highlightWhite, _whiten;
         private readonly TextBox _threshold, _radius, _expansion, _hex;
-        private readonly Slider _thresholdSlider;
+        private readonly Slider _thresholdSlider, _nearWhiteTolerance;
         private readonly ComboBox _units, _view, _marker;
-        private readonly TextBlock _message, _metrics;
-        private readonly Button _apply, _cancel, _swatch;
+        private readonly TextBlock _message, _metrics, _nearWhiteValue;
+        private readonly Button _apply, _cancel, _swatch, _nearWhiteSwatch;
+        private Color _nearWhiteMarker = Color.FromRgb(255, 0, 168);
         private readonly Image _before, _after;
         private readonly StackPanel _settingsPanel;
         private readonly ScrollViewer _beforeScroll, _afterScroll;
@@ -82,6 +84,61 @@ namespace VanyaTools.Native
             root.Children.Add(new ScrollViewer { Content = controls, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
             controls.Children.Add(Text("Коррекция", 16, true));
             controls.Children.Add(Text("Настройки меняют предпросмотр. В Corel вставляется только готовый результат.", 11));
+            controls.Children.Add(Text("Экспресс-аудит", 12, true));
+            var alphaAudit = new Grid();
+            alphaAudit.ColumnDefinitions.Add(new ColumnDefinition());
+            alphaAudit.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            _highlight = Check("Полупрозрачные", false); _highlight.FontSize = 11;
+            _highlight.ToolTip = "Подсветить полупрозрачные пиксели только в предпросмотре";
+            alphaAudit.Children.Add(_highlight);
+            _marker = Combo(new[] { "Зелёный", "Красный" }); _marker.Width = 85;
+            _marker.Margin = new Thickness(5, 0, 0, 0); Grid.SetColumn(_marker, 1); alphaAudit.Children.Add(_marker);
+            controls.Children.Add(alphaAudit);
+            var whiteActions = new Grid();
+            whiteActions.ColumnDefinitions.Add(new ColumnDefinition());
+            whiteActions.ColumnDefinitions.Add(new ColumnDefinition());
+            whiteActions.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            _highlightWhite = Check("Почти белое", false); _highlightWhite.FontSize = 11;
+            _whiten = Check("Подбелить", Options.WhitenNearWhite); _whiten.FontSize = 11;
+            _highlightWhite.ToolTip = "Подсветить почти белые пиксели в пределах допуска. Точный белый не подсвечивается.";
+            _whiten.ToolTip = "Исправить почти белые пиксели на чистый белый. Цвета вне допуска и прозрачность сохраняются.";
+            whiteActions.Children.Add(_highlightWhite); Grid.SetColumn(_whiten, 1); whiteActions.Children.Add(_whiten);
+            _nearWhiteSwatch = new Button { Width = 26, Height = 24, Margin = new Thickness(4, 0, 0, 0),
+                Background = new SolidColorBrush(_nearWhiteMarker), ToolTip = "Цвет подсветки почти белого · 50%" };
+            _nearWhiteSwatch.Padding = new Thickness(1); _nearWhiteSwatch.Content = SwatchContent(_nearWhiteSwatch);
+            Grid.SetColumn(_nearWhiteSwatch, 2); whiteActions.Children.Add(_nearWhiteSwatch);
+            controls.Children.Add(whiteActions);
+            var whiteToleranceRow = new Grid { Margin = new Thickness(0, 1, 0, 2) };
+            whiteToleranceRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            whiteToleranceRow.ColumnDefinitions.Add(new ColumnDefinition());
+            whiteToleranceRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            whiteToleranceRow.Children.Add(new TextBlock { Text = "Допуск", FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+            _nearWhiteTolerance = new Slider { Minimum = 0, Maximum = 64,
+                Value = Math.Max(0, Math.Min(64, Options.NearWhiteTolerance)),
+                IsSnapToTickEnabled = true, TickFrequency = 1, VerticalAlignment = VerticalAlignment.Center };
+            _nearWhiteTolerance.ToolTip = "Допуск каждого канала RGB от белого. Например, 6 — значения 249–254; точный белый не меняется.";
+            System.Windows.Automation.AutomationProperties.SetName(_nearWhiteTolerance, "Допуск почти белого");
+            Grid.SetColumn(_nearWhiteTolerance, 1); whiteToleranceRow.Children.Add(_nearWhiteTolerance);
+            _nearWhiteValue = new TextBlock { Text = ((int)_nearWhiteTolerance.Value).ToString(), FontSize = 11,
+                MinWidth = 20, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(5, 0, 0, 0) };
+            Grid.SetColumn(_nearWhiteValue, 2); whiteToleranceRow.Children.Add(_nearWhiteValue);
+            controls.Children.Add(whiteToleranceRow);
+            controls.Children.Add(Text("Подсветка — только для просмотра. «Подбелить» исправляет почти белое на чистый белый, сохраняя прозрачность.", 10));
+            _nearWhiteSwatch.Click += (_, __) =>
+            {
+                if (_applying || _closed) return;
+                try
+                {
+                    Color? picked = WindowsColorPicker.Pick(new WindowInteropHelper(this).Handle, _nearWhiteMarker);
+                    if (!picked.HasValue) return;
+                    _nearWhiteMarker = picked.Value; _nearWhiteSwatch.Background = new SolidColorBrush(picked.Value); QueuePreview();
+                }
+                catch (Exception error) { ShowMessage(error.GetBaseException().Message, true); }
+            };
+
+            controls.Children.Add(new Separator { Margin = new Thickness(0, 9, 0, 8) });
             _remove = Check("Убрать полупрозрачность", Options.RemoveSemiTransparent);
             controls.Children.Add(_remove);
             _threshold = Field(Options.Threshold.ToString());
@@ -99,23 +156,35 @@ namespace VanyaTools.Native
             _units = Combo(new[] { "мм", "px" }); presetRow.Children.Add(_units); controls.Children.Add(presetRow);
             _radius = Field(DtfOutlineUnits.Format(Options.RadiusMm));
             _expansion = Field(DtfOutlineUnits.Format(Options.ExpansionMm));
-            controls.Children.Add(Labeled("Сглаживание", _radius));
-            controls.Children.Add(Labeled("Обводка +", _expansion));
-            var colors = new Grid { Margin = new Thickness(0, 3, 0, 5) };
+            var outlineValues = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+            outlineValues.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(58) });
+            outlineValues.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(65) });
+            outlineValues.ColumnDefinitions.Add(new ColumnDefinition());
+            var radiusField = Labeled("Сглаж.", _radius); radiusField.Margin = new Thickness(0, 2, 5, 0);
+            radiusField.ToolTip = "Сглаживание края в выбранных единицах"; outlineValues.Children.Add(radiusField);
+            var expansionField = Labeled("Обводка +", _expansion); expansionField.Margin = new Thickness(0, 2, 5, 0);
+            Grid.SetColumn(expansionField, 1); outlineValues.Children.Add(expansionField);
+            var colors = new Grid();
             colors.ColumnDefinitions.Add(new ColumnDefinition());
             colors.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             colors.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            _hex = Field(Hex(Options.Color)); colors.Children.Add(_hex);
-            _swatch = new Button { Width = 30, Height = 28, Margin = new Thickness(4, 0, 4, 0),
+            _hex = Field(Hex(Options.Color)); _hex.FontSize = 10; _hex.MinWidth = 57; colors.Children.Add(_hex);
+            _swatch = new Button { Width = 24, Height = 28, Margin = new Thickness(3, 0, 3, 0),
                 ToolTip = "Выбрать цвет обводки", Background = new SolidColorBrush(Options.Color) };
+            _swatch.Padding = new Thickness(1); _swatch.Content = SwatchContent(_swatch);
             Grid.SetColumn(_swatch, 1); colors.Children.Add(_swatch);
-            var pipette = Button("Пипетка", async (_, __) =>
+            var pipette = Button("⌖", async (_, __) =>
             {
                 if (_applying || _closed) return;
                 try { Color? picked = await ScreenColorPicker.PickAsync(); if (picked.HasValue && !_closed) _hex.Text = Hex(picked.Value); }
                 catch (Exception error) { ShowMessage(error.GetBaseException().Message, true); }
             });
-            Grid.SetColumn(pipette, 2); colors.Children.Add(pipette); controls.Children.Add(Labeled("Цвет", colors));
+            pipette.Width = 24; pipette.MinHeight = 28; pipette.FontSize = 16; pipette.Padding = new Thickness(0);
+            pipette.ToolTip = "Пипетка с экрана";
+            System.Windows.Automation.AutomationProperties.SetName(pipette, "Пипетка с экрана");
+            Grid.SetColumn(pipette, 2); colors.Children.Add(pipette);
+            var colorField = Labeled("Цвет", colors); colorField.Margin = new Thickness(0, 2, 0, 0);
+            Grid.SetColumn(colorField, 2); outlineValues.Children.Add(colorField); controls.Children.Add(outlineValues);
             pipette.SetBinding(IsEnabledProperty, new System.Windows.Data.Binding("IsChecked") { Source = _outline });
             _swatch.Click += (_, __) =>
             {
@@ -128,12 +197,6 @@ namespace VanyaTools.Native
                 catch (Exception error) { ShowMessage(error.GetBaseException().Message, true); }
             };
             _metrics = Text("Загружаю исходник…", 10); controls.Children.Add(_metrics);
-
-            controls.Children.Add(new Separator { Margin = new Thickness(0, 9, 0, 8) });
-            controls.Children.Add(Text("Проверка прозрачности", 12, true));
-            _highlight = Check("Подсветить полупрозрачные", false); controls.Children.Add(_highlight);
-            _marker = Combo(new[] { "Зелёный", "Красный" }); controls.Children.Add(_marker);
-            controls.Children.Add(Text("Подсветка видна только здесь и не попадёт в готовый файл.", 10));
 
             var previews = new Grid(); Grid.SetColumn(previews, 1); root.Children.Add(previews);
             previews.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -190,8 +253,10 @@ namespace VanyaTools.Native
             {
                 if (_syncing) return; _syncing = true; _threshold.Text = ((int)_thresholdSlider.Value).ToString(); _syncing = false; QueuePreview();
             };
-            foreach (var toggle in new[] { _remove, _stairs, _outline, _highlight })
+            foreach (var toggle in new[] { _remove, _stairs, _outline, _highlight, _highlightWhite, _whiten })
             { toggle.Checked += (_, __) => QueuePreview(); toggle.Unchecked += (_, __) => QueuePreview(); }
+            _nearWhiteTolerance.ValueChanged += (_, __) =>
+            { _nearWhiteValue.Text = ((int)_nearWhiteTolerance.Value).ToString(); QueuePreview(); };
             _radius.TextChanged += (_, __) => QueuePreview(); _expansion.TextChanged += (_, __) => QueuePreview();
             _hex.TextChanged += (_, __) =>
             { if (TryColor(_hex.Text, out Color color)) _swatch.Background = new SolidColorBrush(color); QueuePreview(); };
@@ -287,7 +352,8 @@ namespace VanyaTools.Native
             }
             options = new DtfCorrectionOptions { Threshold = threshold, RadiusMm = radius, ExpansionMm = expansion,
                 RemoveSemiTransparent = remove, SmoothStairs = _stairs.IsChecked == true,
-                Outline = outline, Color = color };
+                Outline = outline, Color = color, WhitenNearWhite = _whiten.IsChecked == true,
+                NearWhiteTolerance = (int)_nearWhiteTolerance.Value };
             long pixels = (long)_originalPixels.Width * _originalPixels.Height;
             options.StairsScale = pixels <= 2000000 ? 4 : pixels <= 3500000 ? 3 : pixels <= 8000000 ? 2 : 1;
             try
@@ -324,6 +390,8 @@ namespace VanyaTools.Native
             int revision = _revision, view = _view.SelectedIndex;
             double cropX = _cropX, cropY = _cropY;
             bool highlight = _highlight.IsChecked == true, red = _marker.SelectedIndex == 1;
+            bool highlightWhite = _highlightWhite.IsChecked == true;
+            byte whiteRed = _nearWhiteMarker.R, whiteGreen = _nearWhiteMarker.G, whiteBlue = _nearWhiteMarker.B;
             // Capture only managed data on the UI thread. A BitmapFrame can
             // retain a decoder graph even when its top-level object is frozen.
             DtfCorrectionPixels originalPixels = _originalPixels, overviewPixels = _overviewPixels;
@@ -347,6 +415,11 @@ namespace VanyaTools.Native
                     BitmapSource result = Load(output);
                     var aligned = Align(original, result, processed.OffsetMm, focus, cancellation);
                     original = aligned.Item1; result = aligned.Item2;
+                    if (highlightWhite)
+                    {
+                        original = HighlightNearWhite(original, options.NearWhiteTolerance, whiteRed, whiteGreen, whiteBlue, cancellation);
+                        result = HighlightNearWhite(result, options.NearWhiteTolerance, whiteRed, whiteGreen, whiteBlue, cancellation);
+                    }
                     if (highlight) { original = Highlight(original, red, cancellation); result = Highlight(result, red, cancellation); }
                     cancellation.ThrowIfCancellationRequested();
                     return Tuple.Create(DtfCorrectionPixels.Capture(original), DtfCorrectionPixels.Capture(result));
@@ -444,6 +517,7 @@ namespace VanyaTools.Native
             _settingsPanel.IsEnabled = enabled;
             foreach (var control in new Control[] { _remove, _stairs, _outline, _threshold, _thresholdSlider,
                 _radius, _expansion, _hex, _units, _view, _marker, _highlight, _swatch,
+                _highlightWhite, _whiten, _nearWhiteTolerance, _nearWhiteSwatch,
                 _previewQuality, _previewBackground, _previewBackgroundColor }) control.IsEnabled = enabled;
             if (enabled) UpdateCorrectionControlAvailability();
         }
@@ -540,6 +614,19 @@ namespace VanyaTools.Native
             result.Freeze(); return result;
         }
 
+        private static BitmapSource HighlightNearWhite(BitmapSource source, int tolerance,
+            byte red, byte green, byte blue, CancellationToken cancellation)
+        {
+            BitmapSource bgra = Bgra(source); int stride = checked(bgra.PixelWidth * 4);
+            var pixels = new byte[checked(stride * bgra.PixelHeight)]; bgra.CopyPixels(pixels, stride, 0);
+            var mask = DtfNearWhitePixels.CreateMask(pixels, bgra.PixelWidth, bgra.PixelHeight, tolerance, cancellation);
+            byte[] marked = DtfNearWhitePixels.Highlight(pixels, mask, red, green, blue,
+                DtfNearWhitePixels.DefaultOpacity, cancellation);
+            var result = BitmapSource.Create(bgra.PixelWidth, bgra.PixelHeight, bgra.DpiX, bgra.DpiY,
+                PixelFormats.Bgra32, null, marked, stride);
+            result.Freeze(); return result;
+        }
+
         private static BitmapSource Load(string path)
         {
             using (var stream = File.OpenRead(path))
@@ -576,6 +663,14 @@ namespace VanyaTools.Native
             color = Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb); return true;
         }
         private static string Hex(Color color) => "#" + color.R.ToString("X2") + color.G.ToString("X2") + color.B.ToString("X2");
+        private static FrameworkElement SwatchContent(Button button)
+        {
+            // The shared button chrome uses theme brushes. Keep the actual color
+            // inside its content so both light and dark themes display the sample.
+            var sample = new Border { Width = 14, Height = 16, BorderThickness = new Thickness(1), BorderBrush = Brushes.Gray };
+            sample.SetBinding(Border.BackgroundProperty, new System.Windows.Data.Binding("Background") { Source = button });
+            return sample;
+        }
         private Button Preset(bool thick, double millimeters)
         {
             var shape = new System.Windows.Shapes.Path { Data = Geometry.Parse("M5,4 C8,0 18,0 21,6 L23,14 C24,20 18,24 13,22 L4,20 C0,18 2,9 5,4 Z"),

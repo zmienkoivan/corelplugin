@@ -4,7 +4,6 @@ using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Threading;
 
 namespace VanyaTools.Native
@@ -13,6 +12,7 @@ namespace VanyaTools.Native
     {
         public string Message { get; internal set; }
         public string Text { get; internal set; }
+        public string UsageText { get; internal set; }
         public int ColorCount { get; internal set; }
         public int ApproximateRasterCount { get; internal set; }
         public bool Incomplete { get; internal set; }
@@ -40,7 +40,7 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Выделите объекты, для которых нужна сводка цветов.");
             int oldUnit = Convert.ToInt32(doc.Unit);
             bool oldDirty = Convert.ToBoolean(doc.Dirty), started = false, succeeded = false, cleanupFailed = false;
-            object textShape = null;
+            var created = new List<object>();
             try
             {
                 doc.Unit = CorelConstants.CdrMillimeter;
@@ -56,20 +56,23 @@ namespace VanyaTools.Native
                 if (!SameObject((object)app.ActiveDocument, sourceDocument))
                     throw new InvalidOperationException("Активный документ изменился. Вернитесь в нужный CDR и повторите сводку.");
                 doc.BeginCommandGroup("Vanya Tools — сводка цветов"); started = true;
-                dynamic text = doc.ActiveLayer.CreateArtisticTextWide(0, 0, result.Text, 0, -1, "Arial", 14f);
-                textShape = (object)text;
-                text.Fill.UniformColor.CMYKAssign(0, 0, 0, 100); text.Outline.SetNoOutline();
-                text.Name = "Vanya Tools · сводка цветов";
-                // Anchor the actual top-left, not the font's baseline or the current reference point.
-                text.Move(left - Convert.ToDouble(text.LeftX), bottom - 5 - Convert.ToDouble(text.TopY));
+                dynamic text = CreateText((object)doc, result.Text, left, bottom - 5,
+                    "Vanya Tools · сводка цветов", created);
+                if (!String.IsNullOrWhiteSpace(result.UsageText))
+                {
+                    if (!SameObject((object)app.ActiveDocument, sourceDocument))
+                        throw new InvalidOperationException("Активный документ изменился. Вернитесь в нужный CDR и повторите сводку.");
+                    CreateText((object)doc, result.UsageText, left, Convert.ToDouble(text.BottomY) - 2,
+                        "Vanya Tools · заливки и контуры", created);
+                }
                 doc.EndCommandGroup(); started = false;
                 succeeded = true;
                 return result;
             }
             catch
             {
-                if (textShape != null)
-                    try { ((dynamic)textShape).Delete(); }
+                for (int index = created.Count - 1; index >= 0; index--)
+                    try { ((dynamic)created[index]).Delete(); }
                     catch (Exception error)
                     {
                         cleanupFailed = true;
@@ -87,10 +90,23 @@ namespace VanyaTools.Native
             }
         }
 
+        private static object CreateText(object document, string value, double left, double top,
+            string name, ICollection<object> created)
+        {
+            dynamic text = ((dynamic)document).ActiveLayer.CreateArtisticTextWide(0, 0, value, 0, -1, "Arial", 14f);
+            created.Add((object)text);
+            text.Fill.UniformColor.CMYKAssign(0, 0, 0, 100); text.Outline.SetNoOutline();
+            text.Name = name;
+            // Anchor the actual top-left, not the font baseline or document reference point.
+            text.Move(left - Convert.ToDouble(text.LeftX), top - Convert.ToDouble(text.TopY));
+            return (object)text;
+        }
+
         private sealed class ColorValue
         {
             internal string Key, Text, Model, Warning;
             internal double[] Values;
+            internal bool InFill, InOutline;
             internal string Bucket => Model + ":" + String.Join("/", Values.Select(value =>
                 (Model == "BW" ? value : Math.Floor(value / (Model == "CMYK" || Model == "CMY" ? 5 : 16))).ToString(CultureInfo.InvariantCulture)));
         }
@@ -182,23 +198,25 @@ namespace VanyaTools.Native
                 dynamic fill = fillObject;
                 int type = Convert.ToInt32(fill.Type);
                 if (type == 0) return;
-                if (type == 1) { Vector((object)fill.UniformColor); return; }
+                if (type == 1) { Vector((object)fill.UniformColor, false); return; }
                 if (type != 2) { Warn("Сложные заливки не включены в список цветов"); return; }
                 _gradients = true;
                 dynamic fountain = fill.Fountain;
-                Vector((object)fountain.StartColor); Vector((object)fountain.EndColor);
+                Vector((object)fountain.StartColor, false); Vector((object)fountain.EndColor, false);
                 object stops = (object)fountain.Colors;
-                for (int index = 1; index <= Count(stops); index++) Vector((object)((dynamic)Item(stops, index)).Color);
+                for (int index = 1; index <= Count(stops); index++) Vector((object)((dynamic)Item(stops, index)).Color, false);
             }
 
             private void Outline(object outlineObject)
-            { dynamic outline = outlineObject; if (Convert.ToInt32(outline.Type) != 0) Vector((object)outline.Color); }
+            { dynamic outline = outlineObject; if (Convert.ToInt32(outline.Type) != 0) Vector((object)outline.Color, true); }
 
-            private void Vector(object color)
+            private void Vector(object color, bool outline)
             {
                 ColorValue value = Snapshot(_app, color);
                 if (value.Warning != null) Warn(value.Warning);
-                if (!_vectors.ContainsKey(value.Key)) _vectors.Add(value.Key, value);
+                if (!_vectors.TryGetValue(value.Key, out ColorValue existing)) _vectors.Add(value.Key, existing = value);
+                if (outline) existing.InOutline = true;
+                else existing.InFill = true;
             }
 
             private void Raster(object shapeObject)
@@ -256,25 +274,33 @@ namespace VanyaTools.Native
 
             internal SelectionColorSummaryResult Result()
             {
-                var text = new StringBuilder("Цвета выделения");
+                var lines = new List<string>();
+                var usage = new List<string>();
                 var vectors = _vectors.Values.OrderBy(value => value.Key, StringComparer.Ordinal).ToArray();
-                foreach (ColorValue color in vectors.Take(VectorLines)) text.Append("\n").Append(color.Text);
-                if (vectors.Length > VectorLines) text.Append("\nЕщё ").Append(vectors.Length - VectorLines).Append(" векторных цветов.");
-                if (_gradients) text.Append("\nГрадиенты: перечислены цвета узлов, без промежуточных оттенков.");
+                foreach (ColorValue color in vectors.Take(VectorLines))
+                {
+                    lines.Add(color.Text);
+                    usage.Add(color.Text + " — " + (color.InFill && color.InOutline ? "заливка и контур" : color.InOutline ? "контур" : "заливка"));
+                }
+                if (vectors.Length > VectorLines) usage.Add("Ещё " + (vectors.Length - VectorLines) + " векторных цветов.");
+                if (_gradients) usage.Add("Градиенты: перечислены цвета узлов, без промежуточных оттенков.");
                 var raster = _raster.OrderByDescending(pair => pair.Value.Weight).ThenBy(pair => pair.Key, StringComparer.Ordinal)
                     .Take(RasterColors).Select(pair => pair.Value.Color).ToArray();
                 if (raster.Length > 0)
                 {
-                    text.Append("\nОсновные цвета исходного растра, приблизительно:");
-                    foreach (ColorValue color in raster) text.Append("\n≈ ").Append(color.Text);
-                    if (_raster.Count > RasterColors) text.Append("\nПоказаны ").Append(RasterColors).Append(" основных групп цветов.");
+                    foreach (ColorValue color in raster)
+                    {
+                        lines.Add("≈ " + color.Text);
+                        usage.Add("≈ " + color.Text + " — основной цвет растра, приблизительно");
+                    }
+                    if (_raster.Count > RasterColors) usage.Add("Показаны " + RasterColors + " основных групп цветов.");
                 }
-                if (_warnings.Count > 0) text.Append("\nСводка неполная: ").Append(WarningText()).Append(".");
-                return new SelectionColorSummaryResult { Text = text.ToString(), ColorCount = vectors.Length,
+                if (_warnings.Count > 0) usage.Add("Сводка неполная: " + WarningText() + ".");
+                return new SelectionColorSummaryResult { Text = String.Join("\n", lines), UsageText = String.Join("\n", usage), ColorCount = vectors.Length,
                     ApproximateRasterCount = raster.Length, Incomplete = _warnings.Count > 0,
                     Message = "Сводка добавлена: " + vectors.Length + " векторных цветов" +
                         (raster.Length > 0 ? ", основных цветов растра: " + raster.Length + " (приблизительно)" : "") +
-                        (_warnings.Count > 0 ? ". Есть непроверенные элементы — пояснение в сводке." : ".") };
+                        (_warnings.Count > 0 ? ". Есть непроверенные элементы — пояснение в отдельном тексте снизу." : ".") };
             }
         }
 

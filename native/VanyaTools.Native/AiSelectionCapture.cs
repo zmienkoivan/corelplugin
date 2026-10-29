@@ -26,6 +26,8 @@ namespace VanyaTools.Native
 
         public static string CaptureForCorrection()
         {
+            string native = NativeRasterCorrection.CaptureIfBitmap(memoryCheck: RasterCaptureMemory.EnsureAvailable);
+            if (native != null) return native;
             // Large prints should retain 400 DPI when memory permits. The
             // source is captured once; interactive previews use reduced copies.
             return CaptureCore(CaptureDpi, ArtworkMaxSide, 70000000, false, true, true, true);

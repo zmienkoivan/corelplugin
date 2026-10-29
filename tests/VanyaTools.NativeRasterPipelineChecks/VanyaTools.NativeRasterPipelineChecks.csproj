@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework><OutputType>Exe</OutputType><UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion><PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Microsoft.CSharp" /><Reference Include="System.IO.Compression" />
+    <Compile Include="../../native/VanyaTools.Native/NativeRasterBuffer.cs" Link="NativeRasterBuffer.cs" />
+    <Compile Include="../../native/VanyaTools.Native/NativeRasterModelIO.cs" Link="NativeRasterModelIO.cs" />
+    <Compile Include="../../native/VanyaTools.Native/NativeRasterFiles.cs" Link="NativeRasterFiles.cs" />
+    <Compile Include="../../native/VanyaTools.Native/NativeRasterFilters.cs" Link="NativeRasterFilters.cs" />
+    <Compile Include="../../native/VanyaTools.Native/NativeRasterCorrection.cs" Link="NativeRasterCorrection.cs" />
+    <Compile Include="../../native/VanyaTools.Native/DtfNearWhitePixels.cs" Link="DtfNearWhitePixels.cs" />
+    <Compile Include="../../native/VanyaTools.Native/CorelConstants.cs" Link="CorelConstants.cs" />
+  </ItemGroup>
+</Project>
