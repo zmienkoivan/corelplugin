@@ -43,7 +43,7 @@ namespace VanyaTools.Native
         {
             public string Directory, Source, Part, Hint, ReadyPath;
             public int Width, Height;
-            public bool Upscale;
+            public bool Upscale, ProviderBlocked;
             public string AnalysisPath { get { return Path.Combine(Directory, "analysis.txt"); } }
             public string FocusPath { get { return Path.Combine(Directory, "sleeve-focus-v2.txt"); } }
             public string ReferencePath { get { return Path.Combine(Directory, "sleeve-reference.png"); } }
@@ -144,6 +144,8 @@ namespace VanyaTools.Native
             string key = _token();
             if (!File.Exists(_job.FinalPath) && (String.IsNullOrWhiteSpace(key) || key.Length < 8))
             { Report("Для продолжения нужен ключ Replicate.", true); return; }
+            if (SublimationFailure.BlocksResume(_job.ProviderBlocked, File.Exists(_job.FinalPath)))
+            { Report(SublimationFailure.SensitiveMessage, true); return; }
             await Execute(key);
         }
 
@@ -252,7 +254,15 @@ namespace VanyaTools.Native
             catch (Exception ex)
             {
                 Log.Error("Sublimation panel failed.", ex);
-                Report("Развёртка: " + ex.GetBaseException().Message + " Повторите операцию кнопкой ниже.", true);
+                if (_job != null && SublimationFailure.IsSensitiveRejection(ex) && !File.Exists(_job.FinalPath))
+                {
+                    _job.ProviderBlocked = true;
+                    try { SaveJob(_job); }
+                    catch (Exception saveError) { Log.Error("Could not save sublimation provider rejection.", saveError); }
+                    _activity.Text = SublimationFailure.SensitiveMessage;
+                    Report(SublimationFailure.SensitiveMessage, true);
+                }
+                else Report("Развёртка: " + ex.GetBaseException().Message + " Повторите операцию кнопкой ниже.", true);
             }
             finally
             {
@@ -494,10 +504,19 @@ namespace VanyaTools.Native
             _width.IsEnabled = _height.IsEnabled = _hint.IsEnabled = _upscale.IsEnabled = !value;
             _cancel.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
             _cancel.IsEnabled = value;
-            _retry.Visibility = !value && _job != null ? Visibility.Visible : Visibility.Collapsed;
+            UpdateRetry(value);
             _progress.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
             if (value) { _activity.Visibility = Visibility.Visible; _elapsed.Restart(); _timer.Start(); }
             else { _timer.Stop(); _elapsed.Stop(); }
+        }
+
+        private void UpdateRetry(bool busy)
+        {
+            bool ready = _job != null && File.Exists(_job.FinalPath);
+            bool available = !busy && _job != null && !SublimationFailure.BlocksResume(_job.ProviderBlocked, ready);
+            _retry.Content = SublimationFailure.RetryCaption(ready);
+            _retry.IsEnabled = available;
+            _retry.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void SetStage(string stage) { _stage = stage; _activity.Text = stage; Report(stage, false); }
@@ -511,7 +530,8 @@ namespace VanyaTools.Native
             var details = new Dictionary<string, object>
             {
                 ["part"] = job.Part, ["hint"] = job.Hint, ["width"] = job.Width,
-                ["height"] = job.Height, ["upscale"] = job.Upscale
+                ["height"] = job.Height, ["upscale"] = job.Upscale,
+                ["provider_blocked"] = job.ProviderBlocked
             };
             File.WriteAllText(job.MetadataPath, new JavaScriptSerializer().Serialize(details));
         }
@@ -527,7 +547,7 @@ namespace VanyaTools.Native
                     {
                         _job = new Job { Directory = Path.GetDirectoryName(path), ReadyPath = path };
                         _resultPreview.Source = AiPrintTab.Bitmap(path);
-                        _retry.Visibility = Visibility.Visible;
+                        UpdateRetry(false);
                         _activity.Visibility = Visibility.Visible;
                         _activity.Text = "Развёртка готова к вставке.";
                         return;
@@ -552,6 +572,7 @@ namespace VanyaTools.Native
                             candidate.Width = Convert.ToInt32(details["width"]);
                             candidate.Height = Convert.ToInt32(details["height"]);
                             candidate.Upscale = Convert.ToBoolean(details["upscale"]);
+                            candidate.ProviderBlocked = details.ContainsKey("provider_blocked") && Convert.ToBoolean(details["provider_blocked"]);
                         }
                         else if (!File.Exists(candidate.FinalPath) && File.Exists(candidate.GeneratedPath) && File.Exists(candidate.AnalysisPath))
                         {
@@ -566,6 +587,15 @@ namespace VanyaTools.Native
                             SaveJob(candidate);
                         }
                         else continue;
+                        // Older jobs saved the failed prediction but had no rejection flag.
+                        // Inspect only its terminal error, never the prompt or analysis text.
+                        string predictionPath = candidate.GeneratedPath + ".prediction.json";
+                        if (!File.Exists(candidate.FinalPath) && !candidate.ProviderBlocked && File.Exists(predictionPath) &&
+                            SublimationFailure.IsSensitivePrediction(File.ReadAllText(predictionPath)))
+                        {
+                            candidate.ProviderBlocked = true;
+                            SaveJob(candidate);
+                        }
                         _job = candidate;
                         _part.SelectedItem = candidate.Part;
                         _width.Text = candidate.Width.ToString(CultureInfo.InvariantCulture);
@@ -575,9 +605,11 @@ namespace VanyaTools.Native
                         _sourcePreview.Source = AiPrintTab.Bitmap(source);
                         if (File.Exists(candidate.AnalysisPath)) _analysis.Text = File.ReadAllText(candidate.AnalysisPath);
                         if (File.Exists(candidate.FinalPath)) _resultPreview.Source = AiPrintTab.Bitmap(candidate.FinalPath);
-                        _retry.Visibility = Visibility.Visible;
+                        UpdateRetry(false);
                         _activity.Visibility = Visibility.Visible;
-                        _activity.Text = "Развёртка не завершена. Нажмите «Продолжить».";
+                        _activity.Text = SublimationFailure.BlocksResume(candidate.ProviderBlocked, File.Exists(candidate.FinalPath))
+                            ? SublimationFailure.SensitiveMessage
+                            : "Развёртка не завершена. Нажмите «Продолжить».";
                         return;
                     }
                     catch (Exception ex) { Log.Error("Could not restore sublimation job in " + directory, ex); }

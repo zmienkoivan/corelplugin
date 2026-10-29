@@ -55,9 +55,9 @@ namespace VanyaTools.Native
             CorelApp.SetHostApplication(app);
             _toolbarTarget = new WeakReference<VanyaToolsDocker>(this);
             Log.Info("VanyaToolsDocker constructor started.");
-            _uiWatchdog = new DockerUiWatchdog(Dispatcher);
+            _uiWatchdog = new DockerUiWatchdog(Dispatcher, "Main", this);
             Loaded += (_, __) => _uiWatchdog.Start();
-            Unloaded += (_, __) => _uiWatchdog.Stop();
+            Unloaded += (_, __) => _uiWatchdog.Stop("unloaded");
 
             var outer = new Grid
             {
@@ -169,8 +169,10 @@ namespace VanyaTools.Native
                 _hotkeys.Attach(this);
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    CorelToolbarInstaller.RemoveLegacyDuplicates();
-                    CorelToolbarInstaller.ApplySavedVisibility();
+                    using (DockerUiWatchdog.Trace(Dispatcher, "CorelToolbarInstaller.RemoveLegacyDuplicates"))
+                        CorelToolbarInstaller.RemoveLegacyDuplicates();
+                    using (DockerUiWatchdog.Trace(Dispatcher, "CorelToolbarInstaller.ApplySavedVisibility"))
+                        CorelToolbarInstaller.ApplySavedVisibility();
                 }),
                     System.Windows.Threading.DispatcherPriority.Background);
             };

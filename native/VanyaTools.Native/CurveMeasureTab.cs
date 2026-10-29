@@ -1,8 +1,10 @@
 using System;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 
@@ -14,6 +16,9 @@ namespace VanyaTools.Native
         private readonly TextBlock _mode, _context, _message;
         private readonly ValueRow _first, _second;
         private readonly Button _copyAll;
+        private readonly ObservableCollection<HistoryRow> _history = new ObservableCollection<HistoryRow>();
+        private readonly DataGrid _historyGrid;
+        private readonly Button _clearHistory;
         private CurveMeasurement _measurement;
         private bool _measuring;
 
@@ -30,7 +35,9 @@ namespace VanyaTools.Native
                 "для открытого — один участок. Узлы должны принадлежать одному непрерывному подконтуру. " +
                 "Если объект в группе, выберите саму кривую внутри группы. Если точка ещё не является узлом, добавьте узел в Corel. " +
                 "Считается длина вдоль линий и Безье; результат выводится в миллиметрах с двумя знаками после запятой. " +
-                "Измерение выполняется по нажатию кнопки. Значения относятся к последнему измерению.");
+                "Измерение выполняется по нажатию кнопки. Успешные замеры добавляются в историю внизу. " +
+                "История хранится в текущем сеансе панели; документ, кривая и узлы указаны в подсказке строки. " +
+                "Для удаления строк нажмите «Очистить историю».");
             var measure = new Button { Content = "Измерить между двумя узлами (F10)", MinHeight = 36,
                 Margin = new Thickness(0, 0, 0, 12), Focusable = false, IsTabStop = false };
             measure.Click += (_, __) => Measure();
@@ -52,6 +59,38 @@ namespace VanyaTools.Native
             _message = new TextBlock { Text = "Выберите два узла одной кривой (F10).", TextWrapping = TextWrapping.Wrap };
             DockerTheme.UseTheme(_message, TextBlock.ForegroundProperty, DockerTheme.MutedTextBrush);
             panel.Children.Add(_message);
+
+            var historyHeader = new Grid { Margin = new Thickness(0, 14, 0, 6) };
+            historyHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            historyHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            historyHeader.Children.Add(new TextBlock { Text = "История замеров", FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center });
+            _clearHistory = new Button { Content = "Очистить историю", IsEnabled = false, MinHeight = 28,
+                Margin = new Thickness(6, 0, 0, 0), Padding = new Thickness(6, 2, 6, 2),
+                ToolTip = "Удалить все строки истории. Последний результат останется сверху." };
+            _clearHistory.Click += (_, __) => { _history.Clear(); _clearHistory.IsEnabled = false; };
+            Grid.SetColumn(_clearHistory, 1); historyHeader.Children.Add(_clearHistory);
+            panel.Children.Add(historyHeader);
+
+            _historyGrid = new DataGrid { ItemsSource = _history, AutoGenerateColumns = false, IsReadOnly = true,
+                CanUserAddRows = false, CanUserDeleteRows = false, CanUserReorderColumns = false,
+                CanUserSortColumns = false, HeadersVisibility = DataGridHeadersVisibility.Column,
+                SelectionMode = DataGridSelectionMode.Single, SelectionUnit = DataGridSelectionUnit.FullRow,
+                Height = 210, MinHeight = 110, FontSize = 11, RowHeaderWidth = 0,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                ClipboardCopyMode = DataGridClipboardCopyMode.IncludeHeader };
+            var rowStyle = new Style(typeof(DataGridRow));
+            rowStyle.Setters.Add(new Setter(ToolTipProperty, new Binding(nameof(HistoryRow.Detail))));
+            _historyGrid.RowStyle = rowStyle;
+            _historyGrid.Columns.Add(new DataGridTextColumn { Header = "№", Binding = new Binding(nameof(HistoryRow.Number)), Width = 28 });
+            _historyGrid.Columns.Add(new DataGridTextColumn { Header = "Кривая", Binding = new Binding(nameof(HistoryRow.Curve)),
+                Width = new DataGridLength(1, DataGridLengthUnitType.Star), MinWidth = 60 });
+            _historyGrid.Columns.Add(new DataGridTextColumn { Header = "Длина /\nменьший, мм",
+                Binding = new Binding(nameof(HistoryRow.Smaller)), Width = 78 });
+            _historyGrid.Columns.Add(new DataGridTextColumn { Header = "Больший,\nмм",
+                Binding = new Binding(nameof(HistoryRow.Larger)), Width = 70 });
+            panel.Children.Add(_historyGrid);
         }
 
         private static string Millimeters(double value) => value.ToString("0.00", CultureInfo.CurrentCulture);
@@ -67,6 +106,10 @@ namespace VanyaTools.Native
                 _status("Измерение длины по кривой…", false);
                 var result = CurveMeasureService.MeasureSelection();
                 _measurement = result;
+                var historyRow = new HistoryRow(_history.Count + 1, result);
+                _history.Add(historyRow);
+                _clearHistory.IsEnabled = true;
+                _historyGrid.ScrollIntoView(historyRow);
                 _mode.Text = result.Closed ? "Замкнутая кривая" : "Открытая кривая";
                 _first.Label.Text = (result.Closed ? "Меньший участок" : "Между узлами") + ", мм";
                 _first.SetValue(Millimeters(result.SmallerMm));
@@ -114,6 +157,25 @@ namespace VanyaTools.Native
         {
             try { Clipboard.SetText(value); _status("Измерение скопировано.", false); }
             catch (Exception error) { _status("Не удалось скопировать: " + error.Message, true); }
+        }
+
+        private sealed class HistoryRow
+        {
+            public int Number { get; }
+            public string Curve { get; }
+            public string Smaller { get; }
+            public string Larger { get; }
+            public string Detail { get; }
+
+            internal HistoryRow(int number, CurveMeasurement measurement)
+            {
+                Number = number;
+                Curve = measurement.ShapeName + "\n" + (measurement.Closed ? "Замкнутая" : "Открытая");
+                Smaller = Millimeters(measurement.SmallerMm);
+                Larger = measurement.Closed ? Millimeters(measurement.LargerMm) : "—";
+                Detail = measurement.DocumentName + " · " + measurement.ShapeName + "\nПодконтур " +
+                    measurement.SubPathIndex + " · узлы " + measurement.FirstNode + " — " + measurement.SecondNode;
+            }
         }
 
         private sealed class ValueRow : Grid

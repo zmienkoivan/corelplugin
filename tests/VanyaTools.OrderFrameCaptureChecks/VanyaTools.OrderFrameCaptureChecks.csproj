@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Microsoft.CSharp" />
+    <Compile Include="../../native/VanyaTools.Native/OrderFrameCapture.cs" Link="OrderFrameCapture.cs" />
+    <Compile Include="../../native/VanyaTools.Native/CorelConstants.cs" Link="CorelConstants.cs" />
+  </ItemGroup>
+</Project>

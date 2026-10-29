@@ -158,12 +158,15 @@ namespace VanyaTools.Native
             bool documentOpen = false, selected = false;
             try
             {
-                dynamic app = CorelApp.Get();
-                if (app.ActiveDocument != null)
+                using (DockerUiWatchdog.Trace(Dispatcher, "PrintExportTab.UpdateAvailability"))
                 {
-                    documentOpen = true;
-                    dynamic range = app.ActiveSelectionRange;
-                    selected = range != null && Convert.ToInt32(range.Count) > 0;
+                    dynamic app = CorelApp.Get();
+                    if (app.ActiveDocument != null)
+                    {
+                        documentOpen = true;
+                        dynamic range = app.ActiveSelectionRange;
+                        selected = range != null && Convert.ToInt32(range.Count) > 0;
+                    }
                 }
             }
             catch { documentOpen = selected = false; /* Corel can reject calls while a native dialog is open. */ }

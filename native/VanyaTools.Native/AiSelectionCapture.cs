@@ -62,10 +62,7 @@ namespace VanyaTools.Native
 
         internal static BitmapSource CaptureOrderFrame(bool restoreSelection)
         {
-            // Match the final Telegram photo limits before rasterisation.
-            // Return opaque pixels directly, without a PNG disk round trip.
-            return CaptureBitmapCore(CaptureDpi, 9500, 24000000, false,
-                restoreSelection, false, 9990, true);
+            return OrderFrameCapture.Capture(restoreSelection);
         }
 
         public static long EstimatePublishPixels(int dpi, out double widthMm, out double heightMm)
@@ -269,90 +266,7 @@ namespace VanyaTools.Native
         }
 
         private static BitmapSource ReadBitmap(dynamic bitmap, int captureDpi, int maxPixels,
-            bool whiteBackground)
-        {
-            dynamic colorImage = bitmap.Image;
-            if (colorImage == null)
-                throw new InvalidOperationException("CorelDRAW не вернул цветовые пиксели растра.");
-            int width = Convert.ToInt32(colorImage.Width);
-            int height = Convert.ToInt32(colorImage.Height);
-            if (width <= 0 || height <= 0 || (long)width * height > maxPixels)
-                throw new InvalidOperationException("Размер выделения слишком велик для обработки. Выделите только нужную графику.");
-
-            dynamic alphaImage = null;
-            if (Convert.ToBoolean(bitmap.Transparent))
-            {
-                alphaImage = bitmap.ImageAlpha;
-                if (alphaImage == null)
-                    throw new InvalidOperationException("CorelDRAW не вернул альфа-канал растра.");
-            }
-            byte[] pixels = new byte[checked(width * height * 4)];
-            if (alphaImage == null)
-                for (int i = 3; i < pixels.Length; i += 4) pixels[i] = 255;
-
-            CopyTiles(colorImage, pixels, width, height, false);
-            if (alphaImage != null) CopyTiles(alphaImage, pixels, width, height, true);
-            if (whiteBackground && alphaImage != null)
-                for (int i = 0; i < pixels.Length; i += 4)
-                {
-                    int alpha = pixels[i + 3];
-                    if (alpha == 255) continue;
-                    int white = 255 * (255 - alpha);
-                    pixels[i] = (byte)((pixels[i] * alpha + white + 127) / 255);
-                    pixels[i + 1] = (byte)((pixels[i + 1] * alpha + white + 127) / 255);
-                    pixels[i + 2] = (byte)((pixels[i + 2] * alpha + white + 127) / 255);
-                    pixels[i + 3] = 255;
-                }
-
-            var image = BitmapSource.Create(width, height, captureDpi, captureDpi,
-                PixelFormats.Bgra32, null, pixels, width * 4);
-            image.Freeze();
-            return image;
-        }
-
-        private static void CopyTiles(dynamic image, byte[] pixels, int width, int height, bool alpha)
-        {
-            dynamic tiles = image.Tiles;
-            int count = Convert.ToInt32(tiles.Count);
-            if (count == 0) throw new InvalidOperationException("CorelDRAW не вернул тайлы изображения.");
-            for (int i = 1; i <= count; i++)
-            {
-                dynamic tile = tiles.Item[i];
-                int left = Convert.ToInt32(tile.Left);
-                int top = Convert.ToInt32(tile.Top);
-                int tileWidth = Convert.ToInt32(tile.Width);
-                int tileHeight = Convert.ToInt32(tile.Height);
-                int stride = Math.Abs(Convert.ToInt32(tile.BytesPerLine));
-                int bpp = Convert.ToInt32(tile.BytesPerPixel);
-                byte[] data = (byte[])tile.PixelData;
-                if (bpp < (alpha ? 1 : 3) || stride < tileWidth * bpp ||
-                    data == null || data.Length < stride * tileHeight)
-                    throw new InvalidOperationException("CorelDRAW вернул повреждённый тайл растра.");
-
-                int bottom = top - tileHeight + 1;
-                for (int y = 0; y < tileHeight; y++)
-                {
-                    int imageY = bottom + y;
-                    if (imageY < 0 || imageY >= height) continue;
-                    int destinationRow = (height - 1 - imageY) * width * 4;
-                    int sourceRow = y * stride;
-                    for (int x = 0; x < tileWidth; x++)
-                    {
-                        int imageX = left + x;
-                        if (imageX < 0 || imageX >= width) continue;
-                        int destination = destinationRow + imageX * 4;
-                        int source = sourceRow + x * bpp;
-                        if (alpha) pixels[destination + 3] = data[source];
-                        else
-                        {
-                            pixels[destination] = data[source];
-                            pixels[destination + 1] = data[source + 1];
-                            pixels[destination + 2] = data[source + 2];
-                        }
-                    }
-                }
-            }
-        }
+            bool whiteBackground) => NativeBitmapPixelReader.Read((object)bitmap, captureDpi, maxPixels, whiteBackground);
 
         private static void TryDelete(dynamic shape)
         {

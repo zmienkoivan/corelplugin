@@ -647,37 +647,40 @@ namespace VanyaTools.Native
         private void RefreshDocument()
         {
             if (_busy) return;
-            object candidate = null;
-            string path = null;
-            try
+            using (DockerUiWatchdog.Trace(Dispatcher, "Order card: refresh document"))
             {
-                dynamic doc = CorelApp.Get().ActiveDocument;
-                candidate = (object)doc;
-                path = doc == null ? null : Convert.ToString(doc.FullFileName);
-                if (doc == null) { ClearDocumentView(); return; }
-                if (String.IsNullOrWhiteSpace(path))
+                object candidate = null;
+                string path = null;
+                try
                 {
-                    if (!SameDocument(_documentIdentity, candidate) || _documentPath != null ||
-                        DocumentCardVersion(candidate) != _documentCardVersion)
+                    dynamic doc = CorelApp.Get().ActiveDocument;
+                    candidate = (object)doc;
+                    path = doc == null ? null : Convert.ToString(doc.FullFileName);
+                    if (doc == null) { ClearDocumentView(); return; }
+                    if (String.IsNullOrWhiteSpace(path))
+                    {
+                        if (!SameDocument(_documentIdentity, candidate) || _documentPath != null ||
+                            DocumentCardVersion(candidate) != _documentCardVersion)
+                            LoadDocument(false);
+                        return;
+                    }
+                    if (SameDocument(_failedDocumentIdentity, candidate) &&
+                        String.Equals(path, _failedDocumentPath, StringComparison.OrdinalIgnoreCase)) return;
+                    if (!SameDocument(_documentIdentity, (object)doc) ||
+                        !String.Equals(path, _documentPath, StringComparison.OrdinalIgnoreCase) ||
+                        DocumentCardVersion((object)doc) != _documentCardVersion)
                         LoadDocument(false);
-                    return;
                 }
-                if (SameDocument(_failedDocumentIdentity, candidate) &&
-                    String.Equals(path, _failedDocumentPath, StringComparison.OrdinalIgnoreCase)) return;
-                if (!SameDocument(_documentIdentity, (object)doc) ||
-                    !String.Equals(path, _documentPath, StringComparison.OrdinalIgnoreCase) ||
-                    DocumentCardVersion((object)doc) != _documentCardVersion)
-                    LoadDocument(false);
-            }
-            catch (Exception error)
-            {
-                ClearDocumentView();
-                _failedDocumentIdentity = candidate;
-                _failedDocumentPath = path;
-                _documentName.Text = String.IsNullOrEmpty(path) ? "Откройте сохранённый CDR."
-                    : Path.GetFileName(path) + " · ошибка загрузки";
-                Log.Error("Order card auto-load failed", error);
-                _status("Карточка: " + error.Message, true);
+                catch (Exception error)
+                {
+                    ClearDocumentView();
+                    _failedDocumentIdentity = candidate;
+                    _failedDocumentPath = path;
+                    _documentName.Text = String.IsNullOrEmpty(path) ? "Откройте сохранённый CDR."
+                        : Path.GetFileName(path) + " · ошибка загрузки";
+                    Log.Error("Order card auto-load failed", error);
+                    _status("Карточка: " + error.Message, true);
+                }
             }
         }
 
@@ -2199,10 +2202,11 @@ namespace VanyaTools.Native
 
         private void RememberCurrentOrderFile()
         {
-            if (_data.ServerOrderId <= 0 || String.IsNullOrWhiteSpace(_documentPath) ||
-                !File.Exists(_documentPath)) return;
-            OrderCdrPathIndex.Remember(_server.Text.Trim(), _data.ServerOrderId,
-                _documentPath, YearFolderForDocument(_documentPath));
+            // Snapshot managed values only. Every File/Directory/SMB operation,
+            // including year-folder resolution, belongs to the shared worker.
+            if (_data.ServerOrderId <= 0 || String.IsNullOrWhiteSpace(_documentPath)) return;
+            OrderCdrPathIndex.QueueRemember(_server.Text.Trim(), _data.ServerOrderId,
+                _documentPath, _yearFolder.Text.Trim());
         }
 
         private string SuggestedOrderFolder(OrderListItem selected, string yearRoot)
@@ -2308,7 +2312,7 @@ namespace VanyaTools.Native
                 }
                 UpdateCaption();
                 Log.Info("Order card fields loaded from server on CDR open: " + selected.Id + ".");
-                await Task.Run(() => OrderCdrPathIndex.Remember(server, selected.Id, path, yearRoot));
+                OrderCdrPathIndex.QueueRemember(server, selected.Id, path, yearRoot, false);
                 _status("CDR заказа №" + selected.Number + " открыт. Поля загружены из карточки заказа." +
                     (newlyLinked ? " CDR сохранён." : " Сохраните CDR, чтобы записать обновлённую карточку в файл.") +
                     (framesWarning == null ? "" : " " + framesWarning), framesWarning != null);

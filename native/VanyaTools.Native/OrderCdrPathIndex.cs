@@ -25,13 +25,46 @@ namespace VanyaTools.Native
             String.IsNullOrWhiteSpace(yearFolder) ? null :
             Path.Combine(yearFolder, ".VanyaTools", "order-cdr-links");
 
-        internal static void Remember(string server, int orderId, string cdrPath, string yearFolder)
+        private static readonly OrderCdrLinkQueue RememberQueue = new OrderCdrLinkQueue(RememberSnapshot,
+            error => Log.Info("Background order CDR link failed: " + error.GetType().Name),
+            (milliseconds, success) => {
+                if (!success || milliseconds >= 2000)
+                    Log.Info("Background order CDR link: success=" + success + ", elapsed=" + milliseconds + " ms.");
+            });
+
+        internal static void QueueRemember(string server, int orderId, string cdrPath, string yearFolder,
+            bool resolveDocumentYear = true) => RememberQueue.Enqueue(server, orderId, cdrPath, yearFolder, resolveDocumentYear);
+
+        private static bool RememberSnapshot(OrderCdrLinkQueue.Snapshot value)
         {
-            if (orderId <= 0 || !Path.IsPathRooted(cdrPath)) return;
+            Log.Info("Background order CDR link started.");
+            if (!Path.IsPathRooted(value.CdrPath) || !File.Exists(value.CdrPath)) return false;
+            string year = value.YearFolder;
+            bool yearRequired = !String.IsNullOrWhiteSpace(year);
+            if (value.ResolveDocumentYear)
+            {
+                string customer = Path.GetDirectoryName(value.CdrPath);
+                string month = customer == null ? null : Path.GetDirectoryName(customer);
+                string candidate = month == null ? null : Path.GetDirectoryName(month);
+                bool expectedYear = candidate != null && Path.GetFileName(candidate).Length == 4 &&
+                    Int32.TryParse(Path.GetFileName(candidate), out int number) && number >= 2000 && number <= 2100;
+                yearRequired |= expectedYear;
+                year = expectedYear && Directory.Exists(candidate) ? candidate : OrderCdrFolders.YearFolder(year, null);
+            }
+            // A local link remains useful while the share is down. Keep retrying
+            // the shared link if its year could not yet be resolved.
+            bool written = Remember(value.Server, value.OrderId, value.CdrPath, year);
+            return written && (!yearRequired || !String.IsNullOrWhiteSpace(year));
+        }
+
+        internal static bool Remember(string server, int orderId, string cdrPath, string yearFolder)
+        {
+            if (orderId <= 0 || !Path.IsPathRooted(cdrPath)) return false;
             string name = FileName(server, orderId);
-            Write(Path.Combine(LocalDirectory, name), cdrPath);
+            bool local = Write(Path.Combine(LocalDirectory, name), cdrPath);
             string shared = SharedDirectory(yearFolder);
-            if (shared != null) Write(Path.Combine(shared, name), cdrPath);
+            bool mirrored = shared == null || Write(Path.Combine(shared, name), cdrPath);
+            return local && mirrored;
         }
 
         internal static string Find(string server, int orderId, string yearFolder)
@@ -60,7 +93,7 @@ namespace VanyaTools.Native
             }
         }
 
-        private static void Write(string indexPath, string cdrPath)
+        private static bool Write(string indexPath, string cdrPath)
         {
             string temporary = indexPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
@@ -68,12 +101,13 @@ namespace VanyaTools.Native
                 Directory.CreateDirectory(Path.GetDirectoryName(indexPath));
                 if (File.Exists(indexPath) &&
                     String.Equals(File.ReadAllText(indexPath, Encoding.UTF8).Trim(), cdrPath,
-                        StringComparison.OrdinalIgnoreCase)) return;
+                        StringComparison.OrdinalIgnoreCase)) return true;
                 File.WriteAllText(temporary, cdrPath, Encoding.UTF8);
                 if (File.Exists(indexPath)) File.Delete(indexPath);
                 File.Move(temporary, indexPath);
+                return true;
             }
-            catch (Exception error) { Log.Error("Order CDR link write failed", error); }
+            catch (Exception error) { Log.Error("Order CDR link write failed", error); return false; }
             finally { try { if (File.Exists(temporary)) File.Delete(temporary); } catch { } }
         }
     }

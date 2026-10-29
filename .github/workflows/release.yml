@@ -37,6 +37,26 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.SelectionColorSummaryChecks/VanyaTools.SelectionColorSummaryChecks.csproj --configuration Release
 
+      - name: Check native bitmap pixels
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.NativeBitmapPixelChecks/VanyaTools.NativeBitmapPixelChecks.csproj --configuration Release
+
+      - name: Check order frame capture
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.OrderFrameCaptureChecks/VanyaTools.OrderFrameCaptureChecks.csproj --configuration Release
+
+      - name: Check sublimation failures
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.SublimationFailureChecks/VanyaTools.SublimationFailureChecks.csproj --configuration Release
+
+      - name: Check background order CDR links
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.OrderCdrLinkQueueChecks/VanyaTools.OrderCdrLinkQueueChecks.csproj --configuration Release
+
+      - name: Check docker watchdog
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.DockerWatchdogChecks/VanyaTools.DockerWatchdogChecks.csproj --configuration Release
+
       - name: Build installer package
         shell: pwsh
         run: .\package-native.ps1

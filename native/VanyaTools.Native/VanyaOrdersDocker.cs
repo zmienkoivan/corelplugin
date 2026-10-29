@@ -11,12 +11,16 @@ namespace VanyaTools.Native
 
         private readonly TextBlock _status;
         private readonly OrderCardTab _orders;
+        private readonly DockerUiWatchdog _uiWatchdog;
 
         public VanyaOrdersDocker() : this(null) { }
 
         public VanyaOrdersDocker(object app)
         {
             CorelApp.SetHostApplication(app);
+            _uiWatchdog = new DockerUiWatchdog(Dispatcher, "Orders", this);
+            Loaded += (_, __) => _uiWatchdog.Start();
+            Unloaded += (_, __) => _uiWatchdog.Stop("unloaded");
             HorizontalContentAlignment = HorizontalAlignment.Stretch;
             VerticalContentAlignment = VerticalAlignment.Stretch;
 
@@ -54,6 +58,7 @@ namespace VanyaTools.Native
 
         private void SetStatus(string message, bool isError)
         {
+            _uiWatchdog.Note(message);
             _status.Text = message;
             DockerTheme.UseTheme(_status, TextBlock.ForegroundProperty,
                 isError ? DockerTheme.ErrorTextBrush : DockerTheme.MutedTextBrush);
