@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -11,7 +12,7 @@ using VanyaTools.Native;
 namespace VanyaTools.Native
 {
     internal static class CorelApp { internal static object Get() => throw new Exception("Corel must not be contacted by file-pipeline checks"); }
-    internal static class Log { internal static void Info(string text) { } internal static void Error(string text, Exception error) { } }
+    internal static class Log { internal static bool Enabled; internal static void Info(string text) { if (Enabled) Console.WriteLine(text); } internal static void Error(string text, Exception error) { } }
     internal sealed class DtfCorrectionOptions
     {
         internal bool RemoveSemiTransparent, SmoothStairs, Outline, WhitenNearWhite;
@@ -74,6 +75,9 @@ internal static class Program
         var source = Fixture(mode); byte[] colors = (byte[])source.Colors.Clone(), alpha = (byte[])source.Alpha.Clone();
         string input = PathFor("source-" + mode + ".png"); NativeRasterCorrection.Save(input, source, CancellationToken.None);
         string pngHash = Hash(input), nativeHash = Hash(input + NativeRasterFiles.Suffix);
+        string stored = PathFor("stored-" + mode + ".native");
+        NativeRasterFiles.Write(stored, input, source, CancellationToken.None, CompressionLevel.NoCompression);
+        EqualBuffer(source, NativeRasterFiles.Read(stored, input));
         EqualBuffer(source, Read(input)); CheckWhitePreview(input, 0);
         string copy = PathFor("copy-" + mode + ".png");
         var pass = NativeRasterCorrection.Process(input, copy, new DtfCorrectionOptions(), CancellationToken.None);
@@ -197,13 +201,14 @@ internal static class Program
     }
 
     [STAThread]
-    private static int Main()
+    private static int Main(string[] args)
     {
         string parent = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar);
         _workspace = Path.Combine(parent, "Vanya-NativeRasterPipelineChecks-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_workspace);
         try
         {
+            if (args.Length == 1 && args[0] == "--benchmark") { Benchmark(); return 0; }
             foreach (int mode in new[] { 4, 5, 2 }) FileAndFilterPipeline(mode);
             IntegrityAndCancellation(); AtomicOverwrite(); LongParentPaths();
             Console.WriteLine("Native raster pipeline checks passed: " + _checks + ". Real PNG/native pairs; no Corel or network."); return 0;
@@ -214,5 +219,28 @@ internal static class Program
             if (Directory.Exists(_workspace) && String.Equals(Path.GetDirectoryName(Path.GetFullPath(_workspace)), parent, StringComparison.OrdinalIgnoreCase) &&
                 Path.GetFileName(_workspace).StartsWith("Vanya-NativeRasterPipelineChecks-", StringComparison.Ordinal)) Directory.Delete(_workspace, true);
         }
+    }
+
+    private static void Benchmark()
+    {
+        const int width = 5201, height = 8029;
+        var colors = new byte[width * height * 3]; var alpha = new byte[width * height];
+        uint state = 17821;
+        for (int p = 0; p < alpha.Length; p++)
+        {
+            state = unchecked(state * 1664525 + 1013904223);
+            int i = p * 3;
+            if (((p % width) / 160 + (p / width) / 240) % 4 == 0)
+                colors[i] = colors[i + 1] = colors[i + 2] = (byte)(249 + p % 7);
+            else { colors[i] = (byte)(state >> 8); colors[i + 1] = (byte)(state >> 16); colors[i + 2] = (byte)(state >> 24); }
+            alpha[p] = p % 31 == 0 ? (byte)0 : p % 19 == 0 ? (byte)128 : (byte)255;
+        }
+        var source = new NativeRasterBuffer(width, height, 4, 400, 400, colors, alpha);
+        string input = PathFor("bench-source.png"), output = PathFor("bench-result.png");
+        Log.Enabled = true; var timer = Stopwatch.StartNew();
+        NativeRasterCorrection.Save(input, source, CancellationToken.None); long saved = timer.ElapsedMilliseconds;
+        NativeRasterCorrection.Process(input, output, new DtfCorrectionOptions { RemoveSemiTransparent = true, WhitenNearWhite = true }, CancellationToken.None);
+        Console.WriteLine("BENCH pixels=" + alpha.Length + "; captureSaveMs=" + saved + "; processMs=" + (timer.ElapsedMilliseconds - saved) +
+            "; sourcePngBytes=" + new FileInfo(input).Length + "; resultPngBytes=" + new FileInfo(output).Length);
     }
 }

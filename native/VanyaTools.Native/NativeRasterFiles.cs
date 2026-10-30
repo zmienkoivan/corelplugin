@@ -15,7 +15,8 @@ namespace VanyaTools.Native
         private static readonly byte[] Magic = Encoding.ASCII.GetBytes("VTRASTER2");
         internal const int MaximumPixels = 70000000;
 
-        internal static void Write(string path, string preview, NativeRasterBuffer buffer, CancellationToken cancellation)
+        internal static void Write(string path, string preview, NativeRasterBuffer buffer, CancellationToken cancellation,
+            CompressionLevel? compression = null)
         {
             cancellation.ThrowIfCancellationRequested();
             if (buffer == null) throw new ArgumentNullException(nameof(buffer));
@@ -34,7 +35,11 @@ namespace VanyaTools.Native
                     if (order != null) foreach (int channel in order) writer.Write(channel);
                     writer.Write(previewHash); writer.Write(rasterHash);
                     writer.Flush();
-                    using (var compressed = new DeflateStream(stream, CompressionLevel.Fastest, true))
+                    // Large working planes are short-lived. Stored DEFLATE blocks
+                    // retain format compatibility while avoiding repeated compression.
+                    var level = compression ?? ((long)buffer.Width * buffer.Height >= 8000000
+                        ? CompressionLevel.NoCompression : CompressionLevel.Fastest);
+                    using (var compressed = new DeflateStream(stream, level, true))
                     {
                         CopyBytes(compressed, buffer.Colors, cancellation);
                         CopyBytes(compressed, buffer.Alpha, cancellation);

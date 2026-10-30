@@ -34,7 +34,7 @@ internal static class Program
     {
         try
         {
-            NoOpAndThreshold(); OwnedBuffers(); Whitening(); Smoothing(); OutlineAndCrop(); Validation();
+            NoOpAndThreshold(); OwnedBuffers(); Whitening(); WhiteningEquivalence(); Smoothing(); OutlineAndCrop(); Validation();
             Console.WriteLine("Passed " + _checks + " native raster filter checks. Raw RGB/CMYK/gray arrays; no Corel or UI.");
             return 0;
         }
@@ -186,6 +186,22 @@ internal static class Program
         Check(crop.Mode == 5 && crop.CmykOrder.SequenceEqual(Order) && crop.DpiX == padded.DpiX && crop.DpiY == padded.DpiY, "Cropping preserves model, calibration and DPI");
         var empty = Uniform(4, 5, 4, 0, 3,4,5);
         Check(ReferenceEquals(NativeRasterFilters.Trim(empty, 2, out _, out _), empty), "Fully transparent image retains its original canvas");
+    }
+
+    private static void WhiteningEquivalence()
+    {
+        var random = new Random(17829);
+        foreach (int mode in new[] {4,5,2}) foreach (int tolerance in new[] {0,1,6,64,255})
+        {
+            int channels = NativeRasterBuffer.ChannelCount(mode);
+            var colors = new byte[4096 * channels]; var alpha = new byte[4096]; random.NextBytes(colors); random.NextBytes(alpha);
+            for (int p=0;p<alpha.Length;p+=3) for(int c=0;c<channels;c++) colors[p*channels+c]=(byte)(mode==5?p%9:255-p%9);
+            var source = new NativeRasterBuffer(64,64,mode,400,300,colors,alpha,mode==5?Order:null);
+            var mask = DtfNearWhitePixels.CreateMask(source.ToPreviewBgra(),64,64,tolerance);
+            var expected = NativeRasterFilters.Whiten(source,mask);
+            var result = NativeRasterFilters.Process(source,new NativeRasterFilterOptions { WhitenNearWhite=true,NearWhiteTolerance=tolerance }).Buffer;
+            Check(result.Colors.SequenceEqual(expected.Colors) && result.Alpha.SequenceEqual(expected.Alpha),"Direct native whitening exactly matches the former RGB-preview/mask policy");
+        }
     }
 
     private static void Validation()

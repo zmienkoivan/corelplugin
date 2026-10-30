@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Windows;
 using System.Windows.Media;
@@ -32,6 +33,17 @@ namespace VanyaTools.Native
                 _pixels, checked(Width * 4));
             bitmap.Freeze(); return bitmap;
         }
+
+        internal DtfCorrectionPixels Correct(bool removeAlpha, int threshold, bool whiten, int tolerance, CancellationToken cancellation)
+            => !removeAlpha && !whiten ? this : new DtfCorrectionPixels(Width, Height, DpiX, DpiY,
+                DtfRasterOperations.Correct(_pixels, removeAlpha, threshold, whiten, tolerance, cancellation));
+        internal DtfCorrectionPixels Audit(bool semi, bool red, bool white, int tolerance,
+            byte markerR, byte markerG, byte markerB, CancellationToken cancellation)
+            => !semi && !white ? this : new DtfCorrectionPixels(Width, Height, DpiX, DpiY,
+                DtfRasterOperations.Audit(_pixels, semi, red, white, tolerance, markerR, markerG, markerB, cancellation));
+
+        internal void WritePng(Stream stream, CancellationToken cancellation)
+            => FastRasterPng.Write(stream, _pixels, Width, Height, DpiX, DpiY, cancellation);
 
         internal DtfCorrectionPixels Crop(Int32Rect region, CancellationToken cancellation)
         {

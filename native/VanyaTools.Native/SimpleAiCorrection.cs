@@ -113,6 +113,13 @@ namespace VanyaTools.Native
         {
             if (NativeRasterCorrection.HasSource(source))
                 return NativeRasterCorrection.Process(source, output, options, cancellation);
+            if (!options.SmoothStairs && !options.Outline)
+            {
+                var pixels = DtfCorrectionPixels.Capture(AiPrintTab.Bitmap(source)).Correct(options.RemoveSemiTransparent,
+                    options.Threshold, options.WhitenNearWhite, options.NearWhiteTolerance, cancellation);
+                using (var stream = File.Create(output)) pixels.WritePng(stream, cancellation);
+                return new DtfCorrectionResult { OutputPath = output };
+            }
             var temporary = new List<string>();
             string current = source;
             double offsetX = 0, offsetY = 0;

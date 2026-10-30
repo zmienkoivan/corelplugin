@@ -10,6 +10,7 @@
     <Compile Include="../../native/VanyaTools.Native/NativeRasterFiles.cs" Link="NativeRasterFiles.cs" />
     <Compile Include="../../native/VanyaTools.Native/NativeRasterFilters.cs" Link="NativeRasterFilters.cs" />
     <Compile Include="../../native/VanyaTools.Native/NativeRasterCorrection.cs" Link="NativeRasterCorrection.cs" />
+    <Compile Include="../../native/VanyaTools.Native/FastRasterPng.cs" Link="FastRasterPng.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfNearWhitePixels.cs" Link="DtfNearWhitePixels.cs" />
     <Compile Include="../../native/VanyaTools.Native/CorelConstants.cs" Link="CorelConstants.cs" />
   </ItemGroup>

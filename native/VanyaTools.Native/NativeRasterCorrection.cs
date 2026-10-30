@@ -200,9 +200,6 @@ namespace VanyaTools.Native
             Log.Info("Native raster save started: " + buffer.Width + "x" + buffer.Height + ", model=" + buffer.Mode + ".");
             byte[] bgra = buffer.ToPreviewBgra(cancellation);
             long previewMs = timer.ElapsedMilliseconds;
-            var image = BitmapSource.Create(buffer.Width, buffer.Height, buffer.DpiX, buffer.DpiY,
-                PixelFormats.Bgra32, null, bgra, checked(buffer.Width * 4));
-            var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image));
             string directory = Path.GetDirectoryName(Path.GetFullPath(output));
             string pending = StagingPath(directory, ".tmp");
             string native = output + NativeRasterFiles.Suffix;
@@ -213,7 +210,7 @@ namespace VanyaTools.Native
             bool removeBackups = true;
             try
             {
-                using (var stream = File.Create(pending)) encoder.Save(stream);
+                using (var stream = File.Create(pending)) FastRasterPng.Write(stream, bgra, buffer.Width, buffer.Height, buffer.DpiX, buffer.DpiY, cancellation);
                 long pngMs = timer.ElapsedMilliseconds;
                 Log.Info("Native raster PNG ready: preview=" + previewMs + " ms, PNG=" + (pngMs - previewMs) + " ms.");
                 cancellation.ThrowIfCancellationRequested();

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup><TargetFramework>net48</TargetFramework><OutputType>Exe</OutputType><UseWPF>true</UseWPF><LangVersion>latest</LangVersion><PlatformTarget>x64</PlatformTarget></PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.IO.Compression" />
+    <Compile Include="../../native/VanyaTools.Native/FastRasterPng.cs" Link="FastRasterPng.cs" />
+    <Compile Include="../../native/VanyaTools.Native/DtfRasterOperations.cs" Link="DtfRasterOperations.cs" />
+    <Compile Include="../../native/VanyaTools.Native/DtfCorrectionPixels.cs" Link="DtfCorrectionPixels.cs" />
+    <Compile Include="../../native/VanyaTools.Native/DtfNearWhitePixels.cs" Link="DtfNearWhitePixels.cs" />
+    <Compile Include="../../native/VanyaTools.Native/DtfNearWhiteFilter.cs" Link="DtfNearWhiteFilter.cs" />
+  </ItemGroup>
+</Project>

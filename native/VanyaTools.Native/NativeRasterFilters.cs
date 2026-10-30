@@ -68,9 +68,13 @@ namespace VanyaTools.Native
             if (options.RemoveSemiTransparent && options.Outline) ThresholdInPlace(current, options.Threshold, cancellation);
             if (options.WhitenNearWhite)
             {
-                byte[] preview = options.NearWhitePreviewBgra == null ? current.ToPreviewBgra(cancellation) : options.NearWhitePreviewBgra(current);
-                var mask = DtfNearWhitePixels.CreateMask(preview, current.Width, current.Height, options.NearWhiteTolerance, cancellation);
-                WhitenInPlace(current, mask, cancellation);
+                if (options.NearWhitePreviewBgra == null) WhitenNearWhiteInPlace(current, options.NearWhiteTolerance, cancellation);
+                else
+                {
+                    byte[] preview = options.NearWhitePreviewBgra(current);
+                    var mask = DtfNearWhitePixels.CreateMask(preview, current.Width, current.Height, options.NearWhiteTolerance, cancellation);
+                    WhitenInPlace(current, mask, cancellation);
+                }
             }
             cancellation.ThrowIfCancellationRequested();
             return new NativeRasterFilterResult { Buffer = current, OffsetMm = Tuple.Create(offsetX, offsetY) };
@@ -110,6 +114,28 @@ namespace VanyaTools.Native
             {
                 if ((pixel & 4095) == 0) cancellation.ThrowIfCancellationRequested();
                 if (buffer.Alpha[pixel] != 0 && mask.IsMarked(pixel)) buffer.SetPureWhite(pixel);
+            }
+        }
+
+        private static void WhitenNearWhiteInPlace(NativeRasterBuffer buffer, int tolerance, CancellationToken cancellation)
+        {
+            if (buffer.Mode == 5 && buffer.CmykOrder == null) throw new InvalidOperationException("Не определён порядок CMYK-каналов.");
+            int minimum = 255 - tolerance;
+            for (int p = 0; p < buffer.Alpha.Length; p++)
+            {
+                if ((p & 4095) == 0) cancellation.ThrowIfCancellationRequested();
+                if (buffer.Alpha[p] == 0) continue;
+                int i = p * buffer.Channels, r, g, b;
+                if (buffer.Mode == 4) { b = buffer.Colors[i]; g = buffer.Colors[i + 1]; r = buffer.Colors[i + 2]; }
+                else if (buffer.Mode == 2) r = g = b = buffer.Colors[i];
+                else
+                {
+                    int light = 255 - buffer.Colors[i + buffer.CmykOrder[3]];
+                    r = ((255 - buffer.Colors[i + buffer.CmykOrder[0]]) * light + 127) / 255;
+                    g = ((255 - buffer.Colors[i + buffer.CmykOrder[1]]) * light + 127) / 255;
+                    b = ((255 - buffer.Colors[i + buffer.CmykOrder[2]]) * light + 127) / 255;
+                }
+                if (r >= minimum && g >= minimum && b >= minimum && (r != 255 || g != 255 || b != 255)) buffer.SetPureWhite(p);
             }
         }
 

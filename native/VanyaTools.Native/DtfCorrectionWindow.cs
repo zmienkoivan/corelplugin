@@ -408,6 +408,17 @@ namespace VanyaTools.Native
                     Int32Rect focus = new Int32Rect();
                     BitmapSource original = view == 0 ? overviewPixels.Bitmap() : Fragment(originalPixels, cropX, cropY, options, cancellation, out focus);
                     if (view == 0) focus = new Int32Rect(0, 0, original.PixelWidth, original.PixelHeight);
+                    if (!options.SmoothStairs && !options.Outline)
+                    {
+                        // The common audit/threshold/whiten path stays in memory.
+                        // Even a tolerance-only change used to encode/decode PNGs.
+                        var before = view == 0 ? overviewPixels : DtfCorrectionPixels.Capture(original).Crop(focus, cancellation);
+                        var after = before.Correct(options.RemoveSemiTransparent, options.Threshold,
+                            options.WhitenNearWhite, options.NearWhiteTolerance, cancellation);
+                        return Tuple.Create(
+                            before.Audit(highlight, red, highlightWhite, options.NearWhiteTolerance, whiteRed, whiteGreen, whiteBlue, cancellation),
+                            after.Audit(highlight, red, highlightWhite, options.NearWhiteTolerance, whiteRed, whiteGreen, whiteBlue, cancellation));
+                    }
                     input = view == 0 ? overviewPath : Path.Combine(workspace, "fragment-" + Guid.NewGuid().ToString("N") + ".png");
                     if (view != 0) Save(original, input);
                     cancellation.ThrowIfCancellationRequested();

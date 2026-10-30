@@ -101,6 +101,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.UpdateAvailabilityChecks/VanyaTools.UpdateAvailabilityChecks.csproj --configuration Release
 
+      - name: Check fast raster PNG and preview
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.RasterSpeedChecks/VanyaTools.RasterSpeedChecks.csproj --configuration Release
+
       - name: Build installer package
         shell: pwsh
         run: .\package-native.ps1
