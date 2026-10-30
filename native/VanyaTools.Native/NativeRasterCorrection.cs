@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Windows.Media;
@@ -40,7 +41,10 @@ namespace VanyaTools.Native
             long pixels = checked(Convert.ToInt64(shape.Bitmap.Image.Width) * Convert.ToInt64(shape.Bitmap.Image.Height));
             if (pixels > maxPixels) throw new InvalidOperationException("Исходный растр слишком велик для обработки без изменения разрешения.");
             if (pixels > 2000000) memoryCheck?.Invoke(pixels);
+            var captureTimer = Stopwatch.StartNew();
+            Log.Info("Native raster capture started: pixels=" + pixels + ".");
             var buffer = NativeRasterModelIO.Capture((object)shape.Bitmap, maxPixels);
+            Log.Info("Native raster capture planes ready: " + captureTimer.ElapsedMilliseconds + " ms, model=" + buffer.Mode + ".");
             if (buffer.Mode == 5) buffer = buffer.WithCmykOrder(NativeRasterModelIO.CalibrateCmykOrder((object)doc, application));
             int oldUnit = Convert.ToInt32(doc.Unit);
             try
@@ -58,7 +62,8 @@ namespace VanyaTools.Native
             try
             {
                 Save(path, buffer, CancellationToken.None);
-                Log.Info("Native raster capture: model=" + buffer.Mode + ", " + buffer.Width + "x" + buffer.Height + ".");
+                Log.Info("Native raster capture: model=" + buffer.Mode + ", " + buffer.Width + "x" + buffer.Height +
+                    ", total=" + captureTimer.ElapsedMilliseconds + " ms.");
                 return path;
             }
             catch { Delete(path); Delete(path + NativeRasterFiles.Suffix); throw; }
@@ -96,7 +101,12 @@ namespace VanyaTools.Native
         internal static DtfCorrectionResult Process(string source, string output, DtfCorrectionOptions options,
             CancellationToken cancellation)
         {
+            var timer = Stopwatch.StartNew();
+            Log.Info("Native raster processing started: " + Path.GetFileName(source) + ".");
             NativeRasterBuffer buffer = NativeRasterFiles.Read(source + NativeRasterFiles.Suffix, source, cancellation);
+            long readMs = timer.ElapsedMilliseconds;
+            Log.Info("Native raster processing channels read: " + readMs + " ms, " + buffer.Width + "x" + buffer.Height +
+                ", model=" + buffer.Mode + ", native bytes=" + ((long)buffer.Colors.Length + buffer.Alpha.Length) + ".");
             var nativeOptions = new NativeRasterFilterOptions {
                 RemoveSemiTransparent = options.RemoveSemiTransparent, Threshold = options.Threshold,
                 SmoothStairs = options.SmoothStairs, StairsScale = options.StairsScale,
@@ -104,8 +114,15 @@ namespace VanyaTools.Native
                 OutlineColor = ColorSamples(buffer, options.Color), OutlineOpacity = options.Color.A,
                 WhitenNearWhite = options.WhitenNearWhite, NearWhiteTolerance = options.NearWhiteTolerance
             };
-            NativeRasterFilterResult result = NativeRasterFilters.Process(buffer, nativeOptions, cancellation);
+            // Read creates an exclusive managed buffer for this file job. No
+            // source-file bytes or live Corel image can be mutated by this path.
+            NativeRasterFilterResult result = NativeRasterFilters.ProcessOwned(buffer, nativeOptions, cancellation);
+            long filteredMs = timer.ElapsedMilliseconds;
+            Log.Info("Native raster filters finished: " + (filteredMs - readMs) + " ms, threshold=" + options.RemoveSemiTransparent +
+                ", stairs=" + options.SmoothStairs + ", outline=" + options.Outline + ", whiten=" + options.WhitenNearWhite + ".");
             Save(output, result.Buffer, cancellation);
+            Log.Info("Native raster processing result saved: save=" + (timer.ElapsedMilliseconds - filteredMs) +
+                " ms, total=" + timer.ElapsedMilliseconds + " ms.");
             return new DtfCorrectionResult { OutputPath = output, OffsetMm = result.OffsetMm };
         }
 
@@ -179,7 +196,10 @@ namespace VanyaTools.Native
         internal static void Save(string output, NativeRasterBuffer buffer, CancellationToken cancellation)
         {
             cancellation.ThrowIfCancellationRequested();
+            var timer = Stopwatch.StartNew();
+            Log.Info("Native raster save started: " + buffer.Width + "x" + buffer.Height + ", model=" + buffer.Mode + ".");
             byte[] bgra = buffer.ToPreviewBgra(cancellation);
+            long previewMs = timer.ElapsedMilliseconds;
             var image = BitmapSource.Create(buffer.Width, buffer.Height, buffer.DpiX, buffer.DpiY,
                 PixelFormats.Bgra32, null, bgra, checked(buffer.Width * 4));
             var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image));
@@ -194,8 +214,11 @@ namespace VanyaTools.Native
             try
             {
                 using (var stream = File.Create(pending)) encoder.Save(stream);
+                long pngMs = timer.ElapsedMilliseconds;
+                Log.Info("Native raster PNG ready: preview=" + previewMs + " ms, PNG=" + (pngMs - previewMs) + " ms.");
                 cancellation.ThrowIfCancellationRequested();
                 NativeRasterFiles.Write(pendingNative, pending, buffer, cancellation);
+                Log.Info("Native raster channel companion ready: " + (timer.ElapsedMilliseconds - pngMs) + " ms.");
                 cancellation.ThrowIfCancellationRequested();
                 previewExisted = File.Exists(output); nativeExisted = File.Exists(native);
                 // Prepare both files first. Once commit starts, finish or roll back

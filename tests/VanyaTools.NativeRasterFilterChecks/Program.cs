@@ -34,7 +34,7 @@ internal static class Program
     {
         try
         {
-            NoOpAndThreshold(); Whitening(); Smoothing(); OutlineAndCrop(); Validation();
+            NoOpAndThreshold(); OwnedBuffers(); Whitening(); Smoothing(); OutlineAndCrop(); Validation();
             Console.WriteLine("Passed " + _checks + " native raster filter checks. Raw RGB/CMYK/gray arrays; no Corel or UI.");
             return 0;
         }
@@ -62,6 +62,52 @@ internal static class Program
         Check(NativeRasterFilters.Threshold(rgb, 100).Colors.All(value => value == 255), "RGB white remains exactly 255 without rounding");
         var gray = Uniform(2, 1, 2, 127, 255);
         Check(NativeRasterFilters.Threshold(gray, 128).Mode == 2 && NativeRasterFilters.Threshold(gray, 128).Colors.All(value => value == 255), "Grayscale model and white are preserved");
+    }
+
+    private static void OwnedBuffers()
+    {
+        foreach (int mode in new[] { 4, 5, 2 })
+        {
+            NativeRasterBuffer source = mode == 4 ? Uniform(4, 2, mode, 253, 253,253,253) :
+                mode == 5 ? Uniform(4, 2, mode, 253, 0,1,0,0) : Uniform(4, 2, mode, 253, 253);
+            source.Alpha[0] = 0; source.Alpha[1] = 129; source.Alpha[2] = 130;
+            byte[] originalColors = (byte[])source.Colors.Clone(), originalAlpha = (byte[])source.Alpha.Clone();
+            NativeRasterBuffer consumed = source.Copy();
+            NativeRasterFilterResult threshold = NativeRasterFilters.ProcessOwned(consumed,
+                new NativeRasterFilterOptions { RemoveSemiTransparent = true, Threshold = 130 });
+            Check(ReferenceEquals(consumed, threshold.Buffer) && ReferenceEquals(consumed.Colors, threshold.Buffer.Colors) &&
+                ReferenceEquals(consumed.Alpha, threshold.Buffer.Alpha), "Consumed file planes avoid a second full-size native allocation");
+            Check(threshold.Buffer.Colors.SequenceEqual(originalColors) && threshold.Buffer.Alpha.Take(4).SequenceEqual(new byte[] {0,0,255,255}),
+                "Owned alpha threshold changes only consumed alpha, with exact boundary handling");
+            Check(source.Colors.SequenceEqual(originalColors) && source.Alpha.SequenceEqual(originalAlpha), "Another captured source remains detached from consumed file planes");
+
+            foreach (NativeRasterFilterOptions options in new[] {
+                new NativeRasterFilterOptions(),
+                new NativeRasterFilterOptions { WhitenNearWhite = true },
+                new NativeRasterFilterOptions { SmoothStairs = true, StairsScale = 1 },
+                new NativeRasterFilterOptions { Outline = true, RadiusMm = .1, ExpansionMm = .1 },
+                new NativeRasterFilterOptions { RemoveSemiTransparent = true, SmoothStairs = true, StairsScale = 1,
+                    Outline = true, RadiusMm = .1, ExpansionMm = .1, WhitenNearWhite = true }
+            })
+            {
+                NativeRasterFilterResult detached = NativeRasterFilters.Process(source, options);
+                NativeRasterFilterResult owned = NativeRasterFilters.ProcessOwned(source.Copy(), options);
+                Check(detached.Buffer.Width == owned.Buffer.Width && detached.Buffer.Height == owned.Buffer.Height &&
+                    detached.Buffer.Mode == owned.Buffer.Mode && detached.Buffer.DpiX == owned.Buffer.DpiX && detached.Buffer.DpiY == owned.Buffer.DpiY &&
+                    detached.OffsetMm.Item1 == owned.OffsetMm.Item1 && detached.OffsetMm.Item2 == owned.OffsetMm.Item2 &&
+                    detached.Buffer.Colors.SequenceEqual(owned.Buffer.Colors) && detached.Buffer.Alpha.SequenceEqual(owned.Buffer.Alpha),
+                    "Owned file processing matches detached processing for every native channel, alpha, geometry and physical placement");
+            }
+            using (var canceled = new CancellationTokenSource())
+            {
+                canceled.Cancel();
+                Throws<OperationCanceledException>(() => NativeRasterFilters.ProcessOwned(source,
+                    new NativeRasterFilterOptions { RemoveSemiTransparent = true }, canceled.Token), "Owned processing observes cancellation before consuming planes");
+            }
+            Throws<ArgumentOutOfRangeException>(() => NativeRasterFilters.ProcessOwned(source,
+                new NativeRasterFilterOptions { RemoveSemiTransparent = true, Threshold = -1 }), "Owned processing validates options before consuming planes");
+            Check(source.Colors.SequenceEqual(originalColors) && source.Alpha.SequenceEqual(originalAlpha), "Early owned cancellation and validation leave source unchanged");
+        }
     }
 
     private static void Whitening()

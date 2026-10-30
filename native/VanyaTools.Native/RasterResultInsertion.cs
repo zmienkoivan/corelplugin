@@ -210,7 +210,7 @@ namespace VanyaTools.Native
                     // A job finishing while another tab is open must not inherit
                     // a hidden or nonprinting active layer. Do not alter user layers.
                     temporary.Visible = true; temporary.Editable = true; temporary.Printable = true;
-                    temporary.Name = "Vanya Tools · Развёртка · " + DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+                    temporary.Name = "Vanya Tools · Результат · " + DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
                 }
                 object layer = (object)temporary, options = (object)app.CreateStructImportOptions();
                 dynamic filter = layer.GetType().InvokeMember("ImportEx", BindingFlags.InvokeMethod, null, layer,
@@ -253,7 +253,7 @@ namespace VanyaTools.Native
                 imported.CreateSelection();
                 RequirePlaced((object)imported, left, top, placement.WidthMm, placement.HeightMm);
                 if (keepResultLayer && (!Convert.ToBoolean(temporary.Visible) || !Convert.ToBoolean(temporary.Printable)))
-                    throw new InvalidOperationException("Слой развёртки остался скрытым. Готовый PNG сохранён для повторной вставки.");
+                    throw new InvalidOperationException("Слой результата остался скрытым. Готовый PNG сохранён для повторной вставки.");
                 doc.EndCommandGroup(); started = false;
                 if (keepResultLayer)
                     try { app.ActiveWindow.ActiveView.ToFitShape(imported); }
@@ -351,24 +351,25 @@ namespace VanyaTools.Native
             {
                 doc.Unit = CorelConstants.CdrMillimeter;
                 if (source.Shapes == null || source.Shapes.Count == 0) throw ChangedSource();
+                if (live && (source.NativeShapes == null || source.NativeShapes.Count != source.Shapes.Count))
+                    throw ChangedSource("не сохранены ссылки на исходные объекты");
+                Dictionary<int, object> found = FindSourcesOnPage(activePage, source.Shapes);
                 for (int index = 0; index < source.Shapes.Count; index++)
                 {
                     RasterInsertionShape expected = source.Shapes[index];
-                    object shape;
-                    try { shape = (object)((dynamic)activePage).FindShape(null, 0, expected.Id, true); }
-                    catch { throw ChangedSource(); }
-                    if (shape == null) throw ChangedSource();
+                    if (expected == null || !found.TryGetValue(expected.Id, out object shape))
+                        throw ChangedSource("объект #" + expected?.Id + " не найден на исходной странице и рабочем столе");
                     RasterInsertionShape current;
-                    try { current = ReadShape(shape); } catch { throw ChangedSource(); }
-                    if (!SameShape(expected, current)) throw ChangedSource();
+                    try { current = ReadShape(shape); } catch { throw ChangedSource("не удалось прочитать объект #" + expected.Id); }
+                    if (!SameShape(expected, current)) throw ChangedSource(ShapeDifference(expected, current));
                     if (live)
                     {
                         // Prove both that the captured original is still unchanged and that
-                        // this document's unique StaticID is present on the active page.
+                        // this document's unique StaticID is present on the active page/desktop.
                         // Native wrapper equality is not required for a Shape returned anew.
                         RasterInsertionShape original;
-                        try { original = ReadShape(source.NativeShapes[index]); } catch { throw ChangedSource(); }
-                        if (!SameShape(expected, original)) throw ChangedSource();
+                        try { original = ReadShape(source.NativeShapes[index]); } catch { throw ChangedSource("исходная ссылка #" + expected.Id + " недоступна"); }
+                        if (!SameShape(expected, original)) throw ChangedSource(ShapeDifference(expected, original));
                     }
                     result.Shapes.Add(shape);
                 }
@@ -377,6 +378,76 @@ namespace VanyaTools.Native
             finally { doc.Unit = oldUnit; }
             return result;
         }
+
+        // FindShape can omit desktop objects and focused children. Search only
+        // the proven active page (including its desktop), never a foreign page
+        // or arbitrary matching shapes from a newly selected document.
+        private static Dictionary<int, object> FindSourcesOnPage(object pageObject, IEnumerable<RasterInsertionShape> expected)
+        {
+            var wanted = new HashSet<int>(expected.Where(s => s != null).Select(s => s.Id));
+            var found = new Dictionary<int, object>();
+            dynamic page = pageObject;
+            foreach (int id in wanted)
+            {
+                try
+                {
+                    object shape = (object)page.FindShape(null, 0, id, true);
+                    if (shape != null && Convert.ToInt32(((dynamic)shape).StaticID) == id) found[id] = shape;
+                }
+                catch { /* Native lookup is followed by an explicit page traversal. */ }
+            }
+            if (found.Count == wanted.Count) return found;
+            var seen = new HashSet<int>();
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            int visited = 0;
+            Scan(() => (object)page.Shapes, 0);
+            Scan(() => (object)page.DesktopLayer.Shapes, 0);
+            if (found.Count != wanted.Count)
+                try { foreach (dynamic layer in page.Layers) { Scan(() => (object)layer.Shapes, 0); if (Done()) break; } } catch { }
+            Log.Info("Raster source page traversal: wanted=" + wanted.Count + ", found=" + found.Count +
+                ", visited=" + visited + ", elapsed=" + watch.ElapsedMilliseconds + " ms.");
+            return found;
+
+            bool Done() => found.Count == wanted.Count || visited >= 25000 || watch.ElapsedMilliseconds >= 3000;
+            void Scan(Func<object> collection, int depth)
+            {
+                if (Done() || depth > 128) return;
+                try
+                {
+                    foreach (object value in (dynamic)collection())
+                    {
+                        if (Done()) return;
+                        try
+                        {
+                            dynamic item = value; int id = Convert.ToInt32(item.StaticID);
+                            if (!seen.Add(id)) continue;
+                            visited++;
+                            if (wanted.Contains(id)) found[id] = value;
+                            if (Done()) return;
+                            if (Convert.ToInt32(item.Type) == CorelConstants.CdrGroupShape)
+                                Scan(() => (object)item.Shapes, depth + 1);
+                            if (Done()) return;
+                            object clip = null;
+                            try { clip = (object)item.PowerClip; } catch { }
+                            if (clip != null) Scan(() => (object)((dynamic)clip).Shapes, depth + 1);
+                        }
+                        catch { /* Unsupported or deleted neighbours cannot prove a source. */ }
+                    }
+                }
+                catch { /* Some Corel versions omit one of the optional collections. */ }
+            }
+        }
+
+        private static string ShapeDifference(RasterInsertionShape expected, RasterInsertionShape actual)
+        {
+            string details = "объект #" + expected.Id + ": ";
+            if (expected.Id != actual.Id) return details + "изменился идентификатор";
+            if (expected.Type != actual.Type) return details + "изменился тип";
+            if (!String.Equals(expected.Name, actual.Name, StringComparison.Ordinal)) return details + "изменилось имя";
+            return details + "изменились положение или размер; было " + Geometry(expected) + ", стало " + Geometry(actual);
+        }
+        private static string Geometry(RasterInsertionShape shape) => String.Format(CultureInfo.InvariantCulture,
+            "X={0:0.######}, Y={1:0.######}, W={2:0.######}, H={3:0.######} мм", shape.LeftMm, shape.TopMm, shape.WidthMm, shape.HeightMm);
 
         private static RasterInsertionShape ReadShape(object value)
         {
@@ -420,8 +491,13 @@ namespace VanyaTools.Native
             try { string value = Convert.ToString(((dynamic)document).FullFileName); return Path.IsPathRooted(value) ? Path.GetFullPath(value) : ""; }
             catch { return ""; }
         }
-        private static InvalidOperationException ChangedSource() => new InvalidOperationException(
-            "Исходные объекты удалены или изменены после захвата. Готовый PNG сохранён; исходник не заменён.");
+        private static InvalidOperationException ChangedSource(string reason = null)
+        {
+            Log.Info("Raster source validation rejected: " + (reason ?? "invalid source metadata") + ".");
+            return new InvalidOperationException("Не удалось подтвердить исходные объекты" +
+                (String.IsNullOrEmpty(reason) ? "." : ": " + reason + ".") +
+                " Готовый PNG сохранён; исходник не заменён. Можно вставить результат рядом или отложить его.");
+        }
         private static InvalidOperationException WrongDocument(RasterInsertionSource source, string reason = null, int runtimePage = -1) => new InvalidOperationException(
             "Вернитесь в исходный документ и страницу " + (runtimePage > 0 ? runtimePage : source.Page) +
             " перед вставкой" + (String.IsNullOrEmpty(reason) ? "" : " (" + reason + ")") + ". Готовый PNG сохранён." +

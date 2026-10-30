@@ -29,7 +29,10 @@ namespace VanyaTools.Native
                 // The native publisher restores the source CDR before this
                 // method first yields. All modes prepare locally, so no network
                 // folder operation can block Corel's dispatcher.
-                result = SportPrintExporter.Export(workspace, dpi, true, button != 0, processName: process, confirmPage: confirmPage);
+                // Keep ink away from PDF/page and RIP edge rounding. This is an
+                // empty transparent margin, never a scale change or a white rectangle.
+                result = SportPrintExporter.Export(workspace, dpi, true, button != 0, processName: process,
+                    confirmPage: confirmPage, selectionMarginMm: PrintExportBounds.QueueSafetyMarginMm);
                 if (options.Mode != PrintIccMode.Preserve)
                 {
                     await Task.Run(() => {

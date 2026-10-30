@@ -32,7 +32,7 @@ namespace VanyaTools.Native
         {
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
-            { Report("Сначала вставьте готовый результат.", true); return; }
+            { Report("Вставьте готовый результат или нажмите «Отложить».", true); return; }
             string source = null;
             SetBusy(true, "Подготавливаю выделение для коррекции…");
             try

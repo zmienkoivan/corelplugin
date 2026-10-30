@@ -27,13 +27,24 @@ namespace VanyaTools.Native
     {
         internal static NativeRasterFilterResult Process(NativeRasterBuffer source,
             NativeRasterFilterOptions options, CancellationToken cancellation = default(CancellationToken))
+            => ProcessCore(source, options, cancellation, false);
+
+        // The caller gives up these freshly loaded planes. Avoid a second full
+        // color/alpha copy for file jobs, while the normal API stays immutable.
+        // Cancellation or failure may leave this consumed buffer partly edited.
+        internal static NativeRasterFilterResult ProcessOwned(NativeRasterBuffer source,
+            NativeRasterFilterOptions options, CancellationToken cancellation = default(CancellationToken))
+            => ProcessCore(source, options, cancellation, true);
+
+        private static NativeRasterFilterResult ProcessCore(NativeRasterBuffer source,
+            NativeRasterFilterOptions options, CancellationToken cancellation, bool takeOwnership)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             if (options == null) throw new ArgumentNullException(nameof(options));
             if (options.Threshold < 0 || options.Threshold > 255 || options.NearWhiteTolerance < 0 || options.NearWhiteTolerance > 255 ||
                 options.MaximumOutputPixels <= 0) throw new ArgumentOutOfRangeException(nameof(options));
             cancellation.ThrowIfCancellationRequested();
-            NativeRasterBuffer current = source.Copy();
+            NativeRasterBuffer current = takeOwnership ? source : source.Copy();
             double offsetX = 0, offsetY = 0;
             if (options.RemoveSemiTransparent) ThresholdInPlace(current, options.Threshold, cancellation);
             if (options.SmoothStairs)

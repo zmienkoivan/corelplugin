@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 
@@ -52,19 +53,25 @@ namespace VanyaTools.Native
             if (documentObject == null || bitmapObject == null || buffer == null)
                 throw new ArgumentNullException("Не указан документ, целевой растр или цветовые данные.");
             dynamic document = documentObject, bitmap = bitmapObject;
+            var timer = Stopwatch.StartNew();
+            Log.Info("Native raster Corel apply started: " + buffer.Width + "x" + buffer.Height + ", model=" + buffer.Mode + ".");
             object color = CreateImage(documentObject, buffer.Mode, buffer.Width, buffer.Height);
             WritePlane(color, buffer.Colors, buffer.Width, buffer.Height, buffer.Channels);
+            long colorMs = timer.ElapsedMilliseconds;
+            Log.Info("Native raster Corel color plane written: " + colorMs + " ms.");
             // The native dispatch route requires a real optional image pointer.
             // An all-255 mask is fully opaque and preserves the exact source alpha
             // without relying on null/missing interface argument marshalling.
             object alpha = CreateImage(documentObject, 2, buffer.Width, buffer.Height);
             WritePlane(alpha, buffer.Alpha, buffer.Width, buffer.Height, 1);
+            Log.Info("Native raster Corel alpha plane written: " + (timer.ElapsedMilliseconds - colorMs) + " ms.");
             // The caller owns the target (normally a duplicate/new result), never
             // the source. No SetImageData occurs until both planes are complete.
             bitmap.SetImageData((dynamic)color, (dynamic)alpha, offsetX, offsetY);
             if (Convert.ToInt32(bitmap.Mode) != buffer.Mode ||
                 Convert.ToInt32(bitmap.Image.Width) != buffer.Width || Convert.ToInt32(bitmap.Image.Height) != buffer.Height)
                 throw new InvalidOperationException("Corel изменил модель или размер результата. Проверьте вставленный растр.");
+            Log.Info("Native raster Corel apply finished: " + timer.ElapsedMilliseconds + " ms.");
         }
 
         internal static object CreateImage(object documentObject, int mode, int width, int height)

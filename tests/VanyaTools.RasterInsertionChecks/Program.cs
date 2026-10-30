@@ -64,6 +64,8 @@ namespace VanyaTools.Native
         internal int ReadAttempts;
         internal FakeLayer Owner;
         internal string RawName;
+        public FakeRange Shapes { get; }
+        public FakeClip PowerClip { get; set; }
         public int StaticID { get; }
         public int Type { get; set; } = 5;
         public double LeftX { get { Live(); return Left; } }
@@ -77,7 +79,7 @@ namespace VanyaTools.Native
             set { Live(); Document.App.Events.Add("Name:" + StaticID); RawName = value; Document.Mutated(); Fail("Name"); }
         }
         public FakeShape(FakeDocument document, FakeLayer layer, int id, string name, double left, double top, double width, double height, bool imported = false)
-        { Document = document; Owner = layer; StaticID = id; RawName = name; Left = left; Top = top; Width = width; Height = height; Imported = imported; layer.Items.Add(this); }
+        { Document = document; Owner = layer; StaticID = id; RawName = name; Left = left; Top = top; Width = width; Height = height; Imported = imported; Shapes = new FakeRange(document.App); layer.Items.Add(this); }
         private void Live()
         {
             ReadAttempts++;
@@ -113,6 +115,11 @@ namespace VanyaTools.Native
             if (Document.App.Failure == "CreateSelection") throw new InvalidOperationException("Injected selection failure");
             Document.App.ActiveSelectionRange = new FakeRange(Document.App); Document.App.ActiveSelectionRange.Items.Add(this);
         }
+    }
+    public sealed class FakeClip
+    {
+        public FakeRange Shapes { get; }
+        public FakeClip(FakeApp app) { Shapes = new FakeRange(app); }
     }
     public sealed class FakeLayer
     {
@@ -165,6 +172,11 @@ namespace VanyaTools.Native
             get { if (IndexThrows) throw new InvalidOperationException("Captured page deleted"); return IndexValue; }
         }
         public readonly List<FakeLayer> Layers = new List<FakeLayer>();
+        public FakeLayer DesktopLayer { get; set; }
+        public FakeRange Shapes
+        {
+            get { var range = new FakeRange(Document.App); range.Items.AddRange(Layers.SelectMany(layer => layer.Items).Where(shape => !shape.Deleted)); return range; }
+        }
         public bool HideFindResults;
         public FakePage(FakeDocument document, int index) { Document = document; IndexValue = index; }
         public FakeLayer CreateLayer(string name)
@@ -355,6 +367,32 @@ namespace VanyaTools.Native
                     Check(f.Page.Layers.Count == 1, "Temporary layer leaked");
                 });
             Run("Diagnostic always forces NewAside", () => { var f = New("diagnostic"); f.Save(RasterInsertionMode.ReplaceOriginal, false, true); RasterResultInsertion.Import(f.Output, "QA", RasterInsertionMode.ReplaceOriginal, f.Source); Eq(f.Imported.Left, 105); Check(!f.A.Deleted && !f.B.Deleted, "Diagnostic replaced source"); });
+            Run("Live desktop source survives FindShape omission", () => {
+                var f = New("desktop source"); f.Save(RasterInsertionMode.MoveOriginalAside);
+                var desktop = new FakeLayer(f.Document, f.Page, "desktop"); f.Page.DesktopLayer = desktop;
+                foreach (FakeShape shape in new[] { f.A, f.B }) { f.Layer.Items.Remove(shape); desktop.Items.Add(shape); shape.Owner = desktop; }
+                f.Page.HideFindResults = true; f.SelectOther();
+                RasterResultInsertion.Import(f.Output, "QA desktop", null, f.Source);
+                Check(f.App.Events.Contains("MoveOriginal:11") && f.App.Events.Contains("MoveOriginal:12"), "Desktop originals not resolved");
+                Check(!f.A.Deleted && !f.B.Deleted && f.Other.Left == 800, "Other objects changed");
+            });
+            foreach (bool clipped in new[] { false, true })
+                Run("Focused source found through " + (clipped ? "PowerClip" : "group"), () => {
+                    var f = New("focused source " + clipped); f.Save(RasterInsertionMode.ReplaceOriginal);
+                    var container = new FakeShape(f.Document, f.Layer, 800, "container", 90, 210, 130, 80) { Type = clipped ? 3 : 7 };
+                    var children = clipped ? (container.PowerClip = new FakeClip(f.App)).Shapes : container.Shapes;
+                    foreach (FakeShape shape in new[] { f.A, f.B }) { f.Layer.Items.Remove(shape); children.Items.Add(shape); }
+                    f.Page.HideFindResults = true; f.SelectOther();
+                    RasterResultInsertion.Import(f.Output, "QA focused", null, f.Source);
+                    Check(f.A.Deleted && f.B.Deleted && !container.Deleted && !f.Other.Deleted, "Focused source not safely replaced");
+                });
+            Run("Changed desktop original still rejected before mutation", () => {
+                var f = New("changed desktop"); f.Save(RasterInsertionMode.ReplaceOriginal);
+                var desktop = new FakeLayer(f.Document, f.Page, "desktop"); f.Page.DesktopLayer = desktop;
+                f.Layer.Items.Remove(f.A); desktop.Items.Add(f.A); f.A.Owner = desktop; f.A.Left += 1;
+                f.Page.HideFindResults = true;
+                Throws(() => RasterResultInsertion.Import(f.Output, "QA desktop changed", null, f.Source)); NoMutation(f);
+            });
             foreach (string stage in new[] { "ImportEx", "FinishBefore", "FinishAfter", "SetSize", "Move", "Name", "MoveToLayer", "DeleteTemp", "DeleteTempAfter", "DeleteOriginalSecond", "CreateSelection" })
                 Run("Rollback " + stage, () => {
                     var f = New(stage); f.Save(RasterInsertionMode.ReplaceOriginal); f.App.Failure = stage;

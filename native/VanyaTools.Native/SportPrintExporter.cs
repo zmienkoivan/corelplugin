@@ -24,7 +24,8 @@ namespace VanyaTools.Native
         // Shared PDF publisher: ordinary CDRs need no sport markers or page names.
         // DTF/UV deliberately have no fallback from an empty selection to a whole page.
         internal static Result Export(string folder, int dpi, bool selectionOrPage,
-            bool selectionOnly, bool sportPage = false, string processName = "DTF", Func<string, bool> confirmPage = null)
+            bool selectionOnly, bool sportPage = false, string processName = "DTF", Func<string, bool> confirmPage = null,
+            double selectionMarginMm = 0)
         {
             if (dpi != 150 && dpi != 300)
                 throw new InvalidOperationException("Выберите качество экспорта 150 или 300 DPI.");
@@ -85,10 +86,11 @@ namespace VanyaTools.Native
                 if (selected)
                 {
                     app.Optimization = true;
-                    selectionWorkspace = PrintSelectionWorkspace.Create((object)app, (object)document, (object)page, (object)selection);
+                    selectionWorkspace = PrintSelectionWorkspace.Create((object)app, (object)document, (object)page, (object)selection,
+                        selectionMarginMm);
                     publisher = selectionWorkspace.Document;
-                    result.WidthMm = selectionWorkspace.Bounds.Width;
-                    result.HeightMm = selectionWorkspace.Bounds.Height;
+                    result.WidthMm = selectionWorkspace.PageWidthMm;
+                    result.HeightMm = selectionWorkspace.PageHeightMm;
                 }
                 else
                 {

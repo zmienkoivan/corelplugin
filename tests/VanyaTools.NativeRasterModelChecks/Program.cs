@@ -3,6 +3,11 @@ using System.Linq;
 using System.Threading;
 using VanyaTools.Native;
 
+namespace VanyaTools.Native
+{
+    internal static class Log { internal static void Info(string text) { } }
+}
+
 public sealed class FakeTile
 {
     public int Left { get; set; }

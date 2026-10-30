@@ -350,6 +350,7 @@ namespace VanyaTools.Native
             _retryButton = Button("Повторить", async (_, __) => await Retry());
             _retryButton.Visibility = Visibility.Collapsed;
             panel.Children.Add(_retryButton);
+            AddPendingResultControls(panel);
             _progress = Note("");
             if (!styleOnly)
             {
@@ -554,7 +555,7 @@ namespace VanyaTools.Native
         {
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
-            { Report("Сначала вставьте готовый результат кнопкой «Повторить вставку».", true); return; }
+            { Report("Вставьте готовый результат или нажмите «Отложить».", true); return; }
             if (_localPreset.SelectedIndex < 0)
             { Report("Выберите локальный стиль.", true); return; }
             var settings = LocalSettings();
@@ -604,7 +605,7 @@ namespace VanyaTools.Native
         {
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
-            { Report("Сначала вставьте готовый результат кнопкой «Повторить вставку».", true); return; }
+            { Report("Вставьте готовый результат или нажмите «Отложить».", true); return; }
             var selectedModel = _model.SelectedItem as ModelChoice;
             if (selectedModel == null) { Report("Выберите модель.", true); return; }
             var backgroundModel = _backgroundModel.SelectedItem as ModelChoice;
@@ -669,7 +670,7 @@ namespace VanyaTools.Native
         {
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
-            { Report("Сначала вставьте готовый результат.", true); return; }
+            { Report("Вставьте готовый результат или нажмите «Отложить».", true); return; }
             string source = null;
             SetBusy(true, "Подготавливаю выделение для удаления фона…");
             try
@@ -714,7 +715,7 @@ namespace VanyaTools.Native
         {
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
-            { Report("Сначала вставьте готовый результат.", true); return; }
+            { Report("Вставьте готовый результат или нажмите «Отложить».", true); return; }
             int threshold;
             if (!Int32.TryParse(_alphaThreshold.Text, out threshold) || threshold < 0 || threshold > 255)
             { Report("Порог должен быть от 0 до 255.", true); return; }
@@ -777,7 +778,7 @@ namespace VanyaTools.Native
         {
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
-            { Report("Сначала вставьте готовый результат.", true); return; }
+            { Report("Вставьте готовый результат или нажмите «Отложить».", true); return; }
             bool red = _highlightColor.SelectedIndex == 1;
             SetBusy(true, "Ищу полупрозрачные пиксели…");
             try
@@ -869,7 +870,7 @@ namespace VanyaTools.Native
         {
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
-            { Report("Сначала вставьте готовый результат.", true); return; }
+            { Report("Вставьте готовый результат или нажмите «Отложить».", true); return; }
             int threshold;
             if (!Int32.TryParse(_alphaThreshold.Text, out threshold) || threshold < 0 || threshold > 255)
             { Report("Порог должен быть от 0 до 255.", true); return; }
@@ -1153,7 +1154,7 @@ namespace VanyaTools.Native
         {
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
-            { Report("Сначала вставьте готовый результат.", true); return; }
+            { Report("Вставьте готовый результат или нажмите «Отложить».", true); return; }
             if (!DtfOutlineUnits.TryNumber(_edgeRadius.Text, out double radius) ||
                 !DtfOutlineUnits.TryNumber(_edgeExpansion.Text, out double expansion))
             { Report("Сглаживание и обводка — неотрицательные числа в выбранных единицах.", true); return; }
@@ -1596,13 +1597,14 @@ namespace VanyaTools.Native
             using (var stream = File.Create(destination)) encoder.Save(stream);
         }
 
-        private void InsertReady(bool retry = false)
+        private void InsertReady(bool retry = false, bool beside = false)
         {
             try
             {
                 string name = Path.GetFileName(_readyOutput);
                 bool correction = name.StartsWith("Vanya-Correction-", StringComparison.OrdinalIgnoreCase);
                 bool recorded = _mode == SimpleAiMode.Raster && RasterResultInsertion.HasPlacement(_readyOutput);
+                if (beside && !recorded) throw new InvalidOperationException("Для этого PNG не сохранена исходная страница. Откройте PNG и импортируйте вручную.");
                 var placement = correction && !recorded ? ReadCorrectionPlacement(_readyOutput) : null;
                 if (correction && !recorded) VerifyCorrectionDocument(placement);
                 bool alreadyCropped = correction || name.StartsWith("Vanya-Edge-", StringComparison.OrdinalIgnoreCase) ||
@@ -1613,18 +1615,26 @@ namespace VanyaTools.Native
                 Log.Info("Simple AI import starting: " + name +
                     (alreadyCropped ? " (cropped PNG)" : ""));
                 string warning = recorded ? RasterResultInsertion.Import(_readyOutput, OperationName(name),
-                    requestedMode: retry ? SelectedRasterInsertionMode : (RasterInsertionMode?)null, liveSource: _rasterInsertionSource) : (alreadyCropped ? _importDtf : _import)(_readyOutput, OperationName(name));
+                    requestedMode: beside ? RasterInsertionMode.NewAside : retry ? SelectedRasterInsertionMode : (RasterInsertionMode?)null,
+                    liveSource: _rasterInsertionSource, keepResultLayer: beside) : (alreadyCropped ? _importDtf : _import)(_readyOutput, OperationName(name));
                 if (correction && !recorded) warning = PlaceCorrection(placement, warning);
                 Log.Info("Simple AI import finished: " + name);
                 _importWarning = warning;
-                NativeRasterCorrection.CleanupResultCompanion(_readyOutput);
+                // A previously deferred PNG may still be referenced by the local
+                // recovery index. Keep its native channels available for recovery;
+                // failure to read that index must not turn a completed insert into
+                // a retry or silently leave only an RGB preview behind.
+                bool retained = true;
+                try { retained = PendingRasterResults.Contains(PendingPath(), _readyOutput); }
+                catch (Exception historyError) { Log.Error("Result inserted; preserving native channels because deferred history is unavailable.", historyError); }
+                if (!retained) NativeRasterCorrection.CleanupResultCompanion(_readyOutput);
                 _readyOutput = null; _lastInput = null; _lastSource = null; _rasterInsertionSource = null;
                 try { if (File.Exists(PendingPath())) File.Delete(PendingPath()); } catch { }
             }
             catch (Exception ex)
             {
                 throw new InvalidOperationException("Результат готов, но вставка не удалась. " +
-                    "Нажмите «Повторить вставку» без новой оплаты. " + ex.GetBaseException().Message, ex);
+                    "Попробуйте «Вставить рядом» или «Отложить», чтобы продолжить работу. " + ex.GetBaseException().Message, ex);
             }
         }
 
@@ -1666,7 +1676,7 @@ namespace VanyaTools.Native
             try
             {
                 _importWarning = null;
-                if (ready) InsertReady(true);
+                if (ready) InsertReady(true, RestoredReadyNeedsBeside);
                 else await Execute(key);
                 ReportOutcome();
             }
@@ -1716,7 +1726,8 @@ namespace VanyaTools.Native
             _retryButton.Visibility = !busy && ((!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput)) ||
                 _lastInput != null) ? Visibility.Visible : Visibility.Collapsed;
             _retryButton.Content = !String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput)
-                ? "Повторить вставку · бесплатно" : "Повторить запрос";
+                ? RestoredReadyNeedsBeside ? "Вставить рядом · бесплатно" : "Повторить вставку · бесплатно" : "Повторить запрос";
+            UpdatePendingResultControls();
             _progressBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             if (busy)
             {
@@ -1752,6 +1763,8 @@ namespace VanyaTools.Native
                 if (!File.Exists(PendingPath())) return;
                 string path = File.ReadAllText(PendingPath()).Trim();
                 if (!File.Exists(path)) return;
+                try { if (PendingRasterResults.IsDeferred(PendingPath(), path)) return; }
+                catch (Exception error) { Log.Error("Could not check deferred raster marker.", error); }
                 if (_mode == SimpleAiMode.AiStyles &&
                     Path.GetFileName(path).StartsWith("Vanya-Local-Style-", StringComparison.OrdinalIgnoreCase)) return;
                 _readyOutput = path;
