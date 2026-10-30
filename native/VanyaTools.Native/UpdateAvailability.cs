@@ -2,7 +2,6 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
-using System.Net.Http;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
@@ -22,29 +21,13 @@ namespace VanyaTools.Native
     // existing updater and is never triggered by a timer or a network response.
     internal static class UpdateAvailability
     {
-        private const string Endpoint = "https://api.github.com/repos/zmienkoivan/corelplugin/releases/latest";
-        private static readonly HttpClient Client = CreateClient();
-        private static readonly UpdateAvailabilityProbe Probe = new UpdateAvailabilityProbe(Fetch);
+        // Corel's process can be denied sockets by Windows while the installed
+        // network helper is allowed. Use the same helper as the other LEDs.
+        private static readonly UpdateAvailabilityProbe Probe = new UpdateAvailabilityProbe(ConnectivityClient.LatestRelease);
 
         internal static Task<UpdateAvailabilityStatus> CheckAsync(Version installed, bool force = false)
             => Probe.CheckAsync(installed, force);
 
-        private static HttpClient CreateClient()
-        {
-            var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8), MaxResponseContentBufferSize = 1024 * 1024 };
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("VanyaTools-UpdateIndicator/1.0");
-            client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
-            return client;
-        }
-
-        private static async Task<string> Fetch()
-        {
-            using (HttpResponseMessage response = await Client.GetAsync(Endpoint).ConfigureAwait(false))
-            {
-                response.EnsureSuccessStatusCode();
-                return await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            }
-        }
     }
 
     // Injectable transport/clock keep the cache and comparison checks entirely

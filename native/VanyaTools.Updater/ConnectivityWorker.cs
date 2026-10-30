@@ -13,12 +13,20 @@ namespace VanyaTools.Updater
         {
             var serializer = new JavaScriptSerializer();
             var reply = new Dictionary<string, object>();
+            string service = "Replicate";
             try
             {
                 var job = serializer.Deserialize<Dictionary<string, object>>(Encoding.UTF8.GetString(
                     Convert.FromBase64String(Console.In.ReadToEnd().Trim())));
                 string action = Value(job, "action");
-                if (action == "replicate")
+                if (action == "update-release")
+                {
+                    service = "GitHub";
+                    reply["Data"] = UpdateReleaseMetadata.Read();
+                    reply["Available"] = true;
+                    reply["Message"] = "GitHub: сведения об обновлении получены";
+                }
+                else if (action == "replicate")
                 {
                     ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
                     var request = (HttpWebRequest)WebRequest.Create("https://api.replicate.com/v1/account");
@@ -58,9 +66,9 @@ namespace VanyaTools.Updater
             {
                 var response = error.Response as HttpWebResponse;
                 reply["Available"] = false;
-                reply["Message"] = response != null ? "Replicate: HTTP " + (int)response.StatusCode +
-                    (response.StatusCode == HttpStatusCode.Unauthorized ? " · проверьте ключ API" : "") :
-                    "Replicate: " + (error.Status == WebExceptionStatus.Timeout ? "сервер не ответил вовремя" : error.Message);
+                reply["Message"] = response != null ? service + ": HTTP " + (int)response.StatusCode +
+                    (service == "Replicate" && response.StatusCode == HttpStatusCode.Unauthorized ? " · проверьте ключ API" : "") :
+                    service + ": " + (error.Status == WebExceptionStatus.Timeout ? "сервер не ответил вовремя" : error.Message);
                 response?.Dispose();
             }
             catch (Exception error) { reply["Available"] = false; reply["Message"] = error.Message; }

@@ -13,6 +13,7 @@ namespace VanyaTools.Native
         public string Message { get; set; }
         public string Path { get; set; }
         public long Bytes { get; set; }
+        public string Data { get; set; }
     }
 
     internal static class ConnectivityClient
@@ -26,7 +27,23 @@ namespace VanyaTools.Native
         internal static Task<ConnectionStatus> Deliver(string source, string folder) =>
             Task.Run(() => Run(new { action = "deliver", source, folder }, 120000));
 
-        private static ConnectionStatus Run(object job, int timeout)
+        internal static async Task<string> LatestRelease()
+        {
+            ConnectionStatus response = await Task.Run(() => Run(new { action = "update-release" }, 8000,
+                new Version(1, 1, 97))).ConfigureAwait(false);
+            return ReleaseMetadata(response);
+        }
+
+        internal static string ReleaseMetadata(ConnectionStatus response)
+        {
+            if (response == null || !response.Available)
+                throw new IOException(response?.Message ?? "Сетевой помощник не вернул результат проверки обновления.");
+            if (String.IsNullOrWhiteSpace(response.Data) || response.Data.Length > 1024 * 1024)
+                throw new InvalidDataException("Сетевой помощник вернул пустые или слишком большие данные обновления.");
+            return response.Data;
+        }
+
+        private static ConnectionStatus Run(object job, int timeout, Version minimumVersion = null)
         {
             try
             {
@@ -34,8 +51,9 @@ namespace VanyaTools.Native
                     "VanyaTools", "VanyaTools.ReplicateWorker.exe");
                 if (!File.Exists(exe)) throw new FileNotFoundException("Обновите сетевой помощник Vanya Tools.");
                 var version = FileVersionInfo.GetVersionInfo(exe);
-                if (new Version(version.FileMajorPart, version.FileMinorPart, version.FileBuildPart) < new Version(1, 1, 56))
-                    throw new InvalidOperationException("Сетевой помощник устарел. Установите полный пакет 1.1.56 и перезапустите Corel.");
+                Version required = minimumVersion ?? new Version(1, 1, 56);
+                if (new Version(version.FileMajorPart, version.FileMinorPart, version.FileBuildPart) < required)
+                    throw new InvalidOperationException("Сетевой помощник устарел. Установите полный пакет " + required.ToString(3) + " и перезапустите Corel.");
                 var start = new ProcessStartInfo(exe, "--connectivity-worker") { UseShellExecute = false,
                     CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden, RedirectStandardInput = true,
                     RedirectStandardOutput = true, RedirectStandardError = true };

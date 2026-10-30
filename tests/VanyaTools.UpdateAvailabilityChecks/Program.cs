@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using VanyaTools.Native;
@@ -20,6 +21,16 @@ internal static class Program
     }
     private static async Task Run()
     {
+        string body = Release();
+        Check(VanyaTools.Updater.UpdateReleaseMetadata.ReadLimited(new StringReader(body)) == body, "Worker preserves release metadata without downloading assets");
+        Check(VanyaTools.Updater.UpdateReleaseMetadata.ReadLimited(new StringReader(new String('x', 1024 * 1024))).Length == 1024 * 1024, "Worker response bound is inclusive");
+        RejectAction(() => VanyaTools.Updater.UpdateReleaseMetadata.ReadLimited(new StringReader(new String('x', 1024 * 1024 + 1))));
+        RejectAction(() => VanyaTools.Updater.UpdateReleaseMetadata.ReadLimited(new StringReader("  ")));
+        Check(ConnectivityClient.ReleaseMetadata(new ConnectionStatus { Available = true, Data = body }) == body, "Client consumes worker metadata");
+        RejectAction(() => ConnectivityClient.ReleaseMetadata(new ConnectionStatus { Available = false, Message = "GitHub unavailable", Data = body }));
+        RejectAction(() => ConnectivityClient.ReleaseMetadata(null));
+        RejectAction(() => ConnectivityClient.ReleaseMetadata(new ConnectionStatus { Available = true, Data = "" }));
+        RejectAction(() => ConnectivityClient.ReleaseMetadata(new ConnectionStatus { Available = true, Data = new String('x', 1024 * 1024 + 1) }));
         Check(UpdateAvailabilityProbe.Normalize(new Version(1, 1, 95)) == new Version(1, 1, 95, 0), "Three and four version parts compare equally");
         Check(UpdateAvailabilityProbe.Normalize(new Version(1, 1)) == new Version(1, 1, 0, 0), "Absent version parts normalize to zero");
         Check(UpdateAvailabilityProbe.ReleaseVersion(Release()) == new Version(1, 1, 96, 0), "Latest stable asset yields version");
@@ -71,4 +82,7 @@ internal static class Program
         status = await timeout.CheckAsync(new Version(1, 1, 95));
         Check(status.State == UpdateAvailabilityState.Unknown && status.Message.Contains("время ожидания"), "Timeout is understandable and not up-to-date");
     }
+
+    private static void RejectAction(Action action)
+    { try { action(); } catch (IOException) { _checks++; return; } catch (InvalidDataException) { _checks++; return; } throw new Exception("Invalid worker response was accepted"); }
 }
