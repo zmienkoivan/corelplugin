@@ -180,13 +180,13 @@ namespace VanyaTools.Native
                 string captured = Mouse.Captured?.GetType().FullName ?? "none";
                 if (_owner == null || !_owner.TryGetTarget(out var owner)) return "owner unavailable; mouse=" + captured;
                 bool enabled = owner.IsEnabled, hit = owner.IsHitTestVisible, visible = owner.IsVisible;
-                string hwnd = "none";
+                string hwnd = "none", renderMode = "none";
                 bool windowEnabled = true;
                 if (PresentationSource.FromVisual(owner) is HwndSource source && source.Handle != IntPtr.Zero)
-                { windowEnabled = IsWindowEnabled(source.Handle); hwnd = windowEnabled.ToString(); }
+                { windowEnabled = IsWindowEnabled(source.Handle); hwnd = windowEnabled.ToString(); renderMode = source.CompositionTarget?.RenderMode.ToString() ?? "none"; }
                 disabled = !enabled || !hit || !visible || !windowEnabled;
                 return "IsEnabled=" + enabled + ", IsHitTestVisible=" + hit + ", IsVisible=" + visible +
-                    ", HwndEnabled=" + hwnd + ", mouse=" + captured;
+                    ", HwndEnabled=" + hwnd + ", renderMode=" + renderMode + ", mouse=" + captured;
             }
             catch (Exception error) { return "input state unavailable: " + error.GetType().Name; }
         }

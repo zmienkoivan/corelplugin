@@ -109,6 +109,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.PhotoshopExportChecks/VanyaTools.PhotoshopExportChecks.csproj --configuration Release
 
+      - name: Check local WPF rendering compatibility
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.RenderingCompatibilityChecks/VanyaTools.RenderingCompatibilityChecks.csproj --configuration Release
+
       - name: Build installer package
         shell: pwsh
         run: .\package-native.ps1

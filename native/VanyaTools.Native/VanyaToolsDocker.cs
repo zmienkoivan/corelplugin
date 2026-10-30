@@ -121,6 +121,7 @@ namespace VanyaTools.Native
             var printExport = new PrintExportTab(printExportSettings, SetStatus);
             var interfaceSettings = new StackPanel();
             interfaceSettings.Children.Add(DockerTheme.CreateSettingsView(SetStatus));
+            interfaceSettings.Children.Add(DockerRenderingCompatibility.CreateSettingsView(SetStatus));
             interfaceSettings.Children.Add(Button("Обновить Vanya Tools", (_, __) => RunGitHubUpdate()));
             interfaceSettings.Children.Add(Button("Восстановить кнопки на панели Corel", (_, __) =>
             {

@@ -63,6 +63,7 @@ namespace VanyaTools.Native
         public static void Apply(FrameworkElement root)
         {
             if (root == null) return;
+            DockerRenderingCompatibility.Attach(root);
             lock (RootsLock)
             {
                 Roots.RemoveAll(reference => !reference.TryGetTarget(out _));
