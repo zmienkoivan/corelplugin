@@ -103,7 +103,7 @@ namespace VanyaTools.Native
             var aiTools = new AiPrintTab(ImportAiResult,
                 (message, isError) => SetStatus(message, isError), CaptureAiSelection);
             var orderCards = new OrderCardTab((message, isError) => SetStatus(message, isError));
-            var connectionIndicators = new ConnectionIndicators(() => aiTools.GetToken(), orderCards.LabelPrinterStatus);
+            var connectionIndicators = new ConnectionIndicators(() => aiTools.GetToken(), orderCards.LabelPrinterStatus, RunGitHubUpdate);
             DockPanel.SetDock(connectionIndicators, Dock.Right);
             headingRow.Children.Insert(0, connectionIndicators);
             var standardPage = new DockPanel();

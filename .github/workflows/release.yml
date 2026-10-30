@@ -97,6 +97,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.PrintSelectionChecks/VanyaTools.PrintSelectionChecks.csproj --configuration Release
 
+      - name: Check update availability probe
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.UpdateAvailabilityChecks/VanyaTools.UpdateAvailabilityChecks.csproj --configuration Release
+
       - name: Build installer package
         shell: pwsh
         run: .\package-native.ps1
