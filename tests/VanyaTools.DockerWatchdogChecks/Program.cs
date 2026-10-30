@@ -28,6 +28,8 @@ internal static class Program
         try
         {
             BlockingOperation(); BackgroundStarvation(); StaleCallbacks();
+            Check(DockerUiWatchdog.DelayEvidence(62900, 15).Contains("monitor-also-paused"), "A silent monitor must not prove a continuous UI hang");
+            Check(DockerUiWatchdog.DelayEvidence(2, 15).Contains("monitor-active"), "An active monitor must distinguish dispatcher delay");
             Console.WriteLine("Docker watchdog checks passed: " + _checks + ". Isolated WPF dispatchers; no windows or Corel.");
             return 0;
         }

@@ -48,6 +48,12 @@ public sealed class FakeImage
 }
 public sealed class FakeBitmap
 {
+    public bool CropEnvelopeModified { get; set; }
+    public bool CanCrop = true;
+    public bool Cropped => CropEnvelopeModified && CanCrop;
+    public Action OnCrop;
+    public int CropCalls;
+    public void Crop() { CropCalls++; OnCrop?.Invoke(); }
     public int Mode => Image.Type;
     public FakeImage Image { get; set; }
     public FakeImage ImageAlpha { get; set; }
@@ -63,12 +69,17 @@ public sealed class FakeBitmap
 public sealed class FakeColor { public int Mode = 5; public byte[] Samples; public int[] Cmyk; public FakeColor(params int[] cmyk) { Cmyk = cmyk; } }
 public sealed class FakeApplication
 {
+    public bool Optimization { get; set; }
     public FakeColor CreateCMYKColor(int c, int m, int y, int k) => new FakeColor(c, m, y, k);
     public FakeColor CreateRGBColor(int r, int g, int b) => new FakeColor { Mode = 4, Samples = new[] { (byte)b, (byte)g, (byte)r } };
     public FakeColor CreateGrayColor(int gray) => new FakeColor { Mode = 2, Samples = new[] { (byte)gray } };
 }
 public sealed class FakeDocument
 {
+    public int Unit { get; set; } = 7;
+    public int Begins, Ends;
+    public void BeginCommandGroup(string name) { Begins++; }
+    public void EndCommandGroup() { Ends++; }
     public int[] Order = { 3, 2, 1, 0 };
     public bool ReadOnly, RejectWrite, RejectStandaloneRead = true;
     public FakeApplication Application { get; } = new FakeApplication();
@@ -107,7 +118,7 @@ internal static class Program
     {
         try
         {
-            RoundTrips(); Validation(); CalibrationAndPreview(); ThreadGuard();
+            RoundTrips(); Validation(); CalibrationAndPreview(); ThreadGuard(); CroppedSourceCapture();
             Console.WriteLine("Native raster model checks passed: " + _checks + ". Fake Corel objects only."); return 0;
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
@@ -118,6 +129,59 @@ internal static class Program
         int channels = mode == 5 ? 4 : mode == 4 ? 3 : 1;
         return new FakeBitmap { Image = new FakeImage(mode, width, height,
             new FakeTile(0, height - 1, width, height, bpp == 0 ? channels : bpp, nativeBytes)) };
+    }
+
+    private static void CroppedSourceCapture()
+    {
+        foreach (int mode in new[] { 2, 4, 5 })
+        {
+            int channels = NativeRasterBuffer.ChannelCount(mode);
+            var original = new FakeCropShape { Bitmap = Bitmap(mode, 4, 3, new byte[12 * channels]) };
+            original.Bitmap.CropEnvelopeModified = true;
+            byte[] samples = Enumerable.Range(0, 2 * channels).Select(i => (byte)(i * 7)).ToArray();
+            var copy = new FakeCropShape { Bitmap = Bitmap(mode, 4, 3, new byte[12 * channels]) };
+            copy.Bitmap.OnCrop = () => {
+                copy.Bitmap.Image = Bitmap(mode, 2, 1, samples).Image;
+                copy.Bitmap.ImageAlpha = new FakeImage(2, 2, 1, new FakeTile(0, 0, 2, 1, 1, new byte[] { 255, 129 }));
+            };
+            original.Copy = copy;
+            var doc = new FakeDocument(); var app = new FakeApplication { Optimization = true };
+            var captured = NativeRasterSourceCapture.Read(app, doc, original, 100, null);
+            Check(captured.Mode == mode && captured.Width == 2 && captured.Height == 1 && captured.Colors.SequenceEqual(samples), "Cropped source preserves native model and all visible channel samples");
+            Check(captured.Alpha.SequenceEqual(new byte[] { 255, 129 }), "Materialized crop alpha retained");
+            Check(original.Bitmap.CropCalls == 0 && original.Bitmap.Image.Width == 4 && original.Bitmap.Image.Height == 3 && !original.Deleted, "Original cropped bitmap mutated");
+            Check(copy.Bitmap.CropCalls == 1 && copy.Deleted && original.Selections == 1, "Copy not materialized/deleted or source selection not restored");
+            Check(doc.Unit == 7 && doc.Begins == 1 && doc.Ends == 1 && app.Optimization, "Cropped capture context not restored");
+            Check(Math.Abs(captured.DpiX - 300) < .001 && Math.Abs(captured.DpiY - 400) < .001, "Cropped capture physical size changed");
+        }
+        foreach (string failure in new[] { "crop", "mode", "dpi", "size", "pixels" })
+        {
+            var original = new FakeCropShape { Bitmap = Bitmap(4, 2, 1, new byte[6]) };
+            original.Bitmap.CropEnvelopeModified = true;
+            var copy = new FakeCropShape { Bitmap = Bitmap(4, 2, 1, new byte[6]) }; original.Copy = copy;
+            copy.Bitmap.OnCrop = () => {
+                if (failure == "crop") throw new InvalidOperationException("Injected crop failure");
+                if (failure == "mode") copy.Bitmap.Image.Type = 5;
+                if (failure == "dpi") copy.Bitmap.ResolutionX = 200;
+                if (failure == "size") copy.SizeWidth = 200;
+                if (failure == "pixels") copy.Bitmap.Image.Tiles.Item[1].RejectRead = true;
+            };
+            var doc = new FakeDocument(); var app = new FakeApplication();
+            Reject(() => NativeRasterSourceCapture.Read(app, doc, original, 100, null), "Crop failure accepted: " + failure);
+            Check(copy.Deleted && !original.Deleted && original.Bitmap.CropCalls == 0 && doc.Ends == 1 && doc.Unit == 7 && !app.Optimization,
+                "Failure did not clean copy/restore source: " + failure);
+        }
+        var identity = new FakeCropShape { Bitmap = Bitmap(4, 2, 1, new byte[6]) };
+        identity.Bitmap.CropEnvelopeModified = true; identity.Copy = identity;
+        Reject(() => NativeRasterSourceCapture.Read(new FakeApplication(), new FakeDocument(), identity, 100, null), "Duplicate returning source accepted");
+        Check(!identity.Deleted && identity.Bitmap.CropCalls == 0, "Identity guard modified/deleted the source");
+        var plain = new FakeCropShape { Bitmap = Bitmap(4, 2, 1, new byte[] { 255,255,255, 253,253,253 }) };
+        var plainDoc = new FakeDocument();
+        var result = NativeRasterSourceCapture.Read(new FakeApplication(), plainDoc, plain, 100, null);
+        Check(plain.Duplicates == 0 && plainDoc.Begins == 0 && result.Colors.SequenceEqual(new byte[] { 255,255,255,253,253,253 }), "Uncropped source gained copy or changed colors");
+        plain.Bitmap.CropEnvelopeModified = true; plain.Bitmap.CanCrop = false;
+        result = NativeRasterSourceCapture.Read(new FakeApplication(), plainDoc, plain, 100, null);
+        Check(plain.Duplicates == 0 && result.Colors.SequenceEqual(new byte[] { 255,255,255,253,253,253 }), "Already applied clipping path incorrectly blocked or cropped again");
     }
     private static void RoundTrips()
     {
@@ -199,4 +263,16 @@ internal static class Program
         thread.SetApartmentState(ApartmentState.MTA); thread.Start(); thread.Join();
         Check(caught is InvalidOperationException && caught.Message.Contains("интерфейсе"), "MTA calls blocked before native access");
     }
+}
+public sealed class FakeCropShape
+{
+    public FakeBitmap Bitmap { get; set; }
+    public FakeCropShape Copy;
+    public bool Deleted;
+    public int Duplicates, Selections;
+    public double SizeWidth { get; set; } = 2 * 25.4 / 300;
+    public double SizeHeight { get; set; } = 25.4 / 400;
+    public object Duplicate(double x, double y) { Duplicates++; return Copy; }
+    public void Delete() { Deleted = true; }
+    public void CreateSelection() { Selections++; }
 }

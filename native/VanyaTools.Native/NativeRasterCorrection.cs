@@ -35,29 +35,11 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Для обработки без изменения цветовой модели нужен растр без поворота, зеркалирования и наклона. Сначала подготовьте отдельную копию в Corel.");
             if (Convert.ToInt32(shape.Effects.Count) != 0 || Convert.ToInt32(shape.Transparency.Type) != 0)
                 throw new InvalidOperationException("У растра есть объектные эффекты или прозрачность Corel. Для точного сохранения каналов сначала примените их к отдельной копии растра.");
-            if (Convert.ToBoolean(shape.Bitmap.CropEnvelopeModified))
-                throw new InvalidOperationException("Сначала завершите обрезку растра в Corel. Незавершённая рамка обрезки не должна менять исходные цветовые каналы.");
-
-            long pixels = checked(Convert.ToInt64(shape.Bitmap.Image.Width) * Convert.ToInt64(shape.Bitmap.Image.Height));
-            if (pixels > maxPixels) throw new InvalidOperationException("Исходный растр слишком велик для обработки без изменения разрешения.");
-            if (pixels > 2000000) memoryCheck?.Invoke(pixels);
             var captureTimer = Stopwatch.StartNew();
-            Log.Info("Native raster capture started: pixels=" + pixels + ".");
-            var buffer = NativeRasterModelIO.Capture((object)shape.Bitmap, maxPixels);
+            Log.Info("Native raster capture started.");
+            var buffer = NativeRasterSourceCapture.Read(application, (object)doc, (object)shape, maxPixels, memoryCheck);
             Log.Info("Native raster capture planes ready: " + captureTimer.ElapsedMilliseconds + " ms, model=" + buffer.Mode + ".");
             if (buffer.Mode == 5) buffer = buffer.WithCmykOrder(NativeRasterModelIO.CalibrateCmykOrder((object)doc, application));
-            int oldUnit = Convert.ToInt32(doc.Unit);
-            try
-            {
-                doc.Unit = CorelConstants.CdrMillimeter;
-                double width = Convert.ToDouble(shape.SizeWidth), height = Convert.ToDouble(shape.SizeHeight);
-                if (!Finite(width) || !Finite(height) || width <= 0 || height <= 0)
-                    throw new InvalidOperationException("Не удалось определить физический размер растра.");
-                buffer = new NativeRasterBuffer(buffer.Width, buffer.Height, buffer.Mode,
-                    buffer.Width * 25.4 / width, buffer.Height * 25.4 / height,
-                    buffer.Colors, buffer.Alpha, buffer.CmykOrder);
-            }
-            finally { doc.Unit = oldUnit; }
             string path = Path.Combine(Path.GetTempPath(), SourcePrefix + Guid.NewGuid().ToString("N") + ".png");
             try
             {

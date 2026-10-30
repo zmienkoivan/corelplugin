@@ -46,7 +46,7 @@ namespace VanyaTools.Native
         private readonly int _intervalMs, _delayMs;
         private readonly object _lifecycle = new object();
         private Timer _timer;
-        private long _acknowledged;
+        private long _acknowledged, _lastMonitorCheck;
         private int _pending, _reported, _generation;
         private string _activity = "запуск докера", _lastInput = "not sampled";
         private bool _lastDisabled;
@@ -79,6 +79,7 @@ namespace VanyaTools.Native
             {
                 int generation = ++_generation;
                 Interlocked.Exchange(ref _acknowledged, Stopwatch.GetTimestamp());
+                _lastMonitorCheck = Interlocked.Read(ref _acknowledged);
                 _pending = _reported = 0;
                 _lastInput = "not sampled"; _lastDisabled = false;
                 _timer = new Timer(Check, generation, _intervalMs, _intervalMs);
@@ -103,11 +104,13 @@ namespace VanyaTools.Native
         {
             int generation = (int)value;
             bool delayed, queueBackground;
-            double age;
+            double age, monitorGap;
             lock (_lifecycle)
             {
                 if (!Current(generation) || _dispatcher.HasShutdownStarted) return;
-                age = Seconds(Stopwatch.GetTimestamp() - Interlocked.Read(ref _acknowledged));
+                long now = Stopwatch.GetTimestamp();
+                monitorGap = Seconds(now - _lastMonitorCheck); _lastMonitorCheck = now;
+                age = Seconds(now - Interlocked.Read(ref _acknowledged));
                 delayed = age * 1000 >= _delayMs && _reported == 0;
                 if (delayed) _reported = 1;
                 queueBackground = _pending == 0;
@@ -116,6 +119,7 @@ namespace VanyaTools.Native
             if (delayed && Current(generation))
             {
                 Log.Info(_prefix + "heartbeat delayed " + F(age) + "s. " + TraceDescription() +
+                    "; " + DelayEvidence(monitorGap, _delayMs / 1000.0) +
                     "; last status=" + _activity + "; previous input=" + _lastInput);
                 // One higher-priority probe per delayed episode; never an unbounded queue.
                 long queued = Stopwatch.GetTimestamp();
@@ -187,6 +191,9 @@ namespace VanyaTools.Native
             catch (Exception error) { return "input state unavailable: " + error.GetType().Name; }
         }
         private static double Seconds(long ticks) => ticks / (double)Stopwatch.Frequency;
+        internal static string DelayEvidence(double monitorGapSeconds, double thresholdSeconds) =>
+            "monitor callback gap=" + F(monitorGapSeconds) + "s; evidence=" +
+            (monitorGapSeconds >= thresholdSeconds ? "monitor-also-paused (not proof of continuous UI hang)" : "UI-heartbeat-delayed-with-monitor-active");
         private static string F(double value) => value.ToString("0.0", CultureInfo.InvariantCulture);
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]

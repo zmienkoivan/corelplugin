@@ -2187,6 +2187,7 @@ namespace VanyaTools.Native
 
         private string YearFolderForDocument(string path)
         {
+            if (String.IsNullOrWhiteSpace(path)) return YearFolderForOrder(null);
             try
             {
                 string customer = Path.GetDirectoryName(path);

@@ -43,11 +43,14 @@ namespace VanyaTools.Native
             dynamic range = app.ActiveSelectionRange;
 
             if (doc == null)
-                throw new InvalidOperationException("No active document.");
-            if (range == null || range.Count == 0)
-                throw new InvalidOperationException("Select one or more bitmaps.");
+                throw new InvalidOperationException("Сначала откройте документ CorelDRAW.");
+            if (range == null || Convert.ToInt32(range.Count) == 0)
+                throw new InvalidOperationException("Выделите один или несколько растров.");
+            if (sides == TrimSides.None)
+                throw new InvalidOperationException("Выберите хотя бы одну сторону в параметрах обрезки.");
 
             int trimmed = 0, skipped = 0;
+            bool oldOptimization = SafeBool(() => app.Optimization);
             doc.BeginCommandGroup("Vanya Tools - trim bitmap edges");
             try { app.Optimization = true; } catch { }
 
@@ -61,9 +64,12 @@ namespace VanyaTools.Native
             }
             finally
             {
-                try { app.Optimization = false; } catch { }
-                app.ActiveWindow.Refresh();
-                doc.EndCommandGroup();
+                try { app.Optimization = oldOptimization; }
+                finally
+                {
+                    try { doc.EndCommandGroup(); }
+                    finally { app.ActiveWindow.Refresh(); }
+                }
             }
 
             return new TrimResult(trimmed, skipped);

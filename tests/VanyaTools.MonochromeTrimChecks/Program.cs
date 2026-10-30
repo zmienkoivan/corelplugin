@@ -131,6 +131,14 @@ internal static class Program
         shape = Shape(); shape.Bitmap.Image.ColoredPixel = true; failed = false;
         try { Run(shape); } catch (InvalidOperationException) { failed = true; }
         Check(failed && shape.Bitmap.CropCalls == 0, "Painted RGB cannot masquerade as the native one-bit mask");
+        var app = new FakeApp(Shape()) { Optimization = true }; CorelApp.Application = app;
+        new BitmapTrimService().TrimSelected(TrimMode.TransparentPixels, TrimSides.All, 0);
+        Check(app.Optimization && app.ActiveDocument.Ended, "Pre-existing optimization state must be restored");
+        app = new FakeApp(Shape()); CorelApp.Application = app; app.ActiveWindow.FailRefresh = true;
+        failed = false;
+        try { new BitmapTrimService().TrimSelected(TrimMode.TransparentPixels, TrimSides.All, 0); }
+        catch (InvalidOperationException) { failed = true; }
+        Check(failed && app.ActiveDocument.Ended && !app.Optimization, "Refresh failure must not leave an open command group");
     }
 }
 
@@ -211,7 +219,7 @@ public sealed class FakeDocument
     public void BeginCommandGroup(string name) { }
     public void EndCommandGroup() { Ended = true; }
 }
-public sealed class FakeWindow { public void Refresh() { } }
+public sealed class FakeWindow { public bool FailRefresh; public void Refresh() { if (FailRefresh) throw new InvalidOperationException("Injected refresh failure"); } }
 public sealed class FakeApp
 {
     public FakeApp(FakeShape shape) { ActiveSelectionRange = new FakeSelection(shape); }

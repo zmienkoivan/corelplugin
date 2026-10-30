@@ -9,5 +9,7 @@
     <Reference Include="Microsoft.CSharp" />
     <Compile Include="../../native/VanyaTools.Native/NativeRasterBuffer.cs" Link="NativeRasterBuffer.cs" />
     <Compile Include="../../native/VanyaTools.Native/NativeRasterModelIO.cs" Link="NativeRasterModelIO.cs" />
+    <Compile Include="../../native/VanyaTools.Native/NativeRasterSourceCapture.cs" Link="NativeRasterSourceCapture.cs" />
+    <Compile Include="../../native/VanyaTools.Native/CorelConstants.cs" Link="CorelConstants.cs" />
   </ItemGroup>
 </Project>

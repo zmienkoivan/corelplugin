@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -15,8 +16,7 @@ namespace VanyaTools.Native
     {
         private readonly TextBlock _status;
         private readonly TextBox _trimPaddingPx;
-        private readonly System.Windows.Controls.RadioButton _trimModeTopLeft;
-        private readonly System.Windows.Controls.RadioButton _trimModeBotRight;
+        private readonly ComboBox _trimMode;
         private readonly System.Windows.Controls.CheckBox _trimTop;
         private readonly System.Windows.Controls.CheckBox _trimBottom;
         private readonly System.Windows.Controls.CheckBox _trimLeft;
@@ -289,14 +289,14 @@ namespace VanyaTools.Native
             Grid.SetColumnSpan(approvalButton, 2);
             quickActions.Children.Add(approvalButton);
             rasterTools.Children.Add(quickActions);
+            _trimMode = new ComboBox { ItemsSource = new[] { "Обрезка: прозрачные поля", "Обрезка: цвет угла ↖", "Обрезка: цвет угла ↘" },
+                SelectedIndex = 0, FontSize = 11, MinHeight = 27, Margin = new Thickness(0, 2, 0, 2),
+                ToolTip = "Для однотонного фона выберите цвет угла. Обрезаются внешние поля; фон внутри рисунка удаляется кнопкой «Удалить фон…»." };
+            rasterTools.Children.Add(_trimMode);
             rasterTools.Children.Add(photoshop.ExportButton);
             var trimSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
             rasterTools.Children.Add(new Expander { Header = "Параметры обрезки", Content = trimSettings,
                 FontSize = 11, IsExpanded = false, Margin = new Thickness(1, 2, 0, 0) });
-            AddSmallLabel(trimSettings, "По границе");
-            AddRadioButton(trimSettings, "Прозрачные пиксели", "TrimMode", true);
-            _trimModeTopLeft = AddRadioButton(trimSettings, "Цвет верхнего-левого угла", "TrimMode", false);
-            _trimModeBotRight = AddRadioButton(trimSettings, "Цвет нижнего-правого угла", "TrimMode", false);
             AddSmallLabel(trimSettings, "Обрезать стороны");
             var sidesGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 5) };
             _trimTop = AddCheckBox(sidesGrid, "Сверху", true);
@@ -533,9 +533,7 @@ namespace VanyaTools.Native
         {
             RunSafe(() =>
             {
-                var mode = _trimModeTopLeft.IsChecked  == true ? TrimMode.TopLeftColor
-                         : _trimModeBotRight.IsChecked == true ? TrimMode.BottomRightColor
-                         : TrimMode.TransparentPixels;
+                var mode = (TrimMode)Math.Max(0, Math.Min(2, _trimMode.SelectedIndex));
 
                 var sides = TrimSides.None;
                 if (_trimTop.IsChecked    == true) sides |= TrimSides.Top;
@@ -546,7 +544,9 @@ namespace VanyaTools.Native
                 int padding = ParseInt(_trimPaddingPx.Text, 2);
                 var result = new BitmapTrimService().TrimSelected(mode, sides, padding, useTiles);
                 string m = useTiles ? "тайлы" : "пиксели";
-                SetStatus($"Обрезано ({m}): {result.Trimmed}. Пропущено: {result.Skipped}.", false);
+                string hint = result.Trimmed == 0 && mode == TrimMode.TransparentPixels
+                    ? " Прозрачных полей не найдено. Для однотонного фона выберите «цвет угла» под кнопками обрезки." : "";
+                SetStatus($"Обрезано ({m}): {result.Trimmed}. Пропущено: {result.Skipped}." + hint, false);
             });
         }
 
@@ -736,11 +736,11 @@ namespace VanyaTools.Native
             });
         }
 
-        private void RunSafe(Action action)
+        private void RunSafe(Action action, [CallerMemberName] string operation = null)
         {
             try
             {
-                action();
+                using (DockerUiWatchdog.Trace(Dispatcher, "Main command: " + operation)) action();
             }
             catch (Exception ex)
             {
