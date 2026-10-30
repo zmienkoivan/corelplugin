@@ -105,6 +105,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.RasterSpeedChecks/VanyaTools.RasterSpeedChecks.csproj --configuration Release
 
+      - name: Check Photoshop PNG export
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.PhotoshopExportChecks/VanyaTools.PhotoshopExportChecks.csproj --configuration Release
+
       - name: Build installer package
         shell: pwsh
         run: .\package-native.ps1

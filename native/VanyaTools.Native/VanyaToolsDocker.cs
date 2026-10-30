@@ -113,6 +113,7 @@ namespace VanyaTools.Native
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
             var approvalCopy = new ApprovalCopyTool((message, isError) => SetStatus(message, isError));
+            var photoshop = new PhotoshopExportTool(SetStatus);
             var settings = new StackPanel { Margin = new Thickness(5) };
             var outlineSettings = DtfOutlineSettings.Load();
             var filmRipSettings = FilmRipSettings.Load();
@@ -159,6 +160,7 @@ namespace VanyaTools.Native
                 (message, isError) => SetStatus(message, isError));
             settings.Children.Add(_hotkeys.SettingsView);
             settings.Children.Add(approvalCopy.SettingsView);
+            settings.Children.Add(photoshop.SettingsView);
             settings.Children.Add(DockerSettings.Format(printExportSettings.CreateSettingsView(SetStatus), "Печать PDF, DTF и UV"));
             settings.Children.Add(DockerSettings.Format(filmRipSettings.CreateSettingsView(SetStatus), "Фотовывод · RIP"));
             settings.Children.Add(DockerSettings.Format(outlineSettings.CreateSettingsView(SetStatus), "Пресеты обводки ДТФ"));
@@ -287,6 +289,7 @@ namespace VanyaTools.Native
             Grid.SetColumnSpan(approvalButton, 2);
             quickActions.Children.Add(approvalButton);
             rasterTools.Children.Add(quickActions);
+            rasterTools.Children.Add(photoshop.ExportButton);
             var trimSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
             rasterTools.Children.Add(new Expander { Header = "Параметры обрезки", Content = trimSettings,
                 FontSize = 11, IsExpanded = false, Margin = new Thickness(1, 2, 0, 0) });
