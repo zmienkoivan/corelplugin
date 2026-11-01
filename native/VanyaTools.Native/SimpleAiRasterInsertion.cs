@@ -6,12 +6,12 @@ namespace VanyaTools.Native
         private RasterInsertionMode _rasterOperationMode = RasterInsertionMode.NewAside;
         private string _localNativeRasterInput;
 
-        private void CaptureRasterInsertion()
+        private void CaptureRasterInsertion(bool includeOutline = false)
         {
             _rasterInsertionSource = null;
             if (_mode != SimpleAiMode.Raster) return;
             _rasterOperationMode = SelectedRasterInsertionMode;
-            _rasterInsertionSource = RasterResultInsertion.CaptureSelection();
+            _rasterInsertionSource = RasterResultInsertion.CaptureSelection(includeOutline);
         }
 
         private void SetRasterInsertionInput(string source)

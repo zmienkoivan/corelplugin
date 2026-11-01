@@ -73,6 +73,8 @@ namespace VanyaTools.Native
             scroll.PreviewMouseWheel += (_, e) =>
             {
                 if (!_loaded || _closed || _applying || image.Source == null) return;
+                if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+                { scroll.ScrollToHorizontalOffset(scroll.HorizontalOffset - e.Delta / 2d); e.Handled = true; return; }
                 double factor = Math.Pow(1.25, e.Delta / 120.0);
                 ZoomTo(CurrentZoom() * factor, scroll, e.GetPosition(scroll)); e.Handled = true;
             };

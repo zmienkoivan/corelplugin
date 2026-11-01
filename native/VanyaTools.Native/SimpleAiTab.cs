@@ -138,31 +138,41 @@ namespace VanyaTools.Native
                 BuildRasterOutputTools();
             }
             var correctionTools = DockerLayout.ToolGroup("Коррекция");
-            if (!styleOnly) correctionTools.Children.Add(ThinElementWindow.Launcher(this, _status));
+            _thinAuditButton = Button("Тонкие элементы · ДТФ / УФ…", async (_, __) => await OpenCorrection(true));
+            _thinAuditButton.ToolTip = "Открыть «Коррекция и обводка» с подсветкой тонких элементов. Без выделения — вставить векторную линейку ДТФ.";
+            if (!styleOnly) correctionTools.Children.Add(_thinAuditButton);
             _correctionButton = DockerTheme.Primary(Button("Коррекция и обводка…", async (_, __) => await OpenCorrection()));
             _correctionButton.ToolTip = "Открыть выделение один раз и подбирать прозрачность, сглаживание и обводку с живым предпросмотром. Работает без интернета.";
             if (!styleOnly) panel.Children.Add(correctionTools);
             _alphaButton = Button("Убрать полупрозрачность", async (_, __) => await RemoveSemiTransparent());
             _alphaThreshold = new TextBox { Text = "130", Width = 50, MinHeight = 27, FontSize = 11,
                 VerticalContentAlignment = VerticalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-            var alphaRow = DockerLayout.Trailing(_alphaButton,
-                DockerLayout.FieldRow("Порог", _alphaThreshold, 50));
-            alphaRow.Margin = new Thickness(0, 0, 0, 2);
-            if (!styleOnly) correctionTools.Children.Add(alphaRow);
+            _alphaButton.Content = "Убрать полупрозр."; _alphaButton.FontSize = 10;
+            _alphaThreshold.Width = 44; _alphaThreshold.ToolTip = "Порог непрозрачности: 0–255";
+            System.Windows.Automation.AutomationProperties.SetName(_alphaThreshold, "Порог непрозрачности");
 
             _highlightButton = Button(styleOnly ? "Подсветить полупрозрачные" : "Подсветить", async (_, __) => await HighlightSemiTransparent());
             _highlightButton.ToolTip = "Создаёт рядом с оригиналом копию с яркой отметкой пикселей, у которых прозрачность между 0 и 100%.";
-            _highlightColor = new ComboBox { Width = 88, MinHeight = 27, FontSize = 11,
+            _highlightColor = new ComboBox { Width = 44, MinHeight = 27, FontSize = 11,
                 Margin = new Thickness(3, 1, 0, 1), VerticalAlignment = VerticalAlignment.Center };
-            _highlightColor.Items.Add("Зелёный");
-            _highlightColor.Items.Add("Красный");
+            _highlightColor.Items.Add(new ComboBoxItem { Content = new Border { Width = 12, Height = 12, Background = Brushes.LimeGreen }, ToolTip = "Зелёный" });
+            _highlightColor.Items.Add(new ComboBoxItem { Content = new Border { Width = 12, Height = 12, Background = Brushes.Red }, ToolTip = "Красный" });
             _highlightColor.SelectedIndex = 0;
-            var highlightRow = DockerLayout.Trailing(_highlightButton, _highlightColor);
-            highlightRow.Margin = new Thickness(0, 0, 0, 2);
-            if (!styleOnly) correctionTools.Children.Add(highlightRow);
+            _highlightColor.ToolTip = "Цвет подсветки полупрозрачных пикселей";
+            System.Windows.Automation.AutomationProperties.SetName(_highlightColor, "Цвет подсветки полупрозрачных");
+            _highlightButton.FontSize = 10;
+            var alphaRow = new Grid { Margin = new Thickness(0, 0, 0, 2) };
+            alphaRow.ColumnDefinitions.Add(new ColumnDefinition());
+            alphaRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            alphaRow.ColumnDefinitions.Add(new ColumnDefinition());
+            alphaRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            alphaRow.Children.Add(_alphaButton); Grid.SetColumn(_alphaThreshold, 1); alphaRow.Children.Add(_alphaThreshold);
+            Grid.SetColumn(_highlightButton, 2); alphaRow.Children.Add(_highlightButton);
+            Grid.SetColumn(_highlightColor, 3); alphaRow.Children.Add(_highlightColor);
+            if (!styleOnly) correctionTools.Children.Add(alphaRow);
 
             _stairButton = Button("Сгладить лесенку", async (_, __) => await SmoothStairs());
-            _stairButton.ToolTip = "Создаёт в 2–4 раза более плотную сетку пикселей и сглаживает край и цветовые границы рисунка. Прозрачность результата остаётся 0 или 100%.";
+            _stairButton.ToolTip = "Сглаживает край на сетке ×2–4, когда позволяет размер. Для крупного исходника ограничение 32 Мп может оставить ×1 — эффект слабее. Проверяйте край в масштабе 1:1. Быстрая команда оставляет alpha 0/100%.";
             if (!styleOnly) correctionTools.Children.Add(_stairButton);
 
             var edgeRow = DockerLayout.ToolGroup("Обводка", "Единицы мм/px относятся к сглаживанию и наружной обводке. " +
@@ -184,14 +194,17 @@ namespace VanyaTools.Native
                 MinHeight = 27, VerticalContentAlignment = VerticalAlignment.Center };
             _edgeExpansion = new TextBox { Text = DtfOutlineUnits.Format(_outlineSettings.ThinMm), FontSize = 11,
                 MinHeight = 27, VerticalContentAlignment = VerticalAlignment.Center };
-            var outlineFields = new UniformGrid { Columns = 2, Margin = new Thickness(1, 1, 1, 4) };
-            var radiusField = DockerLayout.LabeledField("Сглаживание", _edgeRadius);
+            var outlineFields = new Grid { Margin = new Thickness(1, 1, 1, 4) };
+            outlineFields.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(58) });
+            outlineFields.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(64) });
+            outlineFields.ColumnDefinitions.Add(new ColumnDefinition());
+            var radiusField = DockerLayout.LabeledField("Сглаж.", _edgeRadius);
+            radiusField.ToolTip = "Радиус сглаживания края в выбранных единицах";
             radiusField.Margin = new Thickness(0, 0, 5, 0);
             var expansionField = DockerLayout.LabeledField("Обводка +", _edgeExpansion);
-            expansionField.Margin = new Thickness(5, 0, 0, 0);
-            outlineFields.Children.Add(radiusField); outlineFields.Children.Add(expansionField);
-            edgeRow.Children.Add(outlineFields);
-            _underlayHex = new TextBox { Text = "#FFFFFF", Width = 72, FontSize = 11,
+            expansionField.Margin = new Thickness(0, 0, 5, 0);
+            outlineFields.Children.Add(radiusField); Grid.SetColumn(expansionField, 1); outlineFields.Children.Add(expansionField);
+            _underlayHex = new TextBox { Text = "#FFFFFF", MinWidth = 60, FontSize = 10,
                 Margin = new Thickness(3, 0, 2, 0), VerticalContentAlignment = VerticalAlignment.Center };
             _underlaySwatch = new Border { Width = 18, Height = 18, Background = Brushes.White,
                 BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1) };
@@ -200,18 +213,16 @@ namespace VanyaTools.Native
                 ToolTip = "Выбрать цвет обводки в палитре" };
             System.Windows.Automation.AutomationProperties.SetName(_underlayColorButton, "Выбрать цвет обводки");
             _underlayColorButton.Click += (_, __) => ChooseUnderlayColor();
-            _pipetteButton = Button("Пипетка", async (_, __) => await BeginColorPick());
+            _pipetteButton = Button("⌖", async (_, __) => await BeginColorPick());
+            _pipetteButton.Width = 28; _pipetteButton.Padding = new Thickness(0); _pipetteButton.FontSize = 17;
             _pipetteButton.ToolTip = "Взять цвет обводки с экрана. Esc — отмена.";
-            var colorFields = new StackPanel { Orientation = Orientation.Horizontal };
-            colorFields.Children.Add(new TextBlock { Text = "Цвет", FontSize = 10,
-                VerticalAlignment = VerticalAlignment.Center });
-            colorFields.Children.Add(_underlayHex); colorFields.Children.Add(_underlayColorButton);
-            var outlineColorRow = new Grid();
-            outlineColorRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            outlineColorRow.ColumnDefinitions.Add(new ColumnDefinition());
-            outlineColorRow.Children.Add(colorFields);
-            Grid.SetColumn(_pipetteButton, 1); outlineColorRow.Children.Add(_pipetteButton);
-            edgeRow.Children.Add(outlineColorRow);
+            System.Windows.Automation.AutomationProperties.SetName(_pipetteButton, "Пипетка цвета обводки");
+            var colorFields = new Grid(); colorFields.ColumnDefinitions.Add(new ColumnDefinition());
+            colorFields.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); colorFields.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            colorFields.Children.Add(_underlayHex); Grid.SetColumn(_underlayColorButton, 1); colorFields.Children.Add(_underlayColorButton);
+            Grid.SetColumn(_pipetteButton, 2); colorFields.Children.Add(_pipetteButton);
+            var colorField = DockerLayout.LabeledField("Цвет", colorFields); Grid.SetColumn(colorField, 2); outlineFields.Children.Add(colorField);
+            edgeRow.Children.Add(outlineFields);
             _underlayHex.TextChanged += (_, __) => UpdateUnderlaySwatch();
             if (!styleOnly) panel.Children.Add(edgeRow);
             _edgeUnits = Note("");
@@ -903,7 +914,8 @@ namespace VanyaTools.Native
                 InsertReady();
                 string warning = _importWarning;
                 Report(String.IsNullOrEmpty(warning)
-                    ? "Готово: рисунок сглажен, пиксельная сетка ×" + scale + "."
+                    ? (scale > 1 ? "Готово: рисунок сглажен, пиксельная сетка ×" + scale + ". Сравнивайте край в масштабе 1:1."
+                        : "Обработка завершена на сетке ×1: крупный исходник не увеличен из-за лимита размера. Сглаживание может быть почти незаметно. Для сравнения откройте «Коррекция и обводка» → 1:1.")
                     : warning, !String.IsNullOrEmpty(warning));
                 _importWarning = null;
             }
@@ -958,8 +970,8 @@ namespace VanyaTools.Native
                 int original = preserveAlpha ? pixels[p * 4 + 3] :
                     pixels[p * 4 + 3] >= threshold && pixels[p * 4 + 3] > 0 ? 255 : 0;
                 work[p] = (byte)original;
-                mask[p] = (byte)((mask[p] * 65 + original * 35 + 50) / 100);
             }
+            StairCoverage.Blend(mask, work, width, height, !preserveAlpha && scale > 1, cancellation);
             byte[] resultPixels = new byte[checked(outWidth * outHeight * 4)];
             double scaleX = (double)outWidth / width, scaleY = (double)outHeight / height;
             for (int y = 0; y < outHeight; y++)
@@ -983,7 +995,7 @@ namespace VanyaTools.Native
                         mask[p01] * w01 + mask[p11] * w11;
                     int destination = (y * outWidth + x) * 4;
                     byte alpha = preserveAlpha ? (byte)Math.Max(0, Math.Min(255, Math.Round(coverage))) :
-                        coverage >= 128 ? (byte)255 : (byte)0;
+                        coverage >= 127.5 ? (byte)255 : (byte)0;
                     if (alpha == 0) continue;
                     // Sample color from the kept artwork, not from translucent
                     // fringe pixels that may contain a matte or white halo.
@@ -995,7 +1007,7 @@ namespace VanyaTools.Native
                     // Gaussian coverage may extend just outside the four color
                     // samples. Take fringe color from visible artwork, never
                     // from hidden RGB of a fully transparent pixel.
-                    int fallback = total == 0 && preserveAlpha ? NearestVisiblePixel(pixels, width, height, x0, y0) : p00;
+                    int fallback = total == 0 && alpha > 0 ? NearestVisiblePixel(pixels, width, height, x0, y0) : p00;
                     if (fallback < 0) continue;
                     for (int channel = 0; channel < 3; channel++)
                     {
@@ -1711,6 +1723,7 @@ namespace VanyaTools.Native
             _busy = busy;
             if (_rasterInsertionMode != null) _rasterInsertionMode.IsEnabled = !busy;
             _correctionButton.IsEnabled = !busy;
+            _thinAuditButton.IsEnabled = !busy;
             _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
                 _highlightButton.IsEnabled = _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled = _underlayColorButton.IsEnabled =
                 _editButton.IsEnabled = _localApplyButton.IsEnabled = _localPreviewButton.IsEnabled = !busy;

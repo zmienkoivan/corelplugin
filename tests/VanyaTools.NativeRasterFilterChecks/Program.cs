@@ -158,6 +158,23 @@ internal static class Program
         Check(binary.Alpha.All(value => value == 0 || value == 255), "Optional alpha threshold retains binary semantics through stair smoothing");
         var budget = Run(rgbWhite, new NativeRasterFilterOptions { SmoothStairs = true, StairsScale = 4, MaximumOutputPixels = 9 });
         Check(budget.Width == 3 && budget.Height == 3, "Output budget prevents an unnecessary supersampling allocation");
+        var diagonal = Uniform(32,32,4,0,255,255,255);
+        for (int y=0;y<32;y++) for (int x=0;x<32;x++) if (x<=y) diagonal.Alpha[y*32+x]=255;
+        var one = Run(diagonal,new NativeRasterFilterOptions { SmoothStairs=true, RemoveSemiTransparent=true, StairsScale=1 });
+        var two = Run(diagonal,new NativeRasterFilterOptions { SmoothStairs=true, RemoveSemiTransparent=true, StairsScale=2 });
+        int sameGridChanges=one.Alpha.Where((a,i)=>a!=diagonal.Alpha[i]).Count();
+        int refinedChanges=two.Alpha.Where((a,i)=>a!=diagonal.Alpha[(i/two.Width/2)*32+(i%two.Width/2)]).Count();
+        var four = Run(diagonal,new NativeRasterFilterOptions { SmoothStairs=true, RemoveSemiTransparent=true, StairsScale=4 });
+        int fourChanges=four.Alpha.Where((a,i)=>a!=diagonal.Alpha[(i/four.Width/4)*32+(i%four.Width/4)]).Count();
+        Check(four.Width==128 && four.Height==128 && fourChanges>0,"Supersampling did not refine a known jagged diagonal");
+        Check(two.DpiX==diagonal.DpiX*2 && two.DpiY==diagonal.DpiY*2 && two.Alpha.All(a=>a==0||a==255),"Refined binary edge changed size or alpha contract");
+        var dot = Uniform(11,11,4,0,255,255,255); dot.Alpha[60]=255;
+        Check(Run(dot,new NativeRasterFilterOptions { SmoothStairs=true, RemoveSemiTransparent=true, StairsScale=4 }).Alpha.Any(a=>a==255),"Binary smoothing erased an isolated 1px dot");
+        var hole = Uniform(11,11,4,255,255,255,255); hole.Alpha[60]=0;
+        for(int c=0;c<3;c++) hole.Colors[60*3+c]=0;
+        var repaired = Run(hole,new NativeRasterFilterOptions { SmoothStairs=true, RemoveSemiTransparent=true, StairsScale=4 });
+        Check(Enumerable.Range(0,repaired.Alpha.Length).Where(i=>repaired.Alpha[i]!=0).All(i=>Pixel(repaired,i%repaired.Width,i/repaired.Width,255,255,255)),"Smoothed binary edge used hidden black matte");
+        Console.WriteLine("Stair diagnostic: 32x32 binary diagonal; scale1 changed="+sameGridChanges+"; scale2 differs from duplication at "+refinedChanges+"; scale4 at "+fourChanges+" pixels.");
     }
 
     private static void OutlineAndCrop()

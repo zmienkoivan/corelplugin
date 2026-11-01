@@ -45,6 +45,8 @@ internal static class Program
             Check(smallDot.SmallDots == 1 && Kind(smallDot) == 1, "Compact dot under 1 mm missed");
             var uvDot = Run(Image(100,100,(x,y) => (x-50)*(x-50)+(y-50)*(y-50) <= 16), options: uv);
             Check(uvDot.SmallDots == 0, "UV dot still uses DTF threshold");
+            var partialDot = Run(Image(100,100,(x,y) => x < 4 && y >= 48 && y <= 51), options: new ThinAuditOptions { IgnoreBoundaryDots = true });
+            Check(partialDot.SmallDots == 0, "Cut component at fragment boundary was reported as an isolated dot");
             Check(Run(Image(100,100,(x,y) => true, 100)).Foreground == 0, "Alpha cutoff ignored");
             Check(Run(new byte[100 * 100 * 4]).Red == 0, "Empty image reported warnings");
             var opaque = Enumerable.Repeat((byte)255, 100 * 100 * 4).ToArray();

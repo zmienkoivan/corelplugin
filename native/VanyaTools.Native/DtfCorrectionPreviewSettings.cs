@@ -87,6 +87,7 @@ namespace VanyaTools.Native
             _radius.IsEnabled = _expansion.IsEnabled = _hex.IsEnabled = _swatch.IsEnabled = outline;
             _nearWhiteTolerance.IsEnabled = available;
             _nearWhiteSwatch.IsEnabled = available && _highlightWhite.IsChecked == true;
+            UpdateThinAvailability();
         }
 
         private void ChangePreviewBackground()

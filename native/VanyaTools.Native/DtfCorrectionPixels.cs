@@ -42,6 +42,24 @@ namespace VanyaTools.Native
             => !semi && !white ? this : new DtfCorrectionPixels(Width, Height, DpiX, DpiY,
                 DtfRasterOperations.Audit(_pixels, semi, red, white, tolerance, markerR, markerG, markerB, cancellation));
 
+        internal ThinAuditResult AnalyzeThickness(ThinAuditOptions options, CancellationToken cancellation) =>
+            ThinElementAudit.Analyze(_pixels, Width, Height, Width * 25.4 / DpiX, Height * 25.4 / DpiY, options, cancellation);
+
+        internal DtfCorrectionPixels OverlayDiagnostic(byte[] overlay, CancellationToken cancellation)
+        {
+            if (overlay == null) return this;
+            if (overlay.Length != _pixels.Length) throw new ArgumentException("Размер маски не совпадает с предпросмотром.");
+            var pixels = (byte[])_pixels.Clone();
+            for (int p = 0; p < pixels.Length; p += 4)
+            {
+                if ((p & 65535) == 0) cancellation.ThrowIfCancellationRequested();
+                int alpha = overlay[p + 3]; if (alpha == 0) continue;
+                for (int channel = 0; channel < 3; channel++) pixels[p + channel] = (byte)((pixels[p + channel] * (255 - alpha) + overlay[p + channel] * alpha + 127) / 255);
+            }
+            // Diagnostic colour never changes the captured transparency.
+            return new DtfCorrectionPixels(Width, Height, DpiX, DpiY, pixels);
+        }
+
         internal void WritePng(Stream stream, CancellationToken cancellation)
             => FastRasterPng.Write(stream, _pixels, Width, Height, DpiX, DpiY, cancellation);
 

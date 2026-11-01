@@ -77,8 +77,15 @@ internal static class Program
         var result=Task.Run(()=>snapshot.Correct(true,130,true,6,CancellationToken.None).Audit(true,false,true,6,255,0,168,CancellationToken.None)).GetAwaiter().GetResult();
         Check(result.Bitmap().PixelWidth==w,"Managed preview crosses worker/UI threads");
         Check(snapshot.Crop(new Int32Rect(5,6,11,12),CancellationToken.None).Bitmap().PixelHeight==12,"Exact fragment bounds");
+        var overlay = new byte[pixels.Length]; for (int p=0;p<overlay.Length;p+=4) { overlay[p+1]=200;overlay[p+2]=255;overlay[p+3]=150; }
+        var diagnostic=Data(snapshot.OverlayDiagnostic(overlay,CancellationToken.None).Bitmap());
+        Check(Enumerable.Range(0,w*h).All(p=>diagnostic[p*4+3]==pixels[p*4+3]),"Diagnostic overlay preserves transparency");
+        Check(Data(snapshot.Bitmap()).SequenceEqual(original),"Diagnostic overlay does not alter clean apply input");
+        Check(!diagnostic.SequenceEqual(pixels),"Diagnostic overlay visibly marks the preview");
         using(var cancel=new CancellationTokenSource()) { cancel.Cancel(); Reject(()=>DtfRasterOperations.Correct(pixels,true,130,true,6,cancel.Token)); }
     }
+    private static byte[] Data(BitmapSource image)
+    { var pixels=new byte[image.PixelWidth*image.PixelHeight*4]; image.CopyPixels(pixels,image.PixelWidth*4,0); return pixels; }
     private static void Benchmark()
     {
         string root=Path.Combine(Path.GetTempPath(),"Vanya-RasterSpeed-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);

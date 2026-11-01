@@ -43,6 +43,7 @@ namespace VanyaTools.Native
         internal object Document, NativePage, TargetLayer;
         internal List<object> NativeShapes;
         internal int ThreadId;
+        internal bool IncludeOutlineBounds = false;
     }
 
     internal sealed class RasterInsertionPlacement
@@ -84,7 +85,7 @@ namespace VanyaTools.Native
             internal readonly List<object> Shapes = new List<object>();
         }
 
-        internal static RasterInsertionSource CaptureSelection()
+        internal static RasterInsertionSource CaptureSelection(bool includeOutline = false)
         {
             RequireSta();
             dynamic app = CorelApp.Get(), doc = app.ActiveDocument;
@@ -102,6 +103,11 @@ namespace VanyaTools.Native
                 doc.Unit = CorelConstants.CdrMillimeter;
                 source.LeftMm = Convert.ToDouble(selected.LeftX); source.TopMm = Convert.ToDouble(selected.TopY);
                 source.WidthMm = Convert.ToDouble(selected.SizeWidth); source.HeightMm = Convert.ToDouble(selected.SizeHeight);
+                if (includeOutline)
+                {
+                    double left, bottom, width, height; selected.GetBoundingBox(out left, out bottom, out width, out height, true);
+                    source.LeftMm = left; source.TopMm = bottom + height; source.WidthMm = width; source.HeightMm = height;
+                }
                 foreach (dynamic shape in selected.Shapes)
                 { source.NativeShapes.Add((object)shape); source.Shapes.Add(ReadShape((object)shape)); }
                 RequireBounds(source.LeftMm, source.TopMm, source.WidthMm, source.HeightMm);

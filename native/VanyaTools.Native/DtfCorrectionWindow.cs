@@ -61,7 +61,8 @@ namespace VanyaTools.Native
 
         internal DtfCorrectionWindow(string sourcePath, DtfCorrectionOptions initial,
             DtfOutlineSettings presets,
-            Func<string, string, DtfCorrectionOptions, CancellationToken, DtfCorrectionResult> processor)
+            Func<string, string, DtfCorrectionOptions, CancellationToken, DtfCorrectionResult> processor,
+            bool startThinAudit = false, Action<byte[], int, int> insertThinMask = null)
         {
             _sourcePath = sourcePath ?? throw new ArgumentNullException(nameof(sourcePath));
             _processor = processor ?? throw new ArgumentNullException(nameof(processor));
@@ -138,6 +139,7 @@ namespace VanyaTools.Native
                 catch (Exception error) { ShowMessage(error.GetBaseException().Message, true); }
             };
 
+            CreateThinAuditControls(controls, startThinAudit, insertThinMask);
             controls.Children.Add(new Separator { Margin = new Thickness(0, 9, 0, 8) });
             _remove = Check("Убрать полупрозрачность", Options.RemoveSemiTransparent);
             controls.Children.Add(_remove);
@@ -215,7 +217,7 @@ namespace VanyaTools.Native
             ConfigurePreviewNavigation(_beforeScroll, _before);
             ConfigurePreviewNavigation(_afterScroll, _after);
             Grid.SetRow(pair, 1); previews.Children.Add(pair);
-            var hint = Text("Колесо — масштаб; средняя/правая кнопка или пробел + перетаскивание — перемещение. Клик на обзор — точный фрагмент края.", 11);
+            var hint = Text("Колесо — зум под курсором; Shift + колесо — горизонтальная прокрутка; средняя/правая кнопка или пробел + перетаскивание — перемещение. Клик на обзор — точный фрагмент.", 11);
             Grid.SetRow(hint, 2); previews.Children.Add(hint);
             _before.MouseLeftButtonDown += (_, e) =>
             {
@@ -268,7 +270,7 @@ namespace VanyaTools.Native
             Closed += (_, __) =>
             {
                 _closed = true; _delay.Stop(); _previewCancellation?.Cancel(); _applyCancellation?.Cancel();
-                _qualityCancellation?.Cancel(); _sourceCancellation?.Cancel(); Cleanup();
+                _qualityCancellation?.Cancel(); _sourceCancellation?.Cancel(); _thinMaskCancellation?.Cancel(); Cleanup();
             };
             SetControlsEnabled(false);
         }
@@ -367,6 +369,8 @@ namespace VanyaTools.Native
                 _metrics.Text = "Сглаживание " + rx + (rx == ry ? "" : "×" + ry) + " px · обводка +" + ex +
                     (ex == ey ? "" : "×" + ey) + " px\n" + DtfOutlineUnits.Format(_originalPixels.DpiX) + " DPI · " +
                     _originalPixels.Width + " × " + _originalPixels.Height + " px";
+                if (options.SmoothStairs) _metrics.Text += "\nЛесенка: сетка ×" + options.StairsScale +
+                    (options.StairsScale == 1 ? " · без увеличения из-за размера исходника; эффект может быть слабым" : " · оцените край в 1:1");
             }
             catch (Exception error)
             { if (options.Outline) { ShowMessage(error.Message, true); return false; } }
@@ -375,22 +379,25 @@ namespace VanyaTools.Native
 
         private void QueuePreview()
         {
-            if (_syncing || !_loaded || _closed || _applying) return;
+            if (_syncing || !_loaded || _closed || _applying || _insertingThinMask) return;
             UpdateCorrectionControlAvailability();
             _apply.IsEnabled = false; _after.Opacity = 0.45;
             _revision++; _previewCancellation?.Cancel(); _delay.Stop();
+            _delay.Interval = TimeSpan.FromMilliseconds(_thinEnabled.IsChecked == true ? 300 : 160);
             if (!_qualityChanging && OverviewReadyForSelection()) _delay.Start();
         }
 
         private async Task PreviewAsync()
         {
-            if (_closed || !_loaded || _applying || _qualityChanging || !OverviewReadyForSelection()) return;
+            if (_closed || !_loaded || _applying || _insertingThinMask || _qualityChanging || !OverviewReadyForSelection()) return;
             if (_rendering) { _retryPreview = true; return; }
             if (!ReadOptions(out DtfCorrectionOptions options)) return;
             int revision = _revision, view = _view.SelectedIndex;
             double cropX = _cropX, cropY = _cropY;
             bool highlight = _highlight.IsChecked == true, red = _marker.SelectedIndex == 1;
             bool highlightWhite = _highlightWhite.IsChecked == true;
+            ThinAuditOptions thin = _thinEnabled.IsChecked == true ? ThinOptions(view != 0) : null;
+            string thinNote = "";
             byte whiteRed = _nearWhiteMarker.R, whiteGreen = _nearWhiteMarker.G, whiteBlue = _nearWhiteMarker.B;
             // Capture only managed data on the UI thread. A BitmapFrame can
             // retain a decoder graph even when its top-level object is frozen.
@@ -415,9 +422,12 @@ namespace VanyaTools.Native
                         var before = view == 0 ? overviewPixels : DtfCorrectionPixels.Capture(original).Crop(focus, cancellation);
                         var after = before.Correct(options.RemoveSemiTransparent, options.Threshold,
                             options.WhitenNearWhite, options.NearWhiteTolerance, cancellation);
+                        var beforeThin = AnalyzeThinPreview(before, thin, view != 0, cancellation, out string beforeNote);
+                        var afterThin = AnalyzeThinPreview(after, thin, view != 0, cancellation, out string afterNote);
+                        thinNote = beforeNote == afterNote ? afterNote : "Исходник: " + beforeNote + " Результат: " + afterNote;
                         return Tuple.Create(
-                            before.Audit(highlight, red, highlightWhite, options.NearWhiteTolerance, whiteRed, whiteGreen, whiteBlue, cancellation),
-                            after.Audit(highlight, red, highlightWhite, options.NearWhiteTolerance, whiteRed, whiteGreen, whiteBlue, cancellation));
+                            before.Audit(highlight, red, highlightWhite, options.NearWhiteTolerance, whiteRed, whiteGreen, whiteBlue, cancellation).OverlayDiagnostic(beforeThin?.Overlay, cancellation),
+                            after.Audit(highlight, red, highlightWhite, options.NearWhiteTolerance, whiteRed, whiteGreen, whiteBlue, cancellation).OverlayDiagnostic(afterThin?.Overlay, cancellation));
                     }
                     input = view == 0 ? overviewPath : Path.Combine(workspace, "fragment-" + Guid.NewGuid().ToString("N") + ".png");
                     if (view != 0) Save(original, input);
@@ -426,6 +436,9 @@ namespace VanyaTools.Native
                     BitmapSource result = Load(output);
                     var aligned = Align(original, result, processed.OffsetMm, focus, cancellation);
                     original = aligned.Item1; result = aligned.Item2;
+                    var originalThin = AnalyzeThinPreview(DtfCorrectionPixels.Capture(original), thin, view != 0, cancellation, out string originalNote);
+                    var resultThin = AnalyzeThinPreview(DtfCorrectionPixels.Capture(result), thin, view != 0, cancellation, out string resultNote);
+                    thinNote = originalNote == resultNote ? resultNote : "Исходник: " + originalNote + " Результат: " + resultNote;
                     if (highlightWhite)
                     {
                         original = HighlightNearWhite(original, options.NearWhiteTolerance, whiteRed, whiteGreen, whiteBlue, cancellation);
@@ -433,7 +446,8 @@ namespace VanyaTools.Native
                     }
                     if (highlight) { original = Highlight(original, red, cancellation); result = Highlight(result, red, cancellation); }
                     cancellation.ThrowIfCancellationRequested();
-                    return Tuple.Create(DtfCorrectionPixels.Capture(original), DtfCorrectionPixels.Capture(result));
+                    return Tuple.Create(DtfCorrectionPixels.Capture(original).OverlayDiagnostic(originalThin?.Overlay, cancellation),
+                        DtfCorrectionPixels.Capture(result).OverlayDiagnostic(resultThin?.Overlay, cancellation));
                 }, cancellation);
                 _previewTask = task;
                 var images = await task.ConfigureAwait(false);
@@ -455,6 +469,7 @@ namespace VanyaTools.Native
                     }), DispatcherPriority.Loaded);
                 }
                 Options = options; _apply.IsEnabled = true;
+                _thinNote.Text = thin == null ? "Красный — ниже минимума; жёлтый — между порогами; зелёный — около безопасного. Пересчёт автоматический." : thinNote;
                 ShowMessage(view == 0 ? "Обзор уменьшен. Кнопка «1:1» открывает точный фрагмент." :
                     "Точный фрагмент исходного растра. Полная обработка — по кнопке «Применить».", false);
                 });
@@ -481,6 +496,7 @@ namespace VanyaTools.Native
 
         private async Task ApplyAsync()
         {
+            if (_insertingThinMask) return;
             if (_applying || !_loaded || _qualityChanging || !OverviewReadyForSelection() ||
                 !ReadOptions(out DtfCorrectionOptions options)) return;
             _applying = true; _delay.Stop(); _previewCancellation?.Cancel(); _apply.IsEnabled = false;

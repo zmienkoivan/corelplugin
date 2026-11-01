@@ -121,6 +121,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.ThinElementChecks/VanyaTools.ThinElementChecks.csproj --configuration Release
 
+      - name: Check correction window preview lifecycle
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.CorrectionWindowChecks/VanyaTools.CorrectionWindowChecks.csproj --configuration Release
+
       - name: Build installer package
         shell: pwsh
         run: .\package-native.ps1

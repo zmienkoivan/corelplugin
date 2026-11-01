@@ -161,8 +161,8 @@ namespace VanyaTools.Native
             {
                 int original = preserveAlpha ? source.Alpha[pixel] : source.Alpha[pixel] > 0 && source.Alpha[pixel] >= threshold ? 255 : 0;
                 originalAlpha[pixel] = (byte)original;
-                mask[pixel] = (byte)((mask[pixel] * 65 + original * 35 + 50) / 100);
             }
+            StairCoverage.Blend(mask, originalAlpha, width, height, !preserveAlpha && scale > 1, cancellation);
             byte[] colors = new byte[checked(outCount * channels)], alpha = new byte[outCount];
             double scaleX = (double)outWidth / width, scaleY = (double)outHeight / height;
             for (int y = 0; y < outHeight; y++)
@@ -180,13 +180,13 @@ namespace VanyaTools.Native
                     double w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy), w01 = (1 - fx) * fy, w11 = fx * fy;
                     double coverage = mask[p00] * w00 + mask[p10] * w10 + mask[p01] * w01 + mask[p11] * w11;
                     int destination = y * outWidth + x;
-                    alpha[destination] = preserveAlpha ? Byte(coverage) : coverage >= 128 ? (byte)255 : (byte)0;
+                    alpha[destination] = preserveAlpha ? Byte(coverage) : coverage >= 127.5 ? (byte)255 : (byte)0;
                     double c00 = preserveAlpha ? originalAlpha[p00] * w00 / 255.0 : originalAlpha[p00] != 0 ? w00 : 0;
                     double c10 = preserveAlpha ? originalAlpha[p10] * w10 / 255.0 : originalAlpha[p10] != 0 ? w10 : 0;
                     double c01 = preserveAlpha ? originalAlpha[p01] * w01 / 255.0 : originalAlpha[p01] != 0 ? w01 : 0;
                     double c11 = preserveAlpha ? originalAlpha[p11] * w11 / 255.0 : originalAlpha[p11] != 0 ? w11 : 0;
                     double total = c00 + c10 + c01 + c11;
-                    int fallback = total == 0 && preserveAlpha && alpha[destination] > 0
+                    int fallback = total == 0 && alpha[destination] > 0
                         ? NearestVisible(source.Alpha, width, height, x0, y0) : p00;
                     if (fallback < 0) { alpha[destination] = 0; fallback = p00; }
                     for (int channel = 0; channel < channels; channel++)

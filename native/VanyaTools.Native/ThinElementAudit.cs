@@ -7,7 +7,8 @@ namespace VanyaTools.Native
     {
         internal double MinimumMm = .6, SafeMm = .8, DotMm = 1;
         internal int Alpha = 128;
-        internal bool IgnoreWhite;
+        internal bool IgnoreWhite, IgnoreBoundaryDots;
+        internal bool ClipX = false, ClipY = false;
         internal static ThinAuditOptions Preset(bool uv) => new ThinAuditOptions {
             MinimumMm = uv ? .4 : .6, SafeMm = uv ? .6 : .8, DotMm = uv ? .8 : 1 };
         internal void Validate()
@@ -50,7 +51,8 @@ namespace VanyaTools.Native
             }
             var result = new ThinAuditResult { Overlay = new byte[count * 4], PixelMm = Math.Max(dx, dy), Foreground = foreground };
             if (foreground == 0) return result;
-            byte[] dots = SmallDots(mask, width, height, dx, dy, options.DotMm, cancel, out int dotCount);
+            int clippedAxes = !options.IgnoreBoundaryDots ? 0 : options.ClipX || options.ClipY ? (options.ClipX ? 1 : 0) | (options.ClipY ? 2 : 0) : 3;
+            byte[] dots = SmallDots(mask, width, height, dx, dy, options.DotMm, clippedAxes, cancel, out int dotCount);
             result.SmallDots = dotCount;
             var inside = new float[count]; var scratch = new float[count];
             Distance(mask, false, width, height, dx, dy, inside, true, cancel);
@@ -87,7 +89,7 @@ namespace VanyaTools.Native
             double limit = radius * radius + 1e-9;
             for (int i = 0; i < mask.Length; i++) if (mask[i] != 0 && scratch[i] <= limit) classes[i] = level;
         }
-        private static byte[] SmallDots(byte[] mask, int w, int h, double dx, double dy, double minimum,
+        private static byte[] SmallDots(byte[] mask, int w, int h, double dx, double dy, double minimum, int clippedAxes,
             CancellationToken cancel, out int count)
         {
             var seen = new byte[mask.Length]; var result = new byte[mask.Length]; var queue = new int[mask.Length]; count = 0;
@@ -112,7 +114,8 @@ namespace VanyaTools.Native
                 }
                 double a = (maxX - minX + 1) * dx, b = (maxY - minY + 1) * dy;
                 // A compact isolated component is a dot; a long narrow line is not.
-                if (Math.Max(a, b) < minimum && Math.Max(a, b) <= 1.6 * Math.Min(a, b))
+                if (!(((clippedAxes & 1) != 0 && (minX == 0 || maxX == w - 1)) || ((clippedAxes & 2) != 0 && (minY == 0 || maxY == h - 1))) &&
+                    Math.Max(a, b) < minimum && Math.Max(a, b) <= 1.6 * Math.Min(a, b))
                 { count++; for (int i = 0; i < tail; i++) result[queue[i]] = 1; }
             }
             return result;

@@ -24,10 +24,7 @@ namespace VanyaTools.Native
                 restoreSelection, refreshWindow);
         }
 
-        internal static string CaptureForThinAudit(int maxPixels) =>
-            CaptureCore(CaptureDpi, 7000, maxPixels, false, true, true, true, true);
-
-        public static string CaptureForCorrection()
+        public static string CaptureForCorrection(bool includeOutline = false)
         {
             using (DockerUiWatchdog.Trace(System.Windows.Threading.Dispatcher.CurrentDispatcher, "Capture correction source"))
             {
@@ -35,7 +32,7 @@ namespace VanyaTools.Native
                 if (native != null) return native;
                 // Large prints should retain 400 DPI when memory permits. The
                 // source is captured once; interactive previews use reduced copies.
-                return CaptureCore(CaptureDpi, ArtworkMaxSide, 70000000, false, true, true, true);
+                return CaptureCore(CaptureDpi, ArtworkMaxSide, 70000000, false, true, true, true, includeOutline);
             }
         }
 

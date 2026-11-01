@@ -48,6 +48,9 @@ namespace VanyaTools.Native
         public double TopY => Items.Max(shape => shape.TopY);
         public double SizeWidth => Items.Max(shape => shape.LeftX + shape.SizeWidth) - LeftX;
         public double SizeHeight => TopY - Items.Min(shape => shape.TopY - shape.SizeHeight);
+        public double OutlinePadding;
+        public void GetBoundingBox(out double left, out double bottom, out double width, out double height, bool includeOutline)
+        { double pad=includeOutline?OutlinePadding:0; left=LeftX-pad; bottom=TopY-SizeHeight-pad; width=SizeWidth+2*pad; height=SizeHeight+2*pad; }
         public void Add(object shape) { Items.Add((FakeShape)shape); }
         public void Delete()
         {
@@ -318,6 +321,15 @@ namespace VanyaTools.Native
             Root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cases"); Directory.CreateDirectory(Root);
             Run("SaveResult offsets and physical size", () => { var f = New("geometry"); f.Save(RasterInsertionMode.ReplaceOriginal); var p = f.Placement(); Eq(p.LeftMm, 95); Eq(p.TopMm, 205); Eq(p.WidthMm, 110); Eq(p.HeightMm, 60); Check(!File.ReadAllText(f.Output + ".insertion.json").Contains("NativeShapes"), "Native refs leaked into JSON"); });
             Run("Preserve source canvas overrides output DPI/size", () => { var f = New("preserve"); Png(f.Output, 800, 400, 300, 150); f.Save(RasterInsertionMode.ReplaceOriginal, true); var p = f.Placement(); Eq(p.WidthMm, 100); Eq(p.HeightMm, 50); });
+            Run("Outline canvas retains raw source identity for replacement", () => {
+                var f=New("outline bounds"); f.App.ActiveSelectionRange.OutlinePadding=1;
+                var captured=RasterResultInsertion.CaptureSelection(true);
+                Eq(captured.LeftMm,99); Eq(captured.TopMm,201); Eq(captured.WidthMm,102); Eq(captured.HeightMm,52); Eq(captured.Shapes[0].WidthMm,40);
+                RasterResultInsertion.SetInputRaster(captured,f.Input);
+                RasterResultInsertion.SaveResult(f.Output,captured,RasterInsertionMode.ReplaceOriginal);
+                RasterResultInsertion.Import(f.Output,"Correction",null,captured);
+                Check(f.A.Deleted && f.B.Deleted && !f.Other.Deleted,"Outline canvas broke source validation");
+            });
             Run("Generated panel uses requested millimetres independent of mockup DPI", () => {
                 var f = New("panel size"); Png(f.Output, 800, 1100, 72, 400);
                 RasterResultInsertion.SaveSizedResult(f.Output, f.Source, 650, 850);

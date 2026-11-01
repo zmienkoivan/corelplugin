@@ -15,7 +15,7 @@ namespace VanyaTools.Native
 {
     internal sealed partial class SimpleAiTab
     {
-        private readonly Button _correctionButton;
+        private readonly Button _correctionButton, _thinAuditButton;
         private object _correctionDocument;
 
         private sealed class CorrectionPlacement
@@ -28,7 +28,7 @@ namespace VanyaTools.Native
             public double OffsetY { get; set; }
         }
 
-        private async Task OpenCorrection()
+        private async Task OpenCorrection(bool thinAudit = false)
         {
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
@@ -43,7 +43,10 @@ namespace VanyaTools.Native
                 if (doc == null) throw new InvalidOperationException("Откройте CDR и выделите принт.");
                 dynamic selection = app.ActiveSelectionRange;
                 if (selection == null || Convert.ToInt32(selection.Count) == 0)
+                {
+                    if (thinAudit) { ThinElementReference.Insert(false, ThinAuditOptions.Preset(false)); Report("Линейка ДТФ вставлена на активную страницу.", false); return; }
                     throw new InvalidOperationException("Выделите принт на холсте.");
+                }
                 var placement = new CorrectionPlacement { DocumentPath = CorrectionDocumentPath(doc),
                     Page = Convert.ToInt32(doc.ActivePage.Index) };
                 int oldUnit = Convert.ToInt32(doc.Unit);
@@ -55,8 +58,11 @@ namespace VanyaTools.Native
                 }
                 finally { doc.Unit = oldUnit; }
                 _correctionDocument = doc;
-                CaptureRasterInsertion();
-                source = AiSelectionCapture.CaptureForCorrection();
+                bool vectorCanvas = true;
+                if (Convert.ToInt32(selection.Count) == 1) foreach (dynamic shape in selection.Shapes) { vectorCanvas = Convert.ToInt32(shape.Type) != CorelConstants.CdrBitmapShape; break; }
+                CaptureRasterInsertion(vectorCanvas);
+                var thinSource = ThinElementMask.CaptureSource(vectorCanvas);
+                source = AiSelectionCapture.CaptureForCorrection(vectorCanvas);
                 SetRasterInsertionInput(source);
                 _sourcePreview.Source = PreviewBitmap(source);
                 _resultPreview.Source = null;
@@ -70,7 +76,8 @@ namespace VanyaTools.Native
                 TryUnderlayColor(out var color);
                 var initial = new DtfCorrectionOptions { RemoveSemiTransparent = false, Threshold = Math.Max(0, Math.Min(255, threshold)),
                     RadiusMm = radius * factor, ExpansionMm = expansion * factor, Color = color };
-                var dialog = new DtfCorrectionWindow(source, initial, _outlineSettings, ProcessCorrection);
+                var dialog = new DtfCorrectionWindow(source, initial, _outlineSettings, ProcessCorrection, thinAudit,
+                    (mask, width, height) => ThinElementMask.Insert(thinSource, mask, width, height));
                 var owner = PresentationSource.FromVisual(this) as HwndSource;
                 if (owner != null) new WindowInteropHelper(dialog).Owner = owner.Handle;
                 _timer.Stop(); _progress.Text = "Подбор коррекции в отдельном окне · без интернета.";
