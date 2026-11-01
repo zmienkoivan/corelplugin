@@ -162,7 +162,6 @@ namespace VanyaTools.Native
             settings.Children.Add(_hotkeys.SettingsView);
             settings.Children.Add(approvalCopy.SettingsView);
             settings.Children.Add(photoshop.SettingsView);
-            settings.Children.Add(WorkTimeUi.Settings(SetStatus));
             settings.Children.Add(DockerSettings.Format(printExportSettings.CreateSettingsView(SetStatus), "Печать PDF, DTF и UV"));
             settings.Children.Add(DockerSettings.Format(filmRipSettings.CreateSettingsView(SetStatus), "Фотовывод · RIP"));
             settings.Children.Add(DockerSettings.Format(outlineSettings.CreateSettingsView(SetStatus), "Пресеты обводки ДТФ"));
@@ -247,6 +246,8 @@ namespace VanyaTools.Native
                             photoTools(SimpleAiMode.LocalStyles) }
                     }
                 }));
+            tabs.Items.Add(ThumbnailTabs.Create("Учёт времени", ThumbnailTabs.WorkTime,
+                Color.FromRgb(83, 123, 131), WorkTimeUi.CreateTab(this, SetStatus)));
             tabs.Items.Add(ThumbnailTabs.Create("Настройки", ThumbnailTabs.Settings,
                 Color.FromRgb(91, 104, 116),
                 new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = settings }));
@@ -295,10 +296,9 @@ namespace VanyaTools.Native
             _trimMode = new ComboBox { ItemsSource = new[] { "Обрезка: прозрачные поля", "Обрезка: цвет угла ↖", "Обрезка: цвет угла ↘" },
                 SelectedIndex = 0, FontSize = 11, MinHeight = 27, Margin = new Thickness(0, 2, 0, 2),
                 ToolTip = "Для однотонного фона выберите цвет угла. Обрезаются внешние поля; фон внутри рисунка удаляется кнопкой «Удалить фон…»." };
-            rasterTools.Children.Add(_trimMode);
             rasterTools.Children.Add(photoshop.ExportButton);
-            rasterTools.Children.Add(WorkTimeUi.HistoryButton(this, SetStatus));
             var trimSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
+            trimSettings.Children.Add(_trimMode);
             rasterTools.Children.Add(new Expander { Header = "Параметры обрезки", Content = trimSettings,
                 FontSize = 11, IsExpanded = false, Margin = new Thickness(1, 2, 0, 0) });
             AddSmallLabel(trimSettings, "Обрезать стороны");

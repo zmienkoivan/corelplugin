@@ -35,6 +35,10 @@ internal static class Program
         Check(UpdateAvailabilityProbe.Normalize(new Version(1, 1)) == new Version(1, 1, 0, 0), "Absent version parts normalize to zero");
         Check(UpdateAvailabilityProbe.ReleaseVersion(Release()) == new Version(1, 1, 96, 0), "Latest stable asset yields version");
         Check(UpdateAvailabilityProbe.ReleaseVersion(Release("V1.2.3.4")) == new Version(1, 2, 3, 4), "Revision and uppercase prefix retained");
+        Check(UpdateAvailabilityProbe.ReleaseVersion(Release("v1.2.0")) == new Version(1, 2, 0, 0), "Minor release normalizes without losing zero patch");
+        var nextSeries = new UpdateAvailabilityProbe(() => Task.FromResult(Release("v1.2.0")));
+        Check((await nextSeries.CheckAsync(new Version(1, 1, 104))).State == UpdateAvailabilityState.Available, "1.2.0 must update 1.1.104");
+        Check((await nextSeries.CheckAsync(new Version(1, 2, 0))).State == UpdateAvailabilityState.Current, "Installed 1.2.0 must be current");
         Reject(Release(draft: "true")); Reject(Release(prerelease: "true")); Reject(Release(state: "new"));
         Reject(Release(size: "0")); Reject(Release(size: "-1")); Reject(Release(tag: "v1.2.3-beta"));
         Reject("{}"); Reject(Release().Replace("VanyaToolsNative.zip", "Other.zip"));

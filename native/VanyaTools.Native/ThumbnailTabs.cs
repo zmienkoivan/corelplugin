@@ -50,5 +50,6 @@ namespace VanyaTools.Native
         public const string Restore = "M4,20 L9,5 L15,5 L20,20 M6,15 L18,15 M20,3 L20,9 M17,6 L23,6";
         public const string Experiment = "M8,2 L16,2 M10,2 L10,10 L4,20 Q3,22 6,22 L18,22 Q21,22 20,20 L14,10 L14,2 M7,16 L17,16 M10,19 L11,19 M14,18 L15,18";
         public const string FilmOutput = "M12,4 A8,8 0 1 0 12,20 A8,8 0 1 0 12,4 M12,7 A5,5 0 1 0 12,17 A5,5 0 1 0 12,7 M1,12 L23,12 M12,1 L12,23 M4,20 L20,4";
+        public const string WorkTime = "M12,4 A9,9 0 1 0 12,22 A9,9 0 1 0 12,4 M12,7 L12,13 L16,15 M9,1 L15,1 M12,1 L12,4";
     }
 }

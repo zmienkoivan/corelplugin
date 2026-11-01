@@ -127,12 +127,13 @@ namespace VanyaTools.Native
                 var backgroundTools = DockerLayout.ToolGroup("Фон и размер",
                     "«Удалить фон» открывает окно подбора цвета, допуска и среза. " +
                     "Настройки меняют предпросмотр; результат вставляется по кнопке «Применить в Corel».");
-                backgroundTools.Children.Add(_removeWhiteButton);
-                var aiRow = new UniformGrid { Columns = 2 };
-                aiRow.Children.Add(_removeButton);
-                aiRow.Children.Add(_upscaleButton);
-                backgroundTools.Children.Add(aiRow);
-                backgroundTools.Children.Add(_backgroundModel);
+                var backgroundGrid = new UniformGrid { Columns = 2, Rows = 2 };
+                backgroundGrid.Children.Add(_removeWhiteButton);
+                backgroundGrid.Children.Add(_upscaleButton);
+                backgroundGrid.Children.Add(_removeButton);
+                _backgroundModel.Margin = new Thickness(1);
+                backgroundGrid.Children.Add(_backgroundModel);
+                backgroundTools.Children.Add(backgroundGrid);
                 panel.Children.Add(backgroundTools);
                 if (printButtons != null) panel.Children.Add(printButtons);
                 BuildRasterOutputTools();
