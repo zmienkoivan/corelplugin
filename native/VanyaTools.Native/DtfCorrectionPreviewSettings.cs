@@ -37,7 +37,7 @@ namespace VanyaTools.Native
             _previewQuality = Combo(new[] { "1100 px", "2200 px", "3600 px" });
             _previewQuality.SelectedIndex = 1; _previewQuality.Width = 95;
             System.Windows.Automation.AutomationProperties.SetName(_previewQuality, "Качество обзора");
-            _previewQuality.ToolTip = "Длинная сторона обзорного изображения. Точный фрагмент всегда берётся из исходника.";
+            _previewQuality.ToolTip = "Длинная сторона быстрого обзора. Видимая область уточняется из исходника автоматически.";
             row.Children.Add(_previewQuality);
             row.Children.Add(new TextBlock { Text = "Фон", FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 5, 0) });
@@ -75,7 +75,7 @@ namespace VanyaTools.Native
         private int SelectedPreviewQuality() => _previewQuality.SelectedIndex == 0 ? 1100 :
             _previewQuality.SelectedIndex == 2 ? 3600 : 2200;
 
-        private bool OverviewReadyForSelection() => _view.SelectedIndex != 0 ||
+        private bool OverviewReadyForSelection() =>
             (_overviewCache.TryGetValue(SelectedPreviewQuality(), out PreviewOverview overview) &&
                 ReferenceEquals(_overviewPixels, overview.Pixels));
 
@@ -129,24 +129,23 @@ namespace VanyaTools.Native
 
         private void UsePreviewOverview(PreviewOverview overview)
         {
-            if (!_zoomFit && _view.SelectedIndex == 0 && _overviewPixels != null)
-                _zoomScale *= (double)_overviewPixels.Width / overview.Pixels.Width;
             _overviewCache[overview.Quality] = overview;
             _overviewPixels = overview.Pixels; _overview = overview.Pixels.Bitmap(); _overviewPath = overview.Path;
         }
 
         private async Task ChangePreviewQualityAsync()
         {
-            if (!_loaded || _closed || _applying) return;
+            if (!_loaded || _closed || _applying || _insertingThinMask) return;
             int quality = SelectedPreviewQuality(), revision = ++_qualityRevision;
             _qualityCancellation?.Cancel();
             var cancellationSource = new CancellationTokenSource(); _qualityCancellation = cancellationSource;
             CancellationToken cancellation = cancellationSource.Token;
             _qualityActive++; _qualityChanging = true; _apply.IsEnabled = false; _after.Opacity = 0.45;
-            _revision++; _previewCancellation?.Cancel(); _delay.Stop();
+            _revision++; _previewCancellation?.Cancel(); CancelDetail(true); _delay.Stop();
             DtfCorrectionPixels source = _originalPixels;
             string workspace = _workspace;
             Task previous = _qualityTask;
+            Task preview = _previewTask, detail = _detailTask;
             string generatedPath = null; bool retained = false;
             try
             {
@@ -158,6 +157,8 @@ namespace VanyaTools.Native
                     {
                         // Never allocate several full source bitmaps in parallel.
                         if (previous != null) try { await previous.ConfigureAwait(false); } catch { }
+                        if (preview != null) try { await preview.ConfigureAwait(false); } catch { }
+                        if (detail != null) try { await detail.ConfigureAwait(false); } catch { }
                         cancellation.ThrowIfCancellationRequested();
                         return BuildPreviewOverview(source.Bitmap(), quality, workspace, cancellation);
                     }, cancellation);
@@ -190,6 +191,8 @@ namespace VanyaTools.Native
                     if (ReferenceEquals(_qualityCancellation, cancellationSource)) _qualityCancellation = null;
                     if (revision == _qualityRevision) _qualityChanging = false;
                     if (_closed) Cleanup();
+                    else if (_qualityActive == 0 && _retryPreview && !_qualityChanging && !_applying && !_insertingThinMask)
+                    { _delay.Stop(); _delay.Start(); }
                 });
             }
         }

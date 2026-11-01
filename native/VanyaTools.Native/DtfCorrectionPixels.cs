@@ -34,6 +34,13 @@ namespace VanyaTools.Native
             bitmap.Freeze(); return bitmap;
         }
 
+        internal bool HasVisiblePixels(CancellationToken cancellation)
+        {
+            for (int p = 3; p < _pixels.Length; p += 4)
+            { if ((p & 65535) == 3) cancellation.ThrowIfCancellationRequested(); if (_pixels[p] != 0) return true; }
+            return false;
+        }
+
         internal DtfCorrectionPixels Correct(bool removeAlpha, int threshold, bool whiten, int tolerance, CancellationToken cancellation)
             => !removeAlpha && !whiten ? this : new DtfCorrectionPixels(Width, Height, DpiX, DpiY,
                 DtfRasterOperations.Correct(_pixels, removeAlpha, threshold, whiten, tolerance, cancellation));

@@ -47,6 +47,10 @@ internal static class Program
             Check(uvDot.SmallDots == 0, "UV dot still uses DTF threshold");
             var partialDot = Run(Image(100,100,(x,y) => x < 4 && y >= 48 && y <= 51), options: new ThinAuditOptions { IgnoreBoundaryDots = true });
             Check(partialDot.SmallDots == 0, "Cut component at fragment boundary was reported as an isolated dot");
+            var edgeDots = Image(100,100,(x,y) => y>=48 && y<=51 && (x<4 || x>=96));
+            Check(Run(edgeDots,options:new ThinAuditOptions { CutEdges=1 }).SmallDots==1,"Synthetic left edge also suppressed true right-edge dot");
+            Check(Run(edgeDots,options:new ThinAuditOptions { CutEdges=2 }).SmallDots==1,"Synthetic right edge also suppressed true left-edge dot");
+            Check(Run(edgeDots,options:new ThinAuditOptions { CutEdges=3 }).SmallDots==0,"Explicit pair of synthetic edges ignored");
             Check(Run(Image(100,100,(x,y) => true, 100)).Foreground == 0, "Alpha cutoff ignored");
             Check(Run(new byte[100 * 100 * 4]).Red == 0, "Empty image reported warnings");
             var opaque = Enumerable.Repeat((byte)255, 100 * 100 * 4).ToArray();

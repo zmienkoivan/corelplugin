@@ -64,12 +64,10 @@ namespace VanyaTools.Native
             var slider = new Slider { Minimum = minimum, Maximum = maximum, Value = initial, TickFrequency = tick, IsSnapToTickEnabled = true };
             Action show = () => value.Text = slider.Value.ToString("0.##"); show(); slider.ValueChanged += (_, __) => show(); panel.Children.Add(slider); return slider;
         }
-        private ThinAuditOptions ThinOptions(bool fragment = false)
+        private ThinAuditOptions ThinOptions()
         {
-            bool clipX = fragment && _originalPixels.Width > 560, clipY = fragment && _originalPixels.Height > 560;
             var options = new ThinAuditOptions { MinimumMm = _thinMinimum.Value, SafeMm = _thinSafe.Value,
-                DotMm = _thinDot.Value, Alpha = (int)_thinAlpha.Value, IgnoreWhite = _thinWhite.IsChecked == true,
-                IgnoreBoundaryDots = clipX || clipY, ClipX = clipX, ClipY = clipY };
+                DotMm = _thinDot.Value, Alpha = (int)_thinAlpha.Value, IgnoreWhite = _thinWhite.IsChecked == true };
             options.Validate(); return options;
         }
         private void UpdateThinAvailability()
@@ -85,33 +83,38 @@ namespace VanyaTools.Native
             note = ""; if (options == null) return null;
             if ((long)pixels.Width * pixels.Height > ThinElementAudit.MaxPixels ||
                 Math.Max(25.4 / pixels.DpiX, 25.4 / pixels.DpiY) > options.MinimumMm / 4)
-            { note = "Для точной подсветки тонких элементов выберите «1:1» или обзор 3600 px. Маска на этом обзоре не показана: не хватает разрешения."; return null; }
+            { note = fragment ? "У исходника не хватает разрешения для точной проверки этой толщины. Используйте векторную линейку для сравнения." :
+                "На обзоре не хватает разрешения для тонких элементов. Увеличьте участок: точная подсветка появится автоматически. «1:1» — масштаб исходника."; return null; }
             var result = pixels.AnalyzeThickness(options, cancellation);
             if (fragment)
             {
                 // Do not flag artificial cut edges of the displayed fragment.
-                int gx = options.ClipX ? (int)Math.Ceiling(Math.Max(options.DotMm, options.SafeMm + .2) * pixels.DpiX / 25.4) : 0;
-                int gy = options.ClipY ? (int)Math.Ceiling(Math.Max(options.DotMm, options.SafeMm + .2) * pixels.DpiY / 25.4) : 0;
+                int edges = options.CutEdges | (options.ClipX ? 3 : 0) | (options.ClipY ? 12 : 0);
+                int gx = (int)Math.Ceiling(Math.Max(options.DotMm, options.SafeMm + .2) * pixels.DpiX / 25.4);
+                int gy = (int)Math.Ceiling(Math.Max(options.DotMm, options.SafeMm + .2) * pixels.DpiY / 25.4);
                 for (int y = 0; y < pixels.Height; y++)
                 {
                     if ((y & 63) == 0) cancellation.ThrowIfCancellationRequested();
-                    for (int x = 0; x < pixels.Width; x++) if (x < gx || y < gy || x >= pixels.Width - gx || y >= pixels.Height - gy)
+                    for (int x = 0; x < pixels.Width; x++) if (((edges & 1) != 0 && x < gx) || ((edges & 2) != 0 && x >= pixels.Width - gx) ||
+                        ((edges & 4) != 0 && y < gy) || ((edges & 8) != 0 && y >= pixels.Height - gy))
                         result.Overlay[(y * pixels.Width + x) * 4 + 3] = 0;
                 }
             }
-            note = "Точки ниже минимума: " + result.SmallDots + ". Оценка ±1–2 пикселя." + (fragment ? " Края фрагмента исключены из подсветки." : "");
+            note = "Точки ниже минимума: " + result.SmallDots + ". Оценка ±1–2 пикселя." +
+                (fragment && (options.CutEdges != 0 || options.ClipX || options.ClipY) ? " Искусственные края участка исключены из подсветки." : "");
             return result;
         }
         private async Task InsertThinMaskAsync()
         {
-            if (!_loaded || _closed || _applying || _insertingThinMask || _insertThinMask == null) return;
+            if (!_loaded || _closed || _applying || _qualityChanging || _qualityActive > 0 || _insertingThinMask || _insertThinMask == null) return;
             _insertingThinMask = true; _settingsPanel.IsEnabled = false; _apply.IsEnabled = false; UpdateThinAvailability();
-            _revision++; _previewCancellation?.Cancel(); _delay.Stop();
+            _revision++; _previewCancellation?.Cancel(); CancelDetail(false); _delay.Stop();
             _thinMaskCancellation = new CancellationTokenSource(); var cancellation = _thinMaskCancellation;
             try
             {
                 var options = ThinOptions(); var pixels = (long)_originalPixels.Width * _originalPixels.Height <= ThinElementAudit.MaxPixels ? _originalPixels : _overviewPixels;
                 if (_previewTask != null) try { await _previewTask; } catch { }
+                if (_detailTask != null) try { await _detailTask; } catch { }
                 cancellation.Token.ThrowIfCancellationRequested();
                 ShowMessage("Считаю маску исходника для холста…", false);
                 var result = await Task.Run(() => pixels.AnalyzeThickness(options, cancellation.Token));
@@ -120,7 +123,7 @@ namespace VanyaTools.Native
             catch (OperationCanceledException) { }
             catch (Exception error) { if (!_closed) ShowMessage(error.GetBaseException().Message, true); }
             finally { cancellation.Dispose(); if (ReferenceEquals(_thinMaskCancellation, cancellation)) _thinMaskCancellation = null;
-                _insertingThinMask = false; if (!_closed) { _settingsPanel.IsEnabled = true; UpdateCorrectionControlAvailability(); QueuePreview(); } }
+                _insertingThinMask = false; if (_closed) Cleanup(); else { _settingsPanel.IsEnabled = true; UpdateCorrectionControlAvailability(); QueuePreview(); } }
         }
     }
 }

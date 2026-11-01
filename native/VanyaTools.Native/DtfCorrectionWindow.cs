@@ -54,8 +54,6 @@ namespace VanyaTools.Native
         private Task _previewTask;
         private bool _syncing, _syncingScroll, _loaded, _closed, _rendering, _applying, _retryPreview;
         private int _revision, _previousUnit;
-        private int _displayView = -1;
-        private double _cropX = 0.5, _cropY = 0.5;
         internal DtfCorrectionResult Result { get; private set; }
         internal DtfCorrectionOptions Options { get; private set; }
 
@@ -206,31 +204,19 @@ namespace VanyaTools.Native
             previews.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             var previewToolbar = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
             previewToolbar.Children.Add(Text("Исходник и результат", 15, true));
-            _view = Combo(new[] { "Весь рисунок", "Точный фрагмент" });
+            _view = Combo(new[] { "Автокачество", "Быстрый обзор" });
             previewToolbar.Children.Add(CreateZoomToolbar());
             previewToolbar.Children.Add(CreatePreviewSettingsToolbar()); previews.Children.Add(previewToolbar);
             var pair = new Grid(); pair.ColumnDefinitions.Add(new ColumnDefinition()); pair.ColumnDefinitions.Add(new ColumnDefinition());
-            pair.Children.Add(Preview("Исходник", out _before, out _beforeScroll));
-            var after = Preview("Результат", out _after, out _afterScroll); Grid.SetColumn(after, 1); pair.Children.Add(after);
+            pair.Children.Add(Preview("Исходник", out _before, out _beforeScroll, out _beforeDetailCanvas, out _beforeDetail));
+            var after = Preview("Результат", out _after, out _afterScroll, out _afterDetailCanvas, out _afterDetail); Grid.SetColumn(after, 1); pair.Children.Add(after);
             _beforeScroll.ScrollChanged += (_, e) => SyncScroll(_beforeScroll, _afterScroll, e);
             _afterScroll.ScrollChanged += (_, e) => SyncScroll(_afterScroll, _beforeScroll, e);
             ConfigurePreviewNavigation(_beforeScroll, _before);
             ConfigurePreviewNavigation(_afterScroll, _after);
             Grid.SetRow(pair, 1); previews.Children.Add(pair);
-            var hint = Text("Колесо — зум под курсором; Shift + колесо — горизонтальная прокрутка; средняя/правая кнопка или пробел + перетаскивание — перемещение. Клик на обзор — точный фрагмент.", 11);
+            var hint = Text("Колесо — зум; Shift + колесо — горизонтальная прокрутка; средняя/правая кнопка или пробел + перетаскивание — перемещение. Видимый участок уточняется автоматически.", 11);
             Grid.SetRow(hint, 2); previews.Children.Add(hint);
-            _before.MouseLeftButtonDown += (_, e) =>
-            {
-                if (!_loaded || _applying || _view.SelectedIndex != 0 || _before.Source == null ||
-                    _panScroll != null || Keyboard.IsKeyDown(Key.Space) || !_zoomFit) return;
-                var point = e.GetPosition(_before);
-                double scale = Math.Min(_before.ActualWidth / _overview.PixelWidth, _before.ActualHeight / _overview.PixelHeight);
-                double width = _overview.PixelWidth * scale, height = _overview.PixelHeight * scale;
-                double x = (point.X - (_before.ActualWidth - width) / 2) / width;
-                double y = (point.Y - (_before.ActualHeight - height) / 2) / height;
-                if (x < 0 || x > 1 || y < 0 || y > 1) return;
-                _cropX = x; _cropY = y; _view.SelectedIndex = 1;
-            };
 
             var footer = new Grid { Margin = new Thickness(0, 10, 0, 0) };
             footer.ColumnDefinitions.Add(new ColumnDefinition());
@@ -263,13 +249,14 @@ namespace VanyaTools.Native
             _hex.TextChanged += (_, __) =>
             { if (TryColor(_hex.Text, out Color color)) _swatch.Background = new SolidColorBrush(color); QueuePreview(); };
             _marker.SelectionChanged += (_, __) => QueuePreview();
-            _view.SelectionChanged += (_, __) => QueuePreview();
+            _view.SelectionChanged += (_, __) => { CancelDetail(true); QueueDetail(); };
             _units.SelectionChanged += (_, __) => SwitchUnits();
             _delay.Tick += async (_, __) => { _delay.Stop(); await PreviewAsync(); };
+            _detailDelay.Tick += async (_, __) => { _detailDelay.Stop(); await DetailAsync(); };
             Loaded += async (_, __) => await LoadAsync();
             Closed += (_, __) =>
             {
-                _closed = true; _delay.Stop(); _previewCancellation?.Cancel(); _applyCancellation?.Cancel();
+                _closed = true; _delay.Stop(); CancelDetail(true); _previewCancellation?.Cancel(); _applyCancellation?.Cancel();
                 _qualityCancellation?.Cancel(); _sourceCancellation?.Cancel(); _thinMaskCancellation?.Cancel(); Cleanup();
             };
             SetControlsEnabled(false);
@@ -382,6 +369,7 @@ namespace VanyaTools.Native
             if (_syncing || !_loaded || _closed || _applying || _insertingThinMask) return;
             UpdateCorrectionControlAvailability();
             _apply.IsEnabled = false; _after.Opacity = 0.45;
+            CancelDetail(true);
             _revision++; _previewCancellation?.Cancel(); _delay.Stop();
             _delay.Interval = TimeSpan.FromMilliseconds(_thinEnabled.IsChecked == true ? 300 : 160);
             if (!_qualityChanging && OverviewReadyForSelection()) _delay.Start();
@@ -390,13 +378,13 @@ namespace VanyaTools.Native
         private async Task PreviewAsync()
         {
             if (_closed || !_loaded || _applying || _insertingThinMask || _qualityChanging || !OverviewReadyForSelection()) return;
-            if (_rendering) { _retryPreview = true; return; }
+            if (_rendering || _detailRendering || _qualityActive > 0) { _retryPreview = true; return; }
             if (!ReadOptions(out DtfCorrectionOptions options)) return;
-            int revision = _revision, view = _view.SelectedIndex;
-            double cropX = _cropX, cropY = _cropY;
+            int revision = _revision;
             bool highlight = _highlight.IsChecked == true, red = _marker.SelectedIndex == 1;
             bool highlightWhite = _highlightWhite.IsChecked == true;
-            ThinAuditOptions thin = _thinEnabled.IsChecked == true ? ThinOptions(view != 0) : null;
+            ThinAuditOptions thin = _thinEnabled.IsChecked == true ? ThinOptions() : null;
+            Rect scene = new Rect(0, 0, _originalPixels.Width, _originalPixels.Height);
             string thinNote = "";
             byte whiteRed = _nearWhiteMarker.R, whiteGreen = _nearWhiteMarker.G, whiteBlue = _nearWhiteMarker.B;
             // Capture only managed data on the UI thread. A BitmapFrame can
@@ -412,32 +400,32 @@ namespace VanyaTools.Native
             {
                 var task = Task.Run(() =>
                 {
-                    Int32Rect focus = new Int32Rect();
-                    BitmapSource original = view == 0 ? overviewPixels.Bitmap() : Fragment(originalPixels, cropX, cropY, options, cancellation, out focus);
-                    if (view == 0) focus = new Int32Rect(0, 0, original.PixelWidth, original.PixelHeight);
+                    BitmapSource original = overviewPixels.Bitmap();
+                    var focus = new Int32Rect(0, 0, original.PixelWidth, original.PixelHeight);
                     if (!options.SmoothStairs && !options.Outline)
                     {
                         // The common audit/threshold/whiten path stays in memory.
                         // Even a tolerance-only change used to encode/decode PNGs.
-                        var before = view == 0 ? overviewPixels : DtfCorrectionPixels.Capture(original).Crop(focus, cancellation);
+                        var before = overviewPixels;
                         var after = before.Correct(options.RemoveSemiTransparent, options.Threshold,
                             options.WhitenNearWhite, options.NearWhiteTolerance, cancellation);
-                        var beforeThin = AnalyzeThinPreview(before, thin, view != 0, cancellation, out string beforeNote);
-                        var afterThin = AnalyzeThinPreview(after, thin, view != 0, cancellation, out string afterNote);
+                        var beforeThin = AnalyzeThinPreview(before, thin, false, cancellation, out string beforeNote);
+                        var afterThin = AnalyzeThinPreview(after, thin, false, cancellation, out string afterNote);
                         thinNote = beforeNote == afterNote ? afterNote : "Исходник: " + beforeNote + " Результат: " + afterNote;
                         return Tuple.Create(
                             before.Audit(highlight, red, highlightWhite, options.NearWhiteTolerance, whiteRed, whiteGreen, whiteBlue, cancellation).OverlayDiagnostic(beforeThin?.Overlay, cancellation),
                             after.Audit(highlight, red, highlightWhite, options.NearWhiteTolerance, whiteRed, whiteGreen, whiteBlue, cancellation).OverlayDiagnostic(afterThin?.Overlay, cancellation));
                     }
-                    input = view == 0 ? overviewPath : Path.Combine(workspace, "fragment-" + Guid.NewGuid().ToString("N") + ".png");
-                    if (view != 0) Save(original, input);
+                    input = overviewPath;
                     cancellation.ThrowIfCancellationRequested();
                     DtfCorrectionResult processed = processor(input, output, options, cancellation);
                     BitmapSource result = Load(output);
-                    var aligned = Align(original, result, processed.OffsetMm, focus, cancellation);
+                    var aligned = Align(original, result, processed.OffsetMm, focus, cancellation, out Int32Rect bounds);
+                    double sx = result.DpiX / originalPixels.DpiX, sy = result.DpiY / originalPixels.DpiY;
+                    scene = new Rect(bounds.X / sx, bounds.Y / sy, bounds.Width / sx, bounds.Height / sy);
                     original = aligned.Item1; result = aligned.Item2;
-                    var originalThin = AnalyzeThinPreview(DtfCorrectionPixels.Capture(original), thin, view != 0, cancellation, out string originalNote);
-                    var resultThin = AnalyzeThinPreview(DtfCorrectionPixels.Capture(result), thin, view != 0, cancellation, out string resultNote);
+                    var originalThin = AnalyzeThinPreview(DtfCorrectionPixels.Capture(original), thin, false, cancellation, out string originalNote);
+                    var resultThin = AnalyzeThinPreview(DtfCorrectionPixels.Capture(result), thin, false, cancellation, out string resultNote);
                     thinNote = originalNote == resultNote ? resultNote : "Исходник: " + originalNote + " Результат: " + resultNote;
                     if (highlightWhite)
                     {
@@ -454,30 +442,20 @@ namespace VanyaTools.Native
                 await OnUiAsync(() =>
                 {
                 if (_closed || revision != _revision || _applying || _qualityChanging || !OverviewReadyForSelection()) return;
-                _before.Source = images.Item1.Bitmap(); _after.Source = images.Item2.Bitmap(); _after.Opacity = 1; SetPreviewScale(view);
-                if (_displayView != view)
-                {
-                    _displayView = view;
-                    _ = Dispatcher.BeginInvoke(new Action(() =>
-                    {
-                        if (_closed || revision != _revision) return;
-                        foreach (var scroll in new[] { _beforeScroll, _afterScroll })
-                        {
-                            scroll.ScrollToHorizontalOffset(view == 0 ? 0 : Math.Max(0, (scroll.ExtentWidth - scroll.ViewportWidth) / 2));
-                            scroll.ScrollToVerticalOffset(view == 0 ? 0 : Math.Max(0, (scroll.ExtentHeight - scroll.ViewportHeight) / 2));
-                        }
-                    }), DispatcherPriority.Loaded);
-                }
+                Point? anchor = PreviewCenter();
+                _previewScene = scene; _baseRevision = revision;
+                _before.Source = images.Item1.Bitmap(); _after.Source = images.Item2.Bitmap(); _after.Opacity = 1;
+                ApplyPreviewZoom(); RestorePreviewCenter(anchor);
                 Options = options; _apply.IsEnabled = true;
                 _thinNote.Text = thin == null ? "Красный — ниже минимума; жёлтый — между порогами; зелёный — около безопасного. Пересчёт автоматический." : thinNote;
-                ShowMessage(view == 0 ? "Обзор уменьшен. Кнопка «1:1» открывает точный фрагмент." :
-                    "Точный фрагмент исходного растра. Полная обработка — по кнопке «Применить».", false);
+                ShowMessage("Обзор готов. При увеличении видимый участок уточняется автоматически.", false);
+                QueueDetail();
                 });
             }
             catch (OperationCanceledException) { }
             catch (Exception error)
             {
-                Log.Error("Correction preview failed; view=" + view + ", revision=" + revision + ".", error);
+                Log.Error("Correction preview failed; revision=" + revision + ".", error);
                 await OnUiAsync(() => { if (!_closed && revision == _revision) ShowMessage("Предпросмотр не обновлён: " + error.GetBaseException().Message, true); });
             }
             finally
@@ -499,7 +477,7 @@ namespace VanyaTools.Native
             if (_insertingThinMask) return;
             if (_applying || !_loaded || _qualityChanging || !OverviewReadyForSelection() ||
                 !ReadOptions(out DtfCorrectionOptions options)) return;
-            _applying = true; _delay.Stop(); _previewCancellation?.Cancel(); _apply.IsEnabled = false;
+            _applying = true; _delay.Stop(); CancelDetail(false); _previewCancellation?.Cancel(); _apply.IsEnabled = false;
             SetControlsEnabled(false); _cancel.Content = "Отменить";
             _applyCancellation = new CancellationTokenSource();
             var cancellationSource = _applyCancellation; CancellationToken cancellation = cancellationSource.Token;
@@ -511,6 +489,7 @@ namespace VanyaTools.Native
             {
                 ShowMessage("Обрабатываю исходник в полном разрешении…", false);
                 if (_previewTask != null) { try { await _previewTask.ConfigureAwait(false); } catch { /* A stale preview must not prevent a fresh full render. */ } }
+                if (_detailTask != null) { try { await _detailTask.ConfigureAwait(false); } catch { } }
                 cancellation.ThrowIfCancellationRequested();
                 var result = await Task.Run(() => processor(sourcePath, output, options, cancellation), cancellation).ConfigureAwait(false);
                 cancellation.ThrowIfCancellationRequested();
@@ -549,16 +528,6 @@ namespace VanyaTools.Native
             if (enabled) UpdateCorrectionControlAvailability();
         }
 
-        private void SetPreviewScale(int view)
-        {
-            if (_zoomView != view)
-            {
-                _zoomView = view; _zoomFit = view == 0;
-                _zoomScale = view <= 1 ? 1 : view == 2 ? 2 : 4;
-            }
-            ApplyPreviewZoom();
-        }
-
         private void SyncScroll(ScrollViewer source, ScrollViewer target, ScrollChangedEventArgs change)
         {
             if (_syncingScroll || (change.HorizontalChange == 0 && change.VerticalChange == 0)) return;
@@ -567,24 +536,8 @@ namespace VanyaTools.Native
             finally { _syncingScroll = false; }
         }
 
-        private static BitmapSource Fragment(DtfCorrectionPixels source, double centerX, double centerY,
-            DtfCorrectionOptions options, CancellationToken cancellation, out Int32Rect focus)
-        {
-            int width = Math.Min(560, source.Width), height = Math.Min(560, source.Height);
-            int x = Math.Max(0, Math.Min(source.Width - width, (int)(source.Width * centerX) - width / 2));
-            int y = Math.Max(0, Math.Min(source.Height - height, (int)(source.Height * centerY) - height / 2));
-            // Process a guard band around the visible fragment. Its cut edges
-            // must not become artificial contours inside the visible preview.
-            int guardX = options.Outline ? (int)Math.Ceiling((options.RadiusMm + options.ExpansionMm) * source.DpiX / 25.4) + 4 : 4;
-            int guardY = options.Outline ? (int)Math.Ceiling((options.RadiusMm + options.ExpansionMm) * source.DpiY / 25.4) + 4 : 4;
-            int left = Math.Max(0, x - guardX), top = Math.Max(0, y - guardY);
-            int right = Math.Min(source.Width, x + width + guardX), bottom = Math.Min(source.Height, y + height + guardY);
-            focus = new Int32Rect(x - left, y - top, width, height);
-            return source.Crop(new Int32Rect(left, top, right - left, bottom - top), cancellation).Bitmap();
-        }
-
         private static Tuple<BitmapSource, BitmapSource> Align(BitmapSource original, BitmapSource result,
-            Tuple<double, double> offsetMm, Int32Rect focus, CancellationToken cancellation)
+            Tuple<double, double> offsetMm, Int32Rect focus, CancellationToken cancellation, out Int32Rect bounds)
         {
             // Crop and outside expansion change the result's origin. Rebuild a
             // common physical canvas so changing a value never shifts the view.
@@ -607,6 +560,7 @@ namespace VanyaTools.Native
             if (focus.X + focus.Width >= originalWidth / sx) right = Math.Max(right, x + result.PixelWidth);
             if (focus.Y + focus.Height >= originalHeight / sy) bottom = Math.Max(bottom, y + result.PixelHeight);
             int width = Math.Max(1, right - left), height = Math.Max(1, bottom - top);
+            bounds = new Int32Rect(left, top, width, height);
             BitmapSource before = Canvas(original, -left, -top, width, height, result.DpiX, result.DpiY, cancellation);
             BitmapSource after = Canvas(result, x - left, y - top, width, height, result.DpiX, result.DpiY, cancellation);
             return Tuple.Create(before, after);
@@ -671,7 +625,7 @@ namespace VanyaTools.Native
         { var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image)); using (var stream = File.Create(path)) encoder.Save(stream); }
         private void Cleanup()
         {
-            if (_loadingSource || _rendering || _applying || _qualityActive > 0) return;
+            if (_loadingSource || _rendering || _detailRendering || _applying || _insertingThinMask || _qualityActive > 0) return;
             try { if (Directory.Exists(_workspace)) Directory.Delete(_workspace, true); } catch { }
         }
         private static void DeleteFile(string path) { if (path != null) try { File.Delete(path); } catch { } }
@@ -726,12 +680,18 @@ namespace VanyaTools.Native
             FontWeight = bold ? FontWeights.SemiBold : FontWeights.Normal, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 5) };
         private static FrameworkElement Labeled(string title, FrameworkElement field)
         { var panel = new StackPanel { Margin = new Thickness(0, 2, 0, 6) }; panel.Children.Add(Text(title, 11)); panel.Children.Add(field); return panel; }
-        private static FrameworkElement Preview(string title, out Image image, out ScrollViewer scroll)
+        private static FrameworkElement Preview(string title, out Image image, out ScrollViewer scroll, out System.Windows.Controls.Canvas detailCanvas, out Image detail)
         {
             var panel = new Grid { Margin = new Thickness(3) }; panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             panel.RowDefinitions.Add(new RowDefinition()); panel.Children.Add(Text(title, 12));
             image = new Image { Stretch = Stretch.Uniform, Cursor = Cursors.Cross };
-            scroll = new ScrollViewer { Content = image, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            detail = new Image { Stretch = Stretch.Fill, IsHitTestVisible = false, SnapsToDevicePixels = true };
+            detailCanvas = new System.Windows.Controls.Canvas { IsHitTestVisible = false, ClipToBounds = true,
+                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
+            detailCanvas.Children.Add(detail);
+            var layers = new Grid { HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
+            layers.Children.Add(image); layers.Children.Add(detailCanvas);
+            scroll = new ScrollViewer { Content = layers, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, Background = Checkerboard() };
             var border = new Border { Child = scroll, BorderThickness = new Thickness(1) };
             DockerTheme.UseTheme(border, Border.BorderBrushProperty, DockerTheme.BorderBrush);
