@@ -20,6 +20,7 @@ namespace VanyaTools.Native
             CorelApp.SetHostApplication(app);
             _uiWatchdog = new DockerUiWatchdog(Dispatcher, "Orders", this);
             Loaded += (_, __) => _uiWatchdog.Start();
+            Loaded += (_, __) => WorkTimeRuntime.Initialize(Dispatcher);
             Unloaded += (_, __) => _uiWatchdog.Stop("unloaded");
             HorizontalContentAlignment = HorizontalAlignment.Stretch;
             VerticalContentAlignment = VerticalAlignment.Stretch;

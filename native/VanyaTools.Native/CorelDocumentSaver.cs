@@ -76,6 +76,7 @@ namespace VanyaTools.Native
 
         internal static void Save(dynamic document)
         {
+            WorkTimeRuntime.BeforeNativeSave((object)document);
             int version = SelectedVersion;
             if (version == 0)
             {
@@ -121,6 +122,7 @@ namespace VanyaTools.Native
 
         private static void SaveAs(dynamic document, string path, bool overwrite, int version)
         {
+            WorkTimeRuntime.BeforeNativeSave((object)document, path);
             object options = CorelApp.Get().CreateStructSaveAsOptions();
             if (version != 0)
                 options.GetType().InvokeMember("Version", BindingFlags.SetProperty,

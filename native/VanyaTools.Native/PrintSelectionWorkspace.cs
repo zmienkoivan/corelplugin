@@ -43,6 +43,7 @@ namespace VanyaTools.Native
                 // including children of the current Focus group, not its parent.
                 CorelClipboardTransfer.Copy(snapshot, "выделение для печати");
                 dynamic output = app.CreateDocument(); workspace._document = (object)output;
+                WorkTimeRuntime.IgnoreTemporaryDocument((object)output);
                 output.Unit = CorelConstants.CdrMillimeter;
                 output.AssignColorContext(((dynamic)source).ColorContext);
                 dynamic targetPage = output.ActivePage, layer = output.ActiveLayer;

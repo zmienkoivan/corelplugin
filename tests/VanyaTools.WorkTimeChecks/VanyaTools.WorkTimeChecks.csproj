@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net48</TargetFramework><OutputType>Exe</OutputType><LangVersion>latest</LangVersion><PlatformTarget>x64</PlatformTarget></PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="Microsoft.CSharp" />
+    <Compile Include="../../native/VanyaTools.Native/WorkTimeModel.cs" Link="WorkTimeModel.cs" />
+    <Compile Include="../../native/VanyaTools.Native/WorkTimeEngine.cs" Link="WorkTimeEngine.cs" />
+    <Compile Include="../../native/VanyaTools.Native/WorkTimeStorage.cs" Link="WorkTimeStorage.cs" />
+    <Compile Include="../../native/VanyaTools.Native/WorkTimeNativeEvents.cs" Link="WorkTimeNativeEvents.cs" />
+    <Compile Include="../../native/VanyaTools.Native/WorkTimeProjectMetadata.cs" Link="WorkTimeProjectMetadata.cs" />
+  </ItemGroup>
+</Project>

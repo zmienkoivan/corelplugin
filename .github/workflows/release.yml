@@ -113,6 +113,14 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.RenderingCompatibilityChecks/VanyaTools.RenderingCompatibilityChecks.csproj --configuration Release
 
+      - name: Check file work-time accounting
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.WorkTimeChecks/VanyaTools.WorkTimeChecks.csproj --configuration Release
+
+      - name: Check DTF and UV thin elements
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.ThinElementChecks/VanyaTools.ThinElementChecks.csproj --configuration Release
+
       - name: Build installer package
         shell: pwsh
         run: .\package-native.ps1

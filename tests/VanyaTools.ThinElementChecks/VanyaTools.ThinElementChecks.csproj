@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup><TargetFramework>net48</TargetFramework><OutputType>Exe</OutputType><LangVersion>latest</LangVersion><PlatformTarget>x64</PlatformTarget><UseWPF>true</UseWPF></PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Microsoft.CSharp" />
+    <Compile Include="../../native/VanyaTools.Native/ThinElementAudit.cs" Link="ThinElementAudit.cs" />
+    <Compile Include="../../native/VanyaTools.Native/ThinElementReference.cs" Link="ThinElementReference.cs" />
+    <Compile Include="../../native/VanyaTools.Native/AiSelectionCapture.cs" Link="AiSelectionCapture.cs" />
+  </ItemGroup>
+</Project>

@@ -2653,7 +2653,10 @@ namespace VanyaTools.Native
                     details["isDelivery"] = _data.IsDelivery;
                 if (_data.ServerOrderId == 0 || urgencyEdited)
                     details["isUrgent"] = requestedUrgency;
-                var result = await OrderServerClient.Publish(server, key, details, photos, _data.ServerOrderId);
+                var result = await WorkTimeRuntime.TrackAsync((object)doc,
+                    includePhotos ? "Публикация карточки" : "Обновление текста карточки",
+                    () => OrderServerClient.Publish(server, key, details, photos, _data.ServerOrderId),
+                    answer => "Результат сервера: " + (answer.TryGetValue("sendState", out var state) ? Convert.ToString(state) : "получен"));
                 if (!SameDocument((object)doc, (object)CorelApp.Get().ActiveDocument))
                     throw new InvalidOperationException("Вернитесь в исходный CDR и загрузите заказ с сервера.");
                 _data.PublishedAtUtc = DateTime.UtcNow.ToString("o");

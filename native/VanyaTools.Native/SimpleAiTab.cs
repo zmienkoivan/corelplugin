@@ -138,6 +138,7 @@ namespace VanyaTools.Native
                 BuildRasterOutputTools();
             }
             var correctionTools = DockerLayout.ToolGroup("Коррекция");
+            if (!styleOnly) correctionTools.Children.Add(ThinElementWindow.Launcher(this, _status));
             _correctionButton = DockerTheme.Primary(Button("Коррекция и обводка…", async (_, __) => await OpenCorrection()));
             _correctionButton.ToolTip = "Открыть выделение один раз и подбирать прозрачность, сглаживание и обводку с живым предпросмотром. Работает без интернета.";
             if (!styleOnly) panel.Children.Add(correctionTools);

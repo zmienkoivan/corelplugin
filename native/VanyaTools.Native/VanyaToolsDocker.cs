@@ -162,6 +162,7 @@ namespace VanyaTools.Native
             settings.Children.Add(_hotkeys.SettingsView);
             settings.Children.Add(approvalCopy.SettingsView);
             settings.Children.Add(photoshop.SettingsView);
+            settings.Children.Add(WorkTimeUi.Settings(SetStatus));
             settings.Children.Add(DockerSettings.Format(printExportSettings.CreateSettingsView(SetStatus), "Печать PDF, DTF и UV"));
             settings.Children.Add(DockerSettings.Format(filmRipSettings.CreateSettingsView(SetStatus), "Фотовывод · RIP"));
             settings.Children.Add(DockerSettings.Format(outlineSettings.CreateSettingsView(SetStatus), "Пресеты обводки ДТФ"));
@@ -169,6 +170,7 @@ namespace VanyaTools.Native
             settings.Children.Add(orderCards.SettingsView);
             Loaded += (_, __) =>
             {
+                WorkTimeRuntime.Initialize(Dispatcher);
                 _hotkeys.Attach(this);
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
@@ -295,6 +297,7 @@ namespace VanyaTools.Native
                 ToolTip = "Для однотонного фона выберите цвет угла. Обрезаются внешние поля; фон внутри рисунка удаляется кнопкой «Удалить фон…»." };
             rasterTools.Children.Add(_trimMode);
             rasterTools.Children.Add(photoshop.ExportButton);
+            rasterTools.Children.Add(WorkTimeUi.HistoryButton(this, SetStatus));
             var trimSettings = new StackPanel { Margin = new Thickness(4, 2, 4, 4) };
             rasterTools.Children.Add(new Expander { Header = "Параметры обрезки", Content = trimSettings,
                 FontSize = 11, IsExpanded = false, Margin = new Thickness(1, 2, 0, 0) });

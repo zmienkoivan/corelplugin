@@ -128,3 +128,7 @@ public sealed class FakePrintApp
     public FakePrintRange CreateShapeRange() {LastCreatedSnapshot=new FakePrintRange(this);return LastCreatedSnapshot;}
     public FakePrintDocument CreateDocument() {Output=new FakePrintDocument(this);return Output;}public object CreateStructPasteOptions()=>new object();
 }
+namespace VanyaTools.Native
+{
+    internal static class WorkTimeRuntime { internal static void IgnoreTemporaryDocument(object document) { } }
+}
