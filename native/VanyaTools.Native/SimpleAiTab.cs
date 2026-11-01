@@ -138,9 +138,6 @@ namespace VanyaTools.Native
                 BuildRasterOutputTools();
             }
             var correctionTools = DockerLayout.ToolGroup("Коррекция");
-            _thinAuditButton = Button("Тонкие элементы · ДТФ / УФ…", async (_, __) => await OpenCorrection(true));
-            _thinAuditButton.ToolTip = "Открыть «Коррекция и обводка» с подсветкой тонких элементов. Без выделения — вставить векторную линейку ДТФ.";
-            if (!styleOnly) correctionTools.Children.Add(_thinAuditButton);
             _correctionButton = DockerTheme.Primary(Button("Коррекция и обводка…", async (_, __) => await OpenCorrection()));
             _correctionButton.ToolTip = "Открыть выделение один раз и подбирать прозрачность, сглаживание и обводку с живым предпросмотром. Работает без интернета.";
             if (!styleOnly) panel.Children.Add(correctionTools);
@@ -1723,7 +1720,6 @@ namespace VanyaTools.Native
             _busy = busy;
             if (_rasterInsertionMode != null) _rasterInsertionMode.IsEnabled = !busy;
             _correctionButton.IsEnabled = !busy;
-            _thinAuditButton.IsEnabled = !busy;
             _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
                 _highlightButton.IsEnabled = _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled = _underlayColorButton.IsEnabled =
                 _editButton.IsEnabled = _localApplyButton.IsEnabled = _localPreviewButton.IsEnabled = !busy;

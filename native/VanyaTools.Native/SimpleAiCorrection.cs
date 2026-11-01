@@ -15,7 +15,7 @@ namespace VanyaTools.Native
 {
     internal sealed partial class SimpleAiTab
     {
-        private readonly Button _correctionButton, _thinAuditButton;
+        private readonly Button _correctionButton;
         private object _correctionDocument;
 
         private sealed class CorrectionPlacement
@@ -28,7 +28,7 @@ namespace VanyaTools.Native
             public double OffsetY { get; set; }
         }
 
-        private async Task OpenCorrection(bool thinAudit = false)
+        private async Task OpenCorrection()
         {
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
@@ -44,7 +44,6 @@ namespace VanyaTools.Native
                 dynamic selection = app.ActiveSelectionRange;
                 if (selection == null || Convert.ToInt32(selection.Count) == 0)
                 {
-                    if (thinAudit) { ThinElementReference.Insert(false, ThinAuditOptions.Preset(false)); Report("Линейка ДТФ вставлена на активную страницу.", false); return; }
                     throw new InvalidOperationException("Выделите принт на холсте.");
                 }
                 var placement = new CorrectionPlacement { DocumentPath = CorrectionDocumentPath(doc),
@@ -76,7 +75,7 @@ namespace VanyaTools.Native
                 TryUnderlayColor(out var color);
                 var initial = new DtfCorrectionOptions { RemoveSemiTransparent = false, Threshold = Math.Max(0, Math.Min(255, threshold)),
                     RadiusMm = radius * factor, ExpansionMm = expansion * factor, Color = color };
-                var dialog = new DtfCorrectionWindow(source, initial, _outlineSettings, ProcessCorrection, thinAudit,
+                var dialog = new DtfCorrectionWindow(source, initial, _outlineSettings, ProcessCorrection, false,
                     (mask, width, height) => ThinElementMask.Insert(thinSource, mask, width, height));
                 var owner = PresentationSource.FromVisual(this) as HwndSource;
                 if (owner != null) new WindowInteropHelper(dialog).Owner = owner.Handle;
