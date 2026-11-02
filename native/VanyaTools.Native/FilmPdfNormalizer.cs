@@ -31,6 +31,8 @@ namespace VanyaTools.Native
                 if (process.ExitCode != 0 || !File.Exists(output))
                 {
                     Log.Info("Film PDF normalization failed: " + detail);
+                    if (process.ExitCode == 3)
+                        throw new InvalidOperationException("PDF фотовывода не отправлен: часть текста не переведена в кривые. " + detail.Trim());
                     if (process.ExitCode == 2)
                     {
                         string diagnostic = "";

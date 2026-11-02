@@ -1480,7 +1480,7 @@ namespace VanyaTools.Native
             {
                 _progress.Text = "Экспортирую активный лист печати в PDF…";
                 await Dispatcher.Yield(DispatcherPriority.Render);
-                SportPrintExporter.Result result = SportPrintExporter.ExportCurrentPage(folder, dpi);
+                SportPrintExporter.Result result = await SportPrintExporter.ExportCurrentPage(folder, dpi);
                 CompleteStep(4, "активный лист сохранён в PDF");
                 _progress.Text = "PDF готов: " + result.WidthMm.ToString("0.#") + " × " +
                     result.HeightMm.ToString("0.#") + " мм · 1:1 · " + dpi + " DPI · " +

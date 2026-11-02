@@ -23,6 +23,12 @@ namespace VanyaTools.FilmPdf
             try
             {
                 Console.OutputEncoding = System.Text.Encoding.UTF8;
+                if (args.Length == 2 && args[0] == "--require-curves")
+                {
+                    using (PdfDocument checkedDocument = PdfReader.Open(Path.GetFullPath(args[1]), PdfDocumentOpenMode.Import))
+                        PdfTextCurvesGuard.Check(checkedDocument);
+                    return 0;
+                }
                 bool printJob = args.Length == 6;
                 if (args.Length != 4 && !printJob) throw new ArgumentException("Expected input PDF, output PDF, width and height in mm, optionally ICC mode and profile.");
                 string mode = printJob ? args[4] : "remove";
@@ -37,6 +43,7 @@ namespace VanyaTools.FilmPdf
                 {
                     if (document.PageCount != 1) throw new InvalidDataException("Expected one film page.");
                     CheckSize(document.Pages[0], width, height);
+                    PdfTextCurvesGuard.Check(document);
                     PdfPrintContentGuard.Check(document.Pages[0]);
                     if (mode != "preserve")
                     {
@@ -66,6 +73,7 @@ namespace VanyaTools.FilmPdf
                 {
                     if (document.PageCount != 1) throw new InvalidDataException("Film page count changed.");
                     CheckSize(document.Pages[0], width, height);
+                    PdfTextCurvesGuard.Check(document);
                     PdfPrintContentGuard.Check(document.Pages[0]);
                     if (selected != null) ProfileAttachment.Check(document, selected);
                     else if (mode != "preserve")
@@ -78,6 +86,7 @@ namespace VanyaTools.FilmPdf
                 return 0;
             }
             catch (FilmSizeException error) { Console.Error.WriteLine(error.Message); return 2; }
+            catch (PdfTextNotOutlinedException error) { Console.Error.WriteLine(error.Message); return 3; }
             catch (Exception error) { Console.Error.WriteLine(error.Message); return 1; }
             finally
             {

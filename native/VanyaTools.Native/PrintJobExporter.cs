@@ -91,7 +91,9 @@ namespace VanyaTools.Native
                 await completed.Task;
                 string detail = await error; await text;
                 if (process.ExitCode != 0 || !File.Exists(output))
-                    throw new InvalidOperationException(process.ExitCode == 2
+                    throw new InvalidOperationException(process.ExitCode == 3
+                        ? "PDF не отправлен: часть текста не переведена в кривые. " + detail.Trim()
+                        : process.ExitCode == 2
                         ? "PDF не отправлен: размер страницы не соответствует заданию 1:1. " + detail.Trim()
                         : "PDF не отправлен: проверка или подготовка содержимого PDF не завершена. " + detail.Trim());
             }

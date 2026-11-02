@@ -140,6 +140,7 @@ namespace VanyaTools.Native
                     object settings = output.PDFSettings;
                     ((dynamic)settings).Reset();
                     Configure(settings);
+                    PrintPdfText.RequireCurves(settings);
                     output.PublishToPDF(pdf);
                     using (Stream stream = File.OpenRead(pdf))
                     {

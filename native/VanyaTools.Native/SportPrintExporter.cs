@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace VanyaTools.Native
 {
@@ -16,9 +17,33 @@ namespace VanyaTools.Native
             public long Bytes;
         }
 
-        public static Result ExportCurrentPage(string folder, int dpi)
+        public static async Task<Result> ExportCurrentPage(string folder, int dpi)
         {
-            return Export(folder, dpi, false, false, true);
+            if (String.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+                throw new InvalidOperationException("Выберите доступную папку для листов печати.");
+            folder = System.IO.Path.GetFullPath(folder);
+            string workspace = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Vanya-sport-pdf-" + Guid.NewGuid().ToString("N"));
+            Result result = null; string local = null;
+            try
+            {
+                Directory.CreateDirectory(workspace);
+                result = Export(workspace, dpi, false, false, true); local = result.Path;
+                // All Corel state has been restored before this first await.
+                await PrintPdfText.CheckFileAsync(local);
+                string target = await Task.Run(() =>
+                {
+                    string ready = AvailablePath(folder, System.IO.Path.GetFileNameWithoutExtension(local));
+                    string stage = System.IO.Path.Combine(folder, ".Vanya-print-" + Guid.NewGuid().ToString("N") + ".partial");
+                    try { File.Copy(local, stage); File.Move(stage, ready); return ready; }
+                    finally { if (File.Exists(stage)) File.Delete(stage); }
+                });
+                result.Path = target; return result;
+            }
+            finally
+            {
+                try { if (local != null && File.Exists(local)) File.Delete(local); Directory.Delete(workspace, false); }
+                catch (Exception error) { Log.Error("Could not remove sport print validation workspace.", error); }
+            }
         }
 
         // Shared PDF publisher: ordinary CDRs need no sport markers or page names.
@@ -114,6 +139,7 @@ namespace VanyaTools.Native
                 if (Convert.ToInt32(Get(settings, "OutputSpotColorsAs")) != 0 ||
                     !Convert.ToBoolean(Get(settings, "Overprints")))
                     throw new InvalidOperationException("Corel не применил сохранение плашечных цветов и наложений для PDF.");
+                PrintPdfText.RequireCurves(settings);
 
                 string documentName = System.IO.Path.GetFileNameWithoutExtension(Convert.ToString(document.FileName));
                 string job = Guid.NewGuid().ToString("N");
