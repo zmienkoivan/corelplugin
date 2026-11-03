@@ -6,5 +6,6 @@
   <ItemGroup>
     <Reference Include="Microsoft.CSharp" />
     <Compile Include="../../native/VanyaTools.Native/PrintSelectionWorkspace.cs" Link="PrintSelectionWorkspace.cs" />
+    <Compile Include="../../native/VanyaTools.Native/PrintTextSnapshot.cs" Link="PrintTextSnapshot.cs" />
   </ItemGroup>
 </Project>

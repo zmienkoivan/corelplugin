@@ -67,7 +67,7 @@ namespace VanyaTools.Native
             var temporary = new List<string>(); var staging = new List<string>(); var destinations = new List<string>();
             var rendered = new List<RenderedFilm>();
             string jobId = Guid.NewGuid().ToString("N");
-            bool restored = false;
+            bool restored = false, sourceCleanupFailed = false;
             void RestoreCorel()
             {
                 if (restored) return;
@@ -75,7 +75,7 @@ namespace VanyaTools.Native
                 if (output != null) try { output.Dirty = false; output.Close(); } catch (Exception error) { Log.Error("Could not close temporary film document.", error); }
                 try { source.Activate(); ((dynamic)sourcePage).Activate(); ((dynamic)FilmOutputService.Range(selected)).CreateSelection(); }
                 catch (Exception error) { result.Notes.Add("Не удалось восстановить исходное выделение."); Log.Error("Could not restore film selection.", error); }
-                try { source.Unit = sourceUnit; source.Dirty = sourceDirty; }
+                try { source.Unit = sourceUnit; source.Dirty = sourceDirty || sourceCleanupFailed; }
                 catch (Exception error) { result.Notes.Add("Не удалось восстановить состояние исходного документа."); Log.Error("Could not restore film document state.", error); }
                 try { app.Optimization = optimization; }
                 catch (Exception error) { result.Notes.Add("Не удалось восстановить режим обновления Corel."); Log.Error("Could not restore Corel optimization.", error); }
@@ -105,51 +105,55 @@ namespace VanyaTools.Native
                 {
                     source.Activate(); ((dynamic)sourcePage).Activate();
                     object range = FilmOutputService.Range(FilmOutputService.PrintShapes(targets[i]));
-                    CorelClipboardTransfer.Copy((dynamic)range, "фотовывод");
-                    output.Activate();
-                    dynamic page = output.ActivePage, layer = output.ActiveLayer;
-                    if (Convert.ToInt32(layer.Shapes.Count) > 0) layer.Shapes.All().Delete();
-                    CorelClipboardTransfer.WaitAvailable("фотовывод");
-                    // Paste() returns one Shape (possibly a group), not a ShapeRange.
-                    // PasteEx returns a range for both single and multi-object input.
-                    dynamic copied = layer.PasteEx(app.CreateStructPasteOptions());
-                    if (copied == null || Convert.ToInt32(copied.Count) == 0) throw new InvalidOperationException("Не удалось перенести фотовывод во временный документ.");
-                    double extra = options.ExportBands ? gaps[i] + options.BandWidth : 0;
-                    double width = bounds[i].Width + 2 * extra, height = bounds[i].Height;
-                    page.SetSize(width, height);
-                    Log.Info("Film PDF page: requested=" + width.ToString("R", CultureInfo.InvariantCulture) + "x" +
-                        height.ToString("R", CultureInfo.InvariantCulture) + " mm; Corel page=" +
-                        Convert.ToDouble(page.SizeWidth).ToString("R", CultureInfo.InvariantCulture) + "x" +
-                        Convert.ToDouble(page.SizeHeight).ToString("R", CultureInfo.InvariantCulture) + " mm.");
-                    double pageLeft = Convert.ToDouble(page.LeftX), pageBottom = Convert.ToDouble(page.BottomY);
-                    // Clipboard placement can use a different origin. Move by
-                    // the actual copied bbox while retaining the reserved caption bottom.
-                    FilmBounds originalRaw = FilmOutputService.Measure((object)source, range),
-                        copiedRaw = FilmOutputService.Measure((object)output, (object)copied);
-                    copied.Move(pageLeft + extra - bounds[i].Left + originalRaw.Left - copiedRaw.Left,
-                        pageBottom - bounds[i].Bottom + originalRaw.Bottom - copiedRaw.Bottom);
-                    dynamic all = app.CreateShapeRange(); foreach (dynamic s in copied) all.Add(s);
-                    var printBounds = new FilmBounds { Left = pageLeft + extra, Bottom = pageBottom, Width = bounds[i].Width, Height = height };
-                    if (options.ExportBands) all.Add(FilmOutputService.CreateBands((object)layer, printBounds, gaps[i], options.BandWidth));
-                    dynamic frame = layer.CreateRectangle2(pageLeft, pageBottom, width, height);
-                    frame.Fill.UniformColor.CMYKAssign(0, 0, 0, 0); frame.Outline.SetNoOutline(); frame.OrderToBack(); all.Add(frame);
-                    all.CreateSelection();
-                    string pdf = Path.Combine(Path.GetTempPath(), "Vanya-film-" + jobId + "-" + i + ".pdf"); temporary.Add(pdf);
-                    // Read/configure PDF settings after sizing this output page;
-                    // a fresh document initially has the default A4 page size.
-                    object settings = output.PDFSettings;
-                    ((dynamic)settings).Reset();
-                    Configure(settings);
-                    PrintPdfText.RequireCurves(settings);
-                    output.PublishToPDF(pdf);
-                    using (Stream stream = File.OpenRead(pdf))
+                    using (var prepared = PrintTextSnapshot.Prepare((object)app, (object)source, range))
                     {
-                        var header = new byte[5];
-                        if (stream.Read(header, 0, 5) != 5 || Encoding.ASCII.GetString(header) != "%PDF-")
-                            throw new InvalidDataException("CorelDRAW не создал корректный PDF.");
+                        range = prepared.Range;
+                        CorelClipboardTransfer.Copy((dynamic)range, "фотовывод");
+                        output.Activate();
+                        dynamic page = output.ActivePage, layer = output.ActiveLayer;
+                        if (Convert.ToInt32(layer.Shapes.Count) > 0) layer.Shapes.All().Delete();
+                        CorelClipboardTransfer.WaitAvailable("фотовывод");
+                        // Paste() returns one Shape (possibly a group), not a ShapeRange.
+                        // PasteEx returns a range for both single and multi-object input.
+                        dynamic copied = layer.PasteEx(app.CreateStructPasteOptions());
+                        if (copied == null || Convert.ToInt32(copied.Count) == 0) throw new InvalidOperationException("Не удалось перенести фотовывод во временный документ.");
+                        double extra = options.ExportBands ? gaps[i] + options.BandWidth : 0;
+                        double width = bounds[i].Width + 2 * extra, height = bounds[i].Height;
+                        page.SetSize(width, height);
+                        Log.Info("Film PDF page: requested=" + width.ToString("R", CultureInfo.InvariantCulture) + "x" +
+                            height.ToString("R", CultureInfo.InvariantCulture) + " mm; Corel page=" +
+                            Convert.ToDouble(page.SizeWidth).ToString("R", CultureInfo.InvariantCulture) + "x" +
+                            Convert.ToDouble(page.SizeHeight).ToString("R", CultureInfo.InvariantCulture) + " mm.");
+                        double pageLeft = Convert.ToDouble(page.LeftX), pageBottom = Convert.ToDouble(page.BottomY);
+                        // Clipboard placement can use a different origin. Move by
+                        // the actual copied bbox while retaining the reserved caption bottom.
+                        FilmBounds originalRaw = FilmOutputService.Measure((object)source, range),
+                            copiedRaw = FilmOutputService.Measure((object)output, (object)copied);
+                        copied.Move(pageLeft + extra - bounds[i].Left + originalRaw.Left - copiedRaw.Left,
+                            pageBottom - bounds[i].Bottom + originalRaw.Bottom - copiedRaw.Bottom);
+                        dynamic all = app.CreateShapeRange(); foreach (dynamic s in copied) all.Add(s);
+                        var printBounds = new FilmBounds { Left = pageLeft + extra, Bottom = pageBottom, Width = bounds[i].Width, Height = height };
+                        if (options.ExportBands) all.Add(FilmOutputService.CreateBands((object)layer, printBounds, gaps[i], options.BandWidth));
+                        dynamic frame = layer.CreateRectangle2(pageLeft, pageBottom, width, height);
+                        frame.Fill.UniformColor.CMYKAssign(0, 0, 0, 0); frame.Outline.SetNoOutline(); frame.OrderToBack(); all.Add(frame);
+                        all.CreateSelection();
+                        string pdf = Path.Combine(Path.GetTempPath(), "Vanya-film-" + jobId + "-" + i + ".pdf"); temporary.Add(pdf);
+                        // Read/configure PDF settings after sizing this output page;
+                        // a fresh document initially has the default A4 page size.
+                        object settings = output.PDFSettings;
+                        ((dynamic)settings).Reset();
+                        Configure(settings);
+                        PrintPdfText.RequireCurves(settings);
+                        output.PublishToPDF(pdf);
+                        using (Stream stream = File.OpenRead(pdf))
+                        {
+                            var header = new byte[5];
+                            if (stream.Read(header, 0, 5) != 5 || Encoding.ASCII.GetString(header) != "%PDF-")
+                                throw new InvalidDataException("CorelDRAW не создал корректный PDF.");
+                        }
+                        rendered.Add(new RenderedFilm { Path = pdf, Width = width, Height = height,
+                            Name = title + " - " + SafeName(targets[i].Caption.Text) });
                     }
-                    rendered.Add(new RenderedFilm { Path = pdf, Width = width, Height = height,
-                        Name = title + " - " + SafeName(targets[i].Caption.Text) });
                 }
                 // Finish all COM work before yielding to the UI for PDF processing.
                 // Otherwise finally could reset Dirty after edits made during await.
@@ -175,6 +179,7 @@ namespace VanyaTools.Native
             }
             catch (Exception error)
             {
+                if (error is PrintTextCleanupException) sourceCleanupFailed = true;
                 if (result.Paths.Count > 0)
                     throw new InvalidOperationException((toRip ?
                         "Часть серии уже передана в RIP. Перед повторной отправкой проверьте очередь RIP для этих файлов:\n" :

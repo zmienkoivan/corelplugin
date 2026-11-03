@@ -104,6 +104,7 @@ namespace VanyaTools.Native
             string temporary = null, staging = null;
             PrintSelectionWorkspace selectionWorkspace = null;
             var result = new Result();
+            bool sourceCleanupFailed = false;
             try
             {
                 document.Unit = CorelConstants.CdrMillimeter;
@@ -173,22 +174,25 @@ namespace VanyaTools.Native
                     ", bytes=" + result.Bytes);
                 return result;
             }
+            catch (PrintTextCleanupException) { sourceCleanupFailed = true; throw; }
             finally
             {
                 bool restoreFailed = false;
+                Exception cleanupFailure = null;
                 // Restore compatibility first, since changing it can reset or
                 // constrain the remaining PDF options in Corel.
                 for (int i = 0; !selected && i < applied; i++)
                     try { Set(settings, previous[i].Key, previous[i].Value); }
                     catch (Exception error)
                     { restoreFailed = true; Log.Error("Could not restore PDF setting " + previous[i].Key + ".", error); }
-                selectionWorkspace?.Dispose();
+                try { selectionWorkspace?.Dispose(); }
+                catch (PrintTextCleanupException error) { sourceCleanupFailed = true; cleanupFailure = error; }
                 if (!String.IsNullOrWhiteSpace(selectionWorkspace?.Warning))
                     result.Warning = selectionWorkspace.Warning;
                 try { document.Unit = oldUnit; }
                 catch (Exception error)
                 { restoreFailed = true; Log.Error("Could not restore document state after print export.", error); }
-                try { document.Dirty = oldDirty; }
+                try { document.Dirty = oldDirty || sourceCleanupFailed || selectionWorkspace?.SourceCleanupFailed == true; }
                 catch (Exception error)
                 { restoreFailed = true; Log.Error("Could not restore document dirty flag after print export.", error); }
                 // Optimization is application-wide. Always restore it even if
@@ -204,6 +208,7 @@ namespace VanyaTools.Native
                 if (staging != null)
                     try { if (File.Exists(staging)) File.Delete(staging); }
                     catch (Exception error) { Log.Error("Could not remove staged print PDF.", error); }
+                if (cleanupFailure != null) throw cleanupFailure;
             }
         }
 

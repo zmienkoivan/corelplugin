@@ -13,7 +13,7 @@ internal static class Program
     { try {work();} catch(InvalidOperationException) {_checks++;return;} throw new Exception(message); }
     private static int Main()
     {
-        try { Geometry();NativeAdapter();Console.WriteLine("Print selection checks passed: "+_checks+". Fake transfer only; no Corel or customer files.");return 0; }
+        try { Geometry();NativeAdapter();FontTransfer();Console.WriteLine("Print selection checks passed: "+_checks+". Fake transfer only; no Corel or customer files.");return 0; }
         catch(Exception error) {Console.Error.WriteLine(error);return 1;}
     }
     private static void Geometry()
@@ -59,10 +59,52 @@ internal static class Program
             Check(app.Output.Closed&&app.Source.Activations==1,"Failure restores original: "+failure);
         }
     }
+    private static void FontTransfer()
+    {
+        foreach(bool dirty in new[] {false,true}) foreach(string placement in new[]{"root","group","powerclip","symbol"})
+        {
+            var app=new FakePrintApp();CorelClipboardTransfer.App=app;app.Source.Dirty=dirty;
+            var text=new FakePrintShape(0,0,30,40) {Type=6,Glyphs="original cached font",Color="spot-orange"};
+            FakePrintShape root=text;
+            if(placement=="group") root=new FakePrintShape(0,0,100,50){Type=7,Shapes=new List<FakePrintShape>{text}};
+            if(placement=="powerclip") root=new FakePrintShape(0,0,100,50){PowerClip=new FakePrintClip(new[]{new FakePrintShape(0,0,100,50){Type=7,Shapes=new List<FakePrintShape>{text}}})};
+            if(placement=="symbol") root=new FakePrintShape(0,0,100,50){Type=23,Definition=new List<FakePrintShape>{text}};
+            var range=new FakePrintRange(app,new[]{root});
+            using(var workspace=PrintSelectionWorkspace.Create(app,app.Source,app.Source.ActivePage,range,2))
+            {
+                var drawn=app.Output.ActiveLayer.Range.Items.SelectMany(s=>s.All()).Where(s=>s.Glyphs!=null).ToArray();
+                Check(drawn.Length==1&&drawn[0].Type==3&&drawn[0].Glyphs=="original cached font","Font changed before outlining: "+placement);
+                Check(drawn[0].Color=="spot-orange","Text preparation changed spot colour");
+                Check(text.Type==6&&!text.Deleted&&text.Glyphs=="original cached font","Original text was converted or deleted");
+                Check(app.ConvertedInSource>0&&!app.ConvertedInOutput,"Text outlined after cross-document paste");
+            }
+            Check(app.Temporary.All(s=>s.Deleted)&&app.Source.Groups==0,"Temporary geometry or command group leaked");
+            Check(app.Source.Dirty==dirty&&text.Type==6&&!text.Deleted,"Source dirty/text state was not restored");
+            Check(app.SelectedRange.Items.Single()==root,"Original selection not restored after text cleanup");
+        }
+        foreach(string failure in new[]{"ConvertFail","ConvertIgnored","DuplicateShift","DuplicatePartial","PasteScale","CleanupFail"})
+        {
+            var app=new FakePrintApp {Failure=failure};CorelClipboardTransfer.App=app;app.Source.Dirty=false;
+            var text=new FakePrintShape(0,0,30,40){Type=6,Glyphs="original cached font"};var range=new FakePrintRange(app,new[]{text});
+            bool failed=false;
+            try {using(var workspace=PrintSelectionWorkspace.Create(app,app.Source,app.Source.ActivePage,range,2)) {}}
+            catch(InvalidOperationException) {failed=true;}catch(PrintTextCleanupException){failed=true;}
+            Check(failed,"Invalid font preparation accepted: "+failure);
+            Check(text.Type==6&&!text.Deleted&&app.Source.Groups==0,"Failure changed original or left command group open: "+failure);
+            Check(app.Source.Dirty==(failure=="CleanupFail"||failure=="DuplicatePartial"),"Failure hid retained source copies or changed dirty state: "+failure);
+            if(failure!="CleanupFail"&&failure!="DuplicatePartial") Check(app.Temporary.All(s=>s.Deleted),"Failure leaked temporary copies: "+failure);
+            if(app.Output!=null) Check(app.Output.Closed,"Failure left output CDR open");
+        }
+        var legacy=new FakePrintApp();CorelClipboardTransfer.App=legacy;
+        var original=new FakePrintShape(0,0,30,40){Type=6,Glyphs="original cached font"};
+        CorelClipboardTransfer.Copy(new FakePrintRange(legacy,new[]{original}),"legacy");
+        var pasted=legacy.CreateDocument().ActiveLayer.PasteEx(null).Items[0];pasted.ConvertToCurves();
+        Check(pasted.Glyphs=="substituted font"&&pasted.Type==3,"Fixture does not reproduce late outlining of wrong glyphs");
+    }
 }
 namespace VanyaTools.Native
 {
-    internal static class CorelConstants {internal const int CdrMillimeter=3;}
+    internal static class CorelConstants {internal const int CdrMillimeter=3,CdrGroupShape=7,CdrTextShape=6;}
     internal static class Log {internal static void Info(string text) {} internal static void Error(string text,Exception error) {}}
     internal static class CorelClipboardTransfer
     {
@@ -73,16 +115,41 @@ namespace VanyaTools.Native
 }
 public sealed class FakePrintShape
 {
+    private static int _next;public int StaticID {get;}=System.Threading.Interlocked.Increment(ref _next);
+    public FakePrintApp App;public int Type=3;public bool Deleted;public string Glyphs,Color;
+    public List<FakePrintShape> Shapes=new List<FakePrintShape>(),Definition=new List<FakePrintShape>();
+    public FakePrintClip PowerClip;public FakePrintSymbol Symbol=>new FakePrintSymbol(this);
     public double Left,Bottom,Width,Height;
     public FakePrintShape(double left,double bottom,double width,double height) {Left=left;Bottom=bottom;Width=width;Height=height;}
-    public FakePrintShape Copy()=>new FakePrintShape(Left+175,Bottom-81,Width,Height);
+    public IEnumerable<FakePrintShape> All()=>new[]{this}.Concat(Shapes.SelectMany(s=>s.All())).Concat(PowerClip?.Shapes.SelectMany(s=>s.All())??Enumerable.Empty<FakePrintShape>());
+    public FakePrintShape Copy(double x=175,double y=-81,bool transfer=true)
+    {
+        var copy=new FakePrintShape(Left+x,Bottom+y,Width,Height){App=App,Type=Type,Glyphs=transfer&&Type==6?"substituted font":Glyphs,Color=Color,
+            Shapes=Shapes.Select(s=>s.Copy(x,y,transfer)).ToList(),Definition=Definition.Select(s=>s.Copy(x,y,transfer)).ToList()};
+        if(PowerClip!=null)copy.PowerClip=new FakePrintClip(PowerClip.Shapes.Select(s=>s.Copy(x,y,transfer)));
+        return copy;
+    }
+    public void ConvertToCurves()
+    {
+        if(App.Failure=="ConvertFail")throw new InvalidOperationException("Synthetic conversion failure");
+        if(App.Failure=="ConvertIgnored")return;
+        if(App.Current==App.Source)App.ConvertedInSource++;else App.ConvertedInOutput=true;Type=3;
+    }
+    public void Delete(){if(App.Failure=="CleanupFail")throw new InvalidOperationException("Synthetic cleanup failure");foreach(var s in All())s.Deleted=true;}
+}
+public sealed class FakePrintClip {public List<FakePrintShape> Shapes;public FakePrintClip(IEnumerable<FakePrintShape> shapes){Shapes=shapes.ToList();}}
+public sealed class FakePrintSymbol
+{
+    private readonly FakePrintShape _shape;public FakePrintSymbol(FakePrintShape shape){_shape=shape;}
+    public FakePrintRange RevertToShapes(){_shape.Deleted=true;var shapes=_shape.Definition.Select(s=>s.Copy(0,0,false)).ToArray();_shape.App.Temporary.AddRange(shapes);return new FakePrintRange(_shape.App,shapes);}
 }
 public sealed class FakePrintRange:IEnumerable
 {
     private readonly FakePrintApp _app;
     public readonly List<FakePrintShape> Items;
     public bool ReadsIncludeOutline=true;public int BoundingBoxReads,CreateSelectionCalls;
-    public FakePrintRange(FakePrintApp app,IEnumerable<FakePrintShape> items=null) {_app=app;Items=new List<FakePrintShape>(items??Enumerable.Empty<FakePrintShape>());}
+    public FakePrintRange(FakePrintApp app,IEnumerable<FakePrintShape> items=null) {_app=app;Items=new List<FakePrintShape>(items??Enumerable.Empty<FakePrintShape>());foreach(var s in Items)Attach(s,app);}
+    private static void Attach(FakePrintShape shape,FakePrintApp app){foreach(var s in shape.All().Concat(shape.Definition.SelectMany(s=>s.All())))s.App=app;}
     public int Count=>Items.Count;
     public double Left=>Items.Min(s=>s.Left);public double Bottom=>Items.Min(s=>s.Bottom);
     public double Width=>Items.Max(s=>s.Left+s.Width)-Left;public double Height=>Items.Max(s=>s.Bottom+s.Height)-Bottom;
@@ -90,7 +157,11 @@ public sealed class FakePrintRange:IEnumerable
     public void GetBoundingBox(out double left,out double bottom,out double width,out double height,bool includeOutline)
     {ReadsIncludeOutline&=includeOutline;BoundingBoxReads++;left=Left;bottom=Bottom;width=Width;height=Height;}
     public void Move(double x,double y) {foreach(var s in Items) {s.Left+=x+(_app.Failure=="MoveShift"?.1:0);s.Bottom+=y;}}
-    public void CreateSelection()=>CreateSelectionCalls++;public FakePrintRange All()=>this;public void Delete()=>Items.Clear();
+    public void CreateSelection(){CreateSelectionCalls++;_app.SelectedRange=this;}public FakePrintRange All()=>this;
+    public void Delete(){foreach(var s in Items)s.Delete();Items.Clear();}
+    public FakePrintRange Duplicate(double x,double y)
+    {var copies=Items.Select(s=>s.Copy(x+(_app.Failure=="DuplicateShift"?1:0),y,false)).ToArray();_app.Temporary.AddRange(copies);_app.Source.Dirty=true;
+        if(_app.Failure=="DuplicatePartial")throw new InvalidOperationException("Synthetic partial duplication");return new FakePrintRange(_app,copies);}
     public IEnumerator GetEnumerator()=>Items.GetEnumerator();
 }
 public sealed class FakePrintLayer
@@ -116,17 +187,20 @@ public sealed class FakePrintPage
 }
 public sealed class FakePrintDocument
 {
-    public readonly FakePrintApp App;public int Unit,Activations;public string ColorContext="native-test-profile";
+    public readonly FakePrintApp App;public int Unit,Activations,Groups;public string ColorContext="native-test-profile";
     public bool Dirty=true,Closed;public FakePrintPage ActivePage;public FakePrintLayer ActiveLayer;
     public FakePrintDocument(FakePrintApp app) {App=app;ActivePage=new FakePrintPage(this);ActiveLayer=new FakePrintLayer(app);}
-    public void AssignColorContext(object value)=>ColorContext=(string)value;public void Activate()=>Activations++;public void Close()=>Closed=true;
+    public void AssignColorContext(object value)=>ColorContext=(string)value;public void Activate(){Activations++;App.Current=this;}public void Close()=>Closed=true;
+    public void BeginCommandGroup(string caption){Groups++;}public void EndCommandGroup(){Groups--;}
 }
 public sealed class FakePrintApp
 {
-    public string Failure;public readonly FakePrintDocument Source;public FakePrintDocument Output;
-    public FakePrintRange Clipboard,LastCreatedSnapshot;public FakePrintApp() {Source=new FakePrintDocument(this);}
+    public string Failure;public readonly FakePrintDocument Source;public FakePrintDocument Output,Current;
+    public int ConvertedInSource;public bool ConvertedInOutput;public FakePrintRange SelectedRange;
+    public List<FakePrintShape> Temporary=new List<FakePrintShape>();
+    public FakePrintRange Clipboard,LastCreatedSnapshot;public FakePrintApp() {Source=new FakePrintDocument(this);Current=Source;}
     public FakePrintRange CreateShapeRange() {LastCreatedSnapshot=new FakePrintRange(this);return LastCreatedSnapshot;}
-    public FakePrintDocument CreateDocument() {Output=new FakePrintDocument(this);return Output;}public object CreateStructPasteOptions()=>new object();
+    public FakePrintDocument CreateDocument() {Output=new FakePrintDocument(this);Current=Output;return Output;}public object CreateStructPasteOptions()=>new object();
 }
 namespace VanyaTools.Native
 {

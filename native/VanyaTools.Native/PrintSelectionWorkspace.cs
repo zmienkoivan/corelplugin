@@ -11,6 +11,7 @@ namespace VanyaTools.Native
     {
         private readonly object _source, _sourcePage, _selection;
         private object _document;
+        private PrintTextSnapshot _textSnapshot;
         private bool _disposed;
         internal object Document => _document;
         internal object Page { get; private set; }
@@ -18,6 +19,7 @@ namespace VanyaTools.Native
         internal double PageWidthMm { get; private set; }
         internal double PageHeightMm { get; private set; }
         internal string Warning { get; private set; }
+        internal bool SourceCleanupFailed => _textSnapshot?.CleanupFailed == true;
 
         private PrintSelectionWorkspace(object source, object page, object selection)
         { _source = source; _sourcePage = page; _selection = selection; }
@@ -33,7 +35,11 @@ namespace VanyaTools.Native
             var workspace = new PrintSelectionWorkspace(source, page, (object)snapshot);
             try
             {
-                workspace.Bounds = ReadBounds((object)snapshot);
+                workspace._textSnapshot = PrintTextSnapshot.Prepare(application, source, (object)snapshot);
+                object printRange = workspace._textSnapshot.Range;
+                // Curve ink bounds can legitimately be tighter than a text
+                // frame. Size/position the output from the prepared geometry.
+                workspace.Bounds = ReadBounds(printRange);
                 PrintExportBounds sheet = PrintExportBounds.PaddedPage(workspace.Bounds, safetyMarginMm);
                 workspace.PageWidthMm = sheet.Width; workspace.PageHeightMm = sheet.Height;
                 Log.Info("Print source ink bounds (including outlines): " + PrintExportBounds.Position(
@@ -41,7 +47,7 @@ namespace VanyaTools.Native
                     "; transparent safety margin=" + safetyMarginMm.ToString("0.###", CultureInfo.InvariantCulture) + " mm.");
                 // Copy before switching documents: this is the real native range,
                 // including children of the current Focus group, not its parent.
-                CorelClipboardTransfer.Copy(snapshot, "выделение для печати");
+                CorelClipboardTransfer.Copy((dynamic)printRange, "выделение для печати");
                 dynamic output = app.CreateDocument(); workspace._document = (object)output;
                 WorkTimeRuntime.IgnoreTemporaryDocument((object)output);
                 output.Unit = CorelConstants.CdrMillimeter;
@@ -120,6 +126,8 @@ namespace VanyaTools.Native
             if (_document != null)
                 try { dynamic output = _document; output.Dirty = false; output.Close(); }
                 catch (Exception error) { Log.Error("Could not close temporary print document.", error); }
+            Exception cleanupFailure = null;
+            try { _textSnapshot?.Dispose(); } catch (Exception error) { cleanupFailure = error; }
             try
             {
                 ((dynamic)_source).Activate(); ((dynamic)_sourcePage).Activate();
@@ -130,6 +138,7 @@ namespace VanyaTools.Native
                 Warning = "Не удалось восстановить прежнее выделение после экспорта.";
                 Log.Error("Could not restore original print selection.", error);
             }
+            if (cleanupFailure != null) throw cleanupFailure;
         }
     }
 
