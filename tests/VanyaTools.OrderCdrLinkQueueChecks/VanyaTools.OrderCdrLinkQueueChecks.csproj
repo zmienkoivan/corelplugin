@@ -8,6 +8,7 @@
   <ItemGroup>
     <Compile Include="../../native/VanyaTools.Native/OrderCdrLinkQueue.cs" Link="OrderCdrLinkQueue.cs" />
     <Compile Include="../../native/VanyaTools.Native/OrderCdrPathIndex.cs" Link="OrderCdrPathIndex.cs" />
+    <Compile Include="../../native/VanyaTools.Native/VanyaToolsDataFolder.cs" Link="VanyaToolsDataFolder.cs" />
     <Compile Include="../../native/VanyaTools.Native/OrderCdrFolders.cs" Link="OrderCdrFolders.cs" />
   </ItemGroup>
 </Project>

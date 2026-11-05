@@ -80,6 +80,7 @@ namespace VanyaTools.Native
         {
             try
             {
+                VanyaToolsDataFolder.HideForPath(Path.GetDirectoryName(indexPath));
                 if (!File.Exists(indexPath)) return null;
                 string cdrPath = File.ReadAllText(indexPath, Encoding.UTF8).Trim();
                 return Path.IsPathRooted(cdrPath) &&
@@ -99,6 +100,7 @@ namespace VanyaTools.Native
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(indexPath));
+                VanyaToolsDataFolder.HideForPath(Path.GetDirectoryName(indexPath));
                 if (File.Exists(indexPath) &&
                     String.Equals(File.ReadAllText(indexPath, Encoding.UTF8).Trim(), cdrPath,
                         StringComparison.OrdinalIgnoreCase)) return true;

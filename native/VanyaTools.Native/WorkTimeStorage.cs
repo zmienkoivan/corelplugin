@@ -160,6 +160,7 @@ namespace VanyaTools.Native
         internal static void WriteAtomic(string path, string json)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));
+            VanyaToolsDataFolder.HideForPath(Path.GetDirectoryName(path));
             string temporary = path + "." + Guid.NewGuid().ToString("N") + ".partial";
             try
             {
@@ -210,6 +211,7 @@ namespace VanyaTools.Native
             try
             {
                 if (!Directory.Exists(directory)) return new WorkTimeHistory();
+                VanyaToolsDataFolder.HideForPath(directory);
                 int count = 0;
                 foreach (string file in Directory.EnumerateFiles(directory, "*.json"))
                 {

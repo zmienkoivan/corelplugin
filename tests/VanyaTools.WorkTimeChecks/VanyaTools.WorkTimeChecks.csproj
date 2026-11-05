@@ -6,6 +6,7 @@
     <Compile Include="../../native/VanyaTools.Native/WorkTimeModel.cs" Link="WorkTimeModel.cs" />
     <Compile Include="../../native/VanyaTools.Native/WorkTimeEngine.cs" Link="WorkTimeEngine.cs" />
     <Compile Include="../../native/VanyaTools.Native/WorkTimeStorage.cs" Link="WorkTimeStorage.cs" />
+    <Compile Include="../../native/VanyaTools.Native/VanyaToolsDataFolder.cs" Link="VanyaToolsDataFolder.cs" />
     <Compile Include="../../native/VanyaTools.Native/WorkTimeNativeEvents.cs" Link="WorkTimeNativeEvents.cs" />
     <Compile Include="../../native/VanyaTools.Native/WorkTimeProjectMetadata.cs" Link="WorkTimeProjectMetadata.cs" />
   </ItemGroup>
