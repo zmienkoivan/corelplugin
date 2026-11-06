@@ -16,22 +16,24 @@ namespace VanyaTools.Native
         public DtfCorrectionPresetValues Settings { get; set; }
 
         internal static DtfCorrectionPreset FromOptions(DtfCorrectionOptions value) => new DtfCorrectionPreset {
-            Format = FormatName, Version = 2, Settings = new DtfCorrectionPresetValues {
+            Format = FormatName, Version = 3, Settings = new DtfCorrectionPresetValues {
                 RemoveSemiTransparent = value.RemoveSemiTransparent, Threshold = value.Threshold, SmoothStairs = value.SmoothStairs,
                 WhitenNearWhite = value.WhitenNearWhite, NearWhiteTolerance = value.NearWhiteTolerance,
                 Outline = value.Outline, RadiusMm = value.RadiusMm, ExpansionMm = value.ExpansionMm, OutlineColor = Hex(value.Color),
                 Knockout = value.Knockout, KnockoutColor = Hex(value.KnockoutColor), KnockoutTolerance = value.KnockoutTolerance,
                 KnockoutSoft = value.KnockoutSoft, HalftoneShape = (int)value.HalftoneShape, HalftoneColorBoost = value.HalftoneColorBoost,
+                HalftoneRemoveSmall=value.HalftoneRemoveSmall,HalftoneRemoveMm=value.HalftoneRemoveMm,HalftoneGrowSmall=value.HalftoneGrowSmall,HalftoneGrowMm=value.HalftoneGrowMm,
                 Halftone = value.Halftone, HalftoneAlphaOnly = value.HalftoneAlphaOnly, HalftoneAutoDot = value.HalftoneAutoDot,
                 HalftoneLpi = value.HalftoneLpi, HalftoneAngle = value.HalftoneAngle, HalftoneDotMm = value.HalftoneDotMm } };
 
         internal DtfCorrectionOptions ToOptions()
         {
-            if (!String.Equals(Format, FormatName, StringComparison.Ordinal) || (Version != 1 && Version != 2) || Settings == null)
+            if (!String.Equals(Format, FormatName, StringComparison.Ordinal) || Version<1 || Version>3 || Settings == null)
                 throw new InvalidDataException("Это не поддерживаемый пресет коррекции Vanya Tools.");
             var s = Settings;
             if (s.Threshold < 0 || s.Threshold > 255 || s.NearWhiteTolerance < 0 || s.NearWhiteTolerance > 64 ||
-                s.KnockoutTolerance < 0 || s.KnockoutTolerance > 255 || !Range(s.RadiusMm,0,50) || !Range(s.ExpansionMm,0,50) ||
+                s.KnockoutTolerance < (Version>=3 && s.KnockoutSoft ? -255 : 0) || s.KnockoutTolerance > 255 || !Range(s.RadiusMm,0,50) || !Range(s.ExpansionMm,0,50) ||
+                !Range(s.HalftoneRemoveMm,.05,5) || !Range(s.HalftoneGrowMm,.05,5) ||
                 !Range(s.HalftoneLpi,.5,200) || !Range(s.HalftoneAngle,-180,180) ||
                 !Range(s.HalftoneDotMm,.01,s.HalftoneAutoDot ? 1000 : 250) ||
                 !Enum.IsDefined(typeof(DtfDotShape),s.HalftoneShape) || s.HalftoneColorBoost<0 || s.HalftoneColorBoost>100)
@@ -42,6 +44,8 @@ namespace VanyaTools.Native
                 Knockout=s.Knockout, KnockoutColor=Color(s.KnockoutColor), KnockoutTolerance=s.KnockoutTolerance,
                 KnockoutSoft=Version>=2 && s.KnockoutSoft, HalftoneShape=Version>=2 ? (DtfDotShape)s.HalftoneShape : DtfDotShape.Circle,
                 HalftoneColorBoost=Version>=2 ? s.HalftoneColorBoost : 0,
+                HalftoneRemoveSmall=Version>=3 && s.HalftoneRemoveSmall,HalftoneRemoveMm=s.HalftoneRemoveMm,
+                HalftoneGrowSmall=Version>=3 && s.HalftoneGrowSmall,HalftoneGrowMm=s.HalftoneGrowMm,
                 Halftone=s.Halftone, HalftoneAlphaOnly=s.HalftoneAlphaOnly, HalftoneAutoDot=s.HalftoneAutoDot,
                 HalftoneLpi=s.HalftoneLpi, HalftoneAngle=s.HalftoneAngle, HalftoneDotMm=s.HalftoneDotMm };
             value.Preparation().Validate(); return value;
@@ -107,6 +111,10 @@ namespace VanyaTools.Native
         public bool KnockoutSoft { get; set; }
         public int HalftoneShape { get; set; }
         public int HalftoneColorBoost { get; set; }
+        public bool HalftoneRemoveSmall {get;set;}
+        public bool HalftoneGrowSmall {get;set;}
+        public double HalftoneRemoveMm {get;set;}=.3;
+        public double HalftoneGrowMm {get;set;}=.5;
         public bool Halftone { get; set; }
         public bool HalftoneAlphaOnly { get; set; } = true;
         public bool HalftoneAutoDot { get; set; } = true;

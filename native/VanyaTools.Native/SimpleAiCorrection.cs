@@ -119,7 +119,9 @@ namespace VanyaTools.Native
         {
             if (NativeRasterCorrection.HasSource(source))
                 return NativeRasterCorrection.Process(source, output, options, cancellation);
-            if (!options.SmoothStairs && !options.Outline)
+            if(options.Halftone && options.NeedsGeometry)
+                return NativeRasterCorrection.ProcessRgb(source,output,options,cancellation);
+            if (!options.NeedsGeometry)
             {
                 var pixels = DtfCorrectionPixels.Capture(AiPrintTab.Bitmap(source)).Correct(options, cancellation);
                 using (var stream = File.Create(output)) pixels.WritePng(stream, cancellation);

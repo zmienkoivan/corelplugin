@@ -3,6 +3,7 @@
   <ItemGroup>
     <Reference Include="System.Web.Extensions" /><Reference Include="System.IO.Compression" />
     <Compile Include="../../native/VanyaTools.Native/DtfCorrectionWindow.cs" Link="DtfCorrectionWindow.cs" />
+    <Compile Include="../../native/VanyaTools.Native/DtfCorrectionHelp.cs" Link="DtfCorrectionHelp.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfCorrectionOptions.cs" Link="DtfCorrectionOptions.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfCorrectionPrintPreparation.cs" Link="DtfCorrectionPrintPreparation.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfPrintPreparation.cs" Link="DtfPrintPreparation.cs" />

@@ -24,9 +24,77 @@ internal static class Program
     { var value = new byte[4]; value[Order[0]] = c; value[Order[1]] = m; value[Order[2]] = y; value[Order[3]] = k; return value; }
     private static int Main()
     {
-        try { Knockout(); SoftKnockout(); Resample(); Models(); Boost(); Modes(); Shapes(); Millimeters(); Phase(); Combined(); Validation();
+        try { Knockout(); SoftKnockout(); NegativeTolerance(); Islands(); Resample(); Models(); Boost(); Modes(); Shapes(); Millimeters(); Phase(); Combined(); Validation();
             Console.WriteLine("DTF print preparation checks passed: " + _checks + ". Synthetic planes only; no Corel or customer images."); return 0; }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+    }
+    private static void NegativeTolerance()
+    {
+        byte previous=0;
+        foreach(int tolerance in new[]{0,-32,-128,-255}) {
+            byte[] rgb={0,0,128,0,0,0};byte[] alpha={255,255};
+            var options=new DtfPrintPreparationOptions {Knockout=true,SoftKnockout=true,Tolerance=tolerance};
+            DtfPrintPreparation.Knockout(rgb,3,4,null,alpha,1,0,2,1,options,CancellationToken.None);
+            Check(alpha[0]>=previous && alpha[1]==0,"Negative tolerance does not narrow effect or preserves exact key");
+            Check(Math.Abs(alpha[0]/255d*rgb[2]-128)<1.5,"Negative tolerance broke garment recomposition");previous=alpha[0];
+        }
+        Check(previous==255,"Minus 255 did not retain non-key colour");
+        Reject<ArgumentOutOfRangeException>(()=>new DtfPrintPreparationOptions {Knockout=true,SoftKnockout=false,Tolerance=-1}.Validate());
+    }
+    private static NativeRasterBuffer IslandImage(int w,int h,double dpiX=254,double dpiY=254)
+    {
+        var colors=new byte[w*h*3];for(int i=0;i<colors.Length;i+=3){colors[i]=10;colors[i+1]=20;colors[i+2]=30;}
+        return new NativeRasterBuffer(w,h,4,dpiX,dpiY,colors,new byte[w*h]);
+    }
+    private static void Rect(NativeRasterBuffer image,int x,int y,int w,int h)
+    {for(int row=y;row<y+h;row++)for(int col=x;col<x+w;col++)image.Alpha[row*image.Width+col]=255;}
+    private static void Islands()
+    {
+        var source=IslandImage(100,60);Rect(source,5,5,1,1);Rect(source,20,8,2,2);Rect(source,35,8,3,3);Rect(source,55,5,1,10);Rect(source,70,10,1,1);Rect(source,71,11,1,1);
+        var before=(byte[])source.Alpha.Clone();
+        var prep=new DtfPrintPreparationOptions {Halftone=true,AlphaOnly=true,RemoveSmall=true,GrowSmall=true,RemoveBelowMm=.3,GrowToMm=.5};
+        var result=NativeRasterFilters.Process(source,new NativeRasterFilterOptions {PrintPreparation=prep,OutlineColor=new byte[]{0,0,255}});
+        int px=(int)Math.Round(result.OffsetMm.Item1*254/25.4),py=(int)Math.Round(result.OffsetMm.Item2*254/25.4);var image=result.Buffer;
+        Func<int,int,int> at=(x,y)=>(y+py)*image.Width+x+px;
+        Check(image.Alpha[at(5,5)]==0 && image.Alpha[at(20,8)]==0 && image.Alpha[at(70,10)]==0 && image.Alpha[at(71,11)]==0,"Small islands or diagonal-connected dots survived removal");
+        Check(image.Alpha[at(35,8)]==255 && image.Alpha[at(34,7)]==255 && image.Alpha[at(38,11)]==255,"Threshold-sized island was deleted or not grown");
+        Check(image.Alpha[at(54,5)]==0 && image.Alpha[at(55,5)]==255,"Long line was treated as a small island");
+        Check(image.Colors[at(34,7)*3+2]==255 && image.Colors[at(35,8)*3]==10,"Grow rim did not use selected colour or changed island centre");
+        Check(source.Alpha.SequenceEqual(before),"Cleanup changed original alpha");
+        Check(image.Alpha.All(a=>a==0 || a==255),"Cleanup introduced semi-transparent pixels");
+        var onlyTiny=IslandImage(20,20);Rect(onlyTiny,10,10,1,1);
+        var gone=NativeRasterFilters.Process(onlyTiny,new NativeRasterFilterOptions {PrintPreparation=prep,Outline=true,ExpansionMm=.2,RadiusMm=.2});
+        Check(gone.Buffer.Alpha.All(a=>a==0),"Removed dot was resurrected by grow or global outline");
+        var corner=IslandImage(20,20);Rect(corner,0,0,1,1);var grow=prep.Copy();grow.RemoveSmall=false;
+        var expanded=NativeRasterFilters.Process(corner,new NativeRasterFilterOptions {PrintPreparation=grow});
+        Check(expanded.Buffer.Alpha.Count(a=>a!=0)==25 && expanded.OffsetMm.Item1>0 && expanded.OffsetMm.Item2>0,"Corner dot was clipped instead of expanded with physical offset");
+        var clipped=prep.Copy();clipped.GrowSmall=false;clipped.CutEdges=1;
+        Check(NativeRasterFilters.Process(corner,new NativeRasterFilterOptions {PrintPreparation=clipped}).Buffer.Alpha[0]==255,"Artificial cropped edge was classified as a whole small dot");
+        var longOnly=IslandImage(20,20);Rect(longOnly,8,2,1,10);
+        var unchanged=NativeRasterFilters.Process(longOnly,new NativeRasterFilterOptions {PrintPreparation=grow});
+        Check(unchanged.Buffer.Width==20 && unchanged.Buffer.Height==20 && unchanged.OffsetMm.Item1==0,"No eligible islands still added padding");
+        var anisotropic=IslandImage(30,30,254,127);Rect(anisotropic,15,15,1,1);grow.GrowToMm=.6;
+        var nonSquare=NativeRasterFilters.Process(anisotropic,new NativeRasterFilterOptions {PrintPreparation=grow}).Buffer;
+        int minX=nonSquare.Width,maxX=-1,minY=nonSquare.Height,maxY=-1;
+        for(int p=0;p<nonSquare.Alpha.Length;p++)if(nonSquare.Alpha[p]!=0){minX=Math.Min(minX,p%nonSquare.Width);maxX=Math.Max(maxX,p%nonSquare.Width);minY=Math.Min(minY,p/nonSquare.Width);maxY=Math.Max(maxY,p/nonSquare.Width);}
+        Check((maxX-minX+1)*.1>=.6-1e-9 && (maxY-minY+1)*.2>=.6-1e-9,"Grow ignored per-axis DPI");
+        var sharp=NativeRasterFilters.Process(source,new NativeRasterFilterOptions {PrintPreparation=new DtfPrintPreparationOptions {Halftone=true,AlphaOnly=false},Outline=true,RadiusMm=.3,ExpansionMm=.1});
+        Check(sharp.Buffer.Alpha.All(a=>a==0 || a==255),"Halftone outline still has Gaussian alpha fringe");
+        Reject<OperationCanceledException>(()=>NativeRasterFilters.Process(source,new NativeRasterFilterOptions {PrintPreparation=prep},new CancellationToken(true)));
+        Reject<ArgumentException>(()=>new DtfPrintPreparationOptions {Halftone=true,RemoveSmall=true,RemoveBelowMm=0}.Validate());
+        Reject<ArgumentException>(()=>new DtfPrintPreparationOptions {Halftone=true,GrowSmall=true,GrowToMm=Double.NaN}.Validate());
+        // Exact cropped preview: padding and artificial edges must not change
+        // the same visible island compared with processing the complete source.
+        var fullSource=IslandImage(160,100);Rect(fullSource,80,50,3,3);Rect(fullSource,10,30,50,1);
+        var opts=new DtfPrintPreparationOptions {Halftone=true,AlphaOnly=true,GrowSmall=true,GrowToMm=.5};
+        var full=NativeRasterFilters.Process(fullSource,new NativeRasterFilterOptions {PrintPreparation=opts});
+        const int left=40,top=20,width=80,height=60;var tileSource=IslandImage(width,height);
+        for(int y=0;y<height;y++)Buffer.BlockCopy(fullSource.Alpha,(top+y)*160+left,tileSource.Alpha,y*width,width);
+        var tileOpts=opts.Copy();tileOpts.CutEdges=15;
+        var tile=NativeRasterFilters.Process(tileSource,new NativeRasterFilterOptions {PrintPreparation=tileOpts});
+        int fx=(int)Math.Round(full.OffsetMm.Item1*10),fy=(int)Math.Round(full.OffsetMm.Item2*10),tx=(int)Math.Round(tile.OffsetMm.Item1*10),ty=(int)Math.Round(tile.OffsetMm.Item2*10);
+        bool same=true;for(int y=45;y<60;y++)for(int x=75;x<90;x++)same &= full.Buffer.Alpha[(y+fy)*full.Buffer.Width+x+fx]==tile.Buffer.Alpha[(y-top+ty)*tile.Buffer.Width+x-left+tx];
+        Check(same,"Cropped cleanup differs from full source");
     }
     private static void Resample()
     {

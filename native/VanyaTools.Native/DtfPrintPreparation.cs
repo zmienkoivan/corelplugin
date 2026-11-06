@@ -10,6 +10,9 @@ namespace VanyaTools.Native
     {
         internal bool Knockout, Halftone, AlphaOnly = true, AutoDot = true;
         internal bool SoftKnockout;
+        internal bool RemoveSmall, GrowSmall;
+        internal double RemoveBelowMm = .3, GrowToMm = .5;
+        internal int CutEdges;
         internal DtfDotShape Shape;
         internal int ColorBoost;
         internal byte Red, Green, Blue;
@@ -22,7 +25,10 @@ namespace VanyaTools.Native
         internal double EffectiveDotMm => AutoDot ? 25.4 / FrequencyLpi * (AlphaOnly ? DtfDotGeometry.CoverDiameter(Shape) : .75) : DotDiameterMm;
         internal void Validate()
         {
-            if (Knockout && (Tolerance < 0 || Tolerance > 255)) throw new ArgumentOutOfRangeException(nameof(Tolerance));
+            if (Knockout && (Tolerance < (SoftKnockout ? -255 : 0) || Tolerance > 255)) throw new ArgumentOutOfRangeException(nameof(Tolerance));
+            if(Halftone && ((RemoveSmall && (!Finite(RemoveBelowMm) || RemoveBelowMm<.05 || RemoveBelowMm>5)) ||
+                (GrowSmall && (!Finite(GrowToMm) || GrowToMm<.05 || GrowToMm>5)) || CutEdges<0 || CutEdges>15))
+                throw new ArgumentException("Мелкие элементы: пороги 0,05–5 мм.");
             if (Halftone && (!Finite(FrequencyLpi) || FrequencyLpi < .5 || FrequencyLpi > 200 ||
                 !Finite(AngleDegrees) || AngleDegrees < -180 || AngleDegrees > 180 ||
                 (!AutoDot && (!Finite(DotDiameterMm) || DotDiameterMm < .01 || DotDiameterMm > 250)) ||
@@ -64,7 +70,8 @@ namespace VanyaTools.Native
                 // the key colour. Unmix the key from RGB as well to avoid halos.
                 // At tolerance 0: alpha*foreground+(1-alpha)*key == input.
                 double opacity = Math.Max(ComponentOpacity(r, options.Red), Math.Max(ComponentOpacity(g, options.Green), ComponentOpacity(b, options.Blue)));
-                opacity = deadZone >= 1 ? 0 : Math.Max(0, (opacity - deadZone) / (1 - deadZone));
+                opacity = deadZone < 0 ? (opacity==0 ? 0 : deadZone<=-1 ? 1 : Math.Min(1,opacity/(1+deadZone))) :
+                    deadZone >= 1 ? 0 : Math.Max(0, (opacity - deadZone) / (1 - deadZone));
                 int nextAlpha = Byte(alpha[a] * opacity);
                 if (nextAlpha == 0) { alpha[a] = 0; continue; }
                 if (opacity >= 1 - 1e-12) continue;

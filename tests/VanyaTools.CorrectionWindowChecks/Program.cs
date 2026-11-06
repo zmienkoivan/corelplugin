@@ -337,10 +337,21 @@ internal static class Program
         var bad=DtfCorrectionPreset.FromOptions(captured);bad.Settings.HalftoneLpi=0;string before=Field<TextBox>(window,"_screenLpi").Text;
         bool rejected=false;try{Call(window,"ApplyPreset",bad);}catch(TargetInvocationException error) when(error.InnerException is InvalidDataException){rejected=true;}
         Check(rejected && Field<TextBox>(window,"_screenLpi").Text==before,"Rejected preset partially changed controls");
-        var tooLarge=DtfCorrectionPreset.FromOptions(captured);tooLarge.Settings.Outline=true;tooLarge.Settings.RadiusMm=10;
+        var tooLarge=DtfCorrectionPreset.FromOptions(captured);tooLarge.Settings.Outline=true;tooLarge.Settings.ExpansionMm=10;
         rejected=false;try{Call(window,"ApplyPreset",tooLarge);}catch(TargetInvocationException error) when(error.InnerException is InvalidOperationException){rejected=true;}
         Check(rejected && Field<TextBox>(window,"_screenLpi").Text==before && Field<CheckBox>(window,"_outline").IsChecked==false,"Preset exceeding source DPI limits partially changed controls");
         Check(Field<Button>(window,"_savePreset").IsEnabled && Field<Button>(window,"_loadPreset").IsEnabled,"Preset buttons unavailable");
+        var cleanup=DtfCorrectionPreset.FromOptions(captured);cleanup.Settings.KnockoutSoft=true;cleanup.Settings.KnockoutTolerance=-90;
+        cleanup.Settings.HalftoneRemoveSmall=true;cleanup.Settings.HalftoneRemoveMm=.25;cleanup.Settings.HalftoneGrowSmall=true;cleanup.Settings.HalftoneGrowMm=.55;
+        Call(window,"ApplyPreset",cleanup);Until(()=>Field<Button>(window,"_apply").IsEnabled,"Cleanup preset did not update");
+        var cleanOptions=((DtfCorrectionPreset)Call(window,"CapturePreset")).ToOptions();
+        Check(cleanOptions.KnockoutTolerance==-90 && cleanOptions.HalftoneRemoveSmall && cleanOptions.HalftoneGrowSmall && cleanOptions.HalftoneGrowMm==.55,"New processing settings were not restored");
+        Check(Field<Slider>(window,"_knockoutTolerance").Minimum==-255 && Field<Slider>(window,"_knockoutTolerance").Value==-90,"Negative knockout tolerance was clamped during preset load");
+        Check(Field<Expander>(window,"_thinSection").IsExpanded && Field<TextBox>(window,"_hex").IsEnabled && !Field<TextBox>(window,"_radius").IsEnabled,"Unified cleanup section, grow colour or hard outline availability incorrect");
+        Field<Slider>(window,"_removeSmallSlider").Value=.2;Field<Slider>(window,"_growSmallSlider").Value=.65;
+        var changed=((DtfCorrectionPreset)Call(window,"CapturePreset")).ToOptions();Check(changed.HalftoneRemoveMm==.2 && changed.HalftoneGrowMm==.65,"Cleanup sliders do not update physical thresholds");
+        Field<CheckBox>(window,"_knockoutSoft").IsChecked=false;
+        Check(Field<Slider>(window,"_knockoutTolerance").Minimum==0 && Field<Slider>(window,"_knockoutTolerance").Value>=0,"Hard knockout retained negative tolerance");
         Call(window,"ApplyPreset",original);Until(()=>Field<Button>(window,"_apply").IsEnabled,"Original settings did not resume after preset test");
     }
 }

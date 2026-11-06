@@ -31,6 +31,9 @@ internal static class Program
             var extended=Fixture();extended.KnockoutSoft=true;extended.HalftoneShape=DtfDotShape.Star;extended.HalftoneColorBoost=43;
             DtfCorrectionPreset.Save(path,DtfCorrectionPreset.FromOptions(extended));var loaded=DtfCorrectionPreset.Load(path).ToOptions();
             Check(loaded.KnockoutSoft && loaded.HalftoneShape==DtfDotShape.Star && loaded.HalftoneColorBoost==43,"New preset fields lost");
+            var cleanup=Fixture();cleanup.KnockoutTolerance=-70;cleanup.HalftoneRemoveSmall=true;cleanup.HalftoneGrowSmall=true;cleanup.HalftoneRemoveMm=.25;cleanup.HalftoneGrowMm=.65;
+            DtfCorrectionPreset.Save(path,DtfCorrectionPreset.FromOptions(cleanup));var restored=DtfCorrectionPreset.Load(path).ToOptions();
+            Check(restored.KnockoutTolerance==-70 && restored.HalftoneRemoveSmall && restored.HalftoneGrowSmall && restored.HalftoneRemoveMm==.25 && restored.HalftoneGrowMm==.65,"Negative tolerance or cleanup preset lost");
             var old=DtfCorrectionPreset.FromOptions(extended);old.Version=1;var legacy=old.ToOptions();
             Check(!legacy.KnockoutSoft && legacy.HalftoneShape==DtfDotShape.Circle && legacy.HalftoneColorBoost==0,"Version 1 preset behaviour changed");
             Check(result.GridOriginXmm==0 && result.GridOriginYmm==0 && result.StairsScale==1,"Source-specific geometry persisted");
@@ -50,7 +53,8 @@ internal static class Program
             foreach(Action<DtfCorrectionPreset> change in new Action<DtfCorrectionPreset>[] {
                 p=>p.Version=99,p=>p.Format="OtherTool",p=>p.Settings=null,p=>p.Settings.OutlineColor="#ZZ0000",
                 p=>p.Settings.KnockoutColor="red",p=>p.Settings.Threshold=256,p=>p.Settings.NearWhiteTolerance=65,
-                p=>p.Settings.KnockoutTolerance=-1,p=>p.Settings.HalftoneLpi=0,p=>p.Settings.HalftoneAngle=181,
+                p=>p.Settings.KnockoutTolerance=-256,p=>p.Settings.HalftoneLpi=0,p=>p.Settings.HalftoneAngle=181,
+                p=>p.Settings.HalftoneRemoveMm=0,p=>p.Settings.HalftoneGrowMm=6,
                 p=>p.Settings.HalftoneShape=99,p=>p.Settings.HalftoneColorBoost=101,
                 p=>p.Settings.HalftoneDotMm=0,p=>p.Settings.ExpansionMm=Double.PositiveInfinity })
             { var p=DtfCorrectionPreset.FromOptions(source);change(p);Reject(()=>p.ToOptions()); }

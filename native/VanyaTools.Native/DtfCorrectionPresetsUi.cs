@@ -35,8 +35,10 @@ namespace VanyaTools.Native
             {
                 long pixels = (long)_originalPixels.Width * _originalPixels.Height;
                 int scale = !options.SmoothStairs ? 1 : pixels<=2000000 ? 4 : pixels<=3500000 ? 3 : pixels<=8000000 ? 2 : 1;
-                DtfOutlineUnits.Pixels(options.RadiusMm,true,_originalPixels.DpiX*scale,DtfOutlineUnits.MaxRadiusPixels,"Сглаживание пресета");
-                DtfOutlineUnits.Pixels(options.RadiusMm,true,_originalPixels.DpiY*scale,DtfOutlineUnits.MaxRadiusPixels,"Сглаживание пресета");
+                if(!options.Halftone) {
+                    DtfOutlineUnits.Pixels(options.RadiusMm,true,_originalPixels.DpiX*scale,DtfOutlineUnits.MaxRadiusPixels,"Сглаживание пресета");
+                    DtfOutlineUnits.Pixels(options.RadiusMm,true,_originalPixels.DpiY*scale,DtfOutlineUnits.MaxRadiusPixels,"Сглаживание пресета");
+                }
                 DtfOutlineUnits.Pixels(options.ExpansionMm,true,_originalPixels.DpiX*scale,DtfOutlineUnits.MaxExpansionPixels,"Обводка пресета");
                 DtfOutlineUnits.Pixels(options.ExpansionMm,true,_originalPixels.DpiY*scale,DtfOutlineUnits.MaxExpansionPixels,"Обводка пресета");
             }
@@ -49,8 +51,11 @@ namespace VanyaTools.Native
                 _stairs.IsChecked=options.SmoothStairs; _outline.IsChecked=options.Outline;
                 _radius.Text=DtfOutlineUnits.Format(options.RadiusMm); _expansion.Text=DtfOutlineUnits.Format(options.ExpansionMm); _hex.Text=Hex(options.Color);
                 _whiten.IsChecked=options.WhitenNearWhite; _nearWhiteTolerance.Value=options.NearWhiteTolerance;
-                _knockout.IsChecked=options.Knockout; _knockoutHex.Text=Hex(options.KnockoutColor); _knockoutTolerance.Value=options.KnockoutTolerance;
-                _knockoutSoft.IsChecked=options.KnockoutSoft; _screenShape.SelectedIndex=(int)options.HalftoneShape;
+                _knockout.IsChecked=options.Knockout; _knockoutHex.Text=Hex(options.KnockoutColor);_knockoutSoft.IsChecked=options.KnockoutSoft;_knockoutTolerance.Value=options.KnockoutTolerance;
+                _screenShape.SelectedIndex=(int)options.HalftoneShape;
+                _removeSmall.IsChecked=options.HalftoneRemoveSmall;_removeSmallMm.Text=DtfOutlineUnits.Format(options.HalftoneRemoveMm);
+                _growSmall.IsChecked=options.HalftoneGrowSmall;_growSmallMm.Text=DtfOutlineUnits.Format(options.HalftoneGrowMm);
+                if(options.HalftoneRemoveSmall || options.HalftoneGrowSmall)_thinSection.IsExpanded=true;
                 _halftone.IsChecked=options.Halftone; _screenMode.SelectedIndex=options.HalftoneAlphaOnly?0:1;
                 _screenLpi.Text=DtfOutlineUnits.Format(options.HalftoneLpi); _screenAngle.Text=options.HalftoneAngle.ToString(System.Globalization.CultureInfo.CurrentCulture);
                 _screenDot.Text=DtfOutlineUnits.Format(options.HalftoneDotMm); _automaticDot=options.HalftoneAutoDot;

@@ -48,6 +48,8 @@ namespace VanyaTools.Native
                 options.MaximumOutputPixels <= 0) throw new ArgumentOutOfRangeException(nameof(options));
             cancellation.ThrowIfCancellationRequested();
             options.PrintPreparation?.Validate();
+            bool screen=options.PrintPreparation?.Halftone==true;
+            bool cleanup=screen && (options.PrintPreparation.RemoveSmall || options.PrintPreparation.GrowSmall);
             var resample = options.Resample300 ? DtfResamplePlan.Create(source.Width,source.Height,source.DpiX,source.DpiY,options.MaximumOutputPixels) : null;
             NativeRasterBuffer current;
             if(resample?.Needed==true) {
@@ -64,12 +66,13 @@ namespace VanyaTools.Native
             {
                 current = Smooth(current, options.Threshold, options.StairsScale, Math.Min(32000000, options.MaximumOutputPixels),
                     !options.RemoveSemiTransparent, cancellation);
-                current = Trim(current, 2, out int left, out int top, cancellation);
-                offsetX -= left * 25.4 / current.DpiX; offsetY -= top * 25.4 / current.DpiY;
+                if(!cleanup) {
+                    current = Trim(current, 2, out int left, out int top, cancellation);
+                    offsetX -= left * 25.4 / current.DpiX; offsetY -= top * 25.4 / current.DpiY;
+                }
             }
             // Screen after smoothing, before the final outline: each actual dot
             // gets the selected outline colour, without screening that rim away.
-            bool screen = options.PrintPreparation?.Halftone == true;
             if (screen)
             {
                 if (options.WhitenNearWhite) WhitenConfigured(current, options, cancellation);
@@ -77,14 +80,18 @@ namespace VanyaTools.Native
                     current.Alpha, 1, 0, current.Width, current.Height, options.PrintPreparation, cancellation);
                 DtfPrintPreparation.Halftone(current.Alpha, 1, 0, current.Width, current.Height, current.DpiX, current.DpiY,
                     options.PrintPreparation.Offset(-offsetX, -offsetY), cancellation);
+                if(cleanup) {
+                    var cleaned=DtfIslandCleanup.Process(current,options.PrintPreparation,options.OutlineColor,options.MaximumOutputPixels,cancellation);
+                    current=cleaned.Buffer;offsetX+=cleaned.OffsetMm.Item1;offsetY+=cleaned.OffsetMm.Item2;
+                }
             }
             if (options.Outline)
             {
-                int radiusX = Pixels(options.RadiusMm, current.DpiX, 12), radiusY = Pixels(options.RadiusMm, current.DpiY, 12);
+                int radiusX = screen ? 0 : Pixels(options.RadiusMm, current.DpiX, 12), radiusY = screen ? 0 : Pixels(options.RadiusMm, current.DpiY, 12);
                 int expansionX = Pixels(options.ExpansionMm, current.DpiX, 100), expansionY = Pixels(options.ExpansionMm, current.DpiY, 100);
                 int paddingX = checked(expansionX + radiusX + 2), paddingY = checked(expansionY + radiusY + 2);
                 current = Outline(current, paddingX, paddingY, radiusX, radiusY, expansionX, expansionY,
-                    options.OutlineColor, options.OutlineOpacity, options.MaximumOutputPixels, cancellation);
+                    options.OutlineColor, screen ? (byte)255 : options.OutlineOpacity, options.MaximumOutputPixels, cancellation);
                 current = Trim(current, 2, out int left, out int top, cancellation);
                 offsetX += (paddingX - left) * 25.4 / current.DpiX;
                 offsetY += (paddingY - top) * 25.4 / current.DpiY;

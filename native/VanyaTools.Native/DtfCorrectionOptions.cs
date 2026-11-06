@@ -12,6 +12,10 @@ namespace VanyaTools.Native
         internal Color Color = Colors.White;
         internal bool Knockout, Halftone, HalftoneAlphaOnly = true, HalftoneAutoDot = true;
         internal bool KnockoutSoft = true;
+        internal bool HalftoneRemoveSmall, HalftoneGrowSmall;
+        internal double HalftoneRemoveMm=.3, HalftoneGrowMm=.5;
+        internal int CleanupCutEdges;
+        internal bool NeedsGeometry => Outline || SmoothStairs || Halftone && (HalftoneRemoveSmall || HalftoneGrowSmall);
         internal DtfDotShape HalftoneShape;
         internal int HalftoneColorBoost = 25;
         internal Color KnockoutColor = Colors.Black;
@@ -23,6 +27,7 @@ namespace VanyaTools.Native
             Knockout = Knockout, Red = KnockoutColor.R, Green = KnockoutColor.G, Blue = KnockoutColor.B,
             Tolerance = KnockoutTolerance, Halftone = Halftone, AlphaOnly = HalftoneAlphaOnly,
             SoftKnockout = KnockoutSoft, Shape = HalftoneShape, ColorBoost = HalftoneColorBoost,
+            RemoveSmall=HalftoneRemoveSmall, GrowSmall=HalftoneGrowSmall, RemoveBelowMm=HalftoneRemoveMm, GrowToMm=HalftoneGrowMm, CutEdges=CleanupCutEdges,
             AutoDot = HalftoneAutoDot, FrequencyLpi = HalftoneLpi, AngleDegrees = HalftoneAngle,
             DotDiameterMm = HalftoneDotMm, OriginXmm = GridOriginXmm + offsetX, OriginYmm = GridOriginYmm + offsetY };
     }

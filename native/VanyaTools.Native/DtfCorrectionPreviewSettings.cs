@@ -84,7 +84,8 @@ namespace VanyaTools.Native
             bool available = _settingsPanel.IsEnabled && !_applying && !_closed;
             _threshold.IsEnabled = _thresholdSlider.IsEnabled = available && _remove.IsChecked == true;
             bool outline = available && _outline.IsChecked == true;
-            _radius.IsEnabled = _expansion.IsEnabled = _hex.IsEnabled = _swatch.IsEnabled = outline;
+            _radius.IsEnabled=outline && _halftone.IsChecked!=true;_expansion.IsEnabled=outline;
+            _hex.IsEnabled=_swatch.IsEnabled=_outlinePipette.IsEnabled=outline || available && _halftone.IsChecked==true && _growSmall.IsChecked==true;
             _nearWhiteTolerance.IsEnabled = available;
             _nearWhiteSwatch.IsEnabled = available && _highlightWhite.IsChecked == true;
             UpdateThinAvailability();

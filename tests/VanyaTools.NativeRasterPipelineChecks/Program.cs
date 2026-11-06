@@ -110,6 +110,19 @@ internal static class Program
         Check(normalized.Width==9 && normalized.Height==4 && normalized.DpiX==300 && normalized.DpiY==300 && normalized.Mode==mode,"File normalization did not preserve native model/300 DPI");
         Check(Math.Abs(normalized.Width/normalized.DpiX-low.Width/low.DpiX)<1e-12 && Math.Abs(normalized.Height/normalized.DpiY-low.Height/low.DpiY)<1e-12,"File normalization changed physical millimetres");
         CheckWhitePreview(normalizedPath,0);Check(beforeHash==Hash(lowPath),"File normalization overwrote source PNG");
+        string cleanedPath=PathFor("cleanup-"+mode+".png");
+        var cleanupResult=NativeRasterCorrection.Process(input,cleanedPath,new DtfCorrectionOptions {Halftone=true,HalftoneAlphaOnly=true,HalftoneGrowSmall=true,HalftoneGrowMm=.5},CancellationToken.None);
+        var cleaned=Read(cleanedPath);int cx=(int)Math.Round(cleanupResult.OffsetMm.Item1*source.DpiX/25.4),cy=(int)Math.Round(cleanupResult.OffsetMm.Item2*source.DpiY/25.4);
+        Check(cleaned.Mode==mode && cleaned.Width>source.Width && cleaned.Height>source.Height,"File island growth lost native model or padding");
+        int centre=cy*cleaned.Width+cx;Check(cleaned.IsPureWhite(centre) && cleaned.Alpha[centre]==255,"File island growth changed existing white");
+        int retained=(cy*cleaned.Width+cx+2)*source.Channels;
+        Check(cleaned.Colors.Skip(retained).Take(source.Channels).SequenceEqual(source.Colors.Skip(2*source.Channels).Take(source.Channels)),"File island growth recoloured original ink");
+        Check(cleaned.Alpha.All(a=>a==0 || a==255),"File island growth introduced translucent rim");
+        if(mode==4) {
+            string rgbPath=PathFor("cleanup-rgb.png");var rgbResult=NativeRasterCorrection.ProcessRgb(input,rgbPath,new DtfCorrectionOptions {Halftone=true,HalftoneAlphaOnly=true,HalftoneGrowSmall=true,HalftoneGrowMm=.5},CancellationToken.None);
+            var rgb=Read(rgbPath);Check(rgb.Alpha.SequenceEqual(cleaned.Alpha) && rgb.Colors.SequenceEqual(cleaned.Colors) &&
+                Math.Abs(rgbResult.OffsetMm.Item1-cleanupResult.OffsetMm.Item1)<.0001 && Math.Abs(rgbResult.OffsetMm.Item2-cleanupResult.OffsetMm.Item2)<.0001,"Plain RGB and native cleanup paths differ");
+        }
 
         string outlined = PathFor("outlined-" + mode + ".png");
         var outlineResult = NativeRasterCorrection.Process(input, outlined, new DtfCorrectionOptions { Outline = true, Color = Colors.Red }, CancellationToken.None);

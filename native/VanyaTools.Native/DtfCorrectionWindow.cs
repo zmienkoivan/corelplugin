@@ -30,7 +30,7 @@ namespace VanyaTools.Native
         private readonly Slider _thresholdSlider, _nearWhiteTolerance;
         private readonly ComboBox _units, _view, _marker;
         private readonly TextBlock _message, _metrics, _nearWhiteValue;
-        private readonly Button _apply, _cancel, _swatch, _nearWhiteSwatch;
+        private readonly Button _apply, _cancel, _swatch, _nearWhiteSwatch, _outlinePipette;
         private Color _nearWhiteMarker = Color.FromRgb(255, 0, 168);
         private readonly Image _before, _after;
         private readonly StackPanel _settingsPanel;
@@ -70,11 +70,10 @@ namespace VanyaTools.Native
 
             var controls = new StackPanel { Margin = new Thickness(0, 0, 12, 0) }; _settingsPanel = controls;
             root.Children.Add(new ScrollViewer { Content = controls, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
-            controls.Children.Add(Text("Коррекция", 16, true));
-            controls.Children.Add(Text("Настройки меняют предпросмотр. В Corel вставляется только готовый результат.", 11));
+            controls.Children.Add(WithHelp(Text("Коррекция",16,true),"Настройки меняют предпросмотр. Все исправления каждый раз считаются от исходника; в Corel вставляется только готовый результат."));
             CreatePresetControls(controls);
             CreateResolutionControls(controls);
-            controls.Children.Add(Text("Экспресс-аудит", 12, true));
+            controls.Children.Add(WithHelp(Text("Экспресс-аудит",12,true),"Подсветка — только для просмотра. «Подбелить» исправляет почти белое на чистый белый, сохраняя прозрачность."));
             var alphaAudit = new Grid();
             alphaAudit.ColumnDefinitions.Add(new ColumnDefinition());
             alphaAudit.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -115,7 +114,6 @@ namespace VanyaTools.Native
                 Margin = new Thickness(5, 0, 0, 0) };
             Grid.SetColumn(_nearWhiteValue, 2); whiteToleranceRow.Children.Add(_nearWhiteValue);
             controls.Children.Add(whiteToleranceRow);
-            controls.Children.Add(Text("Подсветка — только для просмотра. «Подбелить» исправляет почти белое на чистый белый, сохраняя прозрачность.", 10));
             _nearWhiteSwatch.Click += (_, __) =>
             {
                 if (_applying || _closed) return;
@@ -142,7 +140,8 @@ namespace VanyaTools.Native
             _stairs.ToolTip = "Сглаживает край и цветовые границы. Порог применяется только при включённом удалении полупрозрачности.";
 
             controls.Children.Add(new Separator { Margin = new Thickness(0, 9, 0, 8) });
-            _outline = Check("Обводка и сглаживание края", Options.Outline); controls.Children.Add(_outline);
+            _outline = Check("Обводка и сглаживание края", Options.Outline);
+            _metrics=Text("Загружаю исходник…",10);controls.Children.Add(WithHelp(_outline,_metrics));
             var presetRow = new UniformGrid { Columns = 3, Margin = new Thickness(0, 3, 0, 6) };
             presetRow.Children.Add(Preset(false, presets.ThinMm)); presetRow.Children.Add(Preset(true, presets.ThickMm));
             _units = Combo(new[] { "мм", "px" }); presetRow.Children.Add(_units); controls.Children.Add(presetRow);
@@ -165,7 +164,7 @@ namespace VanyaTools.Native
                 ToolTip = "Выбрать цвет обводки", Background = new SolidColorBrush(Options.Color) };
             _swatch.Padding = new Thickness(1); _swatch.Content = SwatchContent(_swatch);
             Grid.SetColumn(_swatch, 1); colors.Children.Add(_swatch);
-            var pipette = Button("⌖", async (_, __) =>
+            var pipette = _outlinePipette = Button("⌖", async (_, __) =>
             {
                 if (_applying || _closed) return;
                 try { Color? picked = await ScreenColorPicker.PickAsync(); if (picked.HasValue && !_closed) _hex.Text = Hex(picked.Value); }
@@ -177,7 +176,6 @@ namespace VanyaTools.Native
             Grid.SetColumn(pipette, 2); colors.Children.Add(pipette);
             var colorField = Labeled("Цвет", colors); colorField.Margin = new Thickness(0, 2, 0, 0);
             Grid.SetColumn(colorField, 2); outlineValues.Children.Add(colorField); controls.Children.Add(outlineValues);
-            pipette.SetBinding(IsEnabledProperty, new System.Windows.Data.Binding("IsChecked") { Source = _outline });
             _swatch.Click += (_, __) =>
             {
                 try
@@ -188,7 +186,6 @@ namespace VanyaTools.Native
                 }
                 catch (Exception error) { ShowMessage(error.GetBaseException().Message, true); }
             };
-            _metrics = Text("Загружаю исходник…", 10); controls.Children.Add(_metrics);
             CreateHalftoneControls(controls);
 
             var previews = new Grid(); Grid.SetColumn(previews, 1); root.Children.Add(previews);
@@ -196,7 +193,7 @@ namespace VanyaTools.Native
             previews.RowDefinitions.Add(new RowDefinition());
             previews.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             var previewToolbar = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
-            previewToolbar.Children.Add(Text("Исходник и результат", 15, true));
+            previewToolbar.Children.Add(WithHelp(Text("Исходник и результат",15,true),"Колесо — зум; Shift + колесо — горизонтальная прокрутка; средняя/правая кнопка или пробел + перетаскивание — перемещение. Видимый участок уточняется автоматически."));
             _view = Combo(new[] { "Автокачество", "Быстрый обзор" });
             previewToolbar.Children.Add(CreateZoomToolbar());
             previewToolbar.Children.Add(CreatePreviewSettingsToolbar()); previews.Children.Add(previewToolbar);
@@ -208,8 +205,6 @@ namespace VanyaTools.Native
             ConfigurePreviewNavigation(_beforeScroll, _before);
             ConfigurePreviewNavigation(_afterScroll, _after);
             Grid.SetRow(pair, 1); previews.Children.Add(pair);
-            var hint = Text("Колесо — зум; Shift + колесо — горизонтальная прокрутка; средняя/правая кнопка или пробел + перетаскивание — перемещение. Видимый участок уточняется автоматически.", 11);
-            Grid.SetRow(hint, 2); previews.Children.Add(hint);
 
             var footer = new Grid { Margin = new Thickness(0, 10, 0, 0) };
             footer.ColumnDefinitions.Add(new ColumnDefinition());
@@ -326,14 +321,14 @@ namespace VanyaTools.Native
             bool mm = _units.SelectedIndex == 0;
             bool validRadius = DtfOutlineUnits.TryNumber(_radius.Text, out double radius);
             bool validExpansion = DtfOutlineUnits.TryNumber(_expansion.Text, out double expansion);
-            if ((!validRadius || !validExpansion) && outline)
+            if ((!validRadius && _halftone.IsChecked!=true || !validExpansion) && outline)
             { ShowMessage("Сглаживание и обводка: неотрицательные числа.", true); return false; }
             double factor = mm ? 1 : 25.4 / _originalPixels.DpiX;
             radius = validRadius ? radius * factor : Options.RadiusMm;
             expansion = validExpansion ? expansion * factor : Options.ExpansionMm;
             if (!TryColor(_hex.Text, out Color color))
             {
-                if (outline) { ShowMessage("Цвет обводки: #RRGGBB.", true); return false; }
+                if (outline || _halftone.IsChecked==true && _growSmall.IsChecked==true) { ShowMessage("Цвет обводки: #RRGGBB.", true); return false; }
                 color = Options.Color;
             }
             options = new DtfCorrectionOptions { Threshold = threshold, RadiusMm = radius, ExpansionMm = expansion,
@@ -347,8 +342,8 @@ namespace VanyaTools.Native
             {
                 double dpiX = _originalPixels.DpiX * (options.SmoothStairs ? options.StairsScale : 1);
                 double dpiY = _originalPixels.DpiY * (options.SmoothStairs ? options.StairsScale : 1);
-                int rx = DtfOutlineUnits.Pixels(radius, true, dpiX, DtfOutlineUnits.MaxRadiusPixels, "Сглаживание");
-                int ry = DtfOutlineUnits.Pixels(radius, true, dpiY, DtfOutlineUnits.MaxRadiusPixels, "Сглаживание");
+                int rx = options.Halftone ? 0 : DtfOutlineUnits.Pixels(radius, true, dpiX, DtfOutlineUnits.MaxRadiusPixels, "Сглаживание");
+                int ry = options.Halftone ? 0 : DtfOutlineUnits.Pixels(radius, true, dpiY, DtfOutlineUnits.MaxRadiusPixels, "Сглаживание");
                 int ex = DtfOutlineUnits.Pixels(expansion, true, dpiX, DtfOutlineUnits.MaxExpansionPixels, "Обводка");
                 int ey = DtfOutlineUnits.Pixels(expansion, true, dpiY, DtfOutlineUnits.MaxExpansionPixels, "Обводка");
                 _metrics.Text = "Сглаживание " + rx + (rx == ry ? "" : "×" + ry) + " px · обводка +" + ex +
@@ -400,7 +395,7 @@ namespace VanyaTools.Native
                 {
                     BitmapSource original = overviewPixels.Bitmap();
                     var focus = new Int32Rect(0, 0, original.PixelWidth, original.PixelHeight);
-                    if (!options.SmoothStairs && !options.Outline)
+                    if (!options.NeedsGeometry)
                     {
                         // The common audit/threshold/whiten path stays in memory.
                         // Even a tolerance-only change used to encode/decode PNGs.
@@ -625,7 +620,11 @@ namespace VanyaTools.Native
             if (_loadingSource || _rendering || _detailRendering || _applying || _insertingThinMask || _normalizing || _qualityActive > 0) return;
             try { if (Directory.Exists(_workspace)) Directory.Delete(_workspace, true); } catch { }
         }
-        private static void DeleteFile(string path) { if (path != null) try { File.Delete(path); } catch { } }
+        private static void DeleteFile(string path)
+        {
+            if(path==null)return;
+            foreach(string owned in new[]{path,path+".native-raster"})try{File.Delete(owned);}catch{}
+        }
         private void ShowMessage(string message, bool error)
         { _message.Text = message; DockerTheme.UseTheme(_message, TextBlock.ForegroundProperty, error ? DockerTheme.ErrorTextBrush : DockerTheme.TextBrush); }
         private Task OnUiAsync(Action action)

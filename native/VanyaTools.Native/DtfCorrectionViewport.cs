@@ -91,6 +91,8 @@ namespace VanyaTools.Native
             if (!ReadOptions(out DtfCorrectionOptions options)) return;
             ThinAuditOptions thin = _thinEnabled.IsChecked == true ? ThinOptions() : null;
             double guardMm = options.Outline ? options.RadiusMm + options.ExpansionMm : 0;
+            if(options.Halftone && (options.HalftoneRemoveSmall || options.HalftoneGrowSmall))
+                guardMm=Math.Max(guardMm,2*Math.Max(options.HalftoneRemoveSmall?options.HalftoneRemoveMm:0,options.HalftoneGrowSmall?options.HalftoneGrowMm:0));
             if (thin != null) guardMm = Math.Max(guardMm, 2 * Math.Max(thin.DotMm, thin.SafeMm + .2));
             var plan = CorrectionViewportPlan.Create(_originalPixels.Width, _originalPixels.Height, _previewScene, visible,
                 CurrentZoom(), options.SmoothStairs ? options.StairsScale : 1,
@@ -174,7 +176,8 @@ namespace VanyaTools.Native
             options = options.Copy();
             options.GridOriginXmm += plan.Input.X * 25.4 / source.DpiX;
             options.GridOriginYmm += plan.Input.Y * 25.4 / source.DpiY;
-            bool geometry = options.Outline || options.SmoothStairs;
+            bool geometry = options.NeedsGeometry;
+            options.CleanupCutEdges=plan.CutEdges;
             // The processor performs the entire geometry pipeline. Do not
             // screen a second time just to decide whether it should run:
             // smoothing can reveal dots absent at the input sampling phase.

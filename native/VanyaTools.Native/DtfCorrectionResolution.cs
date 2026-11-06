@@ -105,7 +105,7 @@ namespace VanyaTools.Native
             }
             finally
             {
-                if(normalize && !cached && !retained) {DeleteFile(normalizedPath);DeleteFile(normalizedPath+".native-raster");}
+                if(normalize && !cached && !retained)DeleteFile(normalizedPath);
                 await OnUiAsync(()=> {
                     _normalizing=false;_qualityChanging=false;cancelSource.Dispose();
                     if(ReferenceEquals(_normalizationCancellation,cancelSource))_normalizationCancellation=null;

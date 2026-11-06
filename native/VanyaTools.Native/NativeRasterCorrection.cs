@@ -111,6 +111,26 @@ namespace VanyaTools.Native
             return new DtfCorrectionResult { OutputPath = output, OffsetMm = result.OffsetMm };
         }
 
+        internal static DtfCorrectionResult ProcessRgb(string source,string output,DtfCorrectionOptions options,CancellationToken cancellation)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            BitmapSource image=Load(source);
+            if(image.Format!=PixelFormats.Bgra32)image=new FormatConvertedBitmap(image,PixelFormats.Bgra32,null,0);
+            int n=checked(image.PixelWidth*image.PixelHeight);
+            if(n>NativeRasterFiles.MaximumPixels)throw new InvalidOperationException("Исходник превышает лимит 70 Мп.");
+            var bgra=new byte[checked(n*4)];image.CopyPixels(bgra,image.PixelWidth*4,0);
+            var colors=new byte[checked(n*3)];var alpha=new byte[n];
+            for(int p=0;p<n;p++) {if((p&65535)==0)cancellation.ThrowIfCancellationRequested();
+                colors[p*3]=bgra[p*4];colors[p*3+1]=bgra[p*4+1];colors[p*3+2]=bgra[p*4+2];alpha[p]=bgra[p*4+3];}
+            var buffer=new NativeRasterBuffer(image.PixelWidth,image.PixelHeight,4,image.DpiX,image.DpiY,colors,alpha);
+            var filters=new NativeRasterFilterOptions { Resample300=options.Resample300,
+                RemoveSemiTransparent=options.RemoveSemiTransparent,Threshold=options.Threshold,SmoothStairs=options.SmoothStairs,StairsScale=options.StairsScale,
+                Outline=options.Outline,RadiusMm=options.RadiusMm,ExpansionMm=options.ExpansionMm,OutlineColor=ColorSamples(buffer,options.Color),OutlineOpacity=options.Color.A,
+                WhitenNearWhite=options.WhitenNearWhite,NearWhiteTolerance=options.NearWhiteTolerance,PrintPreparation=options.Preparation() };
+            var result=NativeRasterFilters.ProcessOwned(buffer,filters,cancellation);Save(output,result.Buffer,cancellation);
+            return new DtfCorrectionResult {OutputPath=output,OffsetMm=result.OffsetMm};
+        }
+
         // Color-based background removal edits alpha only. Keep every native
         // color sample, even the now invisible samples outside the silhouette.
         internal static void AttachProcessedAlpha(string source, string output, CancellationToken cancellation, Color[] backgroundColors = null)
