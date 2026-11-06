@@ -73,6 +73,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.DtfPrintPreparationChecks/VanyaTools.DtfPrintPreparationChecks.csproj --configuration Release
 
+      - name: Check correction preset files
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.CorrectionPresetChecks/VanyaTools.CorrectionPresetChecks.csproj --configuration Release
+
       - name: Check native raster pipeline
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.NativeRasterPipelineChecks/VanyaTools.NativeRasterPipelineChecks.csproj --configuration Release

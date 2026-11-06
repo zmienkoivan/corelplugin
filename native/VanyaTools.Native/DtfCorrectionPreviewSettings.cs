@@ -89,6 +89,7 @@ namespace VanyaTools.Native
             _nearWhiteSwatch.IsEnabled = available && _highlightWhite.IsChecked == true;
             UpdateThinAvailability();
             UpdatePrintPreparationAvailability(available);
+            UpdatePresetAvailability();
         }
 
         private void ChangePreviewBackground()

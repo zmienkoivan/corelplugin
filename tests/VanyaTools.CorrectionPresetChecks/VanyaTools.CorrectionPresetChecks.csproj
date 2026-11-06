@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup><TargetFramework>net48</TargetFramework><OutputType>Exe</OutputType><UseWPF>true</UseWPF><LangVersion>latest</LangVersion><PlatformTarget>x64</PlatformTarget></PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Web.Extensions" />
+    <Compile Include="../../native/VanyaTools.Native/DtfCorrectionOptions.cs" Link="DtfCorrectionOptions.cs" />
+    <Compile Include="../../native/VanyaTools.Native/DtfPrintPreparation.cs" Link="DtfPrintPreparation.cs" />
+    <Compile Include="../../native/VanyaTools.Native/DtfCorrectionPreset.cs" Link="DtfCorrectionPreset.cs" />
+  </ItemGroup>
+</Project>

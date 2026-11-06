@@ -72,6 +72,7 @@ namespace VanyaTools.Native
             root.Children.Add(new ScrollViewer { Content = controls, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
             controls.Children.Add(Text("Коррекция", 16, true));
             controls.Children.Add(Text("Настройки меняют предпросмотр. В Corel вставляется только готовый результат.", 11));
+            CreatePresetControls(controls);
             controls.Children.Add(Text("Экспресс-аудит", 12, true));
             var alphaAudit = new Grid();
             alphaAudit.ColumnDefinitions.Add(new ColumnDefinition());

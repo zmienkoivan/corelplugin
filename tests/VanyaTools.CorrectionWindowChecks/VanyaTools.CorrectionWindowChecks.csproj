@@ -6,6 +6,8 @@
     <Compile Include="../../native/VanyaTools.Native/DtfCorrectionOptions.cs" Link="DtfCorrectionOptions.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfCorrectionPrintPreparation.cs" Link="DtfCorrectionPrintPreparation.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfPrintPreparation.cs" Link="DtfPrintPreparation.cs" />
+    <Compile Include="../../native/VanyaTools.Native/DtfCorrectionPreset.cs" Link="DtfCorrectionPreset.cs" />
+    <Compile Include="../../native/VanyaTools.Native/DtfCorrectionPresetsUi.cs" Link="DtfCorrectionPresetsUi.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfCorrectionViewport.cs" Link="DtfCorrectionViewport.cs" />
     <Compile Include="../../native/VanyaTools.Native/CorrectionViewportPlan.cs" Link="CorrectionViewportPlan.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfCorrectionThinAudit.cs" Link="DtfCorrectionThinAudit.cs" />

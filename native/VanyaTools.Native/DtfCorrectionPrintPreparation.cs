@@ -105,7 +105,7 @@ namespace VanyaTools.Native
 
         private void UpdateAutomaticDot()
         {
-            if (!_automaticDot || _screenDot == null || !DtfOutlineUnits.TryNumber(_screenLpi.Text, out double lpi) || lpi < .5 || lpi > 200) return;
+            if (_preparationSync || !_automaticDot || _screenDot == null || !DtfOutlineUnits.TryNumber(_screenLpi.Text, out double lpi) || lpi < .5 || lpi > 200) return;
             _preparationSync = true;
             _screenDot.Text = DtfOutlineUnits.Format(25.4 / lpi * (_screenMode.SelectedIndex == 0 ? Math.Sqrt(2) : .75));
             _screenAuto.Content = "Авто ✓"; _preparationSync = false;

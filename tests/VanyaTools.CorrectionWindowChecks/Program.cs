@@ -185,6 +185,7 @@ internal static class Program
             Field<CheckBox>(window,"_halftone").IsChecked=false; Field<CheckBox>(window,"_thinEnabled").IsChecked=true;
             Until(()=>apply.IsEnabled,"Original audit did not resume after preparation toggles");
             PreparationDetail(window,root);
+            PresetUi(window);
             var previous=after.Source; var minimum=Field<Slider>(window,"_thinMinimum"); minimum.Value=.5; minimum.Value=.55; minimum.Value=.6;
             Check(!apply.IsEnabled && Field<DispatcherTimer>(window,"_delay").IsEnabled,"Slider did not schedule automatic recompute");
             Check(Field<DispatcherTimer>(window,"_delay").Interval.TotalMilliseconds==300,"Audit drag has no debounce");
@@ -233,5 +234,30 @@ internal static class Program
         var expected=pixels.Correct(options,CancellationToken.None).Crop(plan.Target,CancellationToken.None);
         Check(Data(exact.Bitmap()).SequenceEqual(Data(expected.Bitmap())),"Exact detail grid phase differs from final full-image phase");
         Check(options.GridOriginXmm==0 && options.GridOriginYmm==0,"Detail rendering changed global settings");
+    }
+    private static void PresetUi(DtfCorrectionWindow window)
+    {
+        var original=(DtfCorrectionPreset)Call(window,"CapturePreset");
+        var preset=DtfCorrectionPreset.FromOptions(original.ToOptions());
+        preset.Settings.Knockout=true;preset.Settings.KnockoutColor="#00AAFF";preset.Settings.KnockoutTolerance=12;
+        preset.Settings.Halftone=true;preset.Settings.HalftoneAlphaOnly=true;preset.Settings.HalftoneAutoDot=false;
+        preset.Settings.HalftoneLpi=28;preset.Settings.HalftoneAngle=-30;preset.Settings.HalftoneDotMm=.75;
+        Field<ComboBox>(window,"_units").SelectedIndex=1;
+        Call(window,"ApplyPreset",preset);
+        Check(Field<ComboBox>(window,"_units").SelectedIndex==0 && Field<int>(window,"_previousUnit")==0,"Preset retained source pixel units");
+        Check(Field<CheckBox>(window,"_knockout").IsChecked==true && Field<TextBox>(window,"_knockoutHex").Text=="#00AAFF" && Field<Slider>(window,"_knockoutTolerance").Value==12,"Preset did not restore knockout controls");
+        Check(Field<CheckBox>(window,"_halftone").IsChecked==true && Field<ComboBox>(window,"_screenMode").SelectedIndex==0 && !Field<bool>(window,"_automaticDot"),"Preset did not restore halftone mode");
+        var captured=((DtfCorrectionPreset)Call(window,"CapturePreset")).ToOptions();
+        Check(captured.HalftoneLpi==28 && captured.HalftoneAngle==-30 && captured.HalftoneDotMm==.75,"Preset loading overwrote manual point size");
+        Check(captured.RadiusMm==original.Settings.RadiusMm && captured.ExpansionMm==original.Settings.ExpansionMm,"Preset physical outline dimensions changed");
+        Until(()=>Field<Button>(window,"_apply").IsEnabled,"Preset did not automatically update preview");
+        var bad=DtfCorrectionPreset.FromOptions(captured);bad.Settings.HalftoneLpi=0;string before=Field<TextBox>(window,"_screenLpi").Text;
+        bool rejected=false;try{Call(window,"ApplyPreset",bad);}catch(TargetInvocationException error) when(error.InnerException is InvalidDataException){rejected=true;}
+        Check(rejected && Field<TextBox>(window,"_screenLpi").Text==before,"Rejected preset partially changed controls");
+        var tooLarge=DtfCorrectionPreset.FromOptions(captured);tooLarge.Settings.Outline=true;tooLarge.Settings.RadiusMm=10;
+        rejected=false;try{Call(window,"ApplyPreset",tooLarge);}catch(TargetInvocationException error) when(error.InnerException is InvalidOperationException){rejected=true;}
+        Check(rejected && Field<TextBox>(window,"_screenLpi").Text==before && Field<CheckBox>(window,"_outline").IsChecked==false,"Preset exceeding source DPI limits partially changed controls");
+        Check(Field<Button>(window,"_savePreset").IsEnabled && Field<Button>(window,"_loadPreset").IsEnabled,"Preset buttons unavailable");
+        Call(window,"ApplyPreset",original);Until(()=>Field<Button>(window,"_apply").IsEnabled,"Original settings did not resume after preset test");
     }
 }
