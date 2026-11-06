@@ -35,7 +35,8 @@ namespace VanyaTools.Native
                     // Keep ink away from PDF/page and RIP edge rounding. This is an
                     // empty transparent margin, never a scale change or a white rectangle.
                     result = SportPrintExporter.Export(workspace, dpi, true, button != 0, processName: process,
-                        confirmPage: confirmPage, selectionMarginMm: PrintExportBounds.QueueSafetyMarginMm);
+                        confirmPage: confirmPage, selectionMarginMm: PrintExportBounds.QueueSafetyMarginMm,
+                        sortCutContours: UvCutContourOrder.ForButton(button));
                     if (options.Mode != PrintIccMode.Preserve)
                     {
                         await Task.Run(() => {

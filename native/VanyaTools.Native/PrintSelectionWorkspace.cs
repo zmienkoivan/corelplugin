@@ -19,13 +19,14 @@ namespace VanyaTools.Native
         internal double PageWidthMm { get; private set; }
         internal double PageHeightMm { get; private set; }
         internal string Warning { get; private set; }
+        internal int SortedCutContours { get; private set; }
         internal bool SourceCleanupFailed => _textSnapshot?.CleanupFailed == true;
 
         private PrintSelectionWorkspace(object source, object page, object selection)
         { _source = source; _sourcePage = page; _selection = selection; }
 
         internal static PrintSelectionWorkspace Create(object application, object source, object page, object selection,
-            double safetyMarginMm = 0)
+            double safetyMarginMm = 0, bool sortCutContours = false)
         {
             dynamic app = application;
             dynamic snapshot = app.CreateShapeRange();
@@ -89,6 +90,7 @@ namespace VanyaTools.Native
                     PrintExportBounds.Position(placed.Left, placed.Bottom, placed.Width, placed.Height) + "; page " +
                     PrintExportBounds.Position(pageLeft, pageBottom, workspace.PageWidthMm, workspace.PageHeightMm) +
                     "; verified transparent margins, artwork scale 1:1.");
+                if (sortCutContours) workspace.SortedCutContours = UvCutContourOrder.Sort((object)targetPage);
                 return workspace;
             }
             catch { workspace.Dispose(); throw; }

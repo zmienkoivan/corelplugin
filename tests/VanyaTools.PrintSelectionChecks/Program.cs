@@ -104,7 +104,7 @@ internal static class Program
 }
 namespace VanyaTools.Native
 {
-    internal static class CorelConstants {internal const int CdrMillimeter=3,CdrGroupShape=7,CdrTextShape=6;}
+    internal static class CorelConstants {internal const int CdrMillimeter=3,CdrCurveShape=3,CdrGroupShape=7,CdrTextShape=6;}
     internal static class Log {internal static void Info(string text) {} internal static void Error(string text,Exception error) {}}
     internal static class CorelClipboardTransfer
     {

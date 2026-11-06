@@ -15,6 +15,7 @@ namespace VanyaTools.Native
             public string Path, Warning;
             public double WidthMm, HeightMm;
             public long Bytes;
+            public int SortedCutContours;
         }
 
         public static async Task<Result> ExportCurrentPage(string folder, int dpi)
@@ -50,7 +51,7 @@ namespace VanyaTools.Native
         // DTF/UV deliberately have no fallback from an empty selection to a whole page.
         internal static Result Export(string folder, int dpi, bool selectionOrPage,
             bool selectionOnly, bool sportPage = false, string processName = "DTF", Func<string, bool> confirmPage = null,
-            double selectionMarginMm = 0)
+            double selectionMarginMm = 0, bool sortCutContours = false)
         {
             if (dpi != 150 && dpi != 300)
                 throw new InvalidOperationException("Выберите качество экспорта 150 или 300 DPI.");
@@ -113,10 +114,11 @@ namespace VanyaTools.Native
                 {
                     app.Optimization = true;
                     selectionWorkspace = PrintSelectionWorkspace.Create((object)app, (object)document, (object)page, (object)selection,
-                        selectionMarginMm);
+                        selectionMarginMm, sortCutContours);
                     publisher = selectionWorkspace.Document;
                     result.WidthMm = selectionWorkspace.PageWidthMm;
                     result.HeightMm = selectionWorkspace.PageHeightMm;
+                    result.SortedCutContours = selectionWorkspace.SortedCutContours;
                 }
                 else
                 {

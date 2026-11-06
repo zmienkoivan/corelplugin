@@ -136,7 +136,7 @@ namespace VanyaTools.Native
                         (job.Key == 0 ? "PDF 1:1: выделение или активная страница после подтверждения" :
                             "PDF 1:1: только выделение. Выделите объекты в Corel, чтобы включить кнопку.") + "\n" +
                         (String.IsNullOrWhiteSpace(path) ? "Папка не выбрана. Откройте настройки печати." : path) + "\n" +
-                        _settings.IccFor(job.Key).Description,
+                        _settings.IccFor(job.Key).Description + (job.Key == 4 ? "\nКонтуры CUT: сверху вниз, в ряду слева направо." : ""),
                         MaxWidth = 380, TextWrapping = TextWrapping.Wrap };
                 }
             }
@@ -191,6 +191,7 @@ namespace VanyaTools.Native
                         MessageBoxResult.No) == MessageBoxResult.Yes);
                 string text = "PDF 1:1 · " + result.WidthMm.ToString("0.##") + "×" + result.HeightMm.ToString("0.##") +
                     " мм · " + (result.Bytes / 1048576.0).ToString("0.##") + " МБ\n" + result.Path;
+                if (result.SortedCutContours > 0) text += "\nCUT: " + result.SortedCutContours + " контуров · сверху вниз.";
                 if (!String.IsNullOrEmpty(result.Warning)) text += "\n" + result.Warning;
                 _result.Text = text; _status("PDF отправлен в папку: " + result.Path, !String.IsNullOrEmpty(result.Warning));
             }

@@ -97,6 +97,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.PrintSelectionChecks/VanyaTools.PrintSelectionChecks.csproj --configuration Release
 
+      - name: Check yellow UV cut contour order
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.UvCutOrderChecks/VanyaTools.UvCutOrderChecks.csproj --configuration Release
+
       - name: Check print PDF text outlines
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.PrintPdfTextChecks/VanyaTools.PrintPdfTextChecks.csproj --configuration Release
