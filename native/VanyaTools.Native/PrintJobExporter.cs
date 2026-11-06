@@ -26,6 +26,15 @@ namespace VanyaTools.Native
                 string workspace = Path.Combine(Path.GetTempPath(), "Vanya-print-icc-" + job);
                 string ready = Path.Combine(workspace, "ready.pdf"), profile = Path.Combine(workspace, "input.icc");
                 SportPrintExporter.Result result = null;
+                var total = Stopwatch.StartNew(); var phase = Stopwatch.StartNew();
+                string phaseName = "Corel preparation"; bool succeeded = false;
+                Log.Info("Print job " + job + ": started, button=" + button + ", phase=" + phaseName);
+                void Next(string next)
+                {
+                    Log.Info("Print job " + job + ": phase=" + phaseName + ", elapsed_ms=" + phase.ElapsedMilliseconds);
+                    phaseName = next; phase.Restart();
+                    Log.Info("Print job " + job + ": starting phase=" + phaseName);
+                }
                 try
                 {
                     Directory.CreateDirectory(workspace);
@@ -37,6 +46,7 @@ namespace VanyaTools.Native
                     result = SportPrintExporter.Export(workspace, dpi, true, button != 0, processName: process,
                         confirmPage: confirmPage, selectionMarginMm: PrintExportBounds.QueueSafetyMarginMm,
                         sortCutContours: UvCutContourOrder.ForButton(button));
+                    Next("ICC input");
                     if (options.Mode != PrintIccMode.Preserve)
                     {
                         await Task.Run(() => {
@@ -44,20 +54,25 @@ namespace VanyaTools.Native
                             if (options.Mode == PrintIccMode.Assign) File.WriteAllBytes(profile, IccProfileFile.Read(options.ProfilePath).Data);
                         });
                     }
+                    Next("PDF validation and ICC");
                     // Preserve also validates page size and actual painting content;
                     // its helper route copies the original PDF byte-for-byte.
                     await ProcessPdf(result.Path, ready, result.WidthMm, result.HeightMm, options.Mode, profile);
+                    Next("local ready copy");
                     string prepared = ready;
                     // Keep the exported filename even when the ICC tool used ready.pdf.
                     string delivery = Path.Combine(workspace, Path.GetFileName(result.Path));
                     if (prepared != delivery) File.Copy(prepared, delivery, true);
+                    Next("hot folder delivery");
                     ConnectionStatus sent = await ConnectivityClient.Deliver(delivery, folder);
                     if (!sent.Available) throw new IOException(sent.Message);
+                    Next("complete");
                     string original = result.Path;
                     result.Path = sent.Path; result.Bytes = sent.Bytes;
                     TryDelete(original);
                     Log.Info("Print delivery complete: mode=" + options.Mode + ", file=" + Path.GetFileName(result.Path));
                     activity.Complete(result.Path);
+                    succeeded = true;
                     return result;
                 }
                 catch (Exception error) { activity.Fail(error.Message); throw; }
@@ -67,6 +82,8 @@ namespace VanyaTools.Native
                     TryDelete(ready); TryDelete(profile);
                     try { Directory.Delete(workspace, false); }
                     catch (Exception error) { Log.Error("Could not remove print ICC workspace.", error); }
+                    Log.Info("Print job " + job + ": succeeded=" + succeeded + ", total_ms=" + total.ElapsedMilliseconds +
+                        ", last_phase=" + phaseName + ", last_phase_ms=" + phase.ElapsedMilliseconds);
                 }
             }
         }

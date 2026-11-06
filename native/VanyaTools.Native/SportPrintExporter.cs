@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
@@ -156,7 +157,9 @@ namespace VanyaTools.Native
                 Log.Info("Print PDF export: selection=" + selected + ", lossless=" + selectionOnly + ", page=" + page.Index + ", " +
                     result.WidthMm.ToString("0.###", CultureInfo.InvariantCulture) + "x" +
                     result.HeightMm.ToString("0.###", CultureInfo.InvariantCulture) + " mm, " + dpi + " DPI, PDF.");
+                var publishTime = Stopwatch.StartNew();
                 publisher.PublishToPDF(temporary);
+                Log.Info("Print PDF native publication: elapsed_ms=" + publishTime.ElapsedMilliseconds);
                 using (var stream = File.OpenRead(temporary))
                 {
                     byte[] header = new byte[5];

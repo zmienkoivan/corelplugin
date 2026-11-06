@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Globalization;
 
 namespace VanyaTools.Native
@@ -28,6 +29,8 @@ namespace VanyaTools.Native
         internal static PrintSelectionWorkspace Create(object application, object source, object page, object selection,
             double safetyMarginMm = 0, bool sortCutContours = false)
         {
+            var phase = Stopwatch.StartNew();
+            Log.Info("Print selection preparation started.");
             dynamic app = application;
             dynamic snapshot = app.CreateShapeRange();
             foreach (dynamic shape in (dynamic)selection) snapshot.Add(shape);
@@ -46,6 +49,8 @@ namespace VanyaTools.Native
                 Log.Info("Print source ink bounds (including outlines): " + PrintExportBounds.Position(
                     workspace.Bounds.Left, workspace.Bounds.Bottom, workspace.Bounds.Width, workspace.Bounds.Height) +
                     "; transparent safety margin=" + safetyMarginMm.ToString("0.###", CultureInfo.InvariantCulture) + " mm.");
+                Log.Info("Print selection source preparation: elapsed_ms=" + phase.ElapsedMilliseconds);
+                phase.Restart();
                 // Copy before switching documents: this is the real native range,
                 // including children of the current Focus group, not its parent.
                 CorelClipboardTransfer.Copy((dynamic)printRange, "выделение для печати");
@@ -63,6 +68,8 @@ namespace VanyaTools.Native
                 PrintExportBounds pasted = ReadBounds((object)copied);
                 PrintExportBounds.RequireSameSize(workspace.Bounds.Width, workspace.Bounds.Height,
                     pasted.Width, pasted.Height, "После переноса выделения");
+                Log.Info("Print selection native clipboard transfer: elapsed_ms=" + phase.ElapsedMilliseconds);
+                phase.Restart();
                 targetPage.SetSize(workspace.PageWidthMm, workspace.PageHeightMm);
                 // Resizing a Corel page can move its origin and its objects.
                 // The pre-SetSize pasted bounds are no longer safe to use for placement.
@@ -89,8 +96,8 @@ namespace VanyaTools.Native
                 Log.Info("Print selection transferred: objects=" + Convert.ToInt32(copied.Count) + ", " +
                     PrintExportBounds.Position(placed.Left, placed.Bottom, placed.Width, placed.Height) + "; page " +
                     PrintExportBounds.Position(pageLeft, pageBottom, workspace.PageWidthMm, workspace.PageHeightMm) +
-                    "; verified transparent margins, artwork scale 1:1.");
-                if (sortCutContours) workspace.SortedCutContours = UvCutContourOrder.Sort((object)targetPage);
+                    "; verified transparent margins, artwork scale 1:1; placement_ms=" + phase.ElapsedMilliseconds);
+                if (sortCutContours) workspace.SortedCutContours = UvCutContourOrder.Sort(application, (object)targetPage);
                 return workspace;
             }
             catch { workspace.Dispose(); throw; }

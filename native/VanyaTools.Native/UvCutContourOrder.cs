@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 
@@ -13,50 +14,61 @@ namespace VanyaTools.Native
         private sealed class Cut
         {
             internal object Shape;
+            internal int Id, Type, Paths;
             internal double Left, Bottom, Width, Height, Length, Tint, Pen;
             internal string Color;
             internal double Top => Bottom + Height;
         }
 
-        internal static int Sort(object pageObject)
+        internal static int Sort(object application, object pageObject)
         {
-            var candidates = new List<object>(); var seen = new HashSet<int>();
+            var total = Stopwatch.StartNew(); var phase = Stopwatch.StartNew();
+            Log.Info("Yellow UV CUT preparation started.");
+            var candidates = new List<Cut>(); var seen = new HashSet<int>();
             dynamic page = pageObject;
             foreach (dynamic layer in Items((object)page.Layers))
                 if (Convert.ToBoolean(layer.Printable) && Convert.ToBoolean(layer.Visible))
                     foreach (object shape in Items((object)layer.Shapes)) Collect(shape, candidates, seen, 0, false);
+            Log.Info("Yellow UV CUT scan: objects=" + seen.Count + ", contours=" + candidates.Count + ", elapsed_ms=" + phase.ElapsedMilliseconds);
             if (candidates.Count == 0) return 0;
 
+            phase.Restart();
             dynamic target = page.CreateLayer("Vanya · CUT · сверху вниз");
             target.Visible = true; target.Printable = true; target.Editable = true;
-            var cuts = new List<Cut>();
-            foreach (object item in candidates)
+            dynamic batch = ((dynamic)application).CreateShapeRange();
+            for (int i = 0; i < candidates.Count; i++)
             {
-                dynamic shape = item;
-                Cut before = Read(item);
-                if (Convert.ToInt32(shape.Type) != CorelConstants.CdrCurveShape)
+                Cut before = candidates[i]; dynamic shape = before.Shape;
+                if (before.Type != CorelConstants.CdrCurveShape)
                 {
                     shape.ConvertToCurves();
-                    if (Convert.ToInt32(shape.Type) != CorelConstants.CdrCurveShape)
+                    Cut converted = ReadVerified(before.Shape);
+                    if (converted.Type != CorelConstants.CdrCurveShape)
                         throw Failure("Corel не преобразовал линию CUT в кривую");
-                    Cut converted = Read(item); RequireSame(before, converted); before = converted;
+                    RequireSame(before, converted); candidates[i] = converted;
                 }
-                // A different layer extracts group children into one flat collection.
-                // The native move retains world coordinates and the outline itself.
-                shape.MoveToLayer(target);
-                RequireSame(before, Read(item));
-                int count = Convert.ToInt32(shape.Curve.SubPaths.Count);
-                if (count < 1 || count > 100000) throw Failure("Некорректное число путей CUT");
-                var parts = count == 1 ? new List<object> { item } : Items((object)shape.BreakApartEx());
-                if (parts.Count != count) throw Failure("Corel не разделил составной контур CUT на отдельные пути");
+                batch.Add((dynamic)candidates[i].Shape);
+            }
+            if (Convert.ToInt32(batch.Count) != candidates.Count) throw Failure("Corel не собрал все контуры CUT для переноса");
+            // One native operation avoids recalculating the document for every
+            // group child. Every path is still verified after all native edits.
+            batch.MoveToLayer(target);
+            Log.Info("Yellow UV CUT batch move: contours=" + candidates.Count + ", elapsed_ms=" + phase.ElapsedMilliseconds);
+            phase.Restart();
+            var cuts = new List<Cut>();
+            foreach (Cut before in candidates)
+            {
+                if (before.Paths == 1) { cuts.Add(before); continue; }
+                dynamic shape = before.Shape;
+                var parts = Items((object)shape.BreakApartEx());
+                if (parts.Count != before.Paths) throw Failure("Corel не разделил составной контур CUT на отдельные пути");
                 var split = new List<Cut>();
                 foreach (object part in parts)
                 {
-                    dynamic path = part;
-                    if (!IsCut(part) || Convert.ToInt32(path.Type) != CorelConstants.CdrCurveShape ||
-                        Convert.ToInt32(path.Curve.SubPaths.Count) != 1)
+                    Cut cut = ReadVerified(part);
+                    if (cut.Type != CorelConstants.CdrCurveShape || cut.Paths != 1)
                         throw Failure("Изменился состав путей CUT");
-                    Cut cut = Read(part); RequireStyle(before, cut); split.Add(cut);
+                    RequireStyle(before, cut); split.Add(cut);
                 }
                 var bounds = new Cut { Left = split.Min(p => p.Left), Bottom = split.Min(p => p.Bottom),
                     Length = split.Sum(p => p.Length) };
@@ -66,73 +78,116 @@ namespace VanyaTools.Native
                 cuts.AddRange(split);
                 if (cuts.Count > 100000) throw Failure("Слишком много путей CUT");
             }
+            Log.Info("Yellow UV CUT split: paths=" + cuts.Count + ", elapsed_ms=" + phase.ElapsedMilliseconds);
+            if (cuts.Count > 100000) throw Failure("Слишком много путей CUT");
+            phase.Restart();
 
-            // Anchor each row to its highest edge: approximate comparisons in a
-            // comparator are not transitive and can chain many rows into one.
+            // A row shares an interior horizontal band, not an almost identical
+            // top edge. Its intersection only shrinks, so tall stickers cannot
+            // chain several successive rows into one. Alternate row direction.
             var byTop = cuts.OrderByDescending(p => p.Top).ThenBy(p => p.Left).ToList();
-            var ordered = new List<Cut>();
-            for (int i = 0; i < byTop.Count;)
+            var ordered = new List<Cut>(); int rows = 0;
+            while (byTop.Count > 0)
             {
-                int end = i + 1;
-                while (end < byTop.Count && byTop[i].Top - byTop[end].Top <= RowToleranceMm) end++;
-                ordered.AddRange(byTop.GetRange(i, end - i).OrderBy(p => p.Left).ThenByDescending(p => p.Top));
-                i = end;
+                Cut first = byTop[0]; byTop.RemoveAt(0);
+                var row = new List<Cut> { first };
+                double top = first.Top + RowToleranceMm / 2, bottom = first.Bottom - RowToleranceMm / 2;
+                for (int i = 0; i < byTop.Count;)
+                {
+                    Cut next = byTop[i];
+                    double nextTop = next.Top + RowToleranceMm / 2, nextBottom = next.Bottom - RowToleranceMm / 2;
+                    // Remaining top edges are sorted: everything else is below
+                    // this row once its top no longer reaches the common band.
+                    if (nextTop <= bottom) break;
+                    double sharedTop = Math.Min(top, nextTop), sharedBottom = Math.Max(bottom, nextBottom);
+                    if (sharedTop - sharedBottom >= .5 * Math.Min(top - bottom, nextTop - nextBottom))
+                    {
+                        row.Add(next); top = sharedTop; bottom = sharedBottom; byTop.RemoveAt(i);
+                    }
+                    else i++;
+                }
+                ordered.AddRange(rows++ % 2 == 0 ? row.OrderBy(p => p.Left).ThenByDescending(p => p.Top) :
+                    row.OrderByDescending(p => p.Left).ThenByDescending(p => p.Top));
             }
             // PDF paints back to front. First path stays at the back, last at
             // the front; reversing this would send the bottom of the roll first.
-            foreach (Cut cut in ordered) ((dynamic)cut.Shape).OrderToFront();
-            var actual = Items((object)target.Shapes);
-            if (actual.Count != ordered.Count || actual.Select(Id).Distinct().Count() != ordered.Count ||
-                !actual.AsEnumerable().Reverse().Select(Id).SequenceEqual(ordered.Select(p => Id(p.Shape))))
+            int[] expected = ordered.Select(p => p.Id).ToArray();
+            int[] actual = Items((object)target.Shapes).Select(Id).Reverse().ToArray();
+            if (actual.Length != expected.Length || actual.Distinct().Count() != expected.Length ||
+                !new HashSet<int>(actual).SetEquals(expected)) throw Failure("Corel не перенёс все пути CUT на отдельный слой");
+            // Keep the longest already ordered prefix/subsequence in place.
+            // Moving the remaining paths to the front removes any interleaving.
+            int keep = 0;
+            foreach (int id in actual) if (keep < expected.Length && id == expected[keep]) keep++;
+            for (int i = keep; i < ordered.Count; i++) ((dynamic)ordered[i].Shape).OrderToFront();
+            if (keep != ordered.Count) actual = Items((object)target.Shapes).Select(Id).Reverse().ToArray();
+            if (!actual.SequenceEqual(expected))
                 throw Failure("Corel не сохранил порядок контуров CUT");
-            foreach (Cut cut in ordered) RequireSame(cut, Read(cut.Shape));
-            Log.Info("Yellow UV CUT order: " + ordered.Count + " paths, top-to-bottom, left-to-right within 2 mm rows.");
+            Log.Info("Yellow UV CUT order: rows=" + rows + ", moves=" + (ordered.Count - keep) + ", elapsed_ms=" + phase.ElapsedMilliseconds);
+            phase.Restart();
+            foreach (Cut cut in ordered)
+            {
+                Cut after = ReadVerified(cut.Shape);
+                if (after.Type != CorelConstants.CdrCurveShape || after.Paths != 1) throw Failure("Изменился состав путей CUT");
+                RequireSame(cut, after);
+            }
+            Log.Info("Yellow UV CUT verification: elapsed_ms=" + phase.ElapsedMilliseconds);
+            Log.Info("Yellow UV CUT order: " + ordered.Count + " paths, snake rows=" + rows + ", total_ms=" + total.ElapsedMilliseconds);
             return ordered.Count;
         }
 
-        private static void Collect(object value, List<object> result, HashSet<int> seen, int depth, bool clipped)
+        private static void Collect(object value, List<Cut> result, HashSet<int> seen, int depth, bool clipped)
         {
             if (depth > 128 || seen.Count >= 100000) throw Failure("Слишком сложная вложенность контуров CUT");
-            if (!seen.Add(Id(value))) return;
+            int id = Id(value);
+            if (!seen.Add(id)) return;
             dynamic shape = value;
+            int type = Convert.ToInt32(shape.Type);
             object clip = PowerClip(value);
-            if (Convert.ToInt32(shape.Type) == CorelConstants.CdrGroupShape)
+            if (type == CorelConstants.CdrGroupShape)
                 foreach (object child in Items((object)shape.Shapes)) Collect(child, result, seen, depth + 1, clipped);
-            else if (IsCut(value))
+            else
             {
-                if (clipped || clip != null)
-                    throw Failure("Контур CUT находится в PowerClip. Вынесите линию резки из PowerClip перед отправкой");
-                result.Add(value);
+                Cut cut = ReadCandidate(value, id, type);
+                if (cut != null)
+                {
+                    if (clipped || clip != null)
+                        throw Failure("Контур CUT находится в PowerClip. Вынесите линию резки из PowerClip перед отправкой");
+                    result.Add(cut);
+                }
             }
             if (clip != null)
                 foreach (object child in Items((object)((dynamic)clip).Shapes)) Collect(child, result, seen, depth + 1, true);
         }
 
-        private static bool IsCut(object value)
-        {
-            dynamic shape = value;
-            int type = Convert.ToInt32(shape.Type);
-            if (type < 1 || type > 4 || Convert.ToInt32(shape.Outline.Type) == 0) return false;
-            dynamic color = shape.Outline.Color;
-            if (!Convert.ToBoolean(color.IsSpot)) return false;
-            string name = (Convert.ToString(color.SpotColorName) ?? "").Trim();
-            return (String.Equals(name, "CUT", StringComparison.OrdinalIgnoreCase) ||
-                String.Equals(name, "CutContour", StringComparison.OrdinalIgnoreCase)) && Convert.ToInt32(shape.Fill.Type) == 0;
-        }
+        private static Cut ReadVerified(object value)
+            => ReadCandidate(value, Id(value), Convert.ToInt32(((dynamic)value).Type)) ?? throw Failure("Изменился тип или цвет пути CUT");
 
-        private static Cut Read(object value)
+        private static Cut ReadCandidate(object value, int id, int type)
         {
             dynamic shape = value;
+            if (type < 1 || type > 4) return null;
+            dynamic outline = shape.Outline;
+            if (Convert.ToInt32(outline.Type) == 0) return null;
+            dynamic color = outline.Color;
+            if (!Convert.ToBoolean(color.IsSpot)) return null;
+            string originalName = Convert.ToString(color.SpotColorName) ?? "";
+            string name = originalName.Trim();
+            if ((!String.Equals(name, "CUT", StringComparison.OrdinalIgnoreCase) &&
+                !String.Equals(name, "CutContour", StringComparison.OrdinalIgnoreCase)) || Convert.ToInt32(shape.Fill.Type) != 0) return null;
             double x, y, width, height;
             shape.GetBoundingBox(out x, out y, out width, out height, true);
-            bool curve = Convert.ToInt32(shape.Type) == CorelConstants.CdrCurveShape;
-            double length = curve ? Convert.ToDouble(shape.Curve.Length) : 0;
+            bool curve = type == CorelConstants.CdrCurveShape;
+            double length = 0; int paths = 0;
+            if (curve) { dynamic geometry = shape.Curve; length = Convert.ToDouble(geometry.Length); paths = Convert.ToInt32(geometry.SubPaths.Count); }
             if (!PrintExportBounds.Finite(x) || !PrintExportBounds.Finite(y) || !PrintExportBounds.Finite(width) ||
-                !PrintExportBounds.Finite(height) || !PrintExportBounds.Finite(length) || width < 0 || height < 0 || (curve && length <= 0))
+                !PrintExportBounds.Finite(height) || !PrintExportBounds.Finite(length) || width < 0 || height < 0 ||
+                (curve && (length <= 0 || paths < 1 || paths > 100000)))
                 throw Failure("Некорректная геометрия контура CUT");
-            return new Cut { Shape = value, Left = x, Bottom = y, Width = width, Height = height, Length = length,
-                Color = Convert.ToString(shape.Outline.Color.SpotColorName), Tint = Convert.ToDouble(shape.Outline.Color.Tint),
-                Pen = Convert.ToDouble(shape.Outline.Width) };
+            double tint = Convert.ToDouble(color.Tint), pen = Convert.ToDouble(outline.Width);
+            if (!PrintExportBounds.Finite(tint) || !PrintExportBounds.Finite(pen) || pen < 0) throw Failure("Некорректная обводка CUT");
+            return new Cut { Shape = value, Id = id, Type = type, Paths = paths, Left = x, Bottom = y, Width = width, Height = height,
+                Length = length, Color = originalName, Tint = tint, Pen = pen };
         }
         private static void RequireSame(Cut before, Cut after)
         { RequireGeometry(before, after); RequireStyle(before, after); }
