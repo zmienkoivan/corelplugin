@@ -13,13 +13,6 @@ namespace VanyaTools.Native
 {
     internal static class CorelApp { internal static object Get() => throw new Exception("Corel must not be contacted by file-pipeline checks"); }
     internal static class Log { internal static bool Enabled; internal static void Info(string text) { if (Enabled) Console.WriteLine(text); } internal static void Error(string text, Exception error) { } }
-    internal sealed class DtfCorrectionOptions
-    {
-        internal bool RemoveSemiTransparent, SmoothStairs, Outline, WhitenNearWhite;
-        internal int Threshold = 130, StairsScale = 1, NearWhiteTolerance = 6;
-        internal double RadiusMm = 0, ExpansionMm = 25.4 / 400;
-        internal Color Color = Colors.White;
-    }
     internal sealed class DtfCorrectionResult
     { internal string OutputPath; internal Tuple<double, double> OffsetMm = Tuple.Create(0.0, 0.0); }
 }
@@ -99,6 +92,16 @@ internal static class Program
         Check(opaque.Mode == mode && opaque.Colors.SequenceEqual(colors), "Alpha removal does not rewrite color samples or model");
         Check(opaque.Alpha.SequenceEqual(new byte[] {255,255,255,0,0,255}), "Alpha threshold remains inclusive and binary");
         CheckWhitePreview(threshold, 0);
+        string knockout = PathFor("knockout-" + mode + ".png");
+        NativeRasterCorrection.Process(input,knockout,new DtfCorrectionOptions { Knockout=true,KnockoutColor=Colors.White,KnockoutTolerance=0 },CancellationToken.None);
+        var knocked=Read(knockout);
+        Check(knocked.Mode==mode && knocked.Colors.SequenceEqual(colors),"File knockout rewrote native colour channels");
+        Check(knocked.Alpha.Select((a,p)=>a==(source.IsPureWhite(p)?(byte)0:alpha[p])).All(value=>value),"File knockout differs from original-model colour samples");
+        string halftone = PathFor("halftone-" + mode + ".png");
+        NativeRasterCorrection.Process(input,halftone,new DtfCorrectionOptions { Halftone=true,HalftoneAlphaOnly=false },CancellationToken.None);
+        var screened=Read(halftone);
+        Check(screened.Mode==mode && screened.Colors.SequenceEqual(colors) && screened.Alpha.All(a=>a==0 || a==255),"File halftone rewrote channels or retained partial alpha");
+        Check(screened.Width==source.Width && screened.Height==source.Height && screened.DpiX==source.DpiX && screened.DpiY==source.DpiY,"File halftone changed print size");
 
         string outlined = PathFor("outlined-" + mode + ".png");
         var outlineResult = NativeRasterCorrection.Process(input, outlined, new DtfCorrectionOptions { Outline = true, Color = Colors.Red }, CancellationToken.None);

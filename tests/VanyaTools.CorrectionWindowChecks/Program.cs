@@ -159,6 +159,32 @@ internal static class Program
             Check(Field<TextBlock>(window,"_thinNote").Text.Contains("пиксел"),"Audit status not displayed");
             Check(!Data((BitmapSource)after.Source).SequenceEqual(pixels),"Thin diagnostics missing from preview");
             Check(Data(Field<DtfCorrectionPixels>(window,"_originalPixels").Bitmap()).SequenceEqual(pixels),"Diagnostics modified clean source");
+            Field<CheckBox>(window,"_thinEnabled").IsChecked=false;
+            var beforeKnockout=after.Source;
+            Field<CheckBox>(window,"_knockout").IsChecked=true;
+            Field<TextBox>(window,"_knockoutHex").Text="#64788C"; Field<Slider>(window,"_knockoutTolerance").Value=0;
+            Until(()=>!ReferenceEquals(after.Source,beforeKnockout) && after.Opacity==1,"Knockout preview did not update");
+            Check(Data((BitmapSource)after.Source).Where((b,i)=>i%4==3).All(a=>a==0),"Knockout did not remove selected print colour");
+            Check(Field<TextBox>(window,"_knockoutHex").IsEnabled,"Knockout controls unavailable");
+            Check(Field<DtfCorrectionPixels>(window,"_originalPixels").Sample(159,20,out Color sample) && sample==Color.FromRgb(100,120,140),"Source pipette sampled a diagnostic colour");
+            Field<CheckBox>(window,"_knockout").IsChecked=false;
+            Field<ComboBox>(window,"_screenMode").SelectedIndex=1;
+            Field<CheckBox>(window,"_halftone").IsChecked=true;
+            Until(()=>apply.IsEnabled,"Halftone preview did not update");
+            int screened=Data((BitmapSource)after.Source).Where((b,i)=>i%4==3).Count(a=>a!=0);
+            Check(screened>0 && screened<520,"Full-image grid did not affect dense print");
+            Field<TextBox>(window,"_screenAngle").Text="-22,5"; Field<TextBox>(window,"_screenDot").Text="0,4";
+            object[] prepArgs={null}; Check((bool)Call(window,"ReadOptions",prepArgs),"Valid negative angle/manual dot rejected");
+            var prepOptions=(DtfCorrectionOptions)prepArgs[0];
+            Check(prepOptions.HalftoneAngle==-22.5 && prepOptions.HalftoneDotMm==.4 && !prepOptions.HalftoneAutoDot,"Preparation settings lost");
+            Field<Button>(window,"_screenAuto").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(Field<bool>(window,"_automaticDot"),"Automatic dot size cannot be restored");
+            Field<TextBox>(window,"_screenLpi").Text="0"; prepArgs=new object[]{null};
+            Check(!(bool)Call(window,"ReadOptions",prepArgs),"Invalid LPI accepted");
+            Field<TextBox>(window,"_screenLpi").Text="20";
+            Field<CheckBox>(window,"_halftone").IsChecked=false; Field<CheckBox>(window,"_thinEnabled").IsChecked=true;
+            Until(()=>apply.IsEnabled,"Original audit did not resume after preparation toggles");
+            PreparationDetail(window,root);
             var previous=after.Source; var minimum=Field<Slider>(window,"_thinMinimum"); minimum.Value=.5; minimum.Value=.55; minimum.Value=.6;
             Check(!apply.IsEnabled && Field<DispatcherTimer>(window,"_delay").IsEnabled,"Slider did not schedule automatic recompute");
             Check(Field<DispatcherTimer>(window,"_delay").Interval.TotalMilliseconds==300,"Audit drag has no debounce");
@@ -192,5 +218,20 @@ internal static class Program
         }
         catch(Exception error) { Console.Error.WriteLine(error); return 1; }
         finally { if(window!=null && !Field<bool>(window,"_closed")) window.Close(); }
+    }
+
+    private static void PreparationDetail(DtfCorrectionWindow window,string root)
+    {
+        var pixels=Field<DtfCorrectionPixels>(window,"_originalPixels");
+        var plan=CorrectionViewportPlan.Create(pixels.Width,pixels.Height,new Rect(0,0,pixels.Width,pixels.Height),
+            new Rect(100,10,150,120),1,1,8,8);
+        var options=new DtfCorrectionOptions { Halftone=true,HalftoneAlphaOnly=false,HalftoneAngle=-31.5 };
+        var method=typeof(DtfCorrectionWindow).GetMethod("RenderDetail",BindingFlags.Static|BindingFlags.NonPublic);
+        var frame=method.Invoke(null,new object[]{pixels,plan,options,null,false,false,false,Colors.Magenta,root,
+            (Func<string,string,DtfCorrectionOptions,CancellationToken,DtfCorrectionResult>)Process,CancellationToken.None});
+        var exact=Field<DtfCorrectionPixels>(frame,"After");
+        var expected=pixels.Correct(options,CancellationToken.None).Crop(plan.Target,CancellationToken.None);
+        Check(Data(exact.Bitmap()).SequenceEqual(Data(expected.Bitmap())),"Exact detail grid phase differs from final full-image phase");
+        Check(options.GridOriginXmm==0 && options.GridOriginYmm==0,"Detail rendering changed global settings");
     }
 }

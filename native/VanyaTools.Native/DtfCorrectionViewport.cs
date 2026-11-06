@@ -171,7 +171,10 @@ namespace VanyaTools.Native
             CancellationToken cancellation)
         {
             var input = source.Crop(plan.Input, cancellation);
-            var corrected = input.Correct(options.RemoveSemiTransparent, options.Threshold, options.WhitenNearWhite, options.NearWhiteTolerance, cancellation);
+            options = options.Copy();
+            options.GridOriginXmm += plan.Input.X * 25.4 / source.DpiX;
+            options.GridOriginYmm += plan.Input.Y * 25.4 / source.DpiY;
+            var corrected = input.Correct(options, cancellation);
             BitmapSource result; Tuple<double, double> offset = Tuple.Create(0d, 0d);
             string inputPath = null, outputPath = null;
             try

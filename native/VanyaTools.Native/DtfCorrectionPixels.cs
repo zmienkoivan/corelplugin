@@ -44,6 +44,37 @@ namespace VanyaTools.Native
         internal DtfCorrectionPixels Correct(bool removeAlpha, int threshold, bool whiten, int tolerance, CancellationToken cancellation)
             => !removeAlpha && !whiten ? this : new DtfCorrectionPixels(Width, Height, DpiX, DpiY,
                 DtfRasterOperations.Correct(_pixels, removeAlpha, threshold, whiten, tolerance, cancellation));
+        internal DtfCorrectionPixels Correct(DtfCorrectionOptions options, CancellationToken cancellation)
+        {
+            var prep = options.Preparation(); prep.Validate();
+            byte[] pixels = prep.Knockout ? (byte[])_pixels.Clone() : _pixels;
+            DtfPrintPreparation.Knockout(pixels, 4, 4, null, pixels, 4, 3, Width, Height, prep, cancellation);
+            if (options.RemoveSemiTransparent || options.WhitenNearWhite)
+                pixels = DtfRasterOperations.Correct(pixels, options.RemoveSemiTransparent, options.Threshold,
+                    options.WhitenNearWhite, options.NearWhiteTolerance, cancellation);
+            if (prep.Halftone)
+            {
+                if (ReferenceEquals(pixels, _pixels)) pixels = (byte[])_pixels.Clone();
+                DtfPrintPreparation.Halftone(pixels, 4, 3, Width, Height, DpiX, DpiY, prep, cancellation);
+            }
+            return ReferenceEquals(pixels, _pixels) ? this : new DtfCorrectionPixels(Width, Height, DpiX, DpiY, pixels);
+        }
+        internal DtfCorrectionPixels Prepare(DtfPrintPreparationOptions options, CancellationToken cancellation)
+        {
+            if (options == null || !options.Knockout && !options.Halftone) return this;
+            byte[] pixels = (byte[])_pixels.Clone();
+            DtfPrintPreparation.Knockout(pixels, 4, 4, null, pixels, 4, 3, Width, Height, options, cancellation);
+            DtfPrintPreparation.Halftone(pixels, 4, 3, Width, Height, DpiX, DpiY, options, cancellation);
+            return new DtfCorrectionPixels(Width, Height, DpiX, DpiY, pixels);
+        }
+        internal bool Sample(int x, int y, out Color color)
+        {
+            color = Colors.Black;
+            if (x < 0 || y < 0 || x >= Width || y >= Height) return false;
+            int p = (y * Width + x) * 4;
+            if (_pixels[p + 3] == 0) return false;
+            color = Color.FromRgb(_pixels[p + 2], _pixels[p + 1], _pixels[p]); return true;
+        }
         internal DtfCorrectionPixels Audit(bool semi, bool red, bool white, int tolerance,
             byte markerR, byte markerG, byte markerB, CancellationToken cancellation)
             => !semi && !white ? this : new DtfCorrectionPixels(Width, Height, DpiX, DpiY,

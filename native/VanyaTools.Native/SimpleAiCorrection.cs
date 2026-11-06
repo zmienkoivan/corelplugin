@@ -121,8 +121,7 @@ namespace VanyaTools.Native
                 return NativeRasterCorrection.Process(source, output, options, cancellation);
             if (!options.SmoothStairs && !options.Outline)
             {
-                var pixels = DtfCorrectionPixels.Capture(AiPrintTab.Bitmap(source)).Correct(options.RemoveSemiTransparent,
-                    options.Threshold, options.WhitenNearWhite, options.NearWhiteTolerance, cancellation);
+                var pixels = DtfCorrectionPixels.Capture(AiPrintTab.Bitmap(source)).Correct(options, cancellation);
                 using (var stream = File.Create(output)) pixels.WritePng(stream, cancellation);
                 return new DtfCorrectionResult { OutputPath = output };
             }
@@ -137,6 +136,12 @@ namespace VanyaTools.Native
             try
             {
                 cancellation.ThrowIfCancellationRequested();
+                if (options.Knockout)
+                {
+                    var prep = options.Preparation(); prep.Halftone = false;
+                    var pixels = DtfCorrectionPixels.Capture(AiPrintTab.Bitmap(current)).Prepare(prep, cancellation);
+                    string next = Next(); using (var stream = File.Create(next)) pixels.WritePng(stream, cancellation); current = next;
+                }
                 if (options.WhitenNearWhite)
                 {
                     string next = Next(); DtfNearWhiteFilter.Process(current, next, options.NearWhiteTolerance, cancellation); current = next;
@@ -177,7 +182,13 @@ namespace VanyaTools.Native
                     string next = Next(); DtfNearWhiteFilter.Process(current, next, options.NearWhiteTolerance, cancellation); current = next;
                 }
                 cancellation.ThrowIfCancellationRequested();
-                File.Copy(current, output, true);
+                if (options.Halftone)
+                {
+                    var prep = options.Preparation(-offsetX, -offsetY); prep.Knockout = false;
+                    var pixels = DtfCorrectionPixels.Capture(AiPrintTab.Bitmap(current)).Prepare(prep, cancellation);
+                    using (var stream = File.Create(output)) pixels.WritePng(stream, cancellation);
+                }
+                else File.Copy(current, output, true);
                 return new DtfCorrectionResult { OutputPath = output, OffsetMm = Tuple.Create(offsetX, offsetY) };
             }
             finally { foreach (string path in temporary) try { File.Delete(path); } catch { } }

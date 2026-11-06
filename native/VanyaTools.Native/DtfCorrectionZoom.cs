@@ -69,6 +69,7 @@ namespace VanyaTools.Native
             };
             scroll.PreviewMouseDown += (_, e) =>
             {
+                if (PickKnockoutFromPreview(scroll, image, e)) return;
                 if (e.ChangedButton == MouseButton.Left && e.ClickCount == 2 && !Keyboard.IsKeyDown(Key.Space) && _loaded && !_closed && !_applying)
                 { ZoomTo(1, scroll, e.GetPosition(scroll)); e.Handled = true; return; }
                 bool pan = e.ChangedButton == MouseButton.Middle || e.ChangedButton == MouseButton.Right ||

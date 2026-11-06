@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net48</TargetFramework><OutputType>Exe</OutputType><LangVersion>latest</LangVersion><PlatformTarget>x64</PlatformTarget></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../native/VanyaTools.Native/DtfPrintPreparation.cs" Link="DtfPrintPreparation.cs" />
+    <Compile Include="../../native/VanyaTools.Native/NativeRasterBuffer.cs" Link="NativeRasterBuffer.cs" />
+    <Compile Include="../../native/VanyaTools.Native/NativeRasterFilters.cs" Link="NativeRasterFilters.cs" />
+    <Compile Include="../../native/VanyaTools.Native/StairCoverage.cs" Link="StairCoverage.cs" />
+    <Compile Include="../../native/VanyaTools.Native/DtfNearWhitePixels.cs" Link="DtfNearWhitePixels.cs" />
+  </ItemGroup>
+</Project>

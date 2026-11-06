@@ -13,6 +13,7 @@ namespace VanyaTools.Native
         internal byte OutlineOpacity = 255;
         // Pure managed decoder supplied for CMYK. Never call Corel from here.
         internal Func<NativeRasterBuffer, byte[]> NearWhitePreviewBgra = null;
+        internal DtfPrintPreparationOptions PrintPreparation;
     }
 
     internal sealed class NativeRasterFilterResult
@@ -45,6 +46,9 @@ namespace VanyaTools.Native
                 options.MaximumOutputPixels <= 0) throw new ArgumentOutOfRangeException(nameof(options));
             cancellation.ThrowIfCancellationRequested();
             NativeRasterBuffer current = takeOwnership ? source : source.Copy();
+            options.PrintPreparation?.Validate();
+            DtfPrintPreparation.Knockout(current.Colors, current.Channels, current.Mode, current.CmykOrder,
+                current.Alpha, 1, 0, current.Width, current.Height, options.PrintPreparation, cancellation);
             double offsetX = 0, offsetY = 0;
             if (options.RemoveSemiTransparent) ThresholdInPlace(current, options.Threshold, cancellation);
             if (options.SmoothStairs)
@@ -76,6 +80,8 @@ namespace VanyaTools.Native
                     WhitenInPlace(current, mask, cancellation);
                 }
             }
+            DtfPrintPreparation.Halftone(current.Alpha, 1, 0, current.Width, current.Height, current.DpiX, current.DpiY,
+                options.PrintPreparation?.Offset(-offsetX, -offsetY), cancellation);
             cancellation.ThrowIfCancellationRequested();
             return new NativeRasterFilterResult { Buffer = current, OffsetMm = Tuple.Create(offsetX, offsetY) };
         }

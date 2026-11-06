@@ -13,17 +13,6 @@ using System.Windows.Threading;
 
 namespace VanyaTools.Native
 {
-    internal sealed class DtfCorrectionOptions
-    {
-        internal bool RemoveSemiTransparent, SmoothStairs, Outline, WhitenNearWhite;
-        internal int Threshold = 130;
-        internal int NearWhiteTolerance = 6;
-        internal int StairsScale = 1;
-        internal double RadiusMm = 2 * 25.4 / 400, ExpansionMm = 0.175;
-        internal Color Color = Colors.White;
-        internal DtfCorrectionOptions Copy() => (DtfCorrectionOptions)MemberwiseClone();
-    }
-
     internal sealed class DtfCorrectionResult
     {
         internal string OutputPath;
@@ -138,6 +127,7 @@ namespace VanyaTools.Native
             };
 
             CreateThinAuditControls(controls, startThinAudit, insertThinMask);
+            CreateKnockoutControls(controls);
             controls.Children.Add(new Separator { Margin = new Thickness(0, 9, 0, 8) });
             _remove = Check("Убрать полупрозрачность", Options.RemoveSemiTransparent);
             controls.Children.Add(_remove);
@@ -197,6 +187,7 @@ namespace VanyaTools.Native
                 catch (Exception error) { ShowMessage(error.GetBaseException().Message, true); }
             };
             _metrics = Text("Загружаю исходник…", 10); controls.Children.Add(_metrics);
+            CreateHalftoneControls(controls);
 
             var previews = new Grid(); Grid.SetColumn(previews, 1); root.Children.Add(previews);
             previews.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -343,6 +334,7 @@ namespace VanyaTools.Native
                 RemoveSemiTransparent = remove, SmoothStairs = _stairs.IsChecked == true,
                 Outline = outline, Color = color, WhitenNearWhite = _whiten.IsChecked == true,
                 NearWhiteTolerance = (int)_nearWhiteTolerance.Value };
+            if (!ReadPrintPreparation(options)) return false;
             long pixels = (long)_originalPixels.Width * _originalPixels.Height;
             options.StairsScale = pixels <= 2000000 ? 4 : pixels <= 3500000 ? 3 : pixels <= 8000000 ? 2 : 1;
             try
@@ -407,8 +399,7 @@ namespace VanyaTools.Native
                         // The common audit/threshold/whiten path stays in memory.
                         // Even a tolerance-only change used to encode/decode PNGs.
                         var before = overviewPixels;
-                        var after = before.Correct(options.RemoveSemiTransparent, options.Threshold,
-                            options.WhitenNearWhite, options.NearWhiteTolerance, cancellation);
+                        var after = before.Correct(options, cancellation);
                         var beforeThin = AnalyzeThinPreview(before, thin, false, cancellation, out string beforeNote);
                         var afterThin = AnalyzeThinPreview(after, thin, false, cancellation, out string afterNote);
                         thinNote = beforeNote == afterNote ? afterNote : "Исходник: " + beforeNote + " Результат: " + afterNote;

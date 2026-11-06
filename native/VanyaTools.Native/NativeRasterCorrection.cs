@@ -94,14 +94,16 @@ namespace VanyaTools.Native
                 SmoothStairs = options.SmoothStairs, StairsScale = options.StairsScale,
                 Outline = options.Outline, RadiusMm = options.RadiusMm, ExpansionMm = options.ExpansionMm,
                 OutlineColor = ColorSamples(buffer, options.Color), OutlineOpacity = options.Color.A,
-                WhitenNearWhite = options.WhitenNearWhite, NearWhiteTolerance = options.NearWhiteTolerance
+                WhitenNearWhite = options.WhitenNearWhite, NearWhiteTolerance = options.NearWhiteTolerance,
+                PrintPreparation = options.Preparation()
             };
             // Read creates an exclusive managed buffer for this file job. No
             // source-file bytes or live Corel image can be mutated by this path.
             NativeRasterFilterResult result = NativeRasterFilters.ProcessOwned(buffer, nativeOptions, cancellation);
             long filteredMs = timer.ElapsedMilliseconds;
             Log.Info("Native raster filters finished: " + (filteredMs - readMs) + " ms, threshold=" + options.RemoveSemiTransparent +
-                ", stairs=" + options.SmoothStairs + ", outline=" + options.Outline + ", whiten=" + options.WhitenNearWhite + ".");
+                ", stairs=" + options.SmoothStairs + ", outline=" + options.Outline + ", whiten=" + options.WhitenNearWhite +
+                ", knockout=" + options.Knockout + ", halftone=" + options.Halftone + ".");
             Save(output, result.Buffer, cancellation);
             Log.Info("Native raster processing result saved: save=" + (timer.ElapsedMilliseconds - filteredMs) +
                 " ms, total=" + timer.ElapsedMilliseconds + " ms.");
