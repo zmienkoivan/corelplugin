@@ -90,6 +90,7 @@ namespace VanyaTools.Native
             Log.Info("Native raster processing channels read: " + readMs + " ms, " + buffer.Width + "x" + buffer.Height +
                 ", model=" + buffer.Mode + ", native bytes=" + ((long)buffer.Colors.Length + buffer.Alpha.Length) + ".");
             var nativeOptions = new NativeRasterFilterOptions {
+                Resample300 = options.Resample300,
                 RemoveSemiTransparent = options.RemoveSemiTransparent, Threshold = options.Threshold,
                 SmoothStairs = options.SmoothStairs, StairsScale = options.StairsScale,
                 Outline = options.Outline, RadiusMm = options.RadiusMm, ExpansionMm = options.ExpansionMm,
@@ -103,7 +104,7 @@ namespace VanyaTools.Native
             long filteredMs = timer.ElapsedMilliseconds;
             Log.Info("Native raster filters finished: " + (filteredMs - readMs) + " ms, threshold=" + options.RemoveSemiTransparent +
                 ", stairs=" + options.SmoothStairs + ", outline=" + options.Outline + ", whiten=" + options.WhitenNearWhite +
-                ", knockout=" + options.Knockout + ", halftone=" + options.Halftone + ".");
+                ", knockout=" + options.Knockout + ", halftone=" + options.Halftone + ", resample300="+options.Resample300+".");
             Save(output, result.Buffer, cancellation);
             Log.Info("Native raster processing result saved: save=" + (timer.ElapsedMilliseconds - filteredMs) +
                 " ms, total=" + timer.ElapsedMilliseconds + " ms.");

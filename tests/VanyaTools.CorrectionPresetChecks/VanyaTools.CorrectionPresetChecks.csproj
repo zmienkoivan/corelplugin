@@ -4,6 +4,7 @@
     <Reference Include="System.Web.Extensions" />
     <Compile Include="../../native/VanyaTools.Native/DtfCorrectionOptions.cs" Link="DtfCorrectionOptions.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfPrintPreparation.cs" Link="DtfPrintPreparation.cs" />
+    <Compile Include="../../native/VanyaTools.Native/DtfRasterResample.cs" Link="DtfRasterResample.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfCorrectionPreset.cs" Link="DtfCorrectionPreset.cs" />
   </ItemGroup>
 </Project>

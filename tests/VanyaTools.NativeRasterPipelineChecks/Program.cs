@@ -93,15 +93,23 @@ internal static class Program
         Check(opaque.Alpha.SequenceEqual(new byte[] {255,255,255,0,0,255}), "Alpha threshold remains inclusive and binary");
         CheckWhitePreview(threshold, 0);
         string knockout = PathFor("knockout-" + mode + ".png");
-        NativeRasterCorrection.Process(input,knockout,new DtfCorrectionOptions { Knockout=true,KnockoutColor=Colors.White,KnockoutTolerance=0 },CancellationToken.None);
+        NativeRasterCorrection.Process(input,knockout,new DtfCorrectionOptions { Knockout=true,KnockoutSoft=false,KnockoutColor=Colors.White,KnockoutTolerance=0 },CancellationToken.None);
         var knocked=Read(knockout);
         Check(knocked.Mode==mode && knocked.Colors.SequenceEqual(colors),"File knockout rewrote native colour channels");
         Check(knocked.Alpha.Select((a,p)=>a==(source.IsPureWhite(p)?(byte)0:alpha[p])).All(value=>value),"File knockout differs from original-model colour samples");
         string halftone = PathFor("halftone-" + mode + ".png");
-        NativeRasterCorrection.Process(input,halftone,new DtfCorrectionOptions { Halftone=true,HalftoneAlphaOnly=false },CancellationToken.None);
+        NativeRasterCorrection.Process(input,halftone,new DtfCorrectionOptions { Halftone=true,HalftoneAlphaOnly=false,HalftoneColorBoost=0 },CancellationToken.None);
         var screened=Read(halftone);
         Check(screened.Mode==mode && screened.Colors.SequenceEqual(colors) && screened.Alpha.All(a=>a==0 || a==255),"File halftone rewrote channels or retained partial alpha");
         Check(screened.Width==source.Width && screened.Height==source.Height && screened.DpiX==source.DpiX && screened.DpiY==source.DpiY,"File halftone changed print size");
+        string lowPath=PathFor("low-dpi-"+mode+".png"),normalizedPath=PathFor("normalized-"+mode+".png");
+        var low=new NativeRasterBuffer(source.Width,source.Height,source.Mode,100,150,(byte[])source.Colors.Clone(),(byte[])source.Alpha.Clone(),source.CmykOrder);
+        NativeRasterCorrection.Save(lowPath,low,CancellationToken.None);string beforeHash=Hash(lowPath);
+        NativeRasterCorrection.Process(lowPath,normalizedPath,new DtfCorrectionOptions {Resample300=true},CancellationToken.None);
+        var normalized=Read(normalizedPath);
+        Check(normalized.Width==9 && normalized.Height==4 && normalized.DpiX==300 && normalized.DpiY==300 && normalized.Mode==mode,"File normalization did not preserve native model/300 DPI");
+        Check(Math.Abs(normalized.Width/normalized.DpiX-low.Width/low.DpiX)<1e-12 && Math.Abs(normalized.Height/normalized.DpiY-low.Height/low.DpiY)<1e-12,"File normalization changed physical millimetres");
+        CheckWhitePreview(normalizedPath,0);Check(beforeHash==Hash(lowPath),"File normalization overwrote source PNG");
 
         string outlined = PathFor("outlined-" + mode + ".png");
         var outlineResult = NativeRasterCorrection.Process(input, outlined, new DtfCorrectionOptions { Outline = true, Color = Colors.Red }, CancellationToken.None);

@@ -30,7 +30,7 @@ namespace VanyaTools.Native
 }
 internal static class Program
 {
-    private static int _checks, _active, _maximum, _calls, _canceled;
+    private static int _checks, _active, _maximum, _calls, _canceled, _normalizations;
     private static void Check(bool value, string message) { _checks++; if (!value) throw new Exception(message); }
     private static T Field<T>(object value, string name) => (T)value.GetType().GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).GetValue(value);
     private static object Call(object value, string method, params object[] args) => value.GetType().GetMethod(method,BindingFlags.Instance|BindingFlags.NonPublic).Invoke(value,args);
@@ -46,7 +46,15 @@ internal static class Program
     private static DtfCorrectionResult Process(string input,string output,DtfCorrectionOptions options,CancellationToken cancel)
     {
         Interlocked.Increment(ref _calls); int current=Interlocked.Increment(ref _active); _maximum=Math.Max(_maximum,current);
-        try { for(int i=0;i<30;i++) { cancel.ThrowIfCancellationRequested(); Thread.Sleep(10); } File.Copy(input,output,true); return new DtfCorrectionResult { OutputPath=output }; }
+        try {
+            for(int i=0;i<30;i++) { cancel.ThrowIfCancellationRequested(); Thread.Sleep(10); }
+            if(options.Resample300) {
+                Interlocked.Increment(ref _normalizations);BitmapSource source;
+                using(var file=File.OpenRead(input))source=BitmapFrame.Create(file,BitmapCreateOptions.PreservePixelFormat,BitmapCacheOption.OnLoad);
+                var pixels=DtfCorrectionPixels.Capture(source).Resample300(cancel);using(var file=File.Create(output))pixels.WritePng(file,cancel);
+            } else File.Copy(input,output,true);
+            return new DtfCorrectionResult { OutputPath=output };
+        }
         catch(OperationCanceledException) { Interlocked.Increment(ref _canceled); throw; }
         finally { Interlocked.Decrement(ref _active); }
     }
@@ -166,6 +174,11 @@ internal static class Program
             Until(()=>!ReferenceEquals(after.Source,beforeKnockout) && after.Opacity==1,"Knockout preview did not update");
             Check(Data((BitmapSource)after.Source).Where((b,i)=>i%4==3).All(a=>a==0),"Knockout did not remove selected print colour");
             Check(Field<TextBox>(window,"_knockoutHex").IsEnabled,"Knockout controls unavailable");
+            Field<ComboBox>(window,"_previewBackground").SelectedIndex=3;
+            Check(((SolidColorBrush)Field<ScrollViewer>(window,"_beforeScroll").Background).Color==Color.FromRgb(100,120,140),"Fabric preview background did not use knockout colour");
+            Field<TextBox>(window,"_knockoutHex").Text="#223344";
+            Check(((SolidColorBrush)Field<ScrollViewer>(window,"_afterScroll").Background).Color==Color.FromRgb(34,51,68),"Fabric preview background did not follow colour selection");
+            Field<ComboBox>(window,"_previewBackground").SelectedIndex=0;
             Check(Field<DtfCorrectionPixels>(window,"_originalPixels").Sample(159,20,out Color sample) && sample==Color.FromRgb(100,120,140),"Source pipette sampled a diagnostic colour");
             Field<CheckBox>(window,"_knockout").IsChecked=false;
             Field<ComboBox>(window,"_screenMode").SelectedIndex=1;
@@ -173,10 +186,26 @@ internal static class Program
             Until(()=>apply.IsEnabled,"Halftone preview did not update");
             int screened=Data((BitmapSource)after.Source).Where((b,i)=>i%4==3).Count(a=>a!=0);
             Check(screened>0 && screened<520,"Full-image grid did not affect dense print");
+            var oldPreview=after.Source;
+            Field<Slider>(window,"_screenLpiSlider").Value=30;
+            Field<Slider>(window,"_screenAngleSlider").Value=-30;
+            Field<Slider>(window,"_screenDotSlider").Value=.5;
+            Field<Slider>(window,"_screenBoostSlider").Value=50;
+            Field<ComboBox>(window,"_screenShape").SelectedIndex=(int)DtfDotShape.Star;
+            Check(Field<TextBox>(window,"_screenLpi").Text=="30" && Field<TextBox>(window,"_screenAngle").Text=="-30","Frequency/angle sliders do not update numeric fields");
+            Check(!Field<bool>(window,"_automaticDot") && Field<TextBox>(window,"_screenBoost").Text=="50","Dot/boost slider state missing");
+            Until(()=>apply.IsEnabled && !ReferenceEquals(after.Source,oldPreview),"Slider or shape change did not automatically refresh preview");
+            Field<TextBox>(window,"_screenAngle").Text="-22,5";
+            Check(Field<Slider>(window,"_screenAngleSlider").Value==-22.5,"Numeric angle does not update slider");
+            Field<ComboBox>(window,"_screenMode").SelectedIndex=0;
+            Check(!Field<Slider>(window,"_screenBoostSlider").IsEnabled,"Colour boost remains enabled for alpha-only mode");
+            Field<ComboBox>(window,"_screenMode").SelectedIndex=1;
+            Check(Field<Slider>(window,"_screenBoostSlider").IsEnabled,"Colour boost does not resume for full-image mode");
             Field<TextBox>(window,"_screenAngle").Text="-22,5"; Field<TextBox>(window,"_screenDot").Text="0,4";
             object[] prepArgs={null}; Check((bool)Call(window,"ReadOptions",prepArgs),"Valid negative angle/manual dot rejected");
             var prepOptions=(DtfCorrectionOptions)prepArgs[0];
             Check(prepOptions.HalftoneAngle==-22.5 && prepOptions.HalftoneDotMm==.4 && !prepOptions.HalftoneAutoDot,"Preparation settings lost");
+            Check(prepOptions.KnockoutSoft && prepOptions.HalftoneShape==DtfDotShape.Star && prepOptions.HalftoneColorBoost==50,"Soft knockout, shape or boost was not sent to processing");
             Field<Button>(window,"_screenAuto").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(Field<bool>(window,"_automaticDot"),"Automatic dot size cannot be restored");
             Field<TextBox>(window,"_screenLpi").Text="0"; prepArgs=new object[]{null};
@@ -215,10 +244,61 @@ internal static class Program
             window.Close(); Until(()=>!Field<bool>(window,"_rendering"),"Closed window kept rendering");
             Check(!Field<DispatcherTimer>(window,"_delay").IsEnabled && Field<bool>(window,"_closed"),"Close restarted preview timer");
             ViewportChecks(root);
+            ResolutionChecks(root);
             Console.WriteLine("Correction window checks passed: "+_checks+". Owned hidden WPF viewport, synthetic PNG, fake processor; no Corel."); return 0;
         }
         catch(Exception error) { Console.Error.WriteLine(error); return 1; }
         finally { if(window!=null && !Field<bool>(window,"_closed")) window.Close(); }
+    }
+
+    private static void ResolutionChecks(string root)
+    {
+        var level=typeof(DtfCorrectionWindow).GetMethod("ResolutionLevel",BindingFlags.Static|BindingFlags.NonPublic);
+        Check((int)level.Invoke(null,new object[]{139.9})==0 && (int)level.Invoke(null,new object[]{140d})==1,"DPI red/yellow boundary incorrect");
+        Check((int)level.Invoke(null,new object[]{199.9})==1 && (int)level.Invoke(null,new object[]{200d})==2,"DPI yellow/green boundary incorrect");
+        var matches=typeof(DtfCorrectionWindow).GetMethod("ResolutionSizeMatches",BindingFlags.Static|BindingFlags.NonPublic);
+        Check((bool)matches.Invoke(null,new object[]{286,142.9896,600,300d}),"PNG DPI rounding rejected valid native normalization");
+        Check(!(bool)matches.Invoke(null,new object[]{286,143d,600,290d}) && !(bool)matches.Invoke(null,new object[]{286,143d,800,300d}),"Incorrect normalized DPI or physical size accepted");
+        string path=Path.Combine(root,"low-dpi.png");var data=new byte[32*16*4];
+        for(int p=0;p<data.Length;p+=4){data[p]=data[p+1]=data[p+2]=255;data[p+3]=p%20==0?(byte)128:(byte)255;}
+        using(var file=File.Create(path))FastRasterPng.Write(file,data,32,16,100,100);var original=File.ReadAllBytes(path);
+        var window=new DtfCorrectionWindow(path,new DtfCorrectionOptions(),new DtfOutlineSettings(),Process);
+        try {
+            var loaded=(Task)Call(window,"LoadAsync");Until(()=>loaded.IsCompleted,"Resolution test source did not load");loaded.GetAwaiter().GetResult();
+            Until(()=>Field<Button>(window,"_apply").IsEnabled,"Resolution test initial preview stalled");
+            Check(Field<Button>(window,"_normalizeResolution").IsEnabled && Field<TextBlock>(window,"_resolutionInfo").Text.Contains("100"),"Low DPI was not assessed or normalization unavailable");
+            int calls=_normalizations;
+            var prepared=(Task)Call(window,"NormalizeResolutionAsync");var duplicate=(Task)Call(window,"NormalizeResolutionAsync");
+            Until(()=>prepared.IsCompleted && duplicate.IsCompleted,"Normalization did not complete");prepared.GetAwaiter().GetResult();
+            Until(()=>Field<Button>(window,"_apply").IsEnabled,"Normalization did not restart automatic preview");
+            var full=Field<DtfCorrectionPixels>(window,"_originalPixels");
+            Check(full.Width==96 && full.Height==48 && full.DpiX>299.99,"Normalization did not produce 300-DPI working pixels");
+            Check(Field<bool>(window,"_resolutionNormalized") && _normalizations==calls+1,"Normalization repeated on concurrent click");
+            Check(Data(full.Bitmap()).Where((b,i)=>i%4!=3).All(v=>v==255),"Normalization changed source white");
+            object[] options={null};Check((bool)Call(window,"ReadOptions",options) && !((DtfCorrectionOptions)options[0]).Resample300,"Every preview would repeat full-image normalization");
+            var reset=(Task)Call(window,"NormalizeResolutionAsync");Until(()=>reset.IsCompleted,"Resolution reset stalled");reset.GetAwaiter().GetResult();
+            Until(()=>Field<Button>(window,"_apply").IsEnabled,"Reset preview stalled");
+            Check(Field<DtfCorrectionPixels>(window,"_originalPixels").Width==32 && Field<string>(window,"_workingSourcePath")==path,"Original source was not restored");
+            var cached=(Task)Call(window,"NormalizeResolutionAsync");Until(()=>cached.IsCompleted,"Cached normalization stalled");cached.GetAwaiter().GetResult();
+            Until(()=>Field<Button>(window,"_apply").IsEnabled,"Cached preview stalled");
+            Check(_normalizations==calls+1 && Field<DtfCorrectionPixels>(window,"_originalPixels").Width==96,"Cached normalization was recalculated");
+            Check(original.SequenceEqual(File.ReadAllBytes(path)),"DPI normalization changed original source file");
+        } finally {window.Close();Until(()=>!Field<bool>(window,"_rendering") && !Field<bool>(window,"_normalizing"),"Resolution test close left work running");}
+        var failed=new DtfCorrectionWindow(path,new DtfCorrectionOptions(),new DtfOutlineSettings(),(input,output,options,cancel)=> {
+            if(options.Resample300)throw new IOException("Controlled resample failure");return Process(input,output,options,cancel);
+        });
+        try {
+            var loaded=(Task)Call(failed,"LoadAsync");Until(()=>loaded.IsCompleted && Field<Button>(failed,"_apply").IsEnabled,"Failure-case source did not load");
+            var task=(Task)Call(failed,"NormalizeResolutionAsync");Until(()=>task.IsCompleted,"Failed normalization did not recover");task.GetAwaiter().GetResult();
+            var clock=Stopwatch.StartNew();while(clock.ElapsedMilliseconds<450)Pump();
+            Check(!Field<bool>(failed,"_normalizing") && !Field<bool>(failed,"_resolutionNormalized") && Field<DtfCorrectionPixels>(failed,"_originalPixels").Width==32,"Failed normalization changed source or left UI busy");
+            Check(Field<TextBlock>(failed,"_message").Text.Contains("Controlled resample failure") && Field<Button>(failed,"_normalizeResolution").IsEnabled,"Resample error disappeared or retry unavailable");
+        } finally {failed.Close();}
+        var canceled=new DtfCorrectionWindow(path,new DtfCorrectionOptions(),new DtfOutlineSettings(),Process);
+        var ready=(Task)Call(canceled,"LoadAsync");Until(()=>ready.IsCompleted && Field<Button>(canceled,"_apply").IsEnabled,"Cancellation-case source did not load");
+        var pending=(Task)Call(canceled,"NormalizeResolutionAsync");Until(()=>_active>0,"Cancellation-case normalization did not start");
+        string workspace=Field<string>(canceled,"_workspace");canceled.Close();Until(()=>pending.IsCompleted && !Field<bool>(canceled,"_normalizing"),"Closing left normalization worker running");
+        Check(!Directory.Exists(workspace) && original.SequenceEqual(File.ReadAllBytes(path)),"Canceled normalization left temporary data or changed original");
     }
 
     private static void PreparationDetail(DtfCorrectionWindow window,string root)
@@ -242,6 +322,7 @@ internal static class Program
         preset.Settings.Knockout=true;preset.Settings.KnockoutColor="#00AAFF";preset.Settings.KnockoutTolerance=12;
         preset.Settings.Halftone=true;preset.Settings.HalftoneAlphaOnly=true;preset.Settings.HalftoneAutoDot=false;
         preset.Settings.HalftoneLpi=28;preset.Settings.HalftoneAngle=-30;preset.Settings.HalftoneDotMm=.75;
+        preset.Settings.KnockoutSoft=false;preset.Settings.HalftoneShape=(int)DtfDotShape.Hexagon;preset.Settings.HalftoneColorBoost=65;
         Field<ComboBox>(window,"_units").SelectedIndex=1;
         Call(window,"ApplyPreset",preset);
         Check(Field<ComboBox>(window,"_units").SelectedIndex==0 && Field<int>(window,"_previousUnit")==0,"Preset retained source pixel units");
@@ -249,6 +330,8 @@ internal static class Program
         Check(Field<CheckBox>(window,"_halftone").IsChecked==true && Field<ComboBox>(window,"_screenMode").SelectedIndex==0 && !Field<bool>(window,"_automaticDot"),"Preset did not restore halftone mode");
         var captured=((DtfCorrectionPreset)Call(window,"CapturePreset")).ToOptions();
         Check(captured.HalftoneLpi==28 && captured.HalftoneAngle==-30 && captured.HalftoneDotMm==.75,"Preset loading overwrote manual point size");
+        Check(!captured.KnockoutSoft && captured.HalftoneShape==DtfDotShape.Hexagon && captured.HalftoneColorBoost==65,"Preset did not restore new preparation settings");
+        Check(Field<Slider>(window,"_screenLpiSlider").Value==28 && Field<Slider>(window,"_screenBoostSlider").Value==65,"Preset did not synchronize sliders");
         Check(captured.RadiusMm==original.Settings.RadiusMm && captured.ExpansionMm==original.Settings.ExpansionMm,"Preset physical outline dimensions changed");
         Until(()=>Field<Button>(window,"_apply").IsEnabled,"Preset did not automatically update preview");
         var bad=DtfCorrectionPreset.FromOptions(captured);bad.Settings.HalftoneLpi=0;string before=Field<TextBox>(window,"_screenLpi").Text;

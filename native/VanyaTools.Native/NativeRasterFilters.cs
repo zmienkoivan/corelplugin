@@ -6,6 +6,7 @@ namespace VanyaTools.Native
     internal sealed class NativeRasterFilterOptions
     {
         internal bool RemoveSemiTransparent, SmoothStairs, Outline, WhitenNearWhite;
+        internal bool Resample300;
         internal int Threshold = 130, StairsScale = 1, NearWhiteTolerance = 6;
         internal int MaximumOutputPixels = 70000000;
         internal double RadiusMm = 2 * 25.4 / 400, ExpansionMm = .175;
@@ -23,7 +24,8 @@ namespace VanyaTools.Native
     }
 
     // Color planes stay in their original model and channel order. Only alpha,
-    // requested interpolation, whitening and new outline pixels are changed.
+    // requested interpolation, colour preparation, whitening and new outline
+    // pixels are changed. No conversion of the whole raster's model takes place.
     internal static class NativeRasterFilters
     {
         internal static NativeRasterFilterResult Process(NativeRasterBuffer source,
@@ -45,8 +47,15 @@ namespace VanyaTools.Native
             if (options.Threshold < 0 || options.Threshold > 255 || options.NearWhiteTolerance < 0 || options.NearWhiteTolerance > 255 ||
                 options.MaximumOutputPixels <= 0) throw new ArgumentOutOfRangeException(nameof(options));
             cancellation.ThrowIfCancellationRequested();
-            NativeRasterBuffer current = takeOwnership ? source : source.Copy();
             options.PrintPreparation?.Validate();
+            var resample = options.Resample300 ? DtfResamplePlan.Create(source.Width,source.Height,source.DpiX,source.DpiY,options.MaximumOutputPixels) : null;
+            NativeRasterBuffer current;
+            if(resample?.Needed==true) {
+                var colors=new byte[checked(resample.Width*resample.Height*source.Channels)];var alpha=new byte[checked(resample.Width*resample.Height)];
+                DtfRasterResample.Run(source.Colors,source.Channels,source.Channels,source.Alpha,1,0,source.Width,source.Height,
+                    colors,source.Channels,alpha,1,0,resample,cancellation);
+                current=new NativeRasterBuffer(resample.Width,resample.Height,source.Mode,resample.DpiX,resample.DpiY,colors,alpha,source.CmykOrder);
+            } else current = takeOwnership ? source : source.Copy();
             DtfPrintPreparation.Knockout(current.Colors, current.Channels, current.Mode, current.CmykOrder,
                 current.Alpha, 1, 0, current.Width, current.Height, options.PrintPreparation, cancellation);
             double offsetX = 0, offsetY = 0;
@@ -57,6 +66,17 @@ namespace VanyaTools.Native
                     !options.RemoveSemiTransparent, cancellation);
                 current = Trim(current, 2, out int left, out int top, cancellation);
                 offsetX -= left * 25.4 / current.DpiX; offsetY -= top * 25.4 / current.DpiY;
+            }
+            // Screen after smoothing, before the final outline: each actual dot
+            // gets the selected outline colour, without screening that rim away.
+            bool screen = options.PrintPreparation?.Halftone == true;
+            if (screen)
+            {
+                if (options.WhitenNearWhite) WhitenConfigured(current, options, cancellation);
+                DtfPrintPreparation.Boost(current.Colors, current.Channels, current.Mode, current.CmykOrder,
+                    current.Alpha, 1, 0, current.Width, current.Height, options.PrintPreparation, cancellation);
+                DtfPrintPreparation.Halftone(current.Alpha, 1, 0, current.Width, current.Height, current.DpiX, current.DpiY,
+                    options.PrintPreparation.Offset(-offsetX, -offsetY), cancellation);
             }
             if (options.Outline)
             {
@@ -70,20 +90,19 @@ namespace VanyaTools.Native
                 offsetY += (paddingY - top) * 25.4 / current.DpiY;
             }
             if (options.RemoveSemiTransparent && options.Outline) ThresholdInPlace(current, options.Threshold, cancellation);
-            if (options.WhitenNearWhite)
-            {
-                if (options.NearWhitePreviewBgra == null) WhitenNearWhiteInPlace(current, options.NearWhiteTolerance, cancellation);
-                else
-                {
-                    byte[] preview = options.NearWhitePreviewBgra(current);
-                    var mask = DtfNearWhitePixels.CreateMask(preview, current.Width, current.Height, options.NearWhiteTolerance, cancellation);
-                    WhitenInPlace(current, mask, cancellation);
-                }
-            }
-            DtfPrintPreparation.Halftone(current.Alpha, 1, 0, current.Width, current.Height, current.DpiX, current.DpiY,
-                options.PrintPreparation?.Offset(-offsetX, -offsetY), cancellation);
+            if (options.WhitenNearWhite && !screen) WhitenConfigured(current, options, cancellation);
             cancellation.ThrowIfCancellationRequested();
             return new NativeRasterFilterResult { Buffer = current, OffsetMm = Tuple.Create(offsetX, offsetY) };
+        }
+
+        private static void WhitenConfigured(NativeRasterBuffer current, NativeRasterFilterOptions options, CancellationToken cancellation)
+        {
+            if (options.NearWhitePreviewBgra == null) WhitenNearWhiteInPlace(current, options.NearWhiteTolerance, cancellation);
+            else {
+                byte[] preview = options.NearWhitePreviewBgra(current);
+                var mask = DtfNearWhitePixels.CreateMask(preview, current.Width, current.Height, options.NearWhiteTolerance, cancellation);
+                WhitenInPlace(current, mask, cancellation);
+            }
         }
 
         internal static NativeRasterBuffer Threshold(NativeRasterBuffer source, int threshold,

@@ -50,9 +50,11 @@ namespace VanyaTools.Native
                 _radius.Text=DtfOutlineUnits.Format(options.RadiusMm); _expansion.Text=DtfOutlineUnits.Format(options.ExpansionMm); _hex.Text=Hex(options.Color);
                 _whiten.IsChecked=options.WhitenNearWhite; _nearWhiteTolerance.Value=options.NearWhiteTolerance;
                 _knockout.IsChecked=options.Knockout; _knockoutHex.Text=Hex(options.KnockoutColor); _knockoutTolerance.Value=options.KnockoutTolerance;
+                _knockoutSoft.IsChecked=options.KnockoutSoft; _screenShape.SelectedIndex=(int)options.HalftoneShape;
                 _halftone.IsChecked=options.Halftone; _screenMode.SelectedIndex=options.HalftoneAlphaOnly?0:1;
                 _screenLpi.Text=DtfOutlineUnits.Format(options.HalftoneLpi); _screenAngle.Text=options.HalftoneAngle.ToString(System.Globalization.CultureInfo.CurrentCulture);
                 _screenDot.Text=DtfOutlineUnits.Format(options.HalftoneDotMm); _automaticDot=options.HalftoneAutoDot;
+                _screenBoost.Text=options.HalftoneColorBoost.ToString();
                 _screenAuto.Content=_automaticDot?"Авто ✓":"Авто";
             }
             finally { _syncing=false; _preparationSync=false; }
@@ -92,7 +94,7 @@ namespace VanyaTools.Native
         private void UpdatePresetAvailability()
         {
             if(_savePreset==null) return;
-            _savePreset.IsEnabled=_loadPreset.IsEnabled=_loaded && !_closed && !_applying && !_presetBusy;
+            _savePreset.IsEnabled=_loadPreset.IsEnabled=_loaded && !_closed && !_applying && !_normalizing && !_presetBusy;
         }
     }
 }

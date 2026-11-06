@@ -14,7 +14,7 @@ internal static class Program
         RemoveSemiTransparent=true,Threshold=77,SmoothStairs=true,WhitenNearWhite=true,NearWhiteTolerance=12,
         Outline=true,RadiusMm=.127,ExpansionMm=.3,Color=Color.FromRgb(10,20,30),Knockout=true,
         KnockoutColor=Color.FromRgb(45,67,89),KnockoutTolerance=17,Halftone=true,HalftoneAlphaOnly=false,
-        HalftoneAutoDot=false,HalftoneLpi=32,HalftoneAngle=-22.5,HalftoneDotMm=.7,GridOriginXmm=1337,GridOriginYmm=-120,StairsScale=4 };
+        HalftoneAutoDot=false,HalftoneLpi=32,HalftoneAngle=-22.5,HalftoneDotMm=.7,GridOriginXmm=1337,GridOriginYmm=-120,StairsScale=4,Resample300=true };
     private static int Main()
     {
         string root=Path.Combine(Path.GetTempPath(),"Vanya-CorrectionPresetChecks-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
@@ -28,7 +28,13 @@ internal static class Program
             Check(result.Outline && result.RadiusMm==.127 && result.ExpansionMm==.3 && result.Color==source.Color,"Physical outline or colour lost");
             Check(result.Knockout && result.KnockoutColor==source.KnockoutColor && result.KnockoutTolerance==17,"Knockout lost");
             Check(result.Halftone && !result.HalftoneAlphaOnly && !result.HalftoneAutoDot && result.HalftoneLpi==32 && result.HalftoneAngle==-22.5 && result.HalftoneDotMm==.7,"Halftone lost");
+            var extended=Fixture();extended.KnockoutSoft=true;extended.HalftoneShape=DtfDotShape.Star;extended.HalftoneColorBoost=43;
+            DtfCorrectionPreset.Save(path,DtfCorrectionPreset.FromOptions(extended));var loaded=DtfCorrectionPreset.Load(path).ToOptions();
+            Check(loaded.KnockoutSoft && loaded.HalftoneShape==DtfDotShape.Star && loaded.HalftoneColorBoost==43,"New preset fields lost");
+            var old=DtfCorrectionPreset.FromOptions(extended);old.Version=1;var legacy=old.ToOptions();
+            Check(!legacy.KnockoutSoft && legacy.HalftoneShape==DtfDotShape.Circle && legacy.HalftoneColorBoost==0,"Version 1 preset behaviour changed");
             Check(result.GridOriginXmm==0 && result.GridOriginYmm==0 && result.StairsScale==1,"Source-specific geometry persisted");
+            Check(!result.Resample300,"One-time input normalization persisted as a repeated preview filter");
             string json=File.ReadAllText(path);
             Check(!json.Contains("GridOrigin") && !json.Contains("StairsScale") && !json.Contains("Dpi") && !json.Contains("SourcePath"),"Preset contains source-specific data");
             string bom=Path.Combine(root,"bom.json"); File.WriteAllText(bom,json,new UTF8Encoding(true));
@@ -45,6 +51,7 @@ internal static class Program
                 p=>p.Version=99,p=>p.Format="OtherTool",p=>p.Settings=null,p=>p.Settings.OutlineColor="#ZZ0000",
                 p=>p.Settings.KnockoutColor="red",p=>p.Settings.Threshold=256,p=>p.Settings.NearWhiteTolerance=65,
                 p=>p.Settings.KnockoutTolerance=-1,p=>p.Settings.HalftoneLpi=0,p=>p.Settings.HalftoneAngle=181,
+                p=>p.Settings.HalftoneShape=99,p=>p.Settings.HalftoneColorBoost=101,
                 p=>p.Settings.HalftoneDotMm=0,p=>p.Settings.ExpansionMm=Double.PositiveInfinity })
             { var p=DtfCorrectionPreset.FromOptions(source);change(p);Reject(()=>p.ToOptions()); }
             foreach(string text in new[]{"{","null","{}","{\"Format\":\"VanyaTools.Correction\",\"Version\":1}",new string('x',65537)})

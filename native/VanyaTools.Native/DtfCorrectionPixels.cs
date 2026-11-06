@@ -46,6 +46,10 @@ namespace VanyaTools.Native
                 DtfRasterOperations.Correct(_pixels, removeAlpha, threshold, whiten, tolerance, cancellation));
         internal DtfCorrectionPixels Correct(DtfCorrectionOptions options, CancellationToken cancellation)
         {
+            if(options.Resample300) {
+                var prepared=Resample300(cancellation);var filters=options.Copy();filters.Resample300=false;
+                return prepared.Correct(filters,cancellation);
+            }
             var prep = options.Preparation(); prep.Validate();
             byte[] pixels = prep.Knockout ? (byte[])_pixels.Clone() : _pixels;
             DtfPrintPreparation.Knockout(pixels, 4, 4, null, pixels, 4, 3, Width, Height, prep, cancellation);
@@ -55,15 +59,24 @@ namespace VanyaTools.Native
             if (prep.Halftone)
             {
                 if (ReferenceEquals(pixels, _pixels)) pixels = (byte[])_pixels.Clone();
+                DtfPrintPreparation.Boost(pixels, 4, 4, null, pixels, 4, 3, Width, Height, prep, cancellation);
                 DtfPrintPreparation.Halftone(pixels, 4, 3, Width, Height, DpiX, DpiY, prep, cancellation);
             }
             return ReferenceEquals(pixels, _pixels) ? this : new DtfCorrectionPixels(Width, Height, DpiX, DpiY, pixels);
+        }
+        internal DtfCorrectionPixels Resample300(CancellationToken cancellation)
+        {
+            var plan=DtfResamplePlan.Create(Width,Height,DpiX,DpiY);if(!plan.Needed)return this;
+            var pixels=new byte[checked(plan.Width*plan.Height*4)];
+            DtfRasterResample.Run(_pixels,3,4,_pixels,4,3,Width,Height,pixels,4,pixels,4,3,plan,cancellation);
+            return new DtfCorrectionPixels(plan.Width,plan.Height,plan.DpiX,plan.DpiY,pixels);
         }
         internal DtfCorrectionPixels Prepare(DtfPrintPreparationOptions options, CancellationToken cancellation)
         {
             if (options == null || !options.Knockout && !options.Halftone) return this;
             byte[] pixels = (byte[])_pixels.Clone();
             DtfPrintPreparation.Knockout(pixels, 4, 4, null, pixels, 4, 3, Width, Height, options, cancellation);
+            DtfPrintPreparation.Boost(pixels, 4, 4, null, pixels, 4, 3, Width, Height, options, cancellation);
             DtfPrintPreparation.Halftone(pixels, 4, 3, Width, Height, DpiX, DpiY, options, cancellation);
             return new DtfCorrectionPixels(Width, Height, DpiX, DpiY, pixels);
         }

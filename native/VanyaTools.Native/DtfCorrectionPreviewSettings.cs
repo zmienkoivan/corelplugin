@@ -41,10 +41,10 @@ namespace VanyaTools.Native
             row.Children.Add(_previewQuality);
             row.Children.Add(new TextBlock { Text = "Фон", FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 5, 0) });
-            _previewBackground = Combo(new[] { "Шашки", "Тёмно-серый", "Свой цвет" });
+            _previewBackground = Combo(new[] { "Шашки", "Тёмно-серый", "Свой цвет", "Цвет ткани" });
             _previewBackground.Width = 115; row.Children.Add(_previewBackground);
             System.Windows.Automation.AutomationProperties.SetName(_previewBackground, "Фон предпросмотра");
-            _previewBackground.ToolTip = "Фон только для просмотра прозрачности. В готовый PNG не добавляется.";
+            _previewBackground.ToolTip = "Фон только для просмотра, в PNG не добавляется. «Цвет ткани» берётся из нокаута.";
             _previewBackgroundColor = new Button { Width = 29, Height = 28, MinWidth = 0,
                 Margin = new Thickness(4, 0, 0, 0), Background = new SolidColorBrush(_customPreviewBackground),
                 ToolTip = "Выбрать свой цвет фона предпросмотра" };
@@ -90,13 +90,16 @@ namespace VanyaTools.Native
             UpdateThinAvailability();
             UpdatePrintPreparationAvailability(available);
             UpdatePresetAvailability();
+            UpdateResolutionInfo();
         }
 
         private void ChangePreviewBackground()
         {
             if (_beforeScroll == null || _afterScroll == null) return;
+            Color fabric = _knockoutHex != null && TryColor(_knockoutHex.Text,out Color key) ? key : Options.KnockoutColor;
             Brush background = _previewBackground.SelectedIndex == 0 ? Checkerboard() :
-                new SolidColorBrush(_previewBackground.SelectedIndex == 1 ? Color.FromRgb(48, 48, 48) : _customPreviewBackground);
+                new SolidColorBrush(_previewBackground.SelectedIndex == 1 ? Color.FromRgb(48, 48, 48) :
+                    _previewBackground.SelectedIndex == 3 ? fabric : _customPreviewBackground);
             if (background.CanFreeze) background.Freeze();
             _beforeScroll.Background = background; _afterScroll.Background = background;
         }
@@ -137,7 +140,7 @@ namespace VanyaTools.Native
 
         private async Task ChangePreviewQualityAsync()
         {
-            if (!_loaded || _closed || _applying || _insertingThinMask) return;
+            if (!_loaded || _closed || _applying || _insertingThinMask || _normalizing) return;
             int quality = SelectedPreviewQuality(), revision = ++_qualityRevision;
             _qualityCancellation?.Cancel();
             var cancellationSource = new CancellationTokenSource(); _qualityCancellation = cancellationSource;

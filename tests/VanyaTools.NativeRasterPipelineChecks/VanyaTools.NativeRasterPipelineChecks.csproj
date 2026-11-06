@@ -11,6 +11,7 @@
     <Compile Include="../../native/VanyaTools.Native/NativeRasterFilters.cs" Link="NativeRasterFilters.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfCorrectionOptions.cs" Link="DtfCorrectionOptions.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfPrintPreparation.cs" Link="DtfPrintPreparation.cs" />
+    <Compile Include="../../native/VanyaTools.Native/DtfRasterResample.cs" Link="DtfRasterResample.cs" />
     <Compile Include="../../native/VanyaTools.Native/StairCoverage.cs" Link="StairCoverage.cs" />
     <Compile Include="../../native/VanyaTools.Native/NativeRasterCorrection.cs" Link="NativeRasterCorrection.cs" />
     <Compile Include="../../native/VanyaTools.Native/NativeRasterSourceCapture.cs" Link="NativeRasterSourceCapture.cs" />

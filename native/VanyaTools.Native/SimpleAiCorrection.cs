@@ -136,6 +136,11 @@ namespace VanyaTools.Native
             try
             {
                 cancellation.ThrowIfCancellationRequested();
+                if (options.Resample300)
+                {
+                    var pixels=DtfCorrectionPixels.Capture(AiPrintTab.Bitmap(current)).Resample300(cancellation);
+                    string next=Next();using(var stream=File.Create(next))pixels.WritePng(stream,cancellation);current=next;
+                }
                 if (options.Knockout)
                 {
                     var prep = options.Preparation(); prep.Halftone = false;
@@ -164,6 +169,12 @@ namespace VanyaTools.Native
                         preserveAlpha: !options.RemoveSemiTransparent);
                     current = next;
                 }
+                if (options.Halftone)
+                {
+                    var prep = options.Preparation(-offsetX, -offsetY); prep.Knockout = false;
+                    var pixels = DtfCorrectionPixels.Capture(AiPrintTab.Bitmap(current)).Prepare(prep, cancellation);
+                    string next = Next(); using (var stream = File.Create(next)) pixels.WritePng(stream, cancellation); current = next;
+                }
                 if (options.Outline)
                 {
                     string next = Next();
@@ -177,18 +188,12 @@ namespace VanyaTools.Native
                     // soft pixels introduced by the outline, not just the source.
                     string next = Next(); ThresholdAlpha(current, next, options.Threshold, cancellation); current = next;
                 }
-                if (options.WhitenNearWhite && (options.SmoothStairs || options.Outline))
+                if (options.WhitenNearWhite && !options.Halftone && (options.SmoothStairs || options.Outline))
                 {
                     string next = Next(); DtfNearWhiteFilter.Process(current, next, options.NearWhiteTolerance, cancellation); current = next;
                 }
                 cancellation.ThrowIfCancellationRequested();
-                if (options.Halftone)
-                {
-                    var prep = options.Preparation(-offsetX, -offsetY); prep.Knockout = false;
-                    var pixels = DtfCorrectionPixels.Capture(AiPrintTab.Bitmap(current)).Prepare(prep, cancellation);
-                    using (var stream = File.Create(output)) pixels.WritePng(stream, cancellation);
-                }
-                else File.Copy(current, output, true);
+                File.Copy(current, output, true);
                 return new DtfCorrectionResult { OutputPath = output, OffsetMm = Tuple.Create(offsetX, offsetY) };
             }
             finally { foreach (string path in temporary) try { File.Delete(path); } catch { } }

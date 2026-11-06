@@ -73,6 +73,7 @@ namespace VanyaTools.Native
             controls.Children.Add(Text("Коррекция", 16, true));
             controls.Children.Add(Text("Настройки меняют предпросмотр. В Corel вставляется только готовый результат.", 11));
             CreatePresetControls(controls);
+            CreateResolutionControls(controls);
             controls.Children.Add(Text("Экспресс-аудит", 12, true));
             var alphaAudit = new Grid();
             alphaAudit.ColumnDefinitions.Add(new ColumnDefinition());
@@ -250,6 +251,7 @@ namespace VanyaTools.Native
             {
                 _closed = true; _delay.Stop(); CancelDetail(true); _previewCancellation?.Cancel(); _applyCancellation?.Cancel();
                 _qualityCancellation?.Cancel(); _sourceCancellation?.Cancel(); _thinMaskCancellation?.Cancel(); Cleanup();
+                _normalizationCancellation?.Cancel();
             };
             SetControlsEnabled(false);
         }
@@ -276,7 +278,10 @@ namespace VanyaTools.Native
                 {
                     if (_closed) { Cleanup(); return; }
                     _originalPixels = loaded.Item1; UsePreviewOverview(loaded.Item2);
+                    _inputWidth=_originalPixels.Width;_inputHeight=_originalPixels.Height;
+                    _inputDpiX=_originalPixels.DpiX;_inputDpiY=_originalPixels.DpiY;_workingSourcePath=_sourcePath;
                     _loaded = true; _before.Source = _overview; SetControlsEnabled(true); QueuePreview();
+                    UpdateResolutionInfo();
                 });
             }
             catch (OperationCanceledException) { }
@@ -359,7 +364,7 @@ namespace VanyaTools.Native
 
         private void QueuePreview()
         {
-            if (_syncing || !_loaded || _closed || _applying || _insertingThinMask) return;
+            if (_syncing || !_loaded || _closed || _applying || _insertingThinMask || _normalizing) return;
             UpdateCorrectionControlAvailability();
             _apply.IsEnabled = false; _after.Opacity = 0.45;
             CancelDetail(true);
@@ -370,7 +375,7 @@ namespace VanyaTools.Native
 
         private async Task PreviewAsync()
         {
-            if (_closed || !_loaded || _applying || _insertingThinMask || _qualityChanging || !OverviewReadyForSelection()) return;
+            if (_closed || !_loaded || _applying || _insertingThinMask || _normalizing || _qualityChanging || !OverviewReadyForSelection()) return;
             if (_rendering || _detailRendering || _qualityActive > 0) { _retryPreview = true; return; }
             if (!ReadOptions(out DtfCorrectionOptions options)) return;
             int revision = _revision;
@@ -467,14 +472,14 @@ namespace VanyaTools.Native
         private async Task ApplyAsync()
         {
             if (_insertingThinMask) return;
-            if (_applying || !_loaded || _qualityChanging || !OverviewReadyForSelection() ||
+            if (_applying || _normalizing || !_loaded || _qualityChanging || !OverviewReadyForSelection() ||
                 !ReadOptions(out DtfCorrectionOptions options)) return;
             _applying = true; _delay.Stop(); CancelDetail(false); _previewCancellation?.Cancel(); _apply.IsEnabled = false;
             SetControlsEnabled(false); _cancel.Content = "Отменить";
             _applyCancellation = new CancellationTokenSource();
             var cancellationSource = _applyCancellation; CancellationToken cancellation = cancellationSource.Token;
             string output = Path.Combine(Path.GetTempPath(), "Vanya-Correction-Result-" + Guid.NewGuid().ToString("N") + ".png");
-            string sourcePath = _sourcePath;
+            string sourcePath = _workingSourcePath ?? _sourcePath;
             var processor = _processor;
             bool keepOutput = false;
             try
@@ -617,7 +622,7 @@ namespace VanyaTools.Native
         { var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image)); using (var stream = File.Create(path)) encoder.Save(stream); }
         private void Cleanup()
         {
-            if (_loadingSource || _rendering || _detailRendering || _applying || _insertingThinMask || _qualityActive > 0) return;
+            if (_loadingSource || _rendering || _detailRendering || _applying || _insertingThinMask || _normalizing || _qualityActive > 0) return;
             try { if (Directory.Exists(_workspace)) Directory.Delete(_workspace, true); } catch { }
         }
         private static void DeleteFile(string path) { if (path != null) try { File.Delete(path); } catch { } }

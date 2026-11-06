@@ -37,7 +37,7 @@ namespace VanyaTools.Native
 
         private void QueueDetail()
         {
-            if (!_loaded || _closed || _applying || _insertingThinMask) return;
+            if (!_loaded || _closed || _applying || _insertingThinMask || _normalizing) return;
             CancelDetail(false);
             if (_view.SelectedIndex == 0) _detailDelay.Start();
         }
@@ -79,7 +79,7 @@ namespace VanyaTools.Native
 
         private async Task DetailAsync()
         {
-            if (_closed || !_loaded || _applying || _insertingThinMask || _qualityChanging ||
+            if (_closed || !_loaded || _applying || _insertingThinMask || _normalizing || _qualityChanging ||
                 _view.SelectedIndex != 0 || _baseRevision != _revision || _previewScene.IsEmpty) return;
             if (_rendering || _detailRendering || _qualityActive > 0) { _detailDelay.Start(); return; }
             if (_overviewPixels.Width == _originalPixels.Width && _overviewPixels.Height == _originalPixels.Height)
@@ -174,12 +174,16 @@ namespace VanyaTools.Native
             options = options.Copy();
             options.GridOriginXmm += plan.Input.X * 25.4 / source.DpiX;
             options.GridOriginYmm += plan.Input.Y * 25.4 / source.DpiY;
-            var corrected = input.Correct(options, cancellation);
+            bool geometry = options.Outline || options.SmoothStairs;
+            // The processor performs the entire geometry pipeline. Do not
+            // screen a second time just to decide whether it should run:
+            // smoothing can reveal dots absent at the input sampling phase.
+            var corrected = geometry ? input : input.Correct(options, cancellation);
             BitmapSource result; Tuple<double, double> offset = Tuple.Create(0d, 0d);
             string inputPath = null, outputPath = null;
             try
             {
-                if ((options.Outline || options.SmoothStairs) && corrected.HasVisiblePixels(cancellation))
+                if (geometry && input.HasVisiblePixels(cancellation))
                 {
                     inputPath = Path.Combine(workspace, "detail-input-" + Guid.NewGuid().ToString("N") + ".png");
                     outputPath = Path.Combine(workspace, "detail-output-" + Guid.NewGuid().ToString("N") + ".png");

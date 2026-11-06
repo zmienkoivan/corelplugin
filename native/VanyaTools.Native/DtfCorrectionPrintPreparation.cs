@@ -11,19 +11,20 @@ namespace VanyaTools.Native
 {
     internal sealed partial class DtfCorrectionWindow
     {
-        private CheckBox _knockout, _halftone;
-        private TextBox _knockoutHex, _screenLpi, _screenAngle, _screenDot;
-        private Slider _knockoutTolerance;
+        private CheckBox _knockout, _knockoutSoft, _halftone;
+        private TextBox _knockoutHex, _screenLpi, _screenAngle, _screenDot, _screenBoost;
+        private Slider _knockoutTolerance, _screenLpiSlider, _screenAngleSlider, _screenDotSlider, _screenBoostSlider;
         private TextBlock _knockoutValue, _screenMetrics;
         private Button _knockoutSwatch, _screenAuto;
         private ToggleButton _knockoutPick;
-        private ComboBox _screenMode;
+        private ComboBox _screenMode, _screenShape;
         private bool _preparationSync, _automaticDot;
+        private Action<double> _screenDotMaximum;
 
         private void CreateKnockoutControls(StackPanel controls)
         {
             _knockout = Check("Нокаут цвета", Options.Knockout);
-            _knockout.ToolTip = "Убирает выбранный цвет из всего принта, включая закрытые внутренние области.";
+            _knockout.ToolTip = "Убирает вклад выбранного цвета ткани, включая закрытые области, с плавной прозрачностью.";
             var body = new StackPanel { Margin = new Thickness(3, 4, 0, 4) };
             var section = new Expander { Header = _knockout, IsExpanded = Options.Knockout, Content = body,
                 Margin = new Thickness(0, 7, 0, 2) };
@@ -50,15 +51,19 @@ namespace VanyaTools.Native
             Grid.SetColumn(_knockoutTolerance, 1); tolerance.Children.Add(_knockoutTolerance);
             _knockoutValue = Text(((int)_knockoutTolerance.Value).ToString(), 11);
             _knockoutValue.MinWidth = 25; Grid.SetColumn(_knockoutValue, 2); tolerance.Children.Add(_knockoutValue); body.Children.Add(tolerance);
-            body.Children.Add(Text("Цвет внутри допуска становится прозрачным. Нокаут выполняется перед коррекцией и обводкой.", 10));
+            _knockoutSoft = Check("Плавно · цвет ткани → альфа", Options.KnockoutSoft); body.Children.Add(_knockoutSoft);
+            _knockoutSoft.ToolTip = "Разделяет цвет на вклад ткани и цвет печати, сохраняет переходы. При выключении — прежнее вырезание по допуску.";
+            body.Children.Add(Text("Выберите цвет ткани. Плавный нокаут убирает его вклад и из смешанных цветов. Для оценки задайте такой же фон просмотра.", 10));
             controls.Children.Add(section);
             _knockout.Checked += (_, __) => { section.IsExpanded = true; QueuePreview(); };
             _knockout.Unchecked += (_, __) => { section.IsExpanded = false; _knockoutPick.IsChecked = false; QueuePreview(); };
             _knockoutHex.TextChanged += (_, __) => {
                 if (TryColor(_knockoutHex.Text, out Color color)) _knockoutSwatch.Background = new SolidColorBrush(color);
+                if (_previewBackground?.SelectedIndex == 3) ChangePreviewBackground();
                 QueuePreview();
             };
             _knockoutTolerance.ValueChanged += (_, __) => { _knockoutValue.Text = ((int)_knockoutTolerance.Value).ToString(); QueuePreview(); };
+            _knockoutSoft.Checked += (_, __) => QueuePreview(); _knockoutSoft.Unchecked += (_, __) => QueuePreview();
             _knockoutSwatch.Click += (_, __) => {
                 try {
                     if (!TryColor(_knockoutHex.Text, out Color current)) current = Colors.Black;
@@ -76,38 +81,71 @@ namespace VanyaTools.Native
             var body = new StackPanel { Margin = new Thickness(3, 4, 0, 4) };
             var section = new Expander { Header = _halftone, Content = body, IsExpanded = Options.Halftone, Margin = new Thickness(0, 7, 0, 0) };
             _screenMode = Combo(new[] { "По альфе", "Всё изображение" }); _screenMode.SelectedIndex = Options.HalftoneAlphaOnly ? 0 : 1;
-            _screenMode.ToolTip = "По альфе: плотные участки сохраняются. Всё изображение: сетка также на плотных участках. Промежутки прозрачные, цвета сохраняются.";
+            _screenMode.ToolTip = "По альфе: плотные участки сохраняются. Всё изображение: сетка также на плотных участках; доступен колорбуст.";
             body.Children.Add(_screenMode);
-            var values = new UniformGrid { Columns = 2 };
+            _screenShape = Combo(new[] { "●  Круг", "⬭  Овал", "◆  Ромб", "⬡  Сота", "★  Звезда", "■  Квадрат", "✚  Крест" });
+            _screenShape.SelectedIndex = (int)Options.HalftoneShape; body.Children.Add(_screenShape);
+            System.Windows.Automation.AutomationProperties.SetName(_screenShape, "Форма точки");
             _screenLpi = Field(DtfOutlineUnits.Format(Options.HalftoneLpi));
             _screenAngle = Field(Options.HalftoneAngle.ToString("0.###", CultureInfo.CurrentCulture));
             System.Windows.Automation.AutomationProperties.SetName(_screenLpi, "Растр LPI");
             System.Windows.Automation.AutomationProperties.SetName(_screenAngle, "Угол растра");
-            var first = Labeled("Растр, LPI", _screenLpi); first.Margin = new Thickness(0, 2, 5, 0); values.Children.Add(first);
-            values.Children.Add(Labeled("Угол, °", _screenAngle)); body.Children.Add(values);
-            var dots = new Grid(); dots.ColumnDefinitions.Add(new ColumnDefinition()); dots.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            _screenDot = Field(DtfOutlineUnits.Format(Options.HalftoneDotMm)); dots.Children.Add(_screenDot);
+            _screenLpiSlider = ScreenSlider(body, "Растр, LPI", _screenLpi, .5, 200, .5);
+            _screenAngleSlider = ScreenSlider(body, "Угол, °", _screenAngle, -180, 180, .5);
+            _screenDot = Field(DtfOutlineUnits.Format(Options.HalftoneDotMm));
             System.Windows.Automation.AutomationProperties.SetName(_screenDot, "Максимальный диаметр точки");
             _screenAuto = new Button { Content = "Авто", MinHeight = 27, Padding = new Thickness(6, 2, 6, 2), Margin = new Thickness(4, 0, 0, 0),
                 ToolTip = "Авторазмер: сохраняет покрытие альфы; в режиме всего изображения оставляет промежутки между точками. Ручной ввод задаёт максимальный диаметр." };
-            Grid.SetColumn(_screenAuto, 1); dots.Children.Add(_screenAuto); body.Children.Add(Labeled("Макс. точка, мм", dots));
+            _screenDotSlider = ScreenSlider(body, "Размер, мм", _screenDot, .01, 250, .01, _screenAuto);
+            _screenBoost = Field(Options.HalftoneColorBoost.ToString(CultureInfo.CurrentCulture));
+            _screenBoostSlider = ScreenSlider(body, "Колорбуст, %", _screenBoost, 0, 100, 1);
+            _screenBoostSlider.ToolTip = "Насыщенность и контраст в режиме «Всё изображение». 0% — исходные цвета. Потерю площади точек полностью не компенсирует.";
             _screenMetrics = Text("", 10); body.Children.Add(_screenMetrics);
-            body.Children.Add(Text("Сетка применяется после коррекции и обводки. Для растра по альфе отключите «Убрать полупрозрачность».", 10));
+            body.Children.Add(Text("Обводка применяется к готовым точкам. Для растра по альфе отключите «Убрать полупрозрачность».", 10));
             controls.Children.Add(section); _automaticDot = Options.HalftoneAutoDot; UpdateAutomaticDot();
             _halftone.Checked += (_, __) => { section.IsExpanded = true; QueuePreview(); };
             _halftone.Unchecked += (_, __) => { section.IsExpanded = false; QueuePreview(); };
             _screenMode.SelectionChanged += (_, __) => { UpdateAutomaticDot(); QueuePreview(); };
+            _screenShape.SelectionChanged += (_, __) => { UpdateAutomaticDot(); QueuePreview(); };
             _screenLpi.TextChanged += (_, __) => { UpdateAutomaticDot(); QueuePreview(); };
             _screenAngle.TextChanged += (_, __) => QueuePreview();
             _screenDot.TextChanged += (_, __) => { if (!_preparationSync) { _automaticDot = false; _screenAuto.Content = "Авто"; QueuePreview(); } };
             _screenAuto.Click += (_, __) => { _automaticDot = true; UpdateAutomaticDot(); QueuePreview(); };
+            _screenBoost.TextChanged += (_, __) => QueuePreview();
+        }
+
+        // Retain precise numeric entry alongside every slider. Local sync avoids
+        // recursive events, locale problems and preview restarts during drags.
+        private Slider ScreenSlider(Panel body, string label, TextBox field, double minimum, double maximum, double step, Button extra = null)
+        {
+            var row = new Grid { Margin = new Thickness(0, 3, 0, 0) };
+            row.ColumnDefinitions.Add(new ColumnDefinition()); row.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+            row.Children.Add(new TextBlock { Text=label, FontSize=11, VerticalAlignment=VerticalAlignment.Center });
+            field.Width=70; Grid.SetColumn(field,1); row.Children.Add(field);
+            if(extra!=null) { Grid.SetColumn(extra,2);row.Children.Add(extra); } body.Children.Add(row);
+            var slider = new Slider { Minimum=minimum, Maximum=maximum, TickFrequency=step, IsSnapToTickEnabled=true, Margin=new Thickness(0,1,0,3) };
+            System.Windows.Automation.AutomationProperties.SetName(slider,label);
+            bool syncing=false;
+            bool Parse(out double value) => Double.TryParse((field.Text??"").Trim().Replace(',','.'),NumberStyles.Float,CultureInfo.InvariantCulture,out value) && !Double.IsNaN(value) && !Double.IsInfinity(value);
+            if(Parse(out double initial)) slider.Value=Math.Max(minimum,Math.Min(maximum,initial));
+            field.TextChanged += (_,__) => { if(syncing)return; if(Parse(out double value)) { syncing=true;slider.Value=Math.Max(minimum,Math.Min(maximum,value));syncing=false; } };
+            slider.ValueChanged += (_,__) => { if(syncing)return; syncing=true;field.Text=slider.Value.ToString("0.###",CultureInfo.CurrentCulture);syncing=false; };
+            if(extra!=null) _screenDotMaximum = value => {
+                syncing=true; slider.Maximum=value;
+                if(Parse(out double number)) slider.Value=Math.Max(slider.Minimum,Math.Min(slider.Maximum,number));
+                syncing=false;
+            };
+            body.Children.Add(slider); return slider;
         }
 
         private void UpdateAutomaticDot()
         {
-            if (_preparationSync || !_automaticDot || _screenDot == null || !DtfOutlineUnits.TryNumber(_screenLpi.Text, out double lpi) || lpi < .5 || lpi > 200) return;
+            if (_preparationSync || _screenDot == null || !DtfOutlineUnits.TryNumber(_screenLpi.Text, out double lpi) || lpi < .5 || lpi > 200) return;
+            _screenDotMaximum?.Invoke(Math.Min(250, Math.Max(.02,25.4/lpi*DtfDotGeometry.CoverDiameter((DtfDotShape)Math.Max(0,_screenShape.SelectedIndex)))));
+            if(!_automaticDot) return;
             _preparationSync = true;
-            _screenDot.Text = DtfOutlineUnits.Format(25.4 / lpi * (_screenMode.SelectedIndex == 0 ? Math.Sqrt(2) : .75));
+            _screenDot.Text = DtfOutlineUnits.Format(25.4 / lpi * (_screenMode.SelectedIndex == 0 ? DtfDotGeometry.CoverDiameter((DtfDotShape)Math.Max(0,_screenShape.SelectedIndex)) : .75));
             _screenAuto.Content = "Авто ✓"; _preparationSync = false;
         }
 
@@ -119,7 +157,9 @@ namespace VanyaTools.Native
                 knockoutColor = Options.KnockoutColor;
             }
             options.KnockoutColor = knockoutColor; options.KnockoutTolerance = (int)_knockoutTolerance.Value;
+            options.KnockoutSoft = _knockoutSoft.IsChecked == true;
             options.Halftone = _halftone.IsChecked == true; options.HalftoneAlphaOnly = _screenMode.SelectedIndex == 0;
+            options.HalftoneShape = (DtfDotShape)_screenShape.SelectedIndex;
             options.HalftoneAutoDot = _automaticDot;
             bool lpiOk = DtfOutlineUnits.TryNumber(_screenLpi.Text, out double lpi);
             bool dotOk = DtfOutlineUnits.TryNumber(_screenDot.Text, out double dot);
@@ -131,6 +171,10 @@ namespace VanyaTools.Native
             options.HalftoneLpi = lpiOk ? lpi : Options.HalftoneLpi;
             options.HalftoneAngle = angleOk ? angle : Options.HalftoneAngle;
             options.HalftoneDotMm = dotOk ? dot : Options.HalftoneDotMm;
+            if (!Int32.TryParse(_screenBoost.Text,out int boost) || boost<0 || boost>100) {
+                if(options.Halftone && !options.HalftoneAlphaOnly) {ShowMessage("Колорбуст: 0–100%.",true);return false;} boost=Options.HalftoneColorBoost;
+            }
+            options.HalftoneColorBoost = boost;
             try { options.Preparation().Validate(); }
             catch (Exception error) { ShowMessage(error.Message, true); return false; }
             if (options.Halftone) _screenMetrics.Text = "Шаг " + DtfOutlineUnits.Format(25.4 / options.HalftoneLpi) +
@@ -142,8 +186,10 @@ namespace VanyaTools.Native
         {
             if (_knockout == null || _halftone == null) return;
             bool knockout = available && _knockout.IsChecked == true, halftone = available && _halftone.IsChecked == true;
-            _knockoutHex.IsEnabled = _knockoutTolerance.IsEnabled = _knockoutSwatch.IsEnabled = _knockoutPick.IsEnabled = knockout;
-            _screenLpi.IsEnabled = _screenAngle.IsEnabled = _screenDot.IsEnabled = _screenMode.IsEnabled = _screenAuto.IsEnabled = halftone;
+            _knockoutHex.IsEnabled = _knockoutTolerance.IsEnabled = _knockoutSwatch.IsEnabled = _knockoutPick.IsEnabled = _knockoutSoft.IsEnabled = knockout;
+            _screenLpi.IsEnabled = _screenAngle.IsEnabled = _screenDot.IsEnabled = _screenMode.IsEnabled = _screenShape.IsEnabled = _screenAuto.IsEnabled = halftone;
+            _screenLpiSlider.IsEnabled = _screenAngleSlider.IsEnabled = _screenDotSlider.IsEnabled = halftone;
+            _screenBoost.IsEnabled = _screenBoostSlider.IsEnabled = halftone && _screenMode.SelectedIndex == 1;
             if (!knockout) _knockoutPick.IsChecked = false;
         }
 
