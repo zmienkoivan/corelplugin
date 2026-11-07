@@ -299,6 +299,39 @@ internal static class Program
         var pending=(Task)Call(canceled,"NormalizeResolutionAsync");Until(()=>_active>0,"Cancellation-case normalization did not start");
         string workspace=Field<string>(canceled,"_workspace");canceled.Close();Until(()=>pending.IsCompleted && !Field<bool>(canceled,"_normalizing"),"Closing left normalization worker running");
         Check(!Directory.Exists(workspace) && original.SequenceEqual(File.ReadAllBytes(path)),"Canceled normalization left temporary data or changed original");
+
+        int automaticCalls = _normalizations;
+        var automatic = new DtfCorrectionWindow(path, new DtfCorrectionOptions(), new DtfOutlineSettings(),
+            Process, normalizeOnLoad: true);
+        try
+        {
+            var load = (Task)Call(automatic, "LoadAsync");
+            Until(() => _active > 0, "Checked normalization did not start on load");
+            Check(!Field<Button>(automatic, "_apply").IsEnabled, "Apply enabled before startup normalization");
+            Until(() => load.IsCompleted && Field<Button>(automatic, "_apply").IsEnabled,
+                "Startup normalization did not enable the corrected preview");
+            load.GetAwaiter().GetResult();
+            Check(Field<bool>(automatic, "_resolutionNormalized") && _normalizations == automaticCalls + 1 &&
+                Field<DtfCorrectionPixels>(automatic, "_originalPixels").Width == 96,
+                "Startup normalization did not select one 300-DPI working copy");
+            Check(original.SequenceEqual(File.ReadAllBytes(path)), "Startup normalization changed the source file");
+        }
+        finally { automatic.Close(); }
+
+        string printDpiPath = Path.Combine(root, "print-dpi.png");
+        using (var file = File.Create(printDpiPath)) FastRasterPng.Write(file, data, 32, 16, 300, 400);
+        var printDpi = new DtfCorrectionWindow(printDpiPath, new DtfCorrectionOptions(), new DtfOutlineSettings(),
+            Process, normalizeOnLoad: true);
+        try
+        {
+            var load = (Task)Call(printDpi, "LoadAsync");
+            Until(() => load.IsCompleted && Field<Button>(printDpi, "_apply").IsEnabled, "Print-DPI preview stalled");
+            load.GetAwaiter().GetResult();
+            Check(!Field<bool>(printDpi, "_resolutionNormalized") && _normalizations == automaticCalls + 1 &&
+                Field<string>(printDpi, "_workingSourcePath") == printDpiPath,
+                "Startup option resampled an image already at print DPI");
+        }
+        finally { printDpi.Close(); }
     }
 
     private static void PreparationDetail(DtfCorrectionWindow window,string root)

@@ -314,6 +314,7 @@ namespace VanyaTools.Native
                 () => aiTools.GetToken(), ImportAiResult,
                 (message, isError) => SetStatus(message, isError), SimpleAiMode.Raster, ImportDtfResult, outlineSettings,
                 printExport.QuickButtons);
+            printExport.QuickSelectionRead += rasterEditor.RefreshCorrectionResolution;
             root.Children.Add(rasterEditor);
             settings.Children.Insert(1, rasterEditor.RasterSettingsView);
 

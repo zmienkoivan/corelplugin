@@ -235,7 +235,12 @@ namespace VanyaTools.Native
             _edgeRadius.TextChanged += (_, __) => UpdateEdgeUnits(false);
             _edgeExpansion.TextChanged += (_, __) => UpdateEdgeUnits(false);
             edgeRow.MouseEnter += (_, __) => UpdateEdgeUnits();
-            if (!styleOnly) { UpdateEdgeUnits(false); panel.Children.Add(_correctionButton); }
+            if (!styleOnly)
+            {
+                UpdateEdgeUnits(false);
+                panel.Children.Add(CreateCorrectionResolutionRow());
+                panel.Children.Add(_correctionButton);
+            }
 
             var localPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 5) };
             _localPreviewButton = Button("Загрузить выделение для предпросмотра",
@@ -1721,6 +1726,7 @@ namespace VanyaTools.Native
             _busy = busy;
             if (_rasterInsertionMode != null) _rasterInsertionMode.IsEnabled = !busy;
             _correctionButton.IsEnabled = !busy;
+            if (_normalizeBeforeCorrection != null) _normalizeBeforeCorrection.IsEnabled = !busy;
             _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
                 _highlightButton.IsEnabled = _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled = _underlayColorButton.IsEnabled =
                 _editButton.IsEnabled = _localApplyButton.IsEnabled = _localPreviewButton.IsEnabled = !busy;

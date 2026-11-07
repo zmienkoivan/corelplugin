@@ -23,6 +23,7 @@ namespace VanyaTools.Native
     internal sealed partial class DtfCorrectionWindow : Window
     {
         private readonly string _sourcePath;
+        private readonly bool _normalizeOnLoad;
         private readonly string _workspace = Path.Combine(Path.GetTempPath(), "Vanya-Correction-" + Guid.NewGuid().ToString("N"));
         private readonly Func<string, string, DtfCorrectionOptions, CancellationToken, DtfCorrectionResult> _processor;
         private readonly CheckBox _remove, _stairs, _outline, _highlight, _highlightWhite, _whiten;
@@ -49,9 +50,11 @@ namespace VanyaTools.Native
         internal DtfCorrectionWindow(string sourcePath, DtfCorrectionOptions initial,
             DtfOutlineSettings presets,
             Func<string, string, DtfCorrectionOptions, CancellationToken, DtfCorrectionResult> processor,
-            bool startThinAudit = false, Action<byte[], int, int> insertThinMask = null)
+            bool startThinAudit = false, Action<byte[], int, int> insertThinMask = null,
+            bool normalizeOnLoad = false)
         {
             _sourcePath = sourcePath ?? throw new ArgumentNullException(nameof(sourcePath));
+            _normalizeOnLoad = normalizeOnLoad;
             _processor = processor ?? throw new ArgumentNullException(nameof(processor));
             Options = (initial ?? new DtfCorrectionOptions()).Copy();
             presets = presets ?? new DtfOutlineSettings();
@@ -269,15 +272,19 @@ namespace VanyaTools.Native
                     var original = DtfCorrectionPixels.Capture(image); cancellation.ThrowIfCancellationRequested();
                     return Tuple.Create(original, overview);
                 }, cancellation).ConfigureAwait(false);
+                Task normalization = Task.CompletedTask;
                 await OnUiAsync(() =>
                 {
                     if (_closed) { Cleanup(); return; }
                     _originalPixels = loaded.Item1; UsePreviewOverview(loaded.Item2);
                     _inputWidth=_originalPixels.Width;_inputHeight=_originalPixels.Height;
                     _inputDpiX=_originalPixels.DpiX;_inputDpiY=_originalPixels.DpiY;_workingSourcePath=_sourcePath;
-                    _loaded = true; _before.Source = _overview; SetControlsEnabled(true); QueuePreview();
+                    _loaded = true; _before.Source = _overview; SetControlsEnabled(true);
                     UpdateResolutionInfo();
+                    if (_normalizeOnLoad && CanNormalizeSource) normalization = NormalizeResolutionAsync();
+                    else QueuePreview();
                 });
+                await normalization.ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }
             catch (Exception error)

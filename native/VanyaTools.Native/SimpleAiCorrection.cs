@@ -8,6 +8,7 @@ using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
@@ -16,7 +17,65 @@ namespace VanyaTools.Native
     internal sealed partial class SimpleAiTab
     {
         private readonly Button _correctionButton;
+        private Border _correctionResolutionBadge;
+        private TextBlock _correctionResolutionText;
+        private CheckBox _normalizeBeforeCorrection;
         private object _correctionDocument;
+
+        private FrameworkElement CreateCorrectionResolutionRow()
+        {
+            _correctionResolutionText = new TextBlock {
+                Text = "DPI —", FontSize = 11, Foreground = Brushes.Black
+            };
+            _correctionResolutionBadge = new Border {
+                Child = _correctionResolutionText, Background = Brushes.LightGray,
+                CornerRadius = new CornerRadius(4), Padding = new Thickness(6, 3, 6, 3),
+                Margin = new Thickness(0, 0, 6, 2),
+                ToolTip = "Выделите один растр. Цвет показывает оценку по меньшему DPI из двух осей."
+            };
+            _normalizeBeforeCorrection = new CheckBox {
+                Content = "Нормализовать до 300 DPI", FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 0, 2),
+                ToolTip = "При открытии коррекции повысить DPI рабочей копии, если он ниже 300. Размер в миллиметрах сохраняется."
+            };
+            var row = new WrapPanel { Margin = new Thickness(1, 2, 1, 2) };
+            row.Children.Add(_correctionResolutionBadge);
+            row.Children.Add(_normalizeBeforeCorrection);
+            return row;
+        }
+
+        internal void RefreshCorrectionResolution(object selection, int count)
+        {
+            if (_busy || _correctionResolutionBadge == null) return;
+            string text = "DPI —";
+            Color color = Colors.LightGray;
+            if (count == 1 && selection != null)
+            {
+                try
+                {
+                    using (DockerUiWatchdog.Trace(Dispatcher, "Correction DPI metadata"))
+                    {
+                        dynamic shape = ((dynamic)selection).Shapes.Item[1];
+                        if (Convert.ToInt32(shape.Type) == CorelConstants.CdrBitmapShape)
+                        {
+                            dynamic bitmap = shape.Bitmap;
+                            double dpiX = Convert.ToDouble(bitmap.ResolutionX);
+                            double dpiY = Convert.ToDouble(bitmap.ResolutionY);
+                            if (Finite(dpiX) && Finite(dpiY) && dpiX > 0 && dpiY > 0)
+                            {
+                                text = DtfCorrectionWindow.FormatResolution(dpiX, dpiY) + " DPI";
+                                color = DtfCorrectionWindow.ResolutionColor(Math.Min(dpiX, dpiY));
+                            }
+                        }
+                    }
+                }
+                catch { /* Corel can temporarily reject metadata reads during editing. */ }
+            }
+            if (_correctionResolutionText.Text == text &&
+                (_correctionResolutionBadge.Background as SolidColorBrush)?.Color == color) return;
+            _correctionResolutionText.Text = text;
+            _correctionResolutionBadge.Background = new SolidColorBrush(color);
+        }
 
         private sealed class CorrectionPlacement
         {
@@ -33,6 +92,7 @@ namespace VanyaTools.Native
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
             { Report("Вставьте готовый результат или нажмите «Отложить».", true); return; }
+            bool normalizeOnLoad = _normalizeBeforeCorrection?.IsChecked == true;
             string source = null;
             SetBusy(true, "Подготавливаю выделение для коррекции…");
             try
@@ -76,7 +136,8 @@ namespace VanyaTools.Native
                 var initial = new DtfCorrectionOptions { RemoveSemiTransparent = false, Threshold = Math.Max(0, Math.Min(255, threshold)),
                     RadiusMm = radius * factor, ExpansionMm = expansion * factor, Color = color };
                 var dialog = new DtfCorrectionWindow(source, initial, _outlineSettings, ProcessCorrection, false,
-                    (mask, width, height) => ThinElementMask.Insert(thinSource, mask, width, height));
+                    (mask, width, height) => ThinElementMask.Insert(thinSource, mask, width, height),
+                    normalizeOnLoad: normalizeOnLoad);
                 var owner = PresentationSource.FromVisual(this) as HwndSource;
                 if (owner != null) new WindowInteropHelper(dialog).Owner = owner.Handle;
                 _timer.Stop(); _progress.Text = "Подбор коррекции в отдельном окне · без интернета.";

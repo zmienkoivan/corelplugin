@@ -24,6 +24,7 @@ namespace VanyaTools.Native
             Interval = TimeSpan.FromMilliseconds(500) };
         private bool _busy, _refreshing, _tabLoaded, _quickLoaded;
         internal FrameworkElement QuickButtons => _quickPanel;
+        internal event Action<object, int> QuickSelectionRead;
 
         internal PrintExportTab(PrintExportSettings settings, Action<string, bool> status)
         {
@@ -155,7 +156,9 @@ namespace VanyaTools.Native
         private void UpdateAvailability()
         {
             if (_busy) return;
-            bool documentOpen = false, selected = false;
+            bool documentOpen = false;
+            object selection = null;
+            int selectionCount = 0;
             try
             {
                 using (DockerUiWatchdog.Trace(Dispatcher, "PrintExportTab.UpdateAvailability"))
@@ -165,14 +168,23 @@ namespace VanyaTools.Native
                     {
                         documentOpen = true;
                         dynamic range = app.ActiveSelectionRange;
-                        selected = range != null && Convert.ToInt32(range.Count) > 0;
+                        selection = range;
+                        selectionCount = range == null ? 0 : Convert.ToInt32(range.Count);
                     }
                 }
             }
-            catch { documentOpen = selected = false; /* Corel can reject calls while a native dialog is open. */ }
+            catch
+            {
+                // Corel can reject calls while a native dialog is open.
+                documentOpen = false;
+                selection = null;
+                selectionCount = 0;
+            }
+            if (_quickLoaded && _quickPanel.IsVisible)
+                QuickSelectionRead?.Invoke(selection, selectionCount);
             foreach (var job in _jobs)
             {
-                bool enabled = documentOpen && (job.Key == 0 || selected);
+                bool enabled = documentOpen && (job.Key == 0 || selectionCount > 0);
                 if (job.Value.IsEnabled != enabled) job.Value.IsEnabled = enabled;
             }
         }

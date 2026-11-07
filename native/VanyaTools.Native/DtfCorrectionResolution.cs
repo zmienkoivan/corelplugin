@@ -31,6 +31,21 @@ namespace VanyaTools.Native
         }
 
         private static int ResolutionLevel(double dpi) => Math.Round(dpi,1)<140 ? 0 : Math.Round(dpi,1)<200 ? 1 : 2;
+        internal static Color ResolutionColor(double dpi)
+        {
+            switch (ResolutionLevel(dpi))
+            {
+                case 0: return Color.FromRgb(255, 202, 202);
+                case 1: return Color.FromRgb(255, 232, 164);
+                default: return Color.FromRgb(194, 233, 202);
+            }
+        }
+
+        internal static string FormatResolution(double dpiX, double dpiY) =>
+            Math.Abs(dpiX - dpiY) < .05 ? dpiX.ToString("0.#") : dpiX.ToString("0.#") + " × " + dpiY.ToString("0.#");
+
+        private bool CanNormalizeSource => Math.Min(_inputDpiX, _inputDpiY) < 299.99;
+
         private static bool ResolutionSizeMatches(int oldPixels,double oldDpi,int pixels,double dpi)
         {
             if(pixels<oldPixels || Double.IsNaN(dpi) || Double.IsInfinity(dpi) || dpi<299.95)return false;
@@ -43,14 +58,12 @@ namespace VanyaTools.Native
         private void UpdateResolutionInfo()
         {
             if(_normalizeResolution==null || !_loaded) return;
-            double min=Math.Min(_inputDpiX,_inputDpiY);
-            int level=_resolutionNormalized ? 2 : ResolutionLevel(min);
-            _resolutionBadge.Background=new SolidColorBrush(level==0 ? Color.FromRgb(255,202,202) : level==1 ? Color.FromRgb(255,232,164) : Color.FromRgb(194,233,202));
-            string dpi=Math.Abs(_inputDpiX-_inputDpiY)<.05 ? _inputDpiX.ToString("0.#") : _inputDpiX.ToString("0.#")+" × "+_inputDpiY.ToString("0.#");
+            _resolutionBadge.Background = new SolidColorBrush(ResolutionColor(_resolutionNormalized ? 300 : Math.Min(_inputDpiX, _inputDpiY)));
+            string dpi = FormatResolution(_inputDpiX, _inputDpiY);
             _resolutionInfo.Text=_resolutionNormalized ? "DPI: "+dpi+" → "+Math.Min(_originalPixels.DpiX,_originalPixels.DpiY).ToString("0.#")+" · "+_originalPixels.Width+" × "+_originalPixels.Height+" px" :
                 "Исходник: "+dpi+" DPI · "+_inputWidth+" × "+_inputHeight+" px";
-            _normalizeResolution.Content=_resolutionNormalized ? "Вернуть исходное разрешение" : min>=299.99 ? "Ресемпл не нужен · ≥300 DPI" : "Нормализовать до 300 DPI";
-            _normalizeResolution.IsEnabled=_settingsPanel.IsEnabled && !_normalizing && !_closed && (_resolutionNormalized || min<299.99);
+            _normalizeResolution.Content=_resolutionNormalized ? "Вернуть исходное разрешение" : CanNormalizeSource ? "Нормализовать до 300 DPI" : "Ресемпл не нужен · ≥300 DPI";
+            _normalizeResolution.IsEnabled=_settingsPanel.IsEnabled && !_normalizing && !_closed && (_resolutionNormalized || CanNormalizeSource);
         }
 
         private async Task NormalizeResolutionAsync()
