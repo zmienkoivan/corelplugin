@@ -68,7 +68,8 @@ namespace VanyaTools.Native
                 string output = _readyOutput;
                 PendingRasterResults.Defer(PendingPath(), output, OperationName(Path.GetFileName(output)));
                 _readyOutput = null; _rasterInsertionSource = null; _lastInput = null; _lastSource = null;
-                _lastOutput = null; _lastModel = null; _importWarning = null; _resultPreview.Source = null;
+                _lastOutput = null; _lastModel = null; _importWarning = null;
+                if (_resultPreview != null) _resultPreview.Source = null;
                 SetBusy(false, null); RefreshDeferredResults();
                 Report("Результат отложен. Можно обрабатывать новое выделение; PNG доступен в «Отложенных результатах».", false);
             }
@@ -108,12 +109,13 @@ namespace VanyaTools.Native
             if (_busy) return;
             try
             {
-                var preview = PreviewBitmap(path);
+                var preview = _resultPreview != null ? PreviewBitmap(path) : null;
                 if (ReadyResultExists && !String.Equals(_readyOutput, path, StringComparison.OrdinalIgnoreCase))
                     PendingRasterResults.Defer(PendingPath(), _readyOutput, OperationName(Path.GetFileName(_readyOutput)));
                 PendingRasterResults.Restore(PendingPath(), path);
                 _readyOutput = path; _rasterInsertionSource = null; _lastInput = null; _lastSource = null;
-                _resultPreview.Source = preview; SetBusy(false, null); RefreshDeferredResults();
+                if (_resultPreview != null) _resultPreview.Source = preview;
+                SetBusy(false, null); RefreshDeferredResults();
                 Report("Готовый PNG возвращён. Можно вставить его рядом на исходной странице без новой обработки.", false);
             }
             catch (Exception error) { Log.Error("Could not restore deferred raster result.", error); Report(error.GetBaseException().Message, true); }

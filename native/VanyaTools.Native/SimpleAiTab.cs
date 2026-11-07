@@ -283,19 +283,13 @@ namespace VanyaTools.Native
                 panel.Children.Add(localPanel);
             }
 
-            var previews = new UniformGrid { Columns = 2 };
-            previews.Children.Add(Preview(styleOnly ? "Выделение" : "До", out _sourcePreview, styleOnly ? 220 : 72));
-            previews.Children.Add(Preview(styleOnly ? "Результат" : "После", out _resultPreview, styleOnly ? 220 : 72));
-            if (!styleOnly)
+            if (styleOnly)
             {
-                var previewStyle = new Style(typeof(UniformGrid));
-                var empty = new MultiDataTrigger();
-                empty.Conditions.Add(new Condition(new Binding("Source") { Source = _sourcePreview }, null));
-                empty.Conditions.Add(new Condition(new Binding("Source") { Source = _resultPreview }, null));
-                empty.Setters.Add(new Setter(VisibilityProperty, Visibility.Collapsed));
-                previewStyle.Triggers.Add(empty); previews.Style = previewStyle;
+                var previews = new UniformGrid { Columns = 2 };
+                previews.Children.Add(Preview("Выделение", out _sourcePreview, 220));
+                previews.Children.Add(Preview("Результат", out _resultPreview, 220));
+                panel.Children.Add(previews);
             }
-            panel.Children.Add(previews);
             if (localStyles)
             {
                 _localPreviewTimer.Tick += (_, __) =>
@@ -654,8 +648,11 @@ namespace VanyaTools.Native
                 SetRasterInsertionInput(source);
                 Log.Info("Simple AI capture finished: " + action);
                 _lastSource = action == "background" ? source : null;
-                _sourcePreview.Source = PreviewBitmap(source);
-                _resultPreview.Source = null;
+                if (_sourcePreview != null)
+                {
+                    _sourcePreview.Source = PreviewBitmap(source);
+                    _resultPreview.Source = null;
+                }
                 string image = action == "background"
                     ? AiPrintTab.DataUri(AiPrintTab.Bitmap(source), 4096, 16000000)
                     : AiPrintTab.DataUri(AiPrintTab.Bitmap(source), 2048,
@@ -695,8 +692,6 @@ namespace VanyaTools.Native
                 CaptureRasterInsertion();
                 source = AiSelectionCapture.CaptureForCorrection();
                 SetRasterInsertionInput(source);
-                _sourcePreview.Source = PreviewBitmap(source);
-                _resultPreview.Source = null;
                 var dialog = new BackgroundRemovalWindow(source, _backgroundOptions, BackgroundVariants);
                 var owner = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
                 if (owner != null) new System.Windows.Interop.WindowInteropHelper(dialog).Owner = owner.Handle;
@@ -711,7 +706,6 @@ namespace VanyaTools.Native
                 _readyOutput = dialog.OutputPath;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), _readyOutput);
-                _resultPreview.Source = PreviewBitmap(_readyOutput);
                 SetStage("Вставляю результат в Corel…");
                 InsertReady();
                 ReportOutcome();
@@ -743,8 +737,6 @@ namespace VanyaTools.Native
                 CaptureRasterInsertion();
                 string source = AiSelectionCapture.CaptureForCorrection();
                 SetRasterInsertionInput(source);
-                _sourcePreview.Source = PreviewBitmap(source);
-                _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Alpha-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
                 await Task.Run(() => ThresholdAlpha(source, output, threshold, cancellation), cancellation);
@@ -753,7 +745,6 @@ namespace VanyaTools.Native
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), output);
-                _resultPreview.Source = PreviewBitmap(output);
                 InsertReady();
                 ReportOutcome();
             }
@@ -802,8 +793,6 @@ namespace VanyaTools.Native
                 CaptureRasterInsertion();
                 string source = AiSelectionCapture.CaptureForCorrection();
                 SetRasterInsertionInput(source);
-                _sourcePreview.Source = PreviewBitmap(source);
-                _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(),
                     "Vanya-Alpha-Highlight-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
@@ -819,7 +808,6 @@ namespace VanyaTools.Native
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), output);
-                _resultPreview.Source = PreviewBitmap(output);
                 SetStage("Вставляю подсвеченную копию в Corel…");
                 InsertReady();
                 string warning = _importWarning;
@@ -899,8 +887,6 @@ namespace VanyaTools.Native
                 string source = AiSelectionCapture.CaptureForCorrection();
                 SetRasterInsertionInput(source);
                 Log.Info("Opaque stair smoothing capture finished.");
-                _sourcePreview.Source = PreviewBitmap(source);
-                _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Stairs-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
                 double cropOffsetX = 0, cropOffsetY = 0;
@@ -912,7 +898,6 @@ namespace VanyaTools.Native
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), output);
-                _resultPreview.Source = PreviewBitmap(output);
                 SetStage("Вставляю результат в Corel…");
                 InsertReady();
                 string warning = _importWarning;
@@ -1184,8 +1169,6 @@ namespace VanyaTools.Native
                 CaptureRasterInsertion();
                 string source = AiSelectionCapture.CaptureForCorrection();
                 SetRasterInsertionInput(source);
-                _sourcePreview.Source = PreviewBitmap(source);
-                _resultPreview.Source = null;
                 string output = Path.Combine(Path.GetTempPath(), "Vanya-Edge-" + Guid.NewGuid().ToString("N") + ".png");
                 CancellationToken cancellation = _cancellation.Token;
                 EdgeResult edge = await Task.Run(() => SmoothAlphaEdge(source, output, radius,
@@ -1197,7 +1180,6 @@ namespace VanyaTools.Native
                 _readyOutput = output;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), output);
-                _resultPreview.Source = PreviewBitmap(output);
                 SetStage("Вставляю результат в Corel…");
                 InsertReady();
                 try { if (_mode != SimpleAiMode.Raster) MoveImportedEdge(edge.Offset); }
@@ -1599,7 +1581,7 @@ namespace VanyaTools.Native
             _readyOutput = png;
             Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
             File.WriteAllText(PendingPath(), png);
-            _resultPreview.Source = PreviewBitmap(png);
+            if (_resultPreview != null) _resultPreview.Source = PreviewBitmap(png);
             cancellation.ThrowIfCancellationRequested();
             SetStage("Вставляю результат в Corel…");
             InsertReady();
@@ -1785,7 +1767,7 @@ namespace VanyaTools.Native
                 if (_mode == SimpleAiMode.AiStyles &&
                     Path.GetFileName(path).StartsWith("Vanya-Local-Style-", StringComparison.OrdinalIgnoreCase)) return;
                 _readyOutput = path;
-                _resultPreview.Source = PreviewBitmap(path);
+                if (_resultPreview != null) _resultPreview.Source = PreviewBitmap(path);
                 SetBusy(false, null);
             }
             catch (Exception ex) { Log.Error("Simple AI pending result restore failed.", ex); }

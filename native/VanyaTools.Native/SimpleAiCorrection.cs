@@ -123,8 +123,6 @@ namespace VanyaTools.Native
                 var thinSource = ThinElementMask.CaptureSource(vectorCanvas);
                 source = AiSelectionCapture.CaptureForCorrection(vectorCanvas);
                 SetRasterInsertionInput(source);
-                _sourcePreview.Source = PreviewBitmap(source);
-                _resultPreview.Source = null;
                 int.TryParse(_alphaThreshold.Text, out int threshold);
                 DtfOutlineUnits.TryNumber(_edgeRadius.Text, out double radius);
                 DtfOutlineUnits.TryNumber(_edgeExpansion.Text, out double expansion);
@@ -153,7 +151,6 @@ namespace VanyaTools.Native
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), result.OutputPath);
                 _readyOutput = result.OutputPath;
-                _resultPreview.Source = PreviewBitmap(_readyOutput);
                 _alphaThreshold.Text = dialog.Options.Threshold.ToString(CultureInfo.InvariantCulture);
                 _edgeLengthUnit.SelectedIndex = 0;
                 _edgeRadius.Text = DtfOutlineUnits.Format(dialog.Options.RadiusMm);
