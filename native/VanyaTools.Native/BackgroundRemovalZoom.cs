@@ -123,22 +123,35 @@ namespace VanyaTools.Native
             if (source == null || !(_before.Source is BitmapSource) || _layingOutZoom) return;
             Image image = ReferenceEquals(source, _afterScroll) ? _after : _before;
             if (!(image.Source is BitmapSource)) return;
-            Point viewport = position ?? new Point(source.ViewportWidth / 2, source.ViewportHeight / 2);
+            Point viewport = position ?? ViewportCenter(source);
             viewport.X = Math.Max(0, Math.Min(source.ViewportWidth, viewport.X));
             viewport.Y = Math.Max(0, Math.Min(source.ViewportHeight, viewport.Y));
-            Point imageOrigin = image.TranslatePoint(new Point(0, 0), source);
-            double x = Math.Max(0, Math.Min(1, (viewport.X - imageOrigin.X) / Math.Max(1, image.ActualWidth)));
-            double y = Math.Max(0, Math.Min(1, (viewport.Y - imageOrigin.Y) / Math.Max(1, image.ActualHeight)));
+            Point anchor = RelativePreviewPoint(source, image, viewport);
             _zoomFit = false; _zoomScale = Math.Max(0.025, Math.Min(32, scale)); ApplyPreviewZoom();
+            ScrollPreviewTo(anchor, viewport);
+        }
+
+        private static Point ViewportCenter(ScrollViewer scroll) => new Point(scroll.ViewportWidth / 2, scroll.ViewportHeight / 2);
+
+        private static Point RelativePreviewPoint(ScrollViewer scroll, Image image, Point viewport)
+        {
+            Point origin = image.TranslatePoint(new Point(), scroll);
+            return new Point(Math.Max(0, Math.Min(1, (viewport.X - origin.X) / Math.Max(1, image.ActualWidth))),
+                Math.Max(0, Math.Min(1, (viewport.Y - origin.Y) / Math.Max(1, image.ActualHeight))));
+        }
+
+        private void ScrollPreviewTo(Point anchor, Point? position)
+        {
             _ = Dispatcher.BeginInvoke(new Action(() =>
             {
-                if (_closed) return;
+                if (_closed || _zoomFit) return;
                 foreach (var scroll in new[] { _beforeScroll, _afterScroll })
                 {
-                    Image target = ReferenceEquals(scroll, _beforeScroll) ? _before : _after;
-                    if (!(target.Source is BitmapSource)) continue;
-                    scroll.ScrollToHorizontalOffset(target.Margin.Left + target.Width * x - viewport.X);
-                    scroll.ScrollToVerticalOffset(target.Margin.Top + target.Height * y - viewport.Y);
+                    Image image = ReferenceEquals(scroll, _beforeScroll) ? _before : _after;
+                    if (image.Source == null) continue;
+                    Point viewport = position ?? ViewportCenter(scroll);
+                    scroll.ScrollToHorizontalOffset(image.Margin.Left + image.Width * anchor.X - viewport.X);
+                    scroll.ScrollToVerticalOffset(image.Margin.Top + image.Height * anchor.Y - viewport.Y);
                 }
             }), DispatcherPriority.Loaded);
         }
@@ -174,6 +187,8 @@ namespace VanyaTools.Native
                     scroll.VerticalScrollBarVisibility = _zoomFit ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
                     RenderOptions.SetBitmapScalingMode(image, scale >= 1 ? BitmapScalingMode.NearestNeighbor : BitmapScalingMode.HighQuality);
                 }
+                PositionWandOverlay();
+                _maskEditor.Refresh();
                 _zoomText.Text = (scale * 100).ToString(scale < 0.1 ? "0.#" : "0", CultureInfo.CurrentCulture) + "%";
             }
             finally { _layingOutZoom = false; }

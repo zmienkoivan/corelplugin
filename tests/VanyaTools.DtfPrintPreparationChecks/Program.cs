@@ -24,10 +24,55 @@ internal static class Program
     { var value = new byte[4]; value[Order[0]] = c; value[Order[1]] = m; value[Order[2]] = y; value[Order[3]] = k; return value; }
     private static int Main()
     {
-        try { Knockout(); SoftKnockout(); NegativeTolerance(); Islands(); Resample(); Models(); Boost(); Modes(); Shapes(); Millimeters(); Phase(); Combined(); Validation();
+        try { Knockout(); SoftKnockout(); NegativeTolerance(); Islands(); Resample(); Models(); Boost(); Modes(); Shapes(); Millimeters(); Phase(); Combined(); ProtectionMasks(); Validation();
             Console.WriteLine("DTF print preparation checks passed: " + _checks + ". Synthetic planes only; no Corel or customer images."); return 0; }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
     }
+    private static void ProtectionMasks()
+    {
+        RasterProtectionMask left = new RasterProtectionMask(new[] {
+            new RasterMaskShape(RasterMaskTool.Rectangle,
+                new[] { new RasterMaskPoint(0, 0), new RasterMaskPoint(5, 20) }, 0)
+        });
+        var cmykBlack = Cmyk(0, 0, 0, 255);
+        var black = Image(5, cmykBlack);
+        var result = NativeRasterFilters.Process(black, new NativeRasterFilterOptions
+        {
+            KnockoutMask = left, PrintPreparation = new DtfPrintPreparationOptions { Knockout = true, Tolerance = 0 }
+        }).Buffer;
+        Check(result.Alpha[0] == 255 && result.Alpha[black.Width - 1] == 0 &&
+            result.Colors.Take(4).SequenceEqual(cmykBlack), "Knockout protects original CMYK channels and alpha");
+
+        var nearWhite = Image(4, new byte[] { 253, 253, 253 }, 160);
+        result = NativeRasterFilters.Process(nearWhite, new NativeRasterFilterOptions
+        {
+            RemoveSemiTransparent = true, AlphaMask = left, WhitenNearWhite = true, WhiteMask = left
+        }).Buffer;
+        Check(result.Alpha[0] == 160 && result.Alpha[nearWhite.Width - 1] == 255, "Threshold respects its own mask");
+        Check(result.Colors[0] == 253 && result.Colors[(nearWhite.Width - 1) * 3] == 255, "Whitening respects its own mask");
+
+        var print = Image(4, new byte[] { 120, 100, 75 });
+        result = NativeRasterFilters.Process(print, new NativeRasterFilterOptions
+        {
+            HalftoneMask = left, PrintPreparation = new DtfPrintPreparationOptions
+            {
+                Halftone = true, AlphaOnly = false, ColorBoost = 50,
+                RemoveSmall = true, RemoveBelowMm = .3, AutoDot = false, DotDiameterMm = .2
+            }
+        }).Buffer;
+        Check(result.Alpha[0] == 255 && result.Colors.Take(3).SequenceEqual(print.Colors.Take(3)) &&
+            result.Alpha.Skip(100).Take(60).Any(a => a == 0), "Halftone protection includes boost and dot cleanup");
+
+        var spot = new RasterProtectionMask(new[] { new RasterMaskShape(RasterMaskTool.Ellipse,
+            new[] { new RasterMaskPoint(1, 1), new RasterMaskPoint(2, 2) }, 0) });
+        var crop = spot.Rasterize(20, 20, 508, 508, 1, 1, CancellationToken.None);
+        Check(!crop[0] && crop[10 * 20 + 10], "Oval stays on the same physical area after resample and viewport crop");
+        var brush = new RasterProtectionMask(new[] { new RasterMaskShape(RasterMaskTool.Brush,
+            new[] { new RasterMaskPoint(0, 0), new RasterMaskPoint(3, 3) }, .15) });
+        var stroke = brush.Rasterize(30, 30, 254, 254, 0, 0, CancellationToken.None);
+        Check(stroke[0] && stroke[15 * 30 + 15] && stroke[899] && !stroke[29], "Fast diagonal brush strokes have no gaps");
+    }
+
     private static void NegativeTolerance()
     {
         byte previous=0;

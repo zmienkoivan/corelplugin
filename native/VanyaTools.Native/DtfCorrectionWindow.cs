@@ -24,6 +24,7 @@ namespace VanyaTools.Native
     {
         private readonly string _sourcePath;
         private readonly bool _normalizeOnLoad;
+        private readonly RasterMaskEditor _maskEditor;
         private readonly string _workspace = Path.Combine(Path.GetTempPath(), "Vanya-Correction-" + Guid.NewGuid().ToString("N"));
         private readonly Func<string, string, DtfCorrectionOptions, CancellationToken, DtfCorrectionResult> _processor;
         private readonly CheckBox _remove, _stairs, _outline, _highlight, _highlightWhite, _whiten;
@@ -205,6 +206,13 @@ namespace VanyaTools.Native
             var after = Preview("Результат", out _after, out _afterScroll, out _afterDetailCanvas, out _afterDetail); Grid.SetColumn(after, 1); pair.Children.Add(after);
             _beforeScroll.ScrollChanged += (_, e) => SyncScroll(_beforeScroll, _afterScroll, e);
             _afterScroll.ScrollChanged += (_, e) => SyncScroll(_afterScroll, _beforeScroll, e);
+            _maskEditor = new RasterMaskEditor(previewToolbar, _before, _beforeScroll, () =>
+            {
+                if (_previewScene.IsEmpty || _originalPixels == null) return Rect.Empty;
+                double x = 25.4 / _originalPixels.DpiX, y = 25.4 / _originalPixels.DpiY;
+                return new Rect(_previewScene.X * x, _previewScene.Y * y, _previewScene.Width * x, _previewScene.Height * y);
+            }, () => _loaded && !_closed && !_applying && !_normalizing && !_insertingThinMask,
+                QueuePreview, "Просмотр", "Нокаут", "Халфтон", "Белое", "Полупрозрачность");
             ConfigurePreviewNavigation(_beforeScroll, _before);
             ConfigurePreviewNavigation(_afterScroll, _after);
             Grid.SetRow(pair, 1); previews.Children.Add(pair);
@@ -341,7 +349,9 @@ namespace VanyaTools.Native
             options = new DtfCorrectionOptions { Threshold = threshold, RadiusMm = radius, ExpansionMm = expansion,
                 RemoveSemiTransparent = remove, SmoothStairs = _stairs.IsChecked == true,
                 Outline = outline, Color = color, WhitenNearWhite = _whiten.IsChecked == true,
-                NearWhiteTolerance = (int)_nearWhiteTolerance.Value };
+                NearWhiteTolerance = (int)_nearWhiteTolerance.Value,
+                KnockoutMask = _maskEditor.Snapshot(0), HalftoneMask = _maskEditor.Snapshot(1),
+                WhiteMask = _maskEditor.Snapshot(2), AlphaMask = _maskEditor.Snapshot(3) };
             if (!ReadPrintPreparation(options)) return false;
             long pixels = (long)_originalPixels.Width * _originalPixels.Height;
             options.StairsScale = pixels <= 2000000 ? 4 : pixels <= 3500000 ? 3 : pixels <= 8000000 ? 2 : 1;
@@ -441,7 +451,8 @@ namespace VanyaTools.Native
                 await OnUiAsync(() =>
                 {
                 if (_closed || revision != _revision || _applying || _qualityChanging || !OverviewReadyForSelection()) return;
-                Point? anchor = PreviewCenter();
+                Point? anchor = _resampledPreviewCenter ?? PreviewCenter();
+                _resampledPreviewCenter = null;
                 _previewScene = scene; _baseRevision = revision;
                 _before.Source = images.Item1.Bitmap(); _after.Source = images.Item2.Bitmap(); _after.Opacity = 1;
                 ApplyPreviewZoom(); RestorePreviewCenter(anchor);
@@ -529,7 +540,8 @@ namespace VanyaTools.Native
 
         private void SyncScroll(ScrollViewer source, ScrollViewer target, ScrollChangedEventArgs change)
         {
-            if (_syncingScroll || (change.HorizontalChange == 0 && change.VerticalChange == 0)) return;
+            if (_syncingScroll || _before.Source == null || _after.Source == null ||
+                (change.HorizontalChange == 0 && change.VerticalChange == 0)) return;
             _syncingScroll = true;
             try { target.ScrollToHorizontalOffset(source.HorizontalOffset); target.ScrollToVerticalOffset(source.VerticalOffset); }
             finally { _syncingScroll = false; }

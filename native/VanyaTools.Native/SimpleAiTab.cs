@@ -700,8 +700,6 @@ namespace VanyaTools.Native
                 _backgroundOptions = dialog.Options;
                 if (!accepted || String.IsNullOrEmpty(dialog.OutputPath))
                 { Report("Удаление фона отменено.", false); return; }
-                Color[] backgroundColors = dialog.RemovalColors;
-                await Task.Run(() => NativeRasterCorrection.AttachProcessedAlpha(source, dialog.OutputPath, _cancellation.Token, backgroundColors), _cancellation.Token);
                 PrepareRasterInsertion(dialog.OutputPath);
                 _readyOutput = dialog.OutputPath;
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));

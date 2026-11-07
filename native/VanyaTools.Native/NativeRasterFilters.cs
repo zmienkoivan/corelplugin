@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Threading;
 
 namespace VanyaTools.Native
@@ -15,6 +16,7 @@ namespace VanyaTools.Native
         // Pure managed decoder supplied for CMYK. Never call Corel from here.
         internal Func<NativeRasterBuffer, byte[]> NearWhitePreviewBgra = null;
         internal DtfPrintPreparationOptions PrintPreparation;
+        internal RasterProtectionMask AlphaMask, WhiteMask, KnockoutMask, HalftoneMask;
     }
 
     internal sealed class NativeRasterFilterResult
@@ -58,14 +60,17 @@ namespace VanyaTools.Native
                     colors,source.Channels,alpha,1,0,resample,cancellation);
                 current=new NativeRasterBuffer(resample.Width,resample.Height,source.Mode,resample.DpiX,resample.DpiY,colors,alpha,source.CmykOrder);
             } else current = takeOwnership ? source : source.Copy();
-            DtfPrintPreparation.Knockout(current.Colors, current.Channels, current.Mode, current.CmykOrder,
-                current.Alpha, 1, 0, current.Width, current.Height, options.PrintPreparation, cancellation);
             double offsetX = 0, offsetY = 0;
-            if (options.RemoveSemiTransparent) ThresholdInPlace(current, options.Threshold, cancellation);
+            DtfPrintPreparation.Knockout(current.Colors, current.Channels, current.Mode, current.CmykOrder,
+                current.Alpha, 1, 0, current.Width, current.Height, options.PrintPreparation, cancellation,
+                options.PrintPreparation?.Knockout == true ? Mask(options.KnockoutMask) : null);
+            var alphaMask = options.RemoveSemiTransparent ? Mask(options.AlphaMask) : null;
+            if (options.RemoveSemiTransparent) ThresholdInPlace(current, options.Threshold, cancellation, alphaMask);
             if (options.SmoothStairs)
             {
                 current = Smooth(current, options.Threshold, options.StairsScale, Math.Min(32000000, options.MaximumOutputPixels),
-                    !options.RemoveSemiTransparent, cancellation);
+                    !options.RemoveSemiTransparent || alphaMask != null, cancellation);
+                if (alphaMask != null) ThresholdInPlace(current, 128, cancellation, Mask(options.AlphaMask));
                 if(!cleanup) {
                     current = Trim(current, 2, out int left, out int top, cancellation);
                     offsetX -= left * 25.4 / current.DpiX; offsetY -= top * 25.4 / current.DpiY;
@@ -75,13 +80,14 @@ namespace VanyaTools.Native
             // gets the selected outline colour, without screening that rim away.
             if (screen)
             {
-                if (options.WhitenNearWhite) WhitenConfigured(current, options, cancellation);
+                if (options.WhitenNearWhite) WhitenConfigured(current, options, cancellation, Mask(options.WhiteMask));
+                var halftoneMask = Mask(options.HalftoneMask);
                 DtfPrintPreparation.Boost(current.Colors, current.Channels, current.Mode, current.CmykOrder,
-                    current.Alpha, 1, 0, current.Width, current.Height, options.PrintPreparation, cancellation);
+                    current.Alpha, 1, 0, current.Width, current.Height, options.PrintPreparation, cancellation, halftoneMask);
                 DtfPrintPreparation.Halftone(current.Alpha, 1, 0, current.Width, current.Height, current.DpiX, current.DpiY,
-                    options.PrintPreparation.Offset(-offsetX, -offsetY), cancellation);
+                    options.PrintPreparation.Offset(-offsetX, -offsetY), cancellation, halftoneMask);
                 if(cleanup) {
-                    var cleaned=DtfIslandCleanup.Process(current,options.PrintPreparation,options.OutlineColor,options.MaximumOutputPixels,cancellation);
+                    var cleaned=DtfIslandCleanup.Process(current,options.PrintPreparation,options.OutlineColor,options.MaximumOutputPixels,cancellation,halftoneMask);
                     current=cleaned.Buffer;offsetX+=cleaned.OffsetMm.Item1;offsetY+=cleaned.OffsetMm.Item2;
                 }
             }
@@ -96,19 +102,25 @@ namespace VanyaTools.Native
                 offsetX += (paddingX - left) * 25.4 / current.DpiX;
                 offsetY += (paddingY - top) * 25.4 / current.DpiY;
             }
-            if (options.RemoveSemiTransparent && options.Outline) ThresholdInPlace(current, options.Threshold, cancellation);
-            if (options.WhitenNearWhite && !screen) WhitenConfigured(current, options, cancellation);
+            if (options.RemoveSemiTransparent && options.Outline)
+                ThresholdInPlace(current, options.Threshold, cancellation, Mask(options.AlphaMask));
+            if (options.WhitenNearWhite && !screen) WhitenConfigured(current, options, cancellation, Mask(options.WhiteMask));
             cancellation.ThrowIfCancellationRequested();
             return new NativeRasterFilterResult { Buffer = current, OffsetMm = Tuple.Create(offsetX, offsetY) };
+
+            BitArray Mask(RasterProtectionMask mask) => mask?.Rasterize(current.Width, current.Height,
+                current.DpiX, current.DpiY, (options.PrintPreparation?.OriginXmm ?? 0) - offsetX,
+                (options.PrintPreparation?.OriginYmm ?? 0) - offsetY, cancellation);
         }
 
-        private static void WhitenConfigured(NativeRasterBuffer current, NativeRasterFilterOptions options, CancellationToken cancellation)
+        private static void WhitenConfigured(NativeRasterBuffer current, NativeRasterFilterOptions options,
+            CancellationToken cancellation, BitArray protection)
         {
-            if (options.NearWhitePreviewBgra == null) WhitenNearWhiteInPlace(current, options.NearWhiteTolerance, cancellation);
+            if (options.NearWhitePreviewBgra == null) WhitenNearWhiteInPlace(current, options.NearWhiteTolerance, cancellation, protection);
             else {
                 byte[] preview = options.NearWhitePreviewBgra(current);
                 var mask = DtfNearWhitePixels.CreateMask(preview, current.Width, current.Height, options.NearWhiteTolerance, cancellation);
-                WhitenInPlace(current, mask, cancellation);
+                WhitenInPlace(current, mask, cancellation, protection);
             }
         }
 
@@ -129,34 +141,38 @@ namespace VanyaTools.Native
             NativeRasterBuffer result = source.Copy(); WhitenInPlace(result, mask, cancellation); return result;
         }
 
-        private static void ThresholdInPlace(NativeRasterBuffer buffer, int threshold, CancellationToken cancellation)
+        private static void ThresholdInPlace(NativeRasterBuffer buffer, int threshold,
+            CancellationToken cancellation, BitArray protection = null)
         {
             for (int pixel = 0; pixel < buffer.Alpha.Length; pixel++)
             {
                 if ((pixel & 4095) == 0) cancellation.ThrowIfCancellationRequested();
+                if (protection?[pixel] == true) continue;
                 buffer.Alpha[pixel] = buffer.Alpha[pixel] > 0 && buffer.Alpha[pixel] >= threshold ? (byte)255 : (byte)0;
             }
         }
 
-        private static void WhitenInPlace(NativeRasterBuffer buffer, DtfNearWhitePixels.Mask mask, CancellationToken cancellation)
+        private static void WhitenInPlace(NativeRasterBuffer buffer, DtfNearWhitePixels.Mask mask,
+            CancellationToken cancellation, BitArray protection = null)
         {
             if (mask == null || mask.Width != buffer.Width || mask.Height != buffer.Height)
                 throw new ArgumentException("Маска почти белого не совпадает с исходным растром.", nameof(mask));
             for (int pixel = 0; pixel < buffer.Alpha.Length; pixel++)
             {
                 if ((pixel & 4095) == 0) cancellation.ThrowIfCancellationRequested();
-                if (buffer.Alpha[pixel] != 0 && mask.IsMarked(pixel)) buffer.SetPureWhite(pixel);
+                if (buffer.Alpha[pixel] != 0 && protection?[pixel] != true && mask.IsMarked(pixel)) buffer.SetPureWhite(pixel);
             }
         }
 
-        private static void WhitenNearWhiteInPlace(NativeRasterBuffer buffer, int tolerance, CancellationToken cancellation)
+        private static void WhitenNearWhiteInPlace(NativeRasterBuffer buffer, int tolerance,
+            CancellationToken cancellation, BitArray protection)
         {
             if (buffer.Mode == 5 && buffer.CmykOrder == null) throw new InvalidOperationException("Не определён порядок CMYK-каналов.");
             int minimum = 255 - tolerance;
             for (int p = 0; p < buffer.Alpha.Length; p++)
             {
                 if ((p & 4095) == 0) cancellation.ThrowIfCancellationRequested();
-                if (buffer.Alpha[p] == 0) continue;
+                if (buffer.Alpha[p] == 0 || protection?[p] == true) continue;
                 int i = p * buffer.Channels, r, g, b;
                 if (buffer.Mode == 4) { b = buffer.Colors[i]; g = buffer.Colors[i + 1]; r = buffer.Colors[i + 2]; }
                 else if (buffer.Mode == 2) r = g = b = buffer.Colors[i];

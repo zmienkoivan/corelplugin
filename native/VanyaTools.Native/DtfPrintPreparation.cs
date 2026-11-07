@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Threading;
 
@@ -45,7 +46,7 @@ namespace VanyaTools.Native
     {
         internal static void Knockout(byte[] colors, int stride, int mode, int[] cmykOrder,
             byte[] alpha, int alphaStride, int alphaOffset, int width, int height,
-            DtfPrintPreparationOptions options, CancellationToken cancellation)
+            DtfPrintPreparationOptions options, CancellationToken cancellation, BitArray protection = null)
         {
             if (options == null || !options.Knockout) return;
             options.Validate(); cancellation.ThrowIfCancellationRequested();
@@ -58,7 +59,8 @@ namespace VanyaTools.Native
             for (int p = 0; p < count; p++)
             {
                 if ((p & 8191) == 0) cancellation.ThrowIfCancellationRequested();
-                int a = p * alphaStride + alphaOffset; if (alpha[a] == 0) continue;
+                int a = p * alphaStride + alphaOffset;
+                if (alpha[a] == 0 || protection?[p] == true) continue;
                 int i = p * stride; ReadRgb(colors, i, mode, cmykOrder, out int r, out int g, out int b);
                 if (!options.SoftKnockout)
                 {
@@ -83,7 +85,7 @@ namespace VanyaTools.Native
         }
 
         internal static void Boost(byte[] colors, int stride, int mode, int[] order, byte[] alpha, int alphaStride,
-            int alphaOffset, int width, int height, DtfPrintPreparationOptions options, CancellationToken cancellation)
+            int alphaOffset, int width, int height, DtfPrintPreparationOptions options, CancellationToken cancellation, BitArray protection = null)
         {
             if (options == null || !options.Halftone || options.AlphaOnly || options.ColorBoost == 0) return;
             options.Validate(); cancellation.ThrowIfCancellationRequested();
@@ -92,7 +94,7 @@ namespace VanyaTools.Native
             for (int p = 0; p < count; p++)
             {
                 if ((p & 8191) == 0) cancellation.ThrowIfCancellationRequested();
-                if (alpha[p * alphaStride + alphaOffset] == 0) continue;
+                if (alpha[p * alphaStride + alphaOffset] == 0 || protection?[p] == true) continue;
                 int i = p * stride; ReadRgb(colors, i, mode, order, out int r, out int g, out int b);
                 double luma = .2126 * r + .7152 * g + .0722 * b, baseTone = 127.5 + (luma - 127.5) * contrast;
                 int nr = Byte(baseTone + (r - luma) * saturation), ng = Byte(baseTone + (g - luma) * saturation), nb = Byte(baseTone + (b - luma) * saturation);
@@ -142,7 +144,7 @@ namespace VanyaTools.Native
         }
 
         internal static void Halftone(byte[] alpha, int alphaStride, int alphaOffset, int width, int height,
-            double dpiX, double dpiY, DtfPrintPreparationOptions options, CancellationToken cancellation)
+            double dpiX, double dpiY, DtfPrintPreparationOptions options, CancellationToken cancellation, BitArray protection = null)
         {
             if (options == null || !options.Halftone) return;
             options.Validate(); cancellation.ThrowIfCancellationRequested();
@@ -165,8 +167,9 @@ namespace VanyaTools.Native
                 for (int x = 0; x < width; x++)
                 {
                     if ((x & 8191) == 0) cancellation.ThrowIfCancellationRequested();
-                    int i = (y * width + x) * alphaStride + alphaOffset, a = alpha[i];
-                    if (a == 0 || options.AlphaOnly && a == 255) continue;
+                    int pixel = y * width + x;
+                    int i = pixel * alphaStride + alphaOffset, a = alpha[i];
+                    if (a == 0 || options.AlphaOnly && a == 255 || protection?[pixel] == true) continue;
                     double px = options.OriginXmm + (x + .5) * dx;
                     double u = (px * cos + py * sin) / pitch, v = (-px * sin + py * cos) / pitch;
                     u -= Math.Floor(u + .5); v -= Math.Floor(v + .5);

@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Threading;
 
@@ -11,7 +12,7 @@ namespace VanyaTools.Native
     {
         private struct Span { internal int Left,Right,Y; internal Span(int l,int r,int y){Left=l;Right=r;Y=y;} }
         internal static NativeRasterFilterResult Process(NativeRasterBuffer source,DtfPrintPreparationOptions options,
-            byte[] fill,int maximumPixels,CancellationToken cancel)
+            byte[] fill,int maximumPixels,CancellationToken cancel,BitArray protection=null)
         {
             options.Validate();cancel.ThrowIfCancellationRequested();
             int w=source.Width,h=source.Height;double dx=25.4/source.DpiX,dy=25.4/source.DpiY;
@@ -20,10 +21,10 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Порог мелких элементов слишком велик для этого DPI. Уменьшите порог или разрешение.");
             if(fill!=null && fill.Length!=source.Channels)throw new ArgumentException("Цвет обводки не соответствует модели растра.");
             if(fill==null) {fill=new byte[source.Channels];if(source.Mode!=5)for(int c=0;c<fill.Length;c++)fill[c]=255;}
-            if(options.RemoveSmall) Visit(source.Alpha,w,h,dx,dy,options.RemoveBelowMm,options.CutEdges,cancel,
+            if(options.RemoveSmall) Visit(source.Alpha,w,h,dx,dy,options.RemoveBelowMm,options.CutEdges,cancel,protection,
                 (points,l,r,t,b)=>{foreach(int p in points)source.Alpha[p]=0;});
             NativeRasterBuffer output=source;int padX=0,padY=0;
-            if(options.GrowSmall) Visit(source.Alpha,w,h,dx,dy,options.GrowToMm,options.CutEdges,cancel,(points,l,r,t,b)=> {
+            if(options.GrowSmall) Visit(source.Alpha,w,h,dx,dy,options.GrowToMm,options.CutEdges,cancel,protection,(points,l,r,t,b)=> {
                 if(ReferenceEquals(output,source)) {
                     padX=(int)Math.Ceiling(options.GrowToMm/(2*dx));padY=(int)Math.Ceiling(options.GrowToMm/(2*dy));
                     long ow=(long)w+2*padX,oh=(long)h+2*padY;
@@ -43,7 +44,9 @@ namespace VanyaTools.Native
                     if((p&4095)==0)cancel.ThrowIfCancellationRequested();
                     int px=p%w+padX,py=p/w+padY;
                     for(int y=py-ry;y<=py+ry;y++)for(int x=px-rx;x<=px+rx;x++) {
-                        int at=y*output.Width+x;if(output.Alpha[at]!=0)continue;
+                        int at=y*output.Width+x;
+                        int sx=x-padX,sy=y-padY;
+                        if(output.Alpha[at]!=0 || (uint)sx<(uint)w && (uint)sy<(uint)h && protection?[sy*w+sx]==true)continue;
                         output.Alpha[at]=255;for(int c=0;c<output.Channels;c++)output.Colors[at*output.Channels+c]=fill[c];
                     }
                 }
@@ -52,10 +55,10 @@ namespace VanyaTools.Native
         }
 
         private static void Visit(byte[] alpha,int w,int h,double dx,double dy,double threshold,int cutEdges,
-            CancellationToken cancel,Action<List<int>,int,int,int,int> small)
+            CancellationToken cancel,BitArray protection,Action<List<int>,int,int,int,int> small)
         {
             int n=alpha.Length;var ink=new uint[(n+31)/32];var seen=new uint[ink.Length];
-            for(int i=0;i<n;i++){if((i&65535)==0)cancel.ThrowIfCancellationRequested();if(alpha[i]!=0)ink[i>>5]|=1u<<(i&31);}
+            for(int i=0;i<n;i++){if((i&65535)==0)cancel.ThrowIfCancellationRequested();if(alpha[i]!=0 && protection?[i]!=true)ink[i>>5]|=1u<<(i&31);}
             var frontier=new Queue<Span>();var points=new List<int>();
             for(int start=0;start<n;start++) {
                 if((start&16383)==0)cancel.ThrowIfCancellationRequested();

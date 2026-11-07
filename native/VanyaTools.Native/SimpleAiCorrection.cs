@@ -172,12 +172,12 @@ namespace VanyaTools.Native
             }
         }
 
-        private static DtfCorrectionResult ProcessCorrection(string source, string output,
+        internal static DtfCorrectionResult ProcessCorrection(string source, string output,
             DtfCorrectionOptions options, CancellationToken cancellation)
         {
             if (NativeRasterCorrection.HasSource(source))
                 return NativeRasterCorrection.Process(source, output, options, cancellation);
-            if(options.Halftone && options.NeedsGeometry)
+            if(options.NeedsGeometry && (options.Halftone || options.HasProtection))
                 return NativeRasterCorrection.ProcessRgb(source,output,options,cancellation);
             if (!options.NeedsGeometry)
             {

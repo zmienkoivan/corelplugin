@@ -22,6 +22,7 @@ namespace VanyaTools.Native
         internal int RegionMode;
         internal BackgroundRemovalSeed[] Seeds = new BackgroundRemovalSeed[0];
         internal bool FromBorder => RegionMode != 1;
+        internal RasterProtectionMask Protection;
         internal BackgroundRemovalOptions Copy()
         {
             var copy = (BackgroundRemovalOptions)MemberwiseClone();
@@ -42,7 +43,8 @@ namespace VanyaTools.Native
         private readonly FrameworkElement _edgeColorFields;
         private readonly ComboBox _quality, _background, _regionMode;
         private readonly TextBlock _message, _metrics, _resultHint, _selectionHint;
-        private readonly List<BackgroundRemovalSeed> _seeds = new List<BackgroundRemovalSeed>();
+        private readonly List<Point> _seeds = new List<Point>();
+        private readonly RasterMaskEditor _maskEditor;
         private readonly Image _before, _after;
         private readonly ScrollViewer _beforeScroll, _afterScroll;
         private readonly DispatcherTimer _delay = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(220) };
@@ -55,7 +57,6 @@ namespace VanyaTools.Native
 
         internal BackgroundRemovalOptions Options { get; private set; }
         internal string OutputPath { get; private set; }
-        internal Color[] RemovalColors { get; private set; }
 
         internal BackgroundRemovalWindow(string sourcePath, BackgroundRemovalOptions initial = null,
             Func<Color, Color[]> backgroundColors = null)
@@ -65,6 +66,8 @@ namespace VanyaTools.Native
             Options = (initial ?? new BackgroundRemovalOptions()).Copy();
             // Region coordinates belong to this source only, not to the next capture.
             Options.Seeds = new BackgroundRemovalSeed[0];
+            Options.Protection = null;
+            _workingSource = _sourcePath;
             Title = "Удаление фона · Vanya Tools";
             Width = Math.Min(1220, SystemParameters.WorkArea.Width - 40);
             Height = Math.Min(820, SystemParameters.WorkArea.Height - 40);
@@ -79,10 +82,12 @@ namespace VanyaTools.Native
             _settings = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
             root.Children.Add(new ScrollViewer { Content = _settings, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
             _settings.Children.Add(Text("Удалить цвет фона", 16, true));
+            CreateResolutionControls();
             _regionMode = Choice("Фон от края", "Волшебная палочка", "Край + области");
             _regionMode.SelectedIndex = Math.Max(0, Math.Min(2, Options.RegionMode));
             _settings.Children.Add(_regionMode);
             _selectionHint = Note(""); _settings.Children.Add(_selectionHint);
+            _settings.Children.Add(_showWandSelection);
             var selections = new Grid(); selections.ColumnDefinitions.Add(new ColumnDefinition());
             selections.ColumnDefinitions.Add(new ColumnDefinition());
             _undoSeed = Button("Отменить точку", (_, __) =>
@@ -130,7 +135,8 @@ namespace VanyaTools.Native
             var previews = new Grid(); Grid.SetColumn(previews, 1); root.Children.Add(previews);
             previews.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             previews.RowDefinitions.Add(new RowDefinition());
-            var toolbar = CreateZoomToolbar(); previews.Children.Add(toolbar);
+            var toolbar = new StackPanel();
+            toolbar.Children.Add(CreateZoomToolbar()); previews.Children.Add(toolbar);
             var pair = new Grid { Margin = new Thickness(0, 7, 0, 0) };
             pair.ColumnDefinitions.Add(new ColumnDefinition()); pair.ColumnDefinitions.Add(new ColumnDefinition());
             Grid.SetRow(pair, 1); previews.Children.Add(pair);
@@ -142,6 +148,12 @@ namespace VanyaTools.Native
             _resultHint.VerticalAlignment = VerticalAlignment.Center; _resultHint.IsHitTestVisible = false;
             DockerTheme.UseTheme(_resultHint, TextBlock.BackgroundProperty, DockerTheme.SurfaceBackground);
             Grid.SetRow(_resultHint, 1); afterPanel.Children.Add(_resultHint);
+            AddWandOverlay();
+            _maskEditor = new RasterMaskEditor(toolbar, _before, _beforeScroll, () =>
+                _original == null ? Rect.Empty : new Rect(0, 0, _original.PixelWidth * 25.4 / _original.DpiX,
+                    _original.PixelHeight * 25.4 / _original.DpiY),
+                () => _loaded && !_closed && !_applying && !_normalizing, () => QueuePreview(),
+                "Палочка / фон", "Маска защиты");
             ConfigurePreviewNavigation(_beforeScroll, _before); ConfigurePreviewNavigation(_afterScroll, _after);
             _beforeScroll.ScrollChanged += (_, e) => SyncScroll(_beforeScroll, _afterScroll, e);
             _afterScroll.ScrollChanged += (_, e) => SyncScroll(_afterScroll, _beforeScroll, e);
@@ -177,7 +189,7 @@ namespace VanyaTools.Native
             {
                 if (_loaded) ReadOptions(out BackgroundRemovalOptions unused);
                 _closed = true; ++_revision; _delay.Stop();
-                _previewCancellation?.Cancel(); _applyCancellation?.Cancel(); Cleanup();
+                _previewCancellation?.Cancel(); _applyCancellation?.Cancel(); _normalizationCancellation?.Cancel(); Cleanup();
             };
             PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) { if (_applying) _applyCancellation?.Cancel(); else Close(); e.Handled = true; } };
             UpdatePreviewBackground();
@@ -196,6 +208,7 @@ namespace VanyaTools.Native
                 {
                     if (_closed) return;
                     _original = original; _loaded = true; _settings.IsEnabled = true;
+                    _inputDpiX = original.DpiX; _inputDpiY = original.DpiY; UpdateResolutionControls();
                     // Choosing a background must be possible before the first successful removal.
                     _before.Source = original; ApplyPreviewZoom();
                     _metrics.Text = original.PixelWidth + " × " + original.PixelHeight + " px · исходник загружен.";
@@ -233,7 +246,11 @@ namespace VanyaTools.Native
             { ShowMessage("Срез края: от 0 до 8 пикселей исходника.", true); return false; }
             options = new BackgroundRemovalOptions { Color = color, Tolerance = tolerance, TrimPixels = trim,
                 RegionMode = _regionMode.SelectedIndex,
-                Seeds = _regionMode.SelectedIndex == 0 ? new BackgroundRemovalSeed[0] : _seeds.ToArray() };
+                Protection = _maskEditor.Snapshot(0),
+                Seeds = _regionMode.SelectedIndex == 0 ? new BackgroundRemovalSeed[0] :
+                    _seeds.ConvertAll(point => new BackgroundRemovalSeed(
+                        Math.Min(_original.PixelWidth - 1, (int)(point.X * _original.PixelWidth)),
+                        Math.Min(_original.PixelHeight - 1, (int)(point.Y * _original.PixelHeight)))).ToArray() };
             Options = options.Copy(); return true;
         }
         private Color[] ResolveColors(Color color)
@@ -244,7 +261,8 @@ namespace VanyaTools.Native
         }
         private void QueuePreview(bool process = true)
         {
-            if (_syncing || !_loaded || _closed || _applying) return;
+            if (_syncing || !_loaded || _closed || _applying || _normalizing) return;
+            _wandOverlay.Source = null;
             _previewRequested |= process;
             ++_revision; _apply.IsEnabled = false; _after.Opacity = 0.45;
             if (_after.Source == null) ShowResultHint("Подготавливаю предпросмотр…");
@@ -252,22 +270,18 @@ namespace VanyaTools.Native
         }
         private async Task PreviewAsync()
         {
-            if (_closed || !_loaded || _applying) return;
+            if (_closed || !_loaded || _applying || _normalizing) return;
             if (_rendering) { _pending = true; return; }
             if (!ReadOptions(out BackgroundRemovalOptions options))
             { ClearResult("Проверьте цвет фона, допуск и срез."); return; }
-            if (!options.FromBorder && options.Seeds.Length == 0)
-            {
-                ClearResult("Щёлкните по области на исходнике слева.\nКаждый щелчок добавляет ещё одну область.");
-                ShowMessage("Выберите область для удаления.", false); return;
-            }
+            bool needsSeed = !options.FromBorder && options.Seeds.Length == 0;
+            bool process = _previewRequested && !needsSeed;
             Color[] colors;
-            try { colors = ResolveColors(options.Color); }
+            try { colors = process ? ResolveColors(options.Color) : null; }
             catch (Exception error) { ClearResult("Не удалось подготовить выбранный цвет."); ShowMessage(error.GetBaseException().Message, true); return; }
             int revision = _revision, quality = _quality.SelectedIndex;
-            bool process = _previewRequested;
             BitmapSource original = _original; PreviewInput cached = _previewInput;
-            string workspace = _workspace, source = _sourcePath;
+            string workspace = _workspace, source = _workingSource;
             _previewCancellation = new CancellationTokenSource();
             var cancellationSource = _previewCancellation; CancellationToken cancellation = cancellationSource.Token;
             _rendering = true; _pending = false; ShowMessage("Пересчитываю предпросмотр…", false);
@@ -277,19 +291,28 @@ namespace VanyaTools.Native
                 await OnUiAsync(() =>
                 {
                     if (_closed || revision != _revision || _applying) return;
+                    Point? anchor = null;
+                    if (_preserveViewOnReload && !_zoomFit && _before.Source is BitmapSource previousSource)
+                    {
+                        anchor = RelativePreviewPoint(_beforeScroll, _before, ViewportCenter(_beforeScroll));
+                        _zoomScale = Math.Max(.025, Math.Min(32, _zoomScale * previousSource.PixelWidth / input.Bitmap.PixelWidth));
+                    }
+                    _preserveViewOnReload = false;
                     _previewInput = input; _before.Source = input.Bitmap;
                     if (_after.Source is BitmapSource previous &&
                         (previous.PixelWidth != input.Bitmap.PixelWidth || previous.PixelHeight != input.Bitmap.PixelHeight))
                         ClearResult("Подготавливаю предпросмотр…");
                     _metrics.Text = PreviewMetrics(original, input, options);
                     ApplyPreviewZoom();
+                    if (anchor.HasValue) ScrollPreviewTo(anchor.Value, null);
                 }).ConfigureAwait(false);
                 cancellation.ThrowIfCancellationRequested();
                 if (!process)
                 {
                     await OnUiAsync(() => { if (!_closed && revision == _revision) {
-                        ShowResultHint("Щёлкните по фону на исходнике слева, чтобы увидеть результат.");
-                        ShowMessage("Щёлкните по фону на исходнике слева.", false);
+                        string instruction = needsSeed ? "Щёлкните по области на исходнике слева. Каждый щелчок добавляет область." :
+                            "Щёлкните по фону на исходнике слева, чтобы увидеть результат.";
+                        ClearResult(instruction); ShowMessage(instruction, false);
                     } }).ConfigureAwait(false);
                     return;
                 }
@@ -298,6 +321,7 @@ namespace VanyaTools.Native
                 {
                     if (_closed || revision != _revision || _applying) return;
                     _after.Source = result.Bitmap; _resultHint.Visibility = Visibility.Collapsed;
+                    _wandOverlay.Source = result.WandSelection;
                     _after.Opacity = 1; _displayRevision = revision;
                     ApplyPreviewZoom();
                     SyncResultPosition();
@@ -317,17 +341,17 @@ namespace VanyaTools.Native
                 await OnUiAsync(() =>
                 {
                     _rendering = false;
-                    if (!_closed && !_applying) _apply.IsEnabled = _displayRevision == _revision;
+                    if (!_closed && !_applying && !_normalizing) _apply.IsEnabled = _displayRevision == _revision;
                     if (ReferenceEquals(_previewCancellation, cancellationSource)) _previewCancellation = null;
                     cancellationSource.Dispose();
-                    if (!_closed && !_applying && (_pending || revision != _revision)) { _delay.Stop(); _delay.Start(); }
+                    if (!_closed && !_applying && !_normalizing && (_pending || revision != _revision)) { _delay.Stop(); _delay.Start(); }
                     Cleanup();
                 }).ConfigureAwait(false);
             }
         }
         private async Task ApplyAsync()
         {
-            if (_closed || _applying || _rendering || _displayRevision != _revision || !ReadOptions(out BackgroundRemovalOptions options)) return;
+            if (_closed || _applying || _rendering || _normalizing || _displayRevision != _revision || !ReadOptions(out BackgroundRemovalOptions options)) return;
             Color[] colors;
             try { colors = ResolveColors(options.Color); }
             catch (Exception error) { ShowMessage(error.GetBaseException().Message, true); return; }
@@ -336,25 +360,29 @@ namespace VanyaTools.Native
             _delay.Stop(); _previewCancellation?.Cancel();
             _applyCancellation = new CancellationTokenSource(); var cancellationSource = _applyCancellation;
             CancellationToken cancellation = cancellationSource.Token;
-            string source = _sourcePath, output = Path.Combine(Path.GetTempPath(), "Vanya-Background-" + Guid.NewGuid().ToString("N") + ".png");
+            string source = _workingSource, output = Path.Combine(Path.GetTempPath(), "Vanya-Background-" + Guid.NewGuid().ToString("N") + ".png");
             ShowMessage("Готовлю результат в полном разрешении…", false);
             bool keep = false;
             try
             {
-                await Task.Run(() => BackgroundRemovalProcessor.RemoveColor(source, output, colors,
-                    options.Tolerance, options.TrimPixels, options.FromBorder, options.Seeds, cancellation), cancellation).ConfigureAwait(false);
+                await Task.Run(() =>
+                {
+                    BackgroundRemovalProcessor.RemoveColor(source, output, colors,
+                        options.Tolerance, options.TrimPixels, options.FromBorder, options.Seeds, cancellation, options.Protection);
+                    NativeRasterCorrection.AttachProcessedAlpha(source, output, cancellation, removalColors);
+                }, cancellation).ConfigureAwait(false);
                 cancellation.ThrowIfCancellationRequested();
                 await OnUiAsync(() =>
                 {
                     if (_closed || cancellation.IsCancellationRequested) return;
-                    OutputPath = output; RemovalColors = removalColors; keep = true; DialogResult = true;
+                    OutputPath = output; keep = true; DialogResult = true;
                 }).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { await OnUiAsync(() => { if (!_closed) ShowMessage("Операция отменена.", false); }).ConfigureAwait(false); }
             catch (Exception error) { await OnUiAsync(() => { if (!_closed) ShowMessage(error.GetBaseException().Message, true); }).ConfigureAwait(false); }
             finally
             {
-                if (!keep) DeleteFile(output);
+                if (!keep) { DeleteFile(output); NativeRasterCorrection.CleanupResultCompanion(output); }
                 await OnUiAsync(() =>
                 {
                     _applying = false;
@@ -371,7 +399,7 @@ namespace VanyaTools.Native
         }
         private sealed class PreviewResult
         {
-            internal BitmapSource Bitmap;
+            internal BitmapSource Bitmap, WandSelection;
         }
         private static PreviewInput PreparePreviewInput(BitmapSource original, PreviewInput cached, int quality,
             string workspace, CancellationToken cancellation)
@@ -387,7 +415,10 @@ namespace VanyaTools.Native
                 string inputPath = Path.Combine(workspace, "source-" + quality + ".png");
                 if (scale < .999999)
                 {
-                    bitmap = DtfCorrectionPixels.Capture(new TransformedBitmap(original, new ScaleTransform(scale, scale))).Bitmap();
+                    var resized = new TransformedBitmap(original, new ScaleTransform(scale, scale));
+                    bitmap = DtfCorrectionPixels.Capture(resized,
+                        original.DpiX * resized.PixelWidth / original.PixelWidth,
+                        original.DpiY * resized.PixelHeight / original.PixelHeight).Bitmap();
                     scale = Math.Min((double)bitmap.PixelWidth / original.PixelWidth, (double)bitmap.PixelHeight / original.PixelHeight);
                 }
                 Save(bitmap, inputPath); cancellation.ThrowIfCancellationRequested();
@@ -414,15 +445,17 @@ namespace VanyaTools.Native
             bool fullSizeMask = options.RegionMode != 0;
             // A downsample can close a narrow gap or erase a thin wall. For the
             // wand, choose connectivity at source resolution and only then resize.
-            BackgroundRemovalProcessor.RemoveColor(fullSizeMask ? source : input.Path, output, colors,
+            var removed = BackgroundRemovalProcessor.RemoveColor(fullSizeMask ? source : input.Path, output, colors,
                 options.Tolerance, fullSizeMask ? options.TrimPixels : PreviewTrim(input, options),
-                options.FromBorder, options.Seeds, cancellation);
+                options.FromBorder, options.Seeds, cancellation, options.Protection);
             cancellation.ThrowIfCancellationRequested();
             BitmapSource result = LoadDetached(output);
+            BitmapSource selection = fullSizeMask ? WandSelection(removed, result.PixelWidth, result.PixelHeight,
+                input.Bitmap.PixelWidth, input.Bitmap.PixelHeight, cancellation) : null;
             if (result.PixelWidth != input.Bitmap.PixelWidth || result.PixelHeight != input.Bitmap.PixelHeight)
                 result = DtfCorrectionPixels.Capture(new TransformedBitmap(result, new ScaleTransform(
                     (double)input.Bitmap.PixelWidth / result.PixelWidth, (double)input.Bitmap.PixelHeight / result.PixelHeight))).Bitmap();
-            return new PreviewResult { Bitmap = result };
+            return new PreviewResult { Bitmap = result, WandSelection = selection };
         }
 
         private void ShowResultHint(string message)
@@ -444,7 +477,7 @@ namespace VanyaTools.Native
         }
         private void PickFromImage(MouseButtonEventArgs e)
         {
-            if (_closed || _applying || !_loaded || _original == null || Keyboard.IsKeyDown(Key.Space)) return;
+            if (_closed || _applying || _normalizing || !_loaded || _original == null || Keyboard.IsKeyDown(Key.Space)) return;
             Point point = e.GetPosition(_before);
             if (!BackgroundRegionMask.TryMapPoint(point.X, point.Y, _before.ActualWidth, _before.ActualHeight,
                 _original.PixelWidth, _original.PixelHeight, out BackgroundRemovalSeed seed)) return;
@@ -456,7 +489,8 @@ namespace VanyaTools.Native
             {
                 if (_seeds.Count >= BackgroundRegionMask.MaximumSeeds)
                 { ShowMessage("Выбрано 64 области. Удалите их, затем продолжите на результате.", true); return; }
-                if (!_seeds.Exists(p => p.X == x && p.Y == y)) _seeds.Add(seed);
+                if (!_seeds.Exists(p => (int)(p.X * _original.PixelWidth) == x && (int)(p.Y * _original.PixelHeight) == y))
+                    _seeds.Add(new Point((x + .5) / _original.PixelWidth, (y + .5) / _original.PixelHeight));
                 UpdateSelectionHint(); QueuePreview();
             }
             e.Handled = true;
@@ -480,7 +514,8 @@ namespace VanyaTools.Native
             _selectionHint.Text = picked
                 ? "Щёлкайте по областям на исходнике. Выбрано точек: " + _seeds.Count + "."
                 : "Щёлкните по фону на исходнике. Замкнутые участки сохраняются.";
-            _undoSeed.Visibility = _clearSeeds.Visibility = picked ? Visibility.Visible : Visibility.Collapsed;
+            _undoSeed.Visibility = _clearSeeds.Visibility = _showWandSelection.Visibility =
+                picked ? Visibility.Visible : Visibility.Collapsed;
             _undoSeed.IsEnabled = _clearSeeds.IsEnabled = _seeds.Count > 0;
             _edgeColorFields.Visibility = _screenPicker.Visibility = _regionMode.SelectedIndex == 1 ? Visibility.Collapsed : Visibility.Visible;
             _before.ToolTip = picked ? "Щёлкните по области для удаления. Каждый щелчок добавляет область. ПКМ или пробел + ЛКМ — перемещение."
@@ -509,7 +544,8 @@ namespace VanyaTools.Native
         }
         private void SyncScroll(ScrollViewer source, ScrollViewer target, ScrollChangedEventArgs change)
         {
-            if (_syncingScroll || (change.HorizontalChange == 0 && change.VerticalChange == 0)) return;
+            if (_syncingScroll || _before.Source == null || _after.Source == null ||
+                (change.HorizontalChange == 0 && change.VerticalChange == 0)) return;
             _syncingScroll = true;
             try { target.ScrollToHorizontalOffset(source.HorizontalOffset); target.ScrollToVerticalOffset(source.VerticalOffset); }
             finally { _syncingScroll = false; }
@@ -520,7 +556,7 @@ namespace VanyaTools.Native
         { if (Dispatcher.CheckAccess()) { action(); return Task.CompletedTask; } return Dispatcher.InvokeAsync(action).Task; }
         private void Cleanup()
         {
-            if (!_closed || _loading || _rendering || _applying) return;
+            if (!_closed || _loading || _rendering || _applying || _normalizing) return;
             try { if (Directory.Exists(_workspace)) Directory.Delete(_workspace, true); } catch { }
         }
         private static void DeleteFile(string path) { try { if (File.Exists(path)) File.Delete(path); } catch { } }
@@ -558,7 +594,9 @@ namespace VanyaTools.Native
             var panel = new Grid { Margin = new Thickness(3) }; panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             panel.RowDefinitions.Add(new RowDefinition()); panel.Children.Add(Text(title, 12));
             image = new Image { Cursor = Cursors.Arrow };
-            scroll = new ScrollViewer { Content = image, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            var layers = new Grid { HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
+            layers.Children.Add(image);
+            scroll = new ScrollViewer { Content = layers, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, Background = Checkerboard() };
             var border = new Border { Child = scroll, BorderThickness = new Thickness(1) };
             DockerTheme.UseTheme(border, Border.BorderBrushProperty, DockerTheme.BorderBrush);

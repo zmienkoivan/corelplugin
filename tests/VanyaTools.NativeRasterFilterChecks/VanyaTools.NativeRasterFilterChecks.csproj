@@ -8,6 +8,7 @@
   <ItemGroup>
     <Compile Include="../../native/VanyaTools.Native/NativeRasterBuffer.cs" Link="NativeRasterBuffer.cs" />
     <Compile Include="../../native/VanyaTools.Native/NativeRasterFilters.cs" Link="NativeRasterFilters.cs" />
+    <Compile Include="../../native/VanyaTools.Native/RasterProtectionMask.cs" Link="RasterProtectionMask.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfPrintPreparation.cs" Link="DtfPrintPreparation.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfRasterResample.cs" Link="DtfRasterResample.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfIslandCleanup.cs" Link="DtfIslandCleanup.cs" />

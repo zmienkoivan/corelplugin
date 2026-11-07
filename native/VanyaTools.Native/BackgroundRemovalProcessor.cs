@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -15,8 +16,8 @@ namespace VanyaTools.Native
 
         // Mask selection uses the RGB preview; native color channels are restored
         // by NativeRasterCorrection.AttachProcessedAlpha after the dialog closes.
-        internal static void RemoveColor(string source, string output, Color[] colors, int tolerance, int cutPixels,
-            bool fromBorder, BackgroundRemovalSeed[] seeds, CancellationToken cancellation)
+        internal static byte[] RemoveColor(string source, string output, Color[] colors, int tolerance, int cutPixels,
+            bool fromBorder, BackgroundRemovalSeed[] seeds, CancellationToken cancellation, RasterProtectionMask mask = null)
         {
             BitmapSource input = AiPrintTab.Bitmap(source);
             var bitmap = new FormatConvertedBitmap(input, PixelFormats.Bgra32, null, 0);
@@ -26,8 +27,9 @@ namespace VanyaTools.Native
             bitmap.CopyPixels(pixels, stride, 0);
             int[] packed = new int[colors.Length];
             for (int n = 0; n < colors.Length; n++) packed[n] = colors[n].R << 16 | colors[n].G << 8 | colors[n].B;
+            var protection = mask?.Rasterize(width, height, input.DpiX, input.DpiY, 0, 0, cancellation);
             byte[] background = BackgroundRegionMask.Create(pixels, width, height, packed,
-                tolerance, fromBorder, seeds, cancellation);
+                tolerance, fromBorder, seeds, cancellation, protection);
             var fringeColors = new List<Color>();
             if (fromBorder) fringeColors.AddRange(colors);
             if (seeds != null) foreach (var seed in seeds)
@@ -39,12 +41,12 @@ namespace VanyaTools.Native
             colors = fringeColors.ToArray();
             int removed = 0;
             for (int p = 0; p < length; p++) if (background[p] != 0) removed++;
-            if (removed == 0)
+            if (removed == 0 && protection == null)
                 throw new InvalidOperationException(fromBorder
                     ? "Цвет фона не найден у края изображения. Выберите фон на исходнике или увеличьте допуск."
                     : "Щёлкните по области, которую нужно удалить.");
             if (cutPixels > 0)
-                background = ExpandBackground(background, width, height, cutPixels, cancellation);
+                background = ExpandBackground(background, width, height, cutPixels, cancellation, protection);
 
             int edgeLimit = tolerance + 35;
             int visible = 0;
@@ -61,6 +63,7 @@ namespace VanyaTools.Native
                     }
                     if (pixels[i + 3] == 0) continue;
                     visible++;
+                    if (protection?[p] == true) continue;
                     // Modify only a one-pixel fringe next to the removed background.
                     // All other RGB values and alpha remain exactly as captured.
                     if (pixels[i + 3] < 250 || !TouchesBackground(background, width, height, x, y)) continue;
@@ -87,12 +90,13 @@ namespace VanyaTools.Native
             if (visible == 0)
                 throw new InvalidOperationException("На изображении не осталось непрозрачных деталей. Уменьшите допуск.");
             Save(output, width, height, input.DpiX, input.DpiY, pixels, stride);
+            return background;
         }
 
         // Move only the boundary connected to the removed background inward.
         // A disk distance keeps diagonal edges from being cut as a square block.
         private static byte[] ExpandBackground(byte[] background, int width, int height,
-            int radius, CancellationToken cancellation)
+            int radius, CancellationToken cancellation, BitArray protection)
         {
             int length = checked(width * height);
             var horizontalDistance = new byte[length];
@@ -124,6 +128,7 @@ namespace VanyaTools.Native
                 for (int x = 0; x < width; x++)
                 {
                     int p = row + x;
+                    if (protection?[p] == true) continue;
                     if (background[p] != 0) { expanded[p] = 1; continue; }
                     for (int dy = -radius; dy <= radius; dy++)
                     {

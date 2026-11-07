@@ -22,6 +22,9 @@ namespace VanyaTools.Native
         internal int KnockoutTolerance = 10;
         internal double HalftoneLpi = 20, HalftoneAngle = 22.5, HalftoneDotMm = 1;
         internal double GridOriginXmm, GridOriginYmm;
+        internal RasterProtectionMask KnockoutMask, HalftoneMask, WhiteMask, AlphaMask;
+        internal bool HasProtection => Knockout && KnockoutMask != null || Halftone && HalftoneMask != null ||
+            WhitenNearWhite && WhiteMask != null || RemoveSemiTransparent && AlphaMask != null;
         internal DtfCorrectionOptions Copy() => (DtfCorrectionOptions)MemberwiseClone();
         internal DtfPrintPreparationOptions Preparation(double offsetX = 0, double offsetY = 0) => new DtfPrintPreparationOptions {
             Knockout = Knockout, Red = KnockoutColor.R, Green = KnockoutColor.G, Blue = KnockoutColor.B,

@@ -6,5 +6,6 @@
   <ItemGroup>
     <Compile Include="../../native/VanyaTools.Native/BackgroundRegionMask.cs" Link="BackgroundRegionMask.cs" />
     <Compile Include="../../native/VanyaTools.Native/BackgroundRemovalProcessor.cs" Link="BackgroundRemovalProcessor.cs" />
+    <Compile Include="../../native/VanyaTools.Native/RasterProtectionMask.cs" Link="RasterProtectionMask.cs" />
   </ItemGroup>
 </Project>

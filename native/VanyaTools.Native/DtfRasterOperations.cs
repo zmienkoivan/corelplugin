@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Threading;
 
 namespace VanyaTools.Native
@@ -8,7 +9,7 @@ namespace VanyaTools.Native
     internal static class DtfRasterOperations
     {
         internal static byte[] Correct(byte[] source, bool removeAlpha, int threshold, bool whiten, int tolerance,
-            CancellationToken cancellation)
+            CancellationToken cancellation, BitArray protectAlpha = null, BitArray protectWhite = null)
         {
             Validate(source, tolerance);
             if (threshold < 0 || threshold > 255) throw new ArgumentOutOfRangeException(nameof(threshold));
@@ -17,8 +18,8 @@ namespace VanyaTools.Native
             for (int i = 0; i < result.Length; i += 4)
             {
                 if ((i & 16383) == 0) cancellation.ThrowIfCancellationRequested();
-                if (removeAlpha) result[i + 3] = result[i + 3] > 0 && result[i + 3] >= threshold ? (byte)255 : (byte)0;
-                if (whiten && NearWhite(result, i, minimum)) result[i] = result[i + 1] = result[i + 2] = 255;
+                if (removeAlpha && protectAlpha?[i / 4] != true) result[i + 3] = result[i + 3] > 0 && result[i + 3] >= threshold ? (byte)255 : (byte)0;
+                if (whiten && protectWhite?[i / 4] != true && NearWhite(result, i, minimum)) result[i] = result[i + 1] = result[i + 2] = 255;
             }
             return result;
         }

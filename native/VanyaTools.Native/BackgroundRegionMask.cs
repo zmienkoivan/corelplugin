@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Threading;
 
@@ -29,7 +30,7 @@ namespace VanyaTools.Native
         }
 
         internal static byte[] Create(byte[] bgra, int width, int height, int[] borderColors,
-            int tolerance, bool fromBorder, BackgroundRemovalSeed[] seeds, CancellationToken cancellation)
+            int tolerance, bool fromBorder, BackgroundRemovalSeed[] seeds, CancellationToken cancellation, BitArray protection = null)
         {
             if (width <= 0 || height <= 0 || bgra == null || bgra.Length != checked(width * height * 4))
                 throw new ArgumentException("Неверные размеры исходного изображения.");
@@ -45,7 +46,7 @@ namespace VanyaTools.Native
             {
                 for (int x = 0; x < width; x++) { pending.Push(x); pending.Push((height - 1) * width + x); }
                 for (int y = 1; y < height - 1; y++) { pending.Push(y * width); pending.Push(y * width + width - 1); }
-                Fill(bgra, width, height, mask, visited, 1, pending, borderColors, tolerance, true, cancellation);
+                Fill(bgra, width, height, mask, visited, 1, pending, borderColors, tolerance, true, cancellation, protection);
             }
             for (int n = 0; n < seeds.Length; n++)
             {
@@ -59,24 +60,24 @@ namespace VanyaTools.Native
                 pending.Push(p);
                 int color = (bgra[i + 2] << 16) | (bgra[i + 1] << 8) | bgra[i];
                 Fill(bgra, width, height, mask, visited, (byte)(n + 2), pending,
-                    new[] { color }, tolerance, false, cancellation);
+                    new[] { color }, tolerance, false, cancellation, protection);
             }
             return mask;
         }
 
         private static void Fill(byte[] pixels, int width, int height, byte[] mask, byte[] visited,
             byte stamp, Stack<int> pending, int[] colors, int tolerance, bool transparent,
-            CancellationToken cancellation)
+            CancellationToken cancellation, BitArray protection)
         {
             int steps = 0;
             while (pending.Count != 0)
             {
                 if ((steps++ & 1023) == 0) cancellation.ThrowIfCancellationRequested();
                 int seed = pending.Pop();
-                if (visited[seed] == stamp || !Matches(pixels, seed, colors, tolerance, transparent)) continue;
+                if (visited[seed] == stamp || !Matches(pixels, seed, colors, tolerance, transparent, protection)) continue;
                 int y = seed / width, left = seed % width, right = left, row = y * width;
-                while (left > 0 && visited[row + left - 1] != stamp && Matches(pixels, row + left - 1, colors, tolerance, transparent)) left--;
-                while (right + 1 < width && visited[row + right + 1] != stamp && Matches(pixels, row + right + 1, colors, tolerance, transparent)) right++;
+                while (left > 0 && visited[row + left - 1] != stamp && Matches(pixels, row + left - 1, colors, tolerance, transparent, protection)) left--;
+                while (right + 1 < width && visited[row + right + 1] != stamp && Matches(pixels, row + right + 1, colors, tolerance, transparent, protection)) right++;
                 for (int x = left; x <= right; x++) { visited[row + x] = stamp; mask[row + x] = 1; }
                 if (y > 0) PushRuns(y - 1, left, right);
                 if (y + 1 < height) PushRuns(y + 1, left, right);
@@ -88,16 +89,17 @@ namespace VanyaTools.Native
                 while (x <= right)
                 {
                     int p = y * width + x;
-                    if (visited[p] == stamp || !Matches(pixels, p, colors, tolerance, transparent)) { x++; continue; }
+                    if (visited[p] == stamp || !Matches(pixels, p, colors, tolerance, transparent, protection)) { x++; continue; }
                     pending.Push(p);
                     do { x++; p++; }
-                    while (x <= right && visited[p] != stamp && Matches(pixels, p, colors, tolerance, transparent));
+                    while (x <= right && visited[p] != stamp && Matches(pixels, p, colors, tolerance, transparent, protection));
                 }
             }
         }
 
-        private static bool Matches(byte[] pixels, int p, int[] colors, int tolerance, bool transparent)
+        private static bool Matches(byte[] pixels, int p, int[] colors, int tolerance, bool transparent, BitArray protection)
         {
+            if (protection?[p] == true) return false;
             int i = p * 4;
             if (pixels[i + 3] <= 8) return transparent;
             foreach (int color in colors)

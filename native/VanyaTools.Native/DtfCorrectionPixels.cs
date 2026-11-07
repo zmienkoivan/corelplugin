@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.IO;
 using System.Threading;
 using System.Windows;
@@ -17,14 +18,14 @@ namespace VanyaTools.Native
         private DtfCorrectionPixels(int width, int height, double dpiX, double dpiY, byte[] pixels)
         { Width = width; Height = height; DpiX = dpiX; DpiY = dpiY; _pixels = pixels; }
 
-        internal static DtfCorrectionPixels Capture(BitmapSource source)
+        internal static DtfCorrectionPixels Capture(BitmapSource source, double? dpiX = null, double? dpiY = null)
         {
             BitmapSource bgra = source.Format == PixelFormats.Bgra32 ? source :
                 new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
             int stride = checked(bgra.PixelWidth * 4);
             var pixels = new byte[checked(stride * bgra.PixelHeight)];
             bgra.CopyPixels(pixels, stride, 0);
-            return new DtfCorrectionPixels(bgra.PixelWidth, bgra.PixelHeight, bgra.DpiX, bgra.DpiY, pixels);
+            return new DtfCorrectionPixels(bgra.PixelWidth, bgra.PixelHeight, dpiX ?? bgra.DpiX, dpiY ?? bgra.DpiY, pixels);
         }
 
         internal BitmapSource Bitmap()
@@ -52,17 +53,24 @@ namespace VanyaTools.Native
             }
             var prep = options.Preparation(); prep.Validate();
             byte[] pixels = prep.Knockout ? (byte[])_pixels.Clone() : _pixels;
-            DtfPrintPreparation.Knockout(pixels, 4, 4, null, pixels, 4, 3, Width, Height, prep, cancellation);
+            var knockoutMask = prep.Knockout ? Mask(options.KnockoutMask) : null;
+            DtfPrintPreparation.Knockout(pixels, 4, 4, null, pixels, 4, 3, Width, Height, prep, cancellation, knockoutMask);
             if (options.RemoveSemiTransparent || options.WhitenNearWhite)
                 pixels = DtfRasterOperations.Correct(pixels, options.RemoveSemiTransparent, options.Threshold,
-                    options.WhitenNearWhite, options.NearWhiteTolerance, cancellation);
+                    options.WhitenNearWhite, options.NearWhiteTolerance, cancellation,
+                    options.RemoveSemiTransparent ? Mask(options.AlphaMask) : null,
+                    options.WhitenNearWhite ? Mask(options.WhiteMask) : null);
             if (prep.Halftone)
             {
                 if (ReferenceEquals(pixels, _pixels)) pixels = (byte[])_pixels.Clone();
-                DtfPrintPreparation.Boost(pixels, 4, 4, null, pixels, 4, 3, Width, Height, prep, cancellation);
-                DtfPrintPreparation.Halftone(pixels, 4, 3, Width, Height, DpiX, DpiY, prep, cancellation);
+                var halftoneMask = Mask(options.HalftoneMask);
+                DtfPrintPreparation.Boost(pixels, 4, 4, null, pixels, 4, 3, Width, Height, prep, cancellation, halftoneMask);
+                DtfPrintPreparation.Halftone(pixels, 4, 3, Width, Height, DpiX, DpiY, prep, cancellation, halftoneMask);
             }
             return ReferenceEquals(pixels, _pixels) ? this : new DtfCorrectionPixels(Width, Height, DpiX, DpiY, pixels);
+
+            BitArray Mask(RasterProtectionMask mask) => mask?.Rasterize(Width, Height,
+                DpiX, DpiY, options.GridOriginXmm, options.GridOriginYmm, cancellation);
         }
         internal DtfCorrectionPixels Resample300(CancellationToken cancellation)
         {

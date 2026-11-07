@@ -174,6 +174,23 @@ internal static class Program
             Until(()=>!ReferenceEquals(after.Source,beforeKnockout) && after.Opacity==1,"Knockout preview did not update");
             Check(Data((BitmapSource)after.Source).Where((b,i)=>i%4==3).All(a=>a==0),"Knockout did not remove selected print colour");
             Check(Field<TextBox>(window,"_knockoutHex").IsEnabled,"Knockout controls unavailable");
+            var editor = Field<RasterMaskEditor>(window, "_maskEditor");
+            var tabs = Field<TabControl>(editor, "_tabs");
+            Check(tabs.Items.Count == 5 && tabs.SelectedIndex == 0, "Correction has four independent mask tabs");
+            var masks = Field<System.Collections.Generic.List<RasterMaskShape>[]>(editor, "_layers");
+            tabs.SelectedIndex = 1;
+            masks[0].Add(new RasterMaskShape(RasterMaskTool.Rectangle,
+                new[] { new RasterMaskPoint(9, 0), new RasterMaskPoint(11, 4) }, 0));
+            editor.Refresh();
+            Call(window, "QueuePreview");
+            Until(() => apply.IsEnabled, "Knockout protection did not refresh preview");
+            byte[] protectedPreview = Data((BitmapSource)after.Source);
+            Check(protectedPreview[(20 * 320 + 159) * 4 + 3] == 255 &&
+                protectedPreview[(100 * 320 + 159) * 4 + 3] == 0, "Preview keeps only the masked part of the print");
+            Field<Button>(editor, "_undo").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Until(() => apply.IsEnabled, "Undoing the mask did not refresh preview");
+            Check(Data((BitmapSource)after.Source).Where((b,i)=>i%4==3).All(a=>a==0), "Undo leaves no residual protection");
+            tabs.SelectedIndex = 0;
             Field<ComboBox>(window,"_previewBackground").SelectedIndex=3;
             Check(((SolidColorBrush)Field<ScrollViewer>(window,"_beforeScroll").Background).Color==Color.FromRgb(100,120,140),"Fabric preview background did not use knockout colour");
             Field<TextBox>(window,"_knockoutHex").Text="#223344";
@@ -263,16 +280,34 @@ internal static class Program
         for(int p=0;p<data.Length;p+=4){data[p]=data[p+1]=data[p+2]=255;data[p+3]=p%20==0?(byte)128:(byte)255;}
         using(var file=File.Create(path))FastRasterPng.Write(file,data,32,16,100,100);var original=File.ReadAllBytes(path);
         var window=new DtfCorrectionWindow(path,new DtfCorrectionOptions(),new DtfOutlineSettings(),Process);
+        using var surface = new HwndSource(new HwndSourceParameters("Vanya resolution viewport checks")
+        { Width = 1320, Height = 1000, WindowStyle = 0 });
+        var content = (FrameworkElement)window.Content;
+        window.Content = null; surface.RootVisual = content;
         try {
             var loaded=(Task)Call(window,"LoadAsync");Until(()=>loaded.IsCompleted,"Resolution test source did not load");loaded.GetAwaiter().GetResult();
             Until(()=>Field<Button>(window,"_apply").IsEnabled,"Resolution test initial preview stalled");
             Check(Field<Button>(window,"_normalizeResolution").IsEnabled && Field<TextBlock>(window,"_resolutionInfo").Text.Contains("100"),"Low DPI was not assessed or normalization unavailable");
+            var scroll = Field<ScrollViewer>(window, "_beforeScroll");
+            var image = Field<Image>(window, "_before");
+            Until(() => scroll.ViewportWidth > 100 && scroll.ViewportHeight > 50, "Resolution viewport did not load");
+            Call(window, "ZoomTo", 32d, scroll, null);
+            Until(() => scroll.ScrollableWidth > 120, "Resolution viewport did not zoom");
+            scroll.ScrollToHorizontalOffset(110);
+            Until(() => Math.Abs(scroll.HorizontalOffset - 110) < 2, "Resolution viewport did not pan");
+            Until(() => Call(window, "PreviewCenter") is Point, "Panned artwork did not become visible");
+            var beforeCenter = (Point)Call(window, "PreviewCenter");
+            double beforeWidth = image.Width;
             int calls=_normalizations;
             var prepared=(Task)Call(window,"NormalizeResolutionAsync");var duplicate=(Task)Call(window,"NormalizeResolutionAsync");
             Until(()=>prepared.IsCompleted && duplicate.IsCompleted,"Normalization did not complete");prepared.GetAwaiter().GetResult();
             Until(()=>Field<Button>(window,"_apply").IsEnabled,"Normalization did not restart automatic preview");
             var full=Field<DtfCorrectionPixels>(window,"_originalPixels");
             Check(full.Width==96 && full.Height==48 && full.DpiX>299.99,"Normalization did not produce 300-DPI working pixels");
+            Until(() => Call(window, "PreviewCenter") is Point center &&
+                Math.Abs(center.X / 3 - beforeCenter.X) < .2, "Normalization moved the selected part of the print");
+            Check(!Field<bool>(window, "_zoomFit") && Math.Abs(image.Width - beforeWidth) < 1,
+                "Normalization changed the displayed scale");
             Check(Field<bool>(window,"_resolutionNormalized") && _normalizations==calls+1,"Normalization repeated on concurrent click");
             Check(Data(full.Bitmap()).Where((b,i)=>i%4!=3).All(v=>v==255),"Normalization changed source white");
             object[] options={null};Check((bool)Call(window,"ReadOptions",options) && !((DtfCorrectionOptions)options[0]).Resample300,"Every preview would repeat full-image normalization");

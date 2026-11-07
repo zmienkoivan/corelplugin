@@ -18,6 +18,7 @@ namespace VanyaTools.Native
         private double _inputDpiX, _inputDpiY;
         private string _workingSourcePath, _normalizedSourcePath;
         private CancellationTokenSource _normalizationCancellation;
+        private Point? _resampledPreviewCenter;
 
         private void CreateResolutionControls(Panel controls)
         {
@@ -46,7 +47,7 @@ namespace VanyaTools.Native
 
         private bool CanNormalizeSource => Math.Min(_inputDpiX, _inputDpiY) < 299.99;
 
-        private static bool ResolutionSizeMatches(int oldPixels,double oldDpi,int pixels,double dpi)
+        internal static bool ResolutionSizeMatches(int oldPixels,double oldDpi,int pixels,double dpi)
         {
             if(pixels<oldPixels || Double.IsNaN(dpi) || Double.IsInfinity(dpi) || dpi<299.95)return false;
             double beforeMm=oldPixels*25.4/oldDpi,afterMm=pixels*25.4/dpi;
@@ -102,12 +103,24 @@ namespace VanyaTools.Native
                 await OnUiAsync(()=> {
                     if(_closed) {DeleteFile(frame.Item2.Path);return;}
                     foreach(var old in _overviewCache.Values)DeleteFile(old.Path);
-                    _overviewCache.Clear();_originalPixels=frame.Item1;UsePreviewOverview(frame.Item2);
+                    _overviewCache.Clear();
+                    var previous = _originalPixels;
+                    var center = _resampledPreviewCenter ?? PreviewCenter();
+                    _originalPixels = frame.Item1; UsePreviewOverview(frame.Item2);
+                    if (!_zoomFit)
+                    {
+                        double sx = (double)_originalPixels.Width / previous.Width;
+                        double sy = (double)_originalPixels.Height / previous.Height;
+                        _zoomScale = Math.Max(.001, Math.Min(32, _zoomScale / sx));
+                        if (center.HasValue)
+                            _resampledPreviewCenter = new Point(center.Value.X * sx, center.Value.Y * sy);
+                    }
                     _workingSourcePath=path;_resolutionNormalized=normalize;if(normalize)_normalizedSourceReady=true;
                     _syncing=true;
                     try {_units.SelectedIndex=0;_previousUnit=0;_radius.Text=DtfOutlineUnits.Format(settings.RadiusMm);_expansion.Text=DtfOutlineUnits.Format(settings.ExpansionMm);}
                     finally{_syncing=false;}
-                    _previewScene=Rect.Empty;_baseRevision=-1;_before.Source=_overview;_after.Source=null;_zoomFit=true;retained=true;
+                    _previewScene = Rect.Empty; _baseRevision = -1;
+                    _before.Source = _overview; _after.Source = null; retained = true;
                     UpdateResolutionInfo();
                 });
             }

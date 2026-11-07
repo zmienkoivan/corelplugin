@@ -76,6 +76,18 @@ internal static class Program
             BackgroundRemovalProcessor.RemoveColor(src,dst,new[]{Colors.White},0,0,true,new[]{new BackgroundRemovalSeed(2,2)},CancellationToken.None);
             result=Read(dst); Check(result[3]==0&&result[24*4+3]==0&&result[40*4+3]==255,"Combined PNG removes only border and selected hole");
             Throws<InvalidOperationException>(()=>BackgroundRemovalProcessor.RemoveColor(src,dst,new[]{Colors.White},0,0,false,null,CancellationToken.None),"Empty wand cannot report success");
+            var protect = new RasterProtectionMask(new[] { new RasterMaskShape(RasterMaskTool.Rectangle,
+                new[] { new RasterMaskPoint(2 * 25.4 / 300, 2 * 25.4 / 300),
+                    new RasterMaskPoint(3 * 25.4 / 300, 5 * 25.4 / 300) }, 0) });
+            var selected = BackgroundRemovalProcessor.RemoveColor(src,dst,new[]{Colors.White},0,1,false,
+                new[]{new BackgroundRemovalSeed(3,2)},CancellationToken.None,protect);
+            result = Read(dst);
+            Check(selected[24] == 0 && result[24*4+3] == 255, "Protection is respected by the wand and by the cut");
+            Check(selected[25] == 1 && result[25*4+3] == 0, "Wand overlay reports the actual area removed");
+            var barrier = new System.Collections.BitArray(5); barrier[2] = true;
+            var separated = BackgroundRegionMask.Create(Pixels(5,1,255),5,1,null,0,false,
+                new[]{new BackgroundRemovalSeed(0,0)},CancellationToken.None,barrier);
+            Check(separated.SequenceEqual(new byte[]{1,1,0,0,0}), "Flood does not pass through protection");
             Console.WriteLine("Background region checks passed: "+_checks); return 0;
         }
         catch(Exception error) { Console.Error.WriteLine(error); return 1; }

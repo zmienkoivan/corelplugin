@@ -9,6 +9,7 @@
     <Compile Include="../../native/VanyaTools.Native/NativeRasterModelIO.cs" Link="NativeRasterModelIO.cs" />
     <Compile Include="../../native/VanyaTools.Native/NativeRasterFiles.cs" Link="NativeRasterFiles.cs" />
     <Compile Include="../../native/VanyaTools.Native/NativeRasterFilters.cs" Link="NativeRasterFilters.cs" />
+    <Compile Include="../../native/VanyaTools.Native/RasterProtectionMask.cs" Link="RasterProtectionMask.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfCorrectionOptions.cs" Link="DtfCorrectionOptions.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfPrintPreparation.cs" Link="DtfPrintPreparation.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfRasterResample.cs" Link="DtfRasterResample.cs" />

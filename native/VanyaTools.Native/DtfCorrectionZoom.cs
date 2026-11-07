@@ -37,7 +37,7 @@ namespace VanyaTools.Native
             var fit = ZoomButton("Вписать", (_, __) =>
             {
                 if (!_loaded || _applying || _closed) return;
-                _zoomFit = true; ApplyPreviewZoom();
+                _resampledPreviewCenter = null; _zoomFit = true; ApplyPreviewZoom();
                 _beforeScroll.ScrollToHorizontalOffset(0); _beforeScroll.ScrollToVerticalOffset(0);
                 _afterScroll.ScrollToHorizontalOffset(0); _afterScroll.ScrollToVerticalOffset(0);
             });
@@ -125,7 +125,7 @@ namespace VanyaTools.Native
 
         private void ZoomTo(double scale, ScrollViewer source, Point? position)
         {
-            if (source == null || !(_before.Source is BitmapSource) || _layingOutZoom) return;
+            if (source == null || !(_before.Source is BitmapSource) || _layingOutZoom || _previewScene.IsEmpty) return;
             Image image = ReferenceEquals(source, _afterScroll) ? _after : _before;
             if (!(image.Source is BitmapSource)) return;
             Point viewport = position ?? new Point(source.ViewportWidth / 2, source.ViewportHeight / 2);
@@ -171,6 +171,7 @@ namespace VanyaTools.Native
                 }
                 _zoomText.Text = (scale * 100).ToString(scale < 0.1 ? "0.#" : "0", CultureInfo.CurrentCulture) + "%";
                 PositionDetail();
+                _maskEditor.Refresh();
             }
             finally { _layingOutZoom = false; }
             QueueDetail();
