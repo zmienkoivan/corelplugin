@@ -20,6 +20,8 @@ internal static class Program
         Check("Varied orders preserve gaps, parts and cutting rotations", VariedOrders);
         Check("Tapered contours preserve gaps in all density modes", TaperedOrders);
         Check("Contour improvement keeps a valid result", Improvement);
+        Check("Pattern motifs preserve transforms, gaps and edge bleed", PatternFillChecks.Motifs);
+        Check("Crocodile and pebble cells cover rotated contours", PatternFillChecks.Textures);
         Console.WriteLine(_failed == 0 ? "All nesting checks passed." : _failed + " nesting checks failed.");
         Environment.ExitCode = _failed == 0 ? 0 : 1;
     }
