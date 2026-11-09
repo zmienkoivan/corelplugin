@@ -73,6 +73,11 @@ internal static class PatternFillChecks
                 var items = PatternFillLayout.Build(width, height, motifs, options);
                 Require(items.Count == spaced.Count && items.Select(item => item.Motif).Distinct().Count() == motifs.Length,
                     "Texture did not place every motif across the cells.");
+                if (mode == PatternFillMode.Pebbles)
+                {
+                    AssertGap(items.Select(item => Hull(item, motifs[item.Motif])).ToArray(), options.GapMm);
+                    continue;
+                }
                 for (int i = 0; i < items.Count; i++)
                 {
                     var item = items[i];
@@ -97,8 +102,10 @@ internal static class PatternFillChecks
             var items = PatternFillLayout.Build(width, height, motifs, options);
             Require(items.Count > 500, "The random seeds leave the detail sparse.");
             var blocks = items.Take(7 * 10).Select(p => p.Motif).ToArray();
-            Require(Enumerable.Range(0, 10).All(i => blocks.Skip(i * 7).Take(7).Distinct().Count() == 7),
-                "An organic variant loses part of the motif set.");
+            Require(items.Select(p => p.Motif).Distinct().Count() == motifs.Length, "An organic variant loses part of the motif set.");
+            if (mode == PatternFillMode.Pebbles)
+                Require(Enumerable.Range(0, 10).All(i => blocks.Skip(i * 7).Take(7).Distinct().Count() == 7),
+                    "Pebbles do not cycle through all motifs.");
             Require(Enumerable.Range(0, 10).Select(i => String.Join(",", blocks.Skip(i * 7).Take(7))).Distinct().Count() > 8,
                 "The same motif sequence repeats over the detail.");
             var same = PatternFillLayout.Build(width, height, motifs, options);
@@ -110,6 +117,140 @@ internal static class PatternFillChecks
             Require(items[0].Center.X != another[0].Center.X && items[0].Center.Y != another[0].Center.Y,
                 "A new organic variant did not change the positions.");
         }
+    }
+
+    internal static void OrganicSpacing()
+    {
+        var metrics = SpacingMetrics();
+        Require(metrics.CenterVariation < .100 && metrics.Void95 < 7.5,
+            "Pebble centers or outline gaps are too uneven.");
+        Require(metrics.Repeats < .025, "Crocodile motifs repeat along nearby diagonals.");
+
+        var motif = new PatternFootprint(new PatternPoint(10, 10));
+        var small = new PatternPlacement { Size = 4, Center = new PatternPoint(0, 0) };
+        var neighbor = new PatternPlacement { Size = 10, Center = new PatternPoint(15, 0) };
+        var items = new List<PatternPlacement> { small, neighbor,
+            new PatternPlacement { Size = 10, Center = new PatternPoint(0, 9) },
+            new PatternPlacement { Size = 10, Center = new PatternPoint(0, -9) } };
+        PatternPebbleSpacing.Balance(items, new[] { motif }, 2);
+        Require(small.Size == 4 && neighbor.Size > 12 &&
+            neighbor.Center.X == 15 && neighbor.Center.Y == 0,
+            "A larger neighbor does not fill the space left by the small motif.");
+        AssertGap(items.Select(item => Hull(item, motif)).ToArray(), 2);
+    }
+
+    private static (double CenterVariation, double Void95, double Repeats) SpacingMetrics()
+    {
+        const double width = 325, height = 215, pitch = 27, gap = 4;
+        var motifs = new[]
+        {
+            new PatternFootprint(new PatternPoint(10, 10)),
+            new PatternFootprint(new PatternPoint(18, 8)),
+            new PatternFootprint(new PatternPoint(5, 20)),
+            new PatternFootprint(new PatternPoint(25, 20), new[] { new PatternPoint(-12, -8),
+                new PatternPoint(9, -8), new PatternPoint(4, 9) }),
+            new PatternFootprint(new PatternPoint(12, 11), Enumerable.Range(0, 24).Select(i =>
+                new PatternPoint(6 * Math.Cos(i * Math.PI / 12), 5.5 * Math.Sin(i * Math.PI / 12)))),
+            new PatternFootprint(new PatternPoint(7, 22)),
+            new PatternFootprint(new PatternPoint(12, 12), new[] { new PatternPoint(2, -5), new PatternPoint(5, -3),
+                new PatternPoint(2, 4), new PatternPoint(-4, 0) })
+        };
+        var distances = new List<double>();
+        var voids = new List<double>();
+        int diagonalNeighbors = 0, sameDiagonals = 0;
+        foreach (int seed in new[] { 42, 8123, 69127 })
+        {
+            var options = new PatternFillOptions { Mode = PatternFillMode.Pebbles, SizeMm = pitch, GapMm = gap,
+                Angle = 12, AngleVariation = 25, Seed = seed };
+            var items = PatternFillLayout.Build(width, height, motifs, options);
+            var hulls = items.Select(item => Hull(item, motifs[item.Motif])).ToArray();
+            AssertGap(hulls, gap);
+            var centers = items.Select(item => At(item, motifs[item.Motif], motifs[item.Motif].Center)).ToArray();
+            for (int i = 0; i < centers.Length; i++)
+            {
+                var p = centers[i];
+                if (p.X < pitch || p.X > width - pitch || p.Y < pitch || p.Y > height - pitch) continue;
+                distances.Add(Math.Sqrt(centers.Where((_, index) => index != i).Min(q => DistanceSquared(p, q))));
+            }
+            for (double y = 1.5; y < height; y += 5.3)
+                for (double x = 1.3; x < width; x += 5.1)
+                {
+                    var p = new PatternPoint(x, y);
+                    voids.Add(Math.Sqrt(hulls.Min(hull => Contains(hull, p.X, p.Y) ? 0 : DistanceToEdges(p, hull))));
+                }
+
+            options.Mode = PatternFillMode.Crocodile;
+            items = PatternFillLayout.Build(width, height, motifs, options);
+            centers = items.Select(item => At(item, motifs[item.Motif], motifs[item.Motif].Center)).ToArray();
+            for (int i = 0; i < centers.Length; i++)
+                for (int j = i + 1; j < centers.Length; j++)
+                {
+                    double dx = Math.Abs(centers[i].X - centers[j].X), dy = Math.Abs(centers[i].Y - centers[j].Y);
+                    if (dx < .25 * pitch || dy < .25 * pitch || dx * dx + dy * dy >= 2.1 * pitch * pitch) continue;
+                    diagonalNeighbors++;
+                    if (items[i].Motif == items[j].Motif) sameDiagonals++;
+                }
+        }
+        double mean = distances.Average();
+        return (Math.Sqrt(distances.Average(d => (d - mean) * (d - mean))) / mean,
+            voids.OrderBy(d => d).ElementAt((int)(voids.Count * .95)),
+            sameDiagonals / (double)diagonalNeighbors);
+    }
+
+    private static void AssertGap(PatternPoint[][] hulls, double gap)
+    {
+        for (int i = 0; i < hulls.Length; i++)
+            for (int j = i + 1; j < hulls.Length; j++)
+            {
+                var a = hulls[i]; var b = hulls[j];
+                if (a.Min(p => p.X) - b.Max(p => p.X) >= gap || b.Min(p => p.X) - a.Max(p => p.X) >= gap ||
+                    a.Min(p => p.Y) - b.Max(p => p.Y) >= gap || b.Min(p => p.Y) - a.Max(p => p.Y) >= gap) continue;
+                Require(Separated(a, b) || Separated(b, a), "Motif hulls overlap.");
+                double minimum = Math.Min(a.Min(p => DistanceToEdges(p, b)), b.Min(p => DistanceToEdges(p, a)));
+                double tolerance = Math.Max(0, gap - 1e-6);
+                Require(minimum >= tolerance * tolerance, "Motif edges violate the minimum gap.");
+            }
+    }
+
+    private static bool Separated(PatternPoint[] a, PatternPoint[] b)
+    {
+        for (int i = 0; i < a.Length; i++)
+        {
+            var start = a[i]; var end = a[(i + 1) % a.Length];
+            double nx = end.Y - start.Y, ny = start.X - end.X;
+            if (b.All(p => nx * (p.X - start.X) + ny * (p.Y - start.Y) >= -1e-8)) return true;
+        }
+        return false;
+    }
+
+    private static PatternPoint[] Hull(PatternPlacement item, PatternFootprint motif) =>
+        motif.Hull.Select(point => At(item, motif, point)).ToArray();
+
+    private static PatternPoint At(PatternPlacement item, PatternFootprint motif, PatternPoint point)
+    {
+        double scale = PatternTransform.Fit(motif.Size, item).Scale;
+        double radians = item.Angle * Math.PI / 180, cos = Math.Cos(radians), sin = Math.Sin(radians);
+        return new PatternPoint(item.Center.X + scale * (point.X * cos - point.Y * sin),
+            item.Center.Y + scale * (point.X * sin + point.Y * cos));
+    }
+
+    private static double DistanceSquared(PatternPoint a, PatternPoint b)
+    {
+        double x = a.X - b.X, y = a.Y - b.Y;
+        return x * x + y * y;
+    }
+
+    private static double DistanceToEdges(PatternPoint point, PatternPoint[] hull)
+    {
+        double closest = double.PositiveInfinity;
+        for (int i = 0; i < hull.Length; i++)
+        {
+            var a = hull[i]; var b = hull[(i + 1) % hull.Length];
+            double x = b.X - a.X, y = b.Y - a.Y;
+            double fraction = ((point.X - a.X) * x + (point.Y - a.Y) * y) / (x * x + y * y);
+            closest = Math.Min(closest, DistanceSquared(point, PatternPoint.Between(a, b, Math.Max(0, Math.Min(1, fraction)))));
+        }
+        return closest;
     }
 
     private static bool Contains(IReadOnlyList<PatternPoint> cell, double x, double y)

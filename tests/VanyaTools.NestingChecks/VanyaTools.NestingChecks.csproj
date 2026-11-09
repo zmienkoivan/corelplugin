@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../native/VanyaTools.Native/PatternFillLayout.cs" Link="PatternFillLayout.cs" />
+    <Compile Include="../../native/VanyaTools.Native/PatternPebbleSpacing.cs" Link="PatternPebbleSpacing.cs" />
     <Compile Include="../../native/VanyaTools.Native/SportContourNesting.cs" Link="SportContourNesting.cs" />
     <Compile Include="../../native/VanyaTools.Native/SportSheetNesting.cs" Link="SportSheetNesting.cs" />
     <Compile Include="../../native/VanyaTools.Native/SportGroupedNesting.cs" Link="SportGroupedNesting.cs" />
