@@ -26,8 +26,9 @@ namespace VanyaTools.Native
         private readonly ComboBox _mode;
         private readonly ValueField _size, _gap, _allowance, _angle, _min, _max, _variation;
         private readonly ValueField _heroX, _heroY, _heroSize, _heroAngle, _heroGap;
-        private readonly CheckBox _useHero;
-        private readonly StackPanel _motifFields, _heroFields;
+        private readonly CheckBox _useHero, _repeat, _showCells, _showRepeatBorders;
+        private readonly StackPanel _motifFields, _heroFields, _pebbleFields, _repeatFields;
+        private readonly ValueField _repeatWidth, _repeatHeight;
         private readonly Button _apply;
         private readonly TextBlock _message;
         private readonly DispatcherTimer _refresh = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(70) };
@@ -43,6 +44,7 @@ namespace VanyaTools.Native
         private bool _layoutUsesHero;
         private List<PatternPlacement> _layoutItems;
         private Geometry[] _layoutSilhouettes;
+        private Geometry _layoutCellGuides, _layoutRepeatGuides;
         private Geometry _reserve;
         private double _reserveSize, _reserveAngle, _reserveGap;
 
@@ -106,6 +108,27 @@ namespace VanyaTools.Native
             _variation = AddField(pattern, "Разброс поворота, ±°", 0, 180, initial.Layout.AngleVariation, 180);
             pattern.Children.Add(Button("Другой вариант", (_, __) => { _seed = unchecked(_seed + 7919); QueuePreview(); }));
 
+            _pebbleFields = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
+            pattern.Children.Add(_pebbleFields);
+            _showCells = new CheckBox { Content = "Контуры ячеек", Margin = new Thickness(0, 0, 0, 5),
+                ToolTip = "Контуры первоначальной посадки. При уплотнении фигуры могут выходить за эти линии." };
+            _pebbleFields.Children.Add(_showCells);
+            _repeat = new CheckBox { Content = "Повторять рапорт", IsChecked = initial.Layout.Repeat,
+                Margin = new Thickness(0, 0, 0, 5),
+                ToolTip = "Один блок повторяется по ширине и высоте. Поворот поворачивает весь рапорт." };
+            _pebbleFields.Children.Add(_repeat);
+            _repeatFields = new StackPanel();
+            _pebbleFields.Children.Add(_repeatFields);
+            double defaultRepeatSize = Math.Min(5000, Math.Max(150, initial.Layout.SizeMm * 5));
+            double repeatSliderMax = Math.Max(500, sliderSize);
+            _repeatWidth = AddField(_repeatFields, "Ширина рапорта, мм", .5, 5000,
+                initial.Layout.Repeat ? initial.Layout.RepeatWidthMm : defaultRepeatSize, repeatSliderMax);
+            _repeatHeight = AddField(_repeatFields, "Высота рапорта, мм", .5, 5000,
+                initial.Layout.Repeat ? initial.Layout.RepeatHeightMm : defaultRepeatSize, repeatSliderMax);
+            _showRepeatBorders = new CheckBox { Content = "Пунктир границ рапорта", IsChecked = true,
+                Margin = new Thickness(0, 0, 0, 5) };
+            _repeatFields.Children.Add(_showRepeatBorders);
+
             var hero = DockerLayout.ToolGroup("Главный элемент", "Щёлкните по детали или перетащите главный элемент. Координаты считаются от левого и верхнего краёв внешнего габарита детали. Размер задаёт длинную сторону с учётом поворота.");
             settings.Children.Add(hero);
             hero.Visibility = session.Hero == null ? Visibility.Collapsed : Visibility.Visible;
@@ -121,7 +144,14 @@ namespace VanyaTools.Native
             _heroGap = AddField(_heroFields, "Свободная зона, мм", 0, 1000, initial.HeroGap, 80);
             _heroFields.Children.Add(Button("По центру", (_, __) => SetPosition(50, 50)));
             _preview.HeroPositionChanged += SetPosition;
-            _mode.SelectionChanged += (_, __) => QueuePreview();
+            _mode.SelectionChanged += (_, __) => { UpdateGuideControls(); QueuePreview(); };
+            _repeat.Checked += (_, __) => { UpdateGuideControls(); QueuePreview(); };
+            _repeat.Unchecked += (_, __) => { UpdateGuideControls(); QueuePreview(); };
+            _showCells.Checked += (_, __) => UpdateGuideControls();
+            _showCells.Unchecked += (_, __) => UpdateGuideControls();
+            _showRepeatBorders.Checked += (_, __) => UpdateGuideControls();
+            _showRepeatBorders.Unchecked += (_, __) => UpdateGuideControls();
+            UpdateGuideControls();
             _useHero.Checked += (_, __) => QueuePreview();
             _useHero.Unchecked += (_, __) => QueuePreview();
             _refresh.Tick += (_, __) => { _refresh.Stop(); RenderDraft(); };
@@ -135,6 +165,15 @@ namespace VanyaTools.Native
             _ready = true;
             ShowMessage("Готовлю предпросмотр…", false);
             QueuePreview();
+        }
+
+        private void UpdateGuideControls()
+        {
+            bool pebbles = _mode.SelectedIndex == (int)PatternFillMode.Pebbles;
+            bool repeat = pebbles && _repeat.IsChecked == true;
+            _pebbleFields.Visibility = pebbles ? Visibility.Visible : Visibility.Collapsed;
+            _repeatFields.Visibility = repeat ? Visibility.Visible : Visibility.Collapsed;
+            _preview.ShowGuides(pebbles && _showCells.IsChecked == true, repeat && _showRepeatBorders.IsChecked == true);
         }
 
         private void SetPosition(double x, double y)
@@ -161,6 +200,11 @@ namespace VanyaTools.Native
             {
                 var options = new PatternFillOptions { Mode = (PatternFillMode)_mode.SelectedIndex,
                     SizeMm = _size.Read(), GapMm = _gap.Read(), Angle = _angle.Read(), AngleVariation = _variation.Read(), Seed = _seed };
+                if (options.Mode == PatternFillMode.Pebbles && _repeat.IsChecked == true)
+                {
+                    options.RepeatWidthMm = _repeatWidth.Read();
+                    options.RepeatHeightMm = _repeatHeight.Read();
+                }
                 _motifFields.Visibility = options.Texture ? Visibility.Collapsed : Visibility.Visible;
                 bool useHero = _useHero.IsChecked == true && _session.Hero != null;
                 _heroFields.Visibility = useHero ? Visibility.Visible : Visibility.Collapsed;
@@ -221,7 +265,8 @@ namespace VanyaTools.Native
                     cancellation.ThrowIfCancellationRequested();
                     PatternFillService.PrepareSilhouette(motif);
                 }
-                var items = PatternFillLayout.Build(frame.Width, frame.Height, motifs.Select(asset => asset.Footprint).ToArray(), options);
+                var items = PatternFillLayout.Build(frame.Width, frame.Height, motifs.Select(asset => asset.Footprint).ToArray(),
+                    options, out PatternLayoutGuides guides);
                 Geometry[] silhouettes = null;
                 if (useHero)
                 {
@@ -232,13 +277,16 @@ namespace VanyaTools.Native
                         silhouettes[i] = PatternSilhouette.At(motifs[items[i].Motif], items[i]);
                     }
                 }
+                _layoutCellGuides = GuideGeometry(guides?.Cells, true);
+                _layoutRepeatGuides = GuideGeometry(guides?.RepeatLines, false);
                 _layoutItems = items;
                 _layoutSilhouettes = silhouettes;
                 _layoutFrame = frame; _layoutOptions = options; _layoutUsesHero = useHero;
             }
 
             var draft = new PatternDraft { Frame = frame, Options = options, Motifs = motifs,
-                Items = _layoutItems, Allowance = settings.Allowance };
+                Items = _layoutItems, Allowance = settings.Allowance,
+                CellGuides = _layoutCellGuides, RepeatGuides = _layoutRepeatGuides };
             if (!useHero) return draft;
             PatternFillService.PrepareSilhouette(_session.Hero);
             draft.Hero = new PatternPlacement { Size = settings.HeroSize, Angle = settings.HeroAngle,
@@ -253,10 +301,25 @@ namespace VanyaTools.Native
             return draft;
         }
 
+        private static Geometry GuideGeometry(IReadOnlyList<PatternPoint[]> paths, bool closed)
+        {
+            if (paths == null || paths.Count == 0) return null;
+            var geometry = new StreamGeometry();
+            using (var context = geometry.Open())
+                foreach (var path in paths)
+                {
+                    context.BeginFigure(new Point(path[0].X, path[0].Y), false, closed);
+                    for (int i = 1; i < path.Length; i++) context.LineTo(new Point(path[i].X, path[i].Y), true, false);
+                }
+            geometry.Freeze();
+            return geometry;
+        }
+
         private static bool SameLayout(PatternFillOptions previous, PatternFillOptions next) =>
             previous != null && previous.Mode == next.Mode && previous.SizeMm == next.SizeMm && previous.GapMm == next.GapMm &&
             previous.MinScale == next.MinScale && previous.MaxScale == next.MaxScale && previous.Angle == next.Angle &&
-            previous.AngleVariation == next.AngleVariation && previous.Seed == next.Seed;
+            previous.AngleVariation == next.AngleVariation && previous.Seed == next.Seed &&
+            previous.RepeatWidthMm == next.RepeatWidthMm && previous.RepeatHeightMm == next.RepeatHeightMm;
 
         private void ShowMessage(string message, bool error)
         {

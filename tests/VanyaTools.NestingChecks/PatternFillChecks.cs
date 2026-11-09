@@ -70,11 +70,13 @@ internal static class PatternFillChecks
                 var spaced = PatternFillLayout.TextureCells(width, height, options);
                 Require(spaced.Sum(Area) < cells.Sum(Area) * .95, "Gap does not open the texture.");
                 options.AngleVariation = 25;
-                var items = PatternFillLayout.Build(width, height, motifs, options);
+                var items = PatternFillLayout.Build(width, height, motifs, options, out PatternLayoutGuides guides);
                 Require(items.Count == spaced.Count && items.Select(item => item.Motif).Distinct().Count() == motifs.Length,
                     "Texture did not place every motif across the cells.");
                 if (mode == PatternFillMode.Pebbles)
                 {
+                    Require(guides.RepeatLines == null && spaced.Zip(guides.Cells, (a, b) => a.SequenceEqual(b)).All(equal => equal) &&
+                        spaced.Count == guides.Cells.Count, "The preview guides differ from the actual fitting cells.");
                     AssertGap(items.Select(item => Hull(item, motifs[item.Motif])).ToArray(), options.GapMm);
                     continue;
                 }
@@ -117,6 +119,54 @@ internal static class PatternFillChecks
             Require(items[0].Center.X != another[0].Center.X && items[0].Center.Y != another[0].Center.Y,
                 "A new organic variant did not change the positions.");
         }
+    }
+
+    internal static void PebbleRepeat()
+    {
+        const double width = 475, height = 365, periodX = 110, periodY = 95, gap = 3.5;
+        var motifs = new[] { new PatternFootprint(new PatternPoint(15, 15)),
+            new PatternFootprint(new PatternPoint(23, 12)),
+            new PatternFootprint(new PatternPoint(20, 20), new[] { new PatternPoint(-5, -6),
+                new PatternPoint(9, 2), new PatternPoint(1, 8) }) };
+        foreach (double angle in new[] { 0d, 31d })
+        {
+            var options = new PatternFillOptions { Mode = PatternFillMode.Pebbles, SizeMm = 26, GapMm = gap,
+                RepeatWidthMm = periodX, RepeatHeightMm = periodY, Angle = angle, AngleVariation = 31, Seed = 8123 };
+            var items = PatternFillLayout.Build(width, height, motifs, options, out PatternLayoutGuides guides);
+            Require(items.Count > 180 && guides.Cells.Count > 180, "The periodic module leaves empty parts of the frame.");
+            var hulls = items.Select(item => Hull(item, motifs[item.Motif])).ToArray();
+            AssertGap(hulls, gap);
+            double radians = angle * Math.PI / 180, cos = Math.Cos(radians), sin = Math.Sin(radians);
+            Require(CountMatches(periodX * cos, periodX * sin) > 90 && CountMatches(-periodY * sin, periodY * cos) > 90,
+                "The positions, sizes and motifs differ between copies of the repeat.");
+            var lines = guides.RepeatLines.Select(line => line.Select(ToModule).ToArray()).ToArray();
+            Require(lines.Count(line => Math.Abs(line[0].X - line[1].X) < 1e-8) > 2 &&
+                lines.Count(line => Math.Abs(line[0].Y - line[1].Y) < 1e-8) > 2 &&
+                lines.All(line => OnPeriod(line[0].X, line[1].X, periodX) || OnPeriod(line[0].Y, line[1].Y, periodY)),
+                "The dashed guides are not aligned with the tile boundaries.");
+            Require(hulls.Select(hull => hull.Select(ToModule).ToArray()).Any(hull =>
+                hull.Min(p => p.X) < periodX && hull.Max(p => p.X) > periodX),
+                "Motifs must carry across the seams of the repeat.");
+
+            int CountMatches(double dx, double dy) => items.Count(item => items.Any(other =>
+                other.Motif == item.Motif && other.Angle == item.Angle && other.Size == item.Size &&
+                Math.Abs(item.Center.X + dx - other.Center.X) < 1e-8 && Math.Abs(item.Center.Y + dy - other.Center.Y) < 1e-8));
+
+            PatternPoint ToModule(PatternPoint point)
+            {
+                double x = point.X - width / 2, y = point.Y - height / 2;
+                return new PatternPoint(x * cos + y * sin + periodX / 2, -x * sin + y * cos + periodY / 2);
+            }
+
+            bool OnPeriod(double first, double second, double period) =>
+                Math.Abs(first - second) < 1e-8 && Math.Abs(first - Math.Round(first / period) * period) < 1e-8;
+        }
+
+        var small = new PatternFillOptions { Mode = PatternFillMode.Pebbles, SizeMm = 22, GapMm = 6,
+            RepeatWidthMm = 22, RepeatHeightMm = 22, Seed = 124 };
+        var repeated = PatternFillLayout.Build(110, 132, motifs.Take(1).ToArray(), small);
+        Require(repeated.Count > 20, "A one-cell repeat did not tile the frame.");
+        AssertGap(repeated.Select(item => Hull(item, motifs[0])).ToArray(), 6);
     }
 
     internal static void OrganicSpacing()

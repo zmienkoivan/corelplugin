@@ -12,6 +12,8 @@ namespace VanyaTools.Native
         internal double SizeMm = 30, GapMm = 3, MinScale = 1, MaxScale = 1;
         internal double Angle, AngleVariation;
         internal int Seed;
+        internal double RepeatWidthMm, RepeatHeightMm;
+        internal bool Repeat => Mode == PatternFillMode.Pebbles && RepeatWidthMm > 0;
         internal bool Texture => Mode == PatternFillMode.Crocodile || Mode == PatternFillMode.Pebbles;
     }
 
@@ -101,12 +103,23 @@ namespace VanyaTools.Native
 
     }
 
-    internal static class PatternFillLayout
+    internal sealed class PatternLayoutGuides
+    {
+        internal IReadOnlyList<PatternPoint[]> Cells;
+        internal IReadOnlyList<PatternPoint[]> RepeatLines;
+    }
+
+    internal static partial class PatternFillLayout
     {
         internal const int MaximumElements = 2400;
 
-        internal static List<PatternPlacement> Build(double width, double height, IReadOnlyList<PatternFootprint> motifs, PatternFillOptions options)
+        internal static List<PatternPlacement> Build(double width, double height, IReadOnlyList<PatternFootprint> motifs,
+            PatternFillOptions options) => Build(width, height, motifs, options, out _);
+
+        internal static List<PatternPlacement> Build(double width, double height, IReadOnlyList<PatternFootprint> motifs,
+            PatternFillOptions options, out PatternLayoutGuides guides)
         {
+            guides = null;
             if (!Finite(width) || !Finite(height) || width <= 0 || height <= 0)
                 throw new ArgumentException("Выбранный контур должен иметь ширину и высоту.");
             if (!Finite(options.SizeMm) || options.SizeMm < .5 || options.SizeMm > 2000 ||
@@ -120,8 +133,14 @@ namespace VanyaTools.Native
             {
                 if (options.GapMm > options.SizeMm / 2)
                     throw new ArgumentException("Зазор фактуры должен быть не больше половины размера ячейки.");
-                var items = PlaceInCells(TextureCells(width, height, options), motifs, options);
-                if (options.Mode == PatternFillMode.Pebbles) PatternPebbleSpacing.Balance(items, motifs, options.GapMm);
+                if (options.Repeat) return RepeatPebbles(width, height, motifs, options, out guides);
+                var cells = TextureCells(width, height, options);
+                var items = PlaceInCells(cells, motifs, options);
+                if (options.Mode == PatternFillMode.Pebbles)
+                {
+                    PatternPebbleSpacing.Balance(items, motifs, options.GapMm);
+                    guides = new PatternLayoutGuides { Cells = cells };
+                }
                 return items;
             }
             if (!Finite(options.MinScale) || !Finite(options.MaxScale) || options.MinScale < .1 ||
@@ -212,7 +231,7 @@ namespace VanyaTools.Native
             return result;
         }
 
-        private static List<PatternPoint>[,] RelaxSeeds(List<PatternPoint>[,] seeds)
+        private static List<PatternPoint>[,] RelaxSeeds(List<PatternPoint>[,] seeds, bool periodic = false)
         {
             int cols = seeds.GetLength(0), rows = seeds.GetLength(1);
             var polygon = new List<PatternPoint>(16);
@@ -228,12 +247,13 @@ namespace VanyaTools.Native
                     foreach (var seed in seeds[col, row])
                     {
                         var point = seed;
-                        if (col > 0 && col < cols - 1 && row > 0 && row < rows - 1)
+                        if (periodic || (col > 0 && col < cols - 1 && row > 0 && row < rows - 1))
                         {
-                            var cell = BuildCell(seed, seeds, col, row, 1, 1, 0, polygon, buffer);
+                            var cell = BuildCell(seed, seeds, col, row, 1, 1, 0, polygon, buffer, periodic);
                             if (cell.Count >= 3) point = PatternPoint.Between(seed, AreaCenter(cell), .75);
                         }
-                        if (point.X < 0 || point.Y < 0 || point.X >= cols || point.Y >= rows) point = seed;
+                        if (periodic) point = new PatternPoint(Wrap(point.X, cols), Wrap(point.Y, rows));
+                        else if (point.X < 0 || point.Y < 0 || point.X >= cols || point.Y >= rows) point = seed;
                         AddSeed(next, point);
                     }
                 }
@@ -258,7 +278,8 @@ namespace VanyaTools.Native
         }
 
         private static List<PatternPoint> BuildCell(PatternPoint seed, List<PatternPoint>[,] seeds,
-            int col, int row, double pitchX, double pitchY, double gap, List<PatternPoint> polygon, List<PatternPoint> buffer)
+            int col, int row, double pitchX, double pitchY, double gap, List<PatternPoint> polygon,
+            List<PatternPoint> buffer, bool periodic = false)
         {
             int cols = seeds.GetLength(0), rows = seeds.GetLength(1);
             double halfGap = gap / (2 * Math.Min(pitchX, pitchY));
@@ -272,16 +293,24 @@ namespace VanyaTools.Native
             {
                 double radiusSquared = polygon.Max(p => SquaredDistance(p, seed));
                 if ((ring - 1) / 2d >= Math.Sqrt(radiusSquared) + halfGap) break;
-                for (int y = Math.Max(0, row - ring); y <= Math.Min(rows - 1, row + ring) && polygon.Count >= 3; y++)
-                for (int x = Math.Max(0, col - ring); x <= Math.Min(cols - 1, col + ring) && polygon.Count >= 3; x++)
+                int firstY = periodic ? row - ring : Math.Max(0, row - ring);
+                int lastY = periodic ? row + ring : Math.Min(rows - 1, row + ring);
+                int firstX = periodic ? col - ring : Math.Max(0, col - ring);
+                int lastX = periodic ? col + ring : Math.Min(cols - 1, col + ring);
+                for (int y = firstY; y <= lastY && polygon.Count >= 3; y++)
+                for (int x = firstX; x <= lastX && polygon.Count >= 3; x++)
                 {
-                    if (Math.Max(Math.Abs(x - col), Math.Abs(y - row)) != ring || seeds[x, y] == null) continue;
-                    foreach (var neighbor in seeds[x, y])
+                    if (Math.Max(Math.Abs(x - col), Math.Abs(y - row)) != ring) continue;
+                    int bucketX = periodic ? WrapIndex(x, cols) : x, bucketY = periodic ? WrapIndex(y, rows) : y;
+                    var bucket = seeds[bucketX, bucketY];
+                    if (bucket == null) continue;
+                    foreach (var neighbor in bucket)
                     {
-                        double nx = neighbor.X - seed.X, ny = neighbor.Y - seed.Y;
+                        double neighborX = neighbor.X + (x - bucketX), neighborY = neighbor.Y + (y - bucketY);
+                        double nx = neighborX - seed.X, ny = neighborY - seed.Y;
                         if ((nx == 0 && ny == 0) || polygon.Count < 3) continue;
                         double mx = nx / pitchX, my = ny / pitchY;
-                        double cut = (nx * (neighbor.X + seed.X) + ny * (neighbor.Y + seed.Y)) / 2 -
+                        double cut = (nx * (neighborX + seed.X) + ny * (neighborY + seed.Y)) / 2 -
                             gap / 2 * Math.Sqrt(mx * mx + my * my);
                         Clip(polygon, nx, ny, cut, buffer);
                         var previous = polygon; polygon = buffer; buffer = previous;
@@ -298,7 +327,7 @@ namespace VanyaTools.Native
             buckets[col, row].Add(point);
         }
 
-        private static List<PatternPoint>[,] ScatterSeeds(int cols, int rows, int seed)
+        private static List<PatternPoint>[,] ScatterSeeds(int cols, int rows, int seed, bool periodic = false)
         {
             var random = new Random(seed);
             var buckets = new List<PatternPoint>[cols, rows];
@@ -308,14 +337,20 @@ namespace VanyaTools.Native
                 var point = new PatternPoint(random.NextDouble() * cols, random.NextDouble() * rows);
                 int col = (int)point.X, row = (int)point.Y;
                 bool tooClose = false;
-                for (int y = Math.Max(0, row - 1); y <= Math.Min(rows - 1, row + 1) && !tooClose; y++)
-                for (int x = Math.Max(0, col - 1); x <= Math.Min(cols - 1, col + 1) && !tooClose; x++)
+                int firstY = periodic ? row - 1 : Math.Max(0, row - 1);
+                int lastY = periodic ? row + 1 : Math.Min(rows - 1, row + 1);
+                int firstX = periodic ? col - 1 : Math.Max(0, col - 1);
+                int lastX = periodic ? col + 1 : Math.Min(cols - 1, col + 1);
+                for (int y = firstY; y <= lastY && !tooClose; y++)
+                for (int x = firstX; x <= lastX && !tooClose; x++)
                 {
-                    var bucket = buckets[x, y];
+                    int bucketX = periodic ? WrapIndex(x, cols) : x, bucketY = periodic ? WrapIndex(y, rows) : y;
+                    var bucket = buckets[bucketX, bucketY];
                     if (bucket == null) continue;
                     foreach (var neighbor in bucket)
                     {
-                        if (SquaredDistance(point, neighbor) >= minimumDistance * minimumDistance) continue;
+                        double dx = point.X - neighbor.X - (x - bucketX), dy = point.Y - neighbor.Y - (y - bucketY);
+                        if (dx * dx + dy * dy >= minimumDistance * minimumDistance) continue;
                         tooClose = true;
                         break;
                     }
@@ -353,7 +388,7 @@ namespace VanyaTools.Native
                 int index = pebbles ? order[offset] :
                     ChooseCrocodileMotif(result, placedCenters, center, options.SizeMm, useCounts, neighborDistances, random);
                 var motif = motifs[index];
-                double angle = options.Angle + Signed(random) * options.AngleVariation;
+                double angle = (options.Repeat ? 0 : options.Angle) + Signed(random) * options.AngleVariation;
                 double radians = angle * Math.PI / 180, cos = Math.Cos(radians), sin = Math.Sin(radians);
                 double scale = Double.PositiveInfinity, limit = Double.PositiveInfinity;
                 edges.Clear();

@@ -55,7 +55,7 @@ namespace VanyaTools.Native
         internal PatternAsset[] Motifs;
         internal List<PatternPlacement> Items;
         internal PatternPlacement Hero;
-        internal Geometry Reserve;
+        internal Geometry Reserve, CellGuides, RepeatGuides;
         internal double Allowance;
     }
 

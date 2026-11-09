@@ -24,6 +24,7 @@ internal static class Program
         Check("Crocodile and pebble cells fit visible motifs with bleed and gaps", PatternFillChecks.Textures);
         Check("Organic variants shuffle all seven motifs and reproduce the same seed", PatternFillChecks.OrganicVariety);
         Check("Pebbles balance gaps and crocodile avoids diagonal repeats", PatternFillChecks.OrganicSpacing);
+        Check("Pebble repeat preserves motifs and clearance across guided seams", PatternFillChecks.PebbleRepeat);
         Console.WriteLine(_failed == 0 ? "All nesting checks passed." : _failed + " nesting checks failed.");
         Environment.ExitCode = _failed == 0 ? 0 : 1;
     }

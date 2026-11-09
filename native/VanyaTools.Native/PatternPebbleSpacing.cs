@@ -8,12 +8,31 @@ namespace VanyaTools.Native
     {
         private const double MaximumGrowth = 1.4;
 
-        internal static void Balance(List<PatternPlacement> items, IReadOnlyList<PatternFootprint> motifs, double gap)
+        internal static void Balance(List<PatternPlacement> items, IReadOnlyList<PatternFootprint> motifs, double gap,
+            double periodX = 0, double periodY = 0)
         {
             var shapes = items.Select(item => new Envelope(item, motifs[item.Motif])).ToArray();
+            bool repeat = periodX > 0 && periodY > 0;
             for (int i = 0; i < shapes.Length; i++)
-                for (int j = i + 1; j < shapes.Length; j++)
-                    LimitPair(shapes[i], shapes[j], gap);
+                for (int j = repeat ? i : i + 1; j < shapes.Length; j++)
+                {
+                    var a = shapes[i]; var b = shapes[j];
+                    double dx = b.Center.X - a.Center.X, dy = b.Center.Y - a.Center.Y;
+                    if (!repeat)
+                    {
+                        LimitPair(a, b, gap, dx, dy);
+                        continue;
+                    }
+                    double reachX = a.ReachX + b.ReachX + gap, reachY = a.ReachY + b.ReachY + gap;
+                    int firstX = (int)Math.Ceiling((-reachX - dx) / periodX), lastX = (int)Math.Floor((reachX - dx) / periodX);
+                    int firstY = (int)Math.Ceiling((-reachY - dy) / periodY), lastY = (int)Math.Floor((reachY - dy) / periodY);
+                    for (int y = firstY; y <= lastY; y++)
+                        for (int x = firstX; x <= lastX; x++)
+                        {
+                            if (i == j && (y < 0 || (y == 0 && x <= 0))) continue;
+                            LimitPair(a, b, gap, dx + x * periodX, dy + y * periodY);
+                        }
+                }
 
             double typicalArea = shapes.Select(shape => shape.GrownArea).OrderBy(area => area).ElementAt(shapes.Length / 2);
             var bySpace = shapes.OrderByDescending(shape => shape.Neighbors.Sum(link =>
@@ -35,9 +54,8 @@ namespace VanyaTools.Native
             }
         }
 
-        private static void LimitPair(Envelope a, Envelope b, double gap)
+        private static void LimitPair(Envelope a, Envelope b, double gap, double dx, double dy)
         {
-            double dx = b.Center.X - a.Center.X, dy = b.Center.Y - a.Center.Y;
             if (Math.Abs(dx) >= a.ReachX + b.ReachX + gap || Math.Abs(dy) >= a.ReachY + b.ReachY + gap) return;
 
             double direction = Math.Atan2(dy, dx);
@@ -62,6 +80,11 @@ namespace VanyaTools.Native
                 return;
             }
             a.Growth = Math.Min(a.Growth, best);
+            if (ReferenceEquals(a, b))
+            {
+                a.Ceiling = Math.Min(a.Ceiling, best);
+                return;
+            }
             b.Growth = Math.Min(b.Growth, best);
             a.Neighbors.Add((b, supportA, supportB, available));
             b.Neighbors.Add((a, supportB, supportA, available));

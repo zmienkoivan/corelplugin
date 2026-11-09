@@ -12,7 +12,7 @@ namespace VanyaTools.Native
         private PatternDraft _draft;
         private Point _origin;
         private double _scale;
-        private bool _dragging;
+        private bool _dragging, _showCells, _showRepeatBorders;
 
         internal event Action<double, double> HeroPositionChanged;
 
@@ -27,6 +27,13 @@ namespace VanyaTools.Native
         {
             _frame = frame; _draft = draft;
             Cursor = draft?.Hero == null ? Cursors.Arrow : Cursors.SizeAll;
+            InvalidateVisual();
+        }
+
+        internal void ShowGuides(bool cells, bool repeat)
+        {
+            _showCells = cells;
+            _showRepeatBorders = repeat;
             InvalidateVisual();
         }
 
@@ -50,6 +57,8 @@ namespace VanyaTools.Native
                     DrawMotif(drawing, motif, item, Brushes.SteelBlue);
                     if (_draft.Options.Texture) DrawGuide(drawing, PatternSilhouette.At(motif, item), lightOutline);
                 }
+                if (_showCells && _draft.CellGuides != null)
+                    DrawGuide(drawing, _draft.CellGuides, new Pen(Brushes.MediumPurple, hairline) { DashStyle = DashStyles.Dot });
                 if (_draft.Hero != null)
                 {
                     DrawMotif(drawing, _session.Hero, _draft.Hero, Brushes.MediumVioletRed);
@@ -59,6 +68,8 @@ namespace VanyaTools.Native
                         DrawGuide(drawing, _draft.Reserve, guide);
                     }
                 }
+                if (_showRepeatBorders && _draft.RepeatGuides != null)
+                    DrawGuide(drawing, _draft.RepeatGuides, new Pen(Brushes.OrangeRed, hairline * 1.25) { DashStyle = DashStyles.Dash });
                 drawing.Pop();
             }
 
