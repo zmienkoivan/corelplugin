@@ -155,6 +155,7 @@ namespace VanyaTools.Native
                         y = Math.Max(0, Math.Min(height, y + Signed(random) * space));
                     }
                     if (x + size / 2 <= 0 || x - size / 2 >= width) continue;
+                    if (scattered && result.Count > 0 && result.Count % motifs == 0) Shuffle(order, random, result[result.Count - 1].Motif);
                     int index = scattered ? order[result.Count % motifs] : (result.Count + (int)((uint)options.Seed % (uint)motifs)) % motifs;
                     result.Add(new PatternPlacement { Center = new PatternPoint(x, y), Motif = index, Size = size,
                         Angle = options.Angle + Signed(random) * options.AngleVariation });
@@ -169,6 +170,7 @@ namespace VanyaTools.Native
             bool scales = options.Mode == PatternFillMode.Crocodile;
             double pitchX = options.SizeMm * (scales ? 1.28 : 1);
             double pitchY = options.SizeMm * (scales ? .74 : 1);
+            double halfGap = options.GapMm / (2 * Math.Min(pitchX, pitchY));
             double angle = options.Angle * Math.PI / 180;
             double cos = Math.Cos(angle), sin = Math.Sin(angle);
             double localWidth = Math.Abs(cos) * width + Math.Abs(sin) * height;
@@ -176,34 +178,44 @@ namespace VanyaTools.Native
             double colCount = Math.Ceiling(localWidth / pitchX) + 4, rowCount = Math.Ceiling(localHeight / pitchY) + 4;
             CheckCount(colCount, rowCount);
             int cols = (int)colCount, rows = (int)rowCount;
-            var seeds = new PatternPoint[cols, rows];
-            var random = new Random(options.Seed);
-            for (int row = 0; row < rows; row++)
-                for (int col = 0; col < cols; col++)
-                    seeds[col, row] = new PatternPoint(col + Signed(random) * (scales ? .24 : .41),
-                        row + Signed(random) * (scales ? .19 : .41));
-
-            double middleX = (cols - 1) / 2d, middleY = (rows - 1) / 2d;
+            var seeds = ScatterSeeds(cols, rows, options.Seed);
+            double middleX = cols / 2d, middleY = rows / 2d;
             var result = new List<PatternPoint[]>();
-            for (int row = 1; row < rows - 1; row++)
+            var polygon = new List<PatternPoint>(16);
+            var buffer = new List<PatternPoint>(16);
+            for (int row = 0; row < rows; row++)
+            for (int col = 0; col < cols; col++)
             {
-                for (int col = 1; col < cols - 1; col++)
+                var bucket = seeds[col, row];
+                if (bucket == null) continue;
+                foreach (var seed in bucket)
                 {
-                    var seed = seeds[col, row];
-                    var polygon = new List<PatternPoint> {
-                        new PatternPoint(seed.X - 2, seed.Y - 2), new PatternPoint(seed.X + 2, seed.Y - 2),
-                        new PatternPoint(seed.X + 2, seed.Y + 2), new PatternPoint(seed.X - 2, seed.Y + 2)
-                    };
-                    for (int y = Math.Max(0, row - 2); y <= Math.Min(rows - 1, row + 2) && polygon.Count >= 3; y++)
-                        for (int x = Math.Max(0, col - 2); x <= Math.Min(cols - 1, col + 2) && polygon.Count >= 3; x++)
-                            if (x != col || y != row)
+                    polygon.Clear();
+                    polygon.Add(new PatternPoint(seed.X - 2, seed.Y - 2));
+                    polygon.Add(new PatternPoint(seed.X + 2, seed.Y - 2));
+                    polygon.Add(new PatternPoint(seed.X + 2, seed.Y + 2));
+                    polygon.Add(new PatternPoint(seed.X - 2, seed.Y + 2));
+                    // Stop once even the nearest seed in the remaining buckets cannot cut the cell.
+                    for (int ring = 0; ring <= 7 && polygon.Count >= 3; ring++)
+                    {
+                        double radiusSquared = polygon.Max(p => SquaredDistance(p, seed));
+                        if ((ring - 1) / 2d >= Math.Sqrt(radiusSquared) + halfGap) break;
+                        for (int y = Math.Max(0, row - ring); y <= Math.Min(rows - 1, row + ring) && polygon.Count >= 3; y++)
+                        for (int x = Math.Max(0, col - ring); x <= Math.Min(cols - 1, col + ring) && polygon.Count >= 3; x++)
+                        {
+                            if (Math.Max(Math.Abs(x - col), Math.Abs(y - row)) != ring || seeds[x, y] == null) continue;
+                            foreach (var neighbor in seeds[x, y])
                             {
-                                var neighbor = seeds[x, y];
                                 double nx = neighbor.X - seed.X, ny = neighbor.Y - seed.Y;
+                                if ((nx == 0 && ny == 0) || polygon.Count < 3) continue;
+                                double mx = nx / pitchX, my = ny / pitchY;
                                 double cut = (nx * (neighbor.X + seed.X) + ny * (neighbor.Y + seed.Y)) / 2 -
-                                    options.GapMm / 2 * Math.Sqrt(Math.Pow(nx / pitchX, 2) + Math.Pow(ny / pitchY, 2));
-                                polygon = Clip(polygon, nx, ny, cut);
+                                    options.GapMm / 2 * Math.Sqrt(mx * mx + my * my);
+                                Clip(polygon, nx, ny, cut, buffer);
+                                var previous = polygon; polygon = buffer; buffer = previous;
                             }
+                        }
+                    }
                     if (polygon.Count < 3) continue;
 
                     var points = polygon.Select(point =>
@@ -213,11 +225,49 @@ namespace VanyaTools.Native
                     }).ToArray();
                     if (points.Max(p => p.X) > 0 && points.Min(p => p.X) < width &&
                         points.Max(p => p.Y) > 0 && points.Min(p => p.Y) < height)
+                    {
                         result.Add(points);
+                        if (result.Count > MaximumElements) CheckCount(result.Count, 1);
+                    }
                 }
             }
             if (result.Count == 0) throw new InvalidOperationException("В контуре нет ячеек с таким зазором. Уменьшите зазор.");
             return result;
+        }
+
+        private static List<PatternPoint>[,] ScatterSeeds(int cols, int rows, int seed)
+        {
+            var random = new Random(seed);
+            var buckets = new List<PatternPoint>[cols, rows];
+            const double minimumDistance = .74;
+            for (int attempt = 0; attempt < cols * rows * 28; attempt++)
+            {
+                var point = new PatternPoint(random.NextDouble() * cols, random.NextDouble() * rows);
+                int col = (int)point.X, row = (int)point.Y;
+                bool tooClose = false;
+                for (int y = Math.Max(0, row - 1); y <= Math.Min(rows - 1, row + 1) && !tooClose; y++)
+                for (int x = Math.Max(0, col - 1); x <= Math.Min(cols - 1, col + 1) && !tooClose; x++)
+                {
+                    var bucket = buckets[x, y];
+                    if (bucket == null) continue;
+                    foreach (var neighbor in bucket)
+                    {
+                        if (SquaredDistance(point, neighbor) >= minimumDistance * minimumDistance) continue;
+                        tooClose = true;
+                        break;
+                    }
+                }
+                if (tooClose) continue;
+                if (buckets[col, row] == null) buckets[col, row] = new List<PatternPoint>(2);
+                buckets[col, row].Add(point);
+            }
+            return buckets;
+        }
+
+        private static double SquaredDistance(PatternPoint a, PatternPoint b)
+        {
+            double x = a.X - b.X, y = a.Y - b.Y;
+            return x * x + y * y;
         }
 
         private static List<PatternPlacement> PlaceInCells(List<PatternPoint[]> cells, IReadOnlyList<PatternFootprint> motifs,
@@ -226,32 +276,69 @@ namespace VanyaTools.Native
             var random = new Random(options.Seed);
             int[] order = Shuffle(motifs.Count, random);
             var result = new List<PatternPlacement>(cells.Count);
+            var centers = new List<PatternPoint>(16);
+            var buffer = new List<PatternPoint>(16);
+            var edges = new List<(double X, double Y, double Limit, double Support)>(16);
+            int offset = 0;
             foreach (var cell in cells)
             {
-                int index = order[result.Count % order.Length];
+                int index = order[offset];
                 var motif = motifs[index];
                 double angle = options.Angle + Signed(random) * options.AngleVariation;
                 double radians = angle * Math.PI / 180, cos = Math.Cos(radians), sin = Math.Sin(radians);
                 var center = new PatternPoint(cell.Average(p => p.X), cell.Average(p => p.Y));
-                double scale = Double.PositiveInfinity;
+                double scale = Double.PositiveInfinity, limit = Double.PositiveInfinity;
+                edges.Clear();
                 for (int edge = 0; edge < cell.Length; edge++)
                 {
                     var a = cell[edge]; var b = cell[(edge + 1) % cell.Length];
                     double nx = b.Y - a.Y, ny = a.X - b.X;
                     double localX = nx * cos + ny * sin, localY = -nx * sin + ny * cos;
-                    double support = 0;
+                    double support = 0, opposite = 0;
                     foreach (var point in motif.Hull)
-                        support = Math.Max(support, localX * (point.X - motif.Center.X) + localY * (point.Y - motif.Center.Y));
-                    if (support > 1e-10)
-                        scale = Math.Min(scale, (nx * (a.X - center.X) + ny * (a.Y - center.Y)) / support);
+                    {
+                        double projection = localX * (point.X - motif.Center.X) + localY * (point.Y - motif.Center.Y);
+                        support = Math.Max(support, projection);
+                        opposite = Math.Min(opposite, projection);
+                    }
+                    if (support <= 1e-10) continue;
+                    double cut = nx * a.X + ny * a.Y;
+                    edges.Add((nx, ny, cut, support));
+                    scale = Math.Min(scale, (cut - nx * center.X - ny * center.Y) / support);
+                    double width = cut - cell.Min(p => nx * p.X + ny * p.Y);
+                    limit = Math.Min(limit, width / (support - opposite));
                 }
                 if (!Finite(scale) || scale <= 0) continue;
-                // Position the visible silhouette even when the bitmap has transparent padding.
+
+                // For a given scale, clip the cell by the motif's supports to find all valid translations.
+                for (int step = 0; step < 7 && limit > scale * 1.005; step++)
+                {
+                    double candidate = (scale + limit) / 2;
+                    centers.Clear(); centers.AddRange(cell);
+                    foreach (var edge in edges)
+                    {
+                        Clip(centers, edge.X, edge.Y, edge.Limit - edge.Support * candidate, buffer);
+                        var previous = centers; centers = buffer; buffer = previous;
+                        if (centers.Count == 0) break;
+                    }
+                    if (centers.Count == 0)
+                    {
+                        limit = candidate;
+                        continue;
+                    }
+                    scale = candidate;
+                    center = new PatternPoint(centers.Average(p => p.X), centers.Average(p => p.Y));
+                }
                 double x = center.X - scale * (motif.Center.X * cos - motif.Center.Y * sin);
                 double y = center.Y - scale * (motif.Center.X * sin + motif.Center.Y * cos);
                 var rotated = PatternTransform.RotatedSize(motif.Size.X, motif.Size.Y, angle);
                 result.Add(new PatternPlacement { Motif = index, Center = new PatternPoint(x, y), Angle = angle,
                     Size = scale * Math.Max(rotated.X, rotated.Y) });
+                if (++offset == order.Length)
+                {
+                    Shuffle(order, random, index);
+                    offset = 0;
+                }
             }
             if (result.Count == 0) throw new InvalidOperationException("Уменьшите зазор, чтобы разместить фигуры в ячейках.");
             return result;
@@ -260,17 +347,28 @@ namespace VanyaTools.Native
         private static int[] Shuffle(int count, Random random)
         {
             var order = Enumerable.Range(0, count).ToArray();
-            for (int i = count - 1; i > 0; i--)
+            Shuffle(order, random, -1);
+            return order;
+        }
+
+        private static void Shuffle(int[] order, Random random, int last)
+        {
+            for (int i = order.Length - 1; i > 0; i--)
             {
                 int j = random.Next(i + 1), previous = order[i];
                 order[i] = order[j]; order[j] = previous;
             }
-            return order;
+            if (order.Length > 1 && order[0] == last)
+            {
+                int j = random.Next(1, order.Length);
+                order[0] = order[j]; order[j] = last;
+            }
         }
 
-        private static List<PatternPoint> Clip(List<PatternPoint> polygon, double nx, double ny, double cut)
+        private static void Clip(IReadOnlyList<PatternPoint> polygon, double nx, double ny, double cut,
+            List<PatternPoint> result)
         {
-            var result = new List<PatternPoint>(polygon.Count + 1);
+            result.Clear();
             PatternPoint previous = polygon[polygon.Count - 1];
             double previousDistance = nx * previous.X + ny * previous.Y - cut;
             foreach (var current in polygon)
@@ -281,7 +379,6 @@ namespace VanyaTools.Native
                 if (distance <= 0) result.Add(current);
                 previous = current; previousDistance = distance;
             }
-            return result;
         }
 
         private static double Signed(Random random) => 2 * random.NextDouble() - 1;

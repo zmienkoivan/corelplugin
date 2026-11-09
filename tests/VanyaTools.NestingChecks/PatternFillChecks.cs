@@ -87,6 +87,31 @@ internal static class PatternFillChecks
             }
     }
 
+    internal static void OrganicVariety()
+    {
+        const double width = 550, height = 710;
+        var motifs = Enumerable.Range(0, 7).Select(i => new PatternFootprint(new PatternPoint(8 + i, 9))).ToArray();
+        foreach (var mode in new[] { PatternFillMode.Crocodile, PatternFillMode.Pebbles })
+        {
+            var options = new PatternFillOptions { Mode = mode, SizeMm = 22, GapMm = 2, Seed = 42 };
+            var items = PatternFillLayout.Build(width, height, motifs, options);
+            Require(items.Count > 500, "The random seeds leave the detail sparse.");
+            var blocks = items.Take(7 * 10).Select(p => p.Motif).ToArray();
+            Require(Enumerable.Range(0, 10).All(i => blocks.Skip(i * 7).Take(7).Distinct().Count() == 7),
+                "An organic variant loses part of the motif set.");
+            Require(Enumerable.Range(0, 10).Select(i => String.Join(",", blocks.Skip(i * 7).Take(7))).Distinct().Count() > 8,
+                "The same motif sequence repeats over the detail.");
+            var same = PatternFillLayout.Build(width, height, motifs, options);
+            Require(items.Count == same.Count && items.Zip(same, (a, b) =>
+                a.Center.X == b.Center.X && a.Center.Y == b.Center.Y && a.Motif == b.Motif && a.Size == b.Size).All(equal => equal),
+                "An organic variant changes during preview.");
+            options.Seed++;
+            var another = PatternFillLayout.Build(width, height, motifs, options);
+            Require(items[0].Center.X != another[0].Center.X && items[0].Center.Y != another[0].Center.Y,
+                "A new organic variant did not change the positions.");
+        }
+    }
+
     private static bool Contains(IReadOnlyList<PatternPoint> cell, double x, double y)
     {
         for (int i = 0; i < cell.Count; i++)

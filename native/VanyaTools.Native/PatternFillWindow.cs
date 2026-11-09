@@ -1,6 +1,9 @@
 using System;
 using System.Globalization;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -30,8 +33,18 @@ namespace VanyaTools.Native
         private readonly DispatcherTimer _refresh = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(70) };
         private PatternFrame _frame;
         private double _frameAllowance = Double.NaN;
-        private int _seed;
-        private bool _ready;
+        private int _seed, _revision;
+        private bool _ready, _rendering;
+        private readonly CancellationTokenSource _closing = new CancellationTokenSource();
+
+        // Used by one preview task at a time. Moving the hero reuses the placement and contour calculations.
+        private PatternFrame _layoutFrame;
+        private PatternFillOptions _layoutOptions;
+        private bool _layoutUsesHero;
+        private List<PatternPlacement> _layoutItems;
+        private Geometry[] _layoutSilhouettes;
+        private Geometry _reserve;
+        private double _reserveSize, _reserveAngle, _reserveGap;
 
         internal PatternDraft Draft { get; private set; }
         internal PatternEditorSettings Settings { get; private set; }
@@ -56,7 +69,6 @@ namespace VanyaTools.Native
             cancel.MinWidth = 84; DockPanel.SetDock(cancel, Dock.Right); footer.Children.Add(cancel);
             _apply = DockerTheme.Primary(Button("Применить в Corel", (_, __) =>
             {
-                _refresh.Stop(); RenderDraft();
                 if (Draft != null) DialogResult = true;
             }));
             _apply.IsEnabled = false; _apply.Margin = new Thickness(0, 0, 6, 0);
@@ -113,9 +125,16 @@ namespace VanyaTools.Native
             _useHero.Checked += (_, __) => QueuePreview();
             _useHero.Unchecked += (_, __) => QueuePreview();
             _refresh.Tick += (_, __) => { _refresh.Stop(); RenderDraft(); };
-            Closed += (_, __) => { _ready = false; _refresh.Stop(); };
+            Closed += (_, __) =>
+            {
+                _ready = false;
+                _refresh.Stop();
+                _closing.Cancel();
+                if (!_rendering) _closing.Dispose();
+            };
             _ready = true;
-            RenderDraft();
+            ShowMessage("Готовлю предпросмотр…", false);
+            QueuePreview();
         }
 
         private void SetPosition(double x, double y)
@@ -128,12 +147,15 @@ namespace VanyaTools.Native
         private void QueuePreview()
         {
             if (!_ready) return;
+            _revision++;
             _apply.IsEnabled = false;
-            if (!_refresh.IsEnabled) _refresh.Start();
+            if (!_rendering && !_refresh.IsEnabled) _refresh.Start();
         }
 
-        private void RenderDraft()
+        private async void RenderDraft()
         {
+            int revision = _revision;
+            _rendering = true;
             Draft = null;
             try
             {
@@ -152,36 +174,89 @@ namespace VanyaTools.Native
                     _frame = PatternFillService.FrameFor(_session, allowance);
                     _frameAllowance = allowance;
                 }
-                var motifs = useHero ? _session.Motifs.Where(asset => asset.Id != _session.Hero.Id).ToArray() : _session.Motifs;
-                var items = PatternFillLayout.Build(_frame.Width, _frame.Height, motifs.Select(asset => asset.Footprint).ToArray(), options);
                 var next = new PatternEditorSettings { Layout = options, Allowance = allowance, UseHero = useHero || _session.Hero == null };
-                var draft = new PatternDraft { Frame = _frame, Options = options, Motifs = motifs, Items = items, Allowance = allowance };
                 if (useHero)
                 {
                     next.HeroX = _heroX.Read(); next.HeroY = _heroY.Read(); next.HeroSize = _heroSize.Read();
                     next.HeroAngle = _heroAngle.Read(); next.HeroGap = _heroGap.Read();
-                    var center = new PatternPoint(_frame.Width * next.HeroX / 100,
-                        _frame.Height * (1 - next.HeroY / 100));
-                    draft.Hero = new PatternPlacement { Center = center, Size = next.HeroSize, Angle = next.HeroAngle };
-                    draft.Reserve = PatternSilhouette.Reserve(_session.Hero, draft.Hero, next.HeroGap);
-                    PatternSilhouette.LeaveRoom(items, motifs, draft.Reserve);
                 }
+                PatternFrame frame = _frame;
+                var cancellation = _closing.Token;
+                PatternDraft draft = await Task.Run(() => BuildDraft(frame, next, useHero, cancellation), cancellation);
+                if (!_ready) return;
+                _preview.Update(frame, draft);
+                if (revision != _revision) return;
                 Settings = next;
                 Draft = draft;
-                int fallback = motifs.Count(asset => asset.OutlineFallback);
+                int fallback = draft.Motifs.Count(asset => asset.OutlineFallback);
                 if (useHero && _session.Hero.OutlineFallback) fallback++;
-                int used = items.Select(item => item.Motif).Distinct().Count();
-                string message = "Повторов: " + items.Count + " · фигур в раскладке: " + used + " из " + motifs.Length;
+                int used = draft.Items.Select(item => item.Motif).Distinct().Count();
+                string message = "Повторов: " + draft.Items.Count + " · фигур в раскладке: " + used + " из " + draft.Motifs.Length;
                 if (fallback > 0) message += " · по габаритам: " + fallback;
                 ShowMessage(message, false);
+                _apply.IsEnabled = true;
             }
+            catch (OperationCanceledException) when (!_ready) { }
             catch (Exception error)
             {
-                ShowMessage(error.Message, true);
+                if (_ready && revision == _revision) ShowMessage(error.Message, true);
             }
-            _preview.Update(_frame, Draft);
-            _apply.IsEnabled = Draft != null;
+            finally
+            {
+                _rendering = false;
+                if (!_ready) _closing.Dispose();
+                else if (revision != _revision) _refresh.Start();
+            }
         }
+
+        private PatternDraft BuildDraft(PatternFrame frame, PatternEditorSettings settings, bool useHero,
+            CancellationToken cancellation)
+        {
+            var options = settings.Layout;
+            var motifs = useHero ? _session.Motifs.Where(asset => asset.Id != _session.Hero.Id).ToArray() : _session.Motifs;
+            if (_layoutFrame != frame || useHero != _layoutUsesHero || !SameLayout(_layoutOptions, options))
+            {
+                foreach (var motif in motifs)
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    PatternFillService.PrepareSilhouette(motif);
+                }
+                var items = PatternFillLayout.Build(frame.Width, frame.Height, motifs.Select(asset => asset.Footprint).ToArray(), options);
+                Geometry[] silhouettes = null;
+                if (useHero)
+                {
+                    silhouettes = new Geometry[items.Count];
+                    for (int i = 0; i < items.Count; i++)
+                    {
+                        cancellation.ThrowIfCancellationRequested();
+                        silhouettes[i] = PatternSilhouette.At(motifs[items[i].Motif], items[i]);
+                    }
+                }
+                _layoutItems = items;
+                _layoutSilhouettes = silhouettes;
+                _layoutFrame = frame; _layoutOptions = options; _layoutUsesHero = useHero;
+            }
+
+            var draft = new PatternDraft { Frame = frame, Options = options, Motifs = motifs,
+                Items = _layoutItems, Allowance = settings.Allowance };
+            if (!useHero) return draft;
+            PatternFillService.PrepareSilhouette(_session.Hero);
+            draft.Hero = new PatternPlacement { Size = settings.HeroSize, Angle = settings.HeroAngle,
+                Center = new PatternPoint(frame.Width * settings.HeroX / 100, frame.Height * (1 - settings.HeroY / 100)) };
+            if (_reserve == null || _reserveSize != settings.HeroSize || _reserveAngle != settings.HeroAngle || _reserveGap != settings.HeroGap)
+            {
+                _reserve = PatternSilhouette.Reserve(_session.Hero, draft.Hero, settings.HeroGap);
+                _reserveSize = settings.HeroSize; _reserveAngle = settings.HeroAngle; _reserveGap = settings.HeroGap;
+            }
+            draft.Reserve = PatternSilhouette.MoveReserve(_reserve, draft.Hero.Center);
+            draft.Items = PatternSilhouette.LeaveRoom(_layoutItems, _layoutSilhouettes, draft.Reserve, cancellation);
+            return draft;
+        }
+
+        private static bool SameLayout(PatternFillOptions previous, PatternFillOptions next) =>
+            previous != null && previous.Mode == next.Mode && previous.SizeMm == next.SizeMm && previous.GapMm == next.GapMm &&
+            previous.MinScale == next.MinScale && previous.MaxScale == next.MaxScale && previous.Angle == next.Angle &&
+            previous.AngleVariation == next.AngleVariation && previous.Seed == next.Seed;
 
         private void ShowMessage(string message, bool error)
         {

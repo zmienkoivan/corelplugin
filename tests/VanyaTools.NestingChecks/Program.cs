@@ -22,6 +22,7 @@ internal static class Program
         Check("Contour improvement keeps a valid result", Improvement);
         Check("Pattern motifs preserve transforms, gaps and edge bleed", PatternFillChecks.Motifs);
         Check("Crocodile and pebble cells fit visible motifs with bleed and gaps", PatternFillChecks.Textures);
+        Check("Organic variants shuffle all seven motifs and reproduce the same seed", PatternFillChecks.OrganicVariety);
         Console.WriteLine(_failed == 0 ? "All nesting checks passed." : _failed + " nesting checks failed.");
         Environment.ExitCode = _failed == 0 ? 0 : 1;
     }

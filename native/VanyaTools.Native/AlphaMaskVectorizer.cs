@@ -83,12 +83,12 @@ namespace VanyaTools.Native
             }
         }
 
-        internal static IEnumerable<(int X, int Y)[]> TraceOutline(bool[] visible, int width, int height)
+        internal static IEnumerable<(int X, int Y)[]> TraceOutline(bool[] visible, int width, int height, double tolerance)
         {
             foreach (var loop in TraceLoops(visible, width, height))
             {
                 if (loop.Count < 3) continue;
-                var simplified = SimplifyClosed(loop, 1, 1, .35);
+                var simplified = SimplifyClosed(loop, 1, 1, tolerance);
                 var points = simplified.Count >= 3 ? simplified : loop;
                 yield return points.ConvertAll(point => (point.X, point.Y)).ToArray();
             }

@@ -8,14 +8,20 @@ namespace VanyaTools.Native
 {
     internal static class PatternSilhouette
     {
-        private const double GeometryTolerance = .025;
+        private const double GeometryTolerance = .05;
+        private const int MaximumSide = 224;
 
         internal static Geometry Read(BitmapSource preview, PatternPoint size, out PatternFootprint footprint)
         {
             if (preview != null)
             {
-                BitmapSource image = preview.Format == PixelFormats.Bgra32 ? preview :
-                    new FormatConvertedBitmap(preview, PixelFormats.Bgra32, null, 0);
+                BitmapSource image = preview;
+                double scale = MaximumSide / (double)Math.Max(image.PixelWidth, image.PixelHeight);
+                if (scale < 1)
+                    image = new TransformedBitmap(image, new ScaleTransform(
+                        Math.Max(1d / image.PixelWidth, scale), Math.Max(1d / image.PixelHeight, scale)));
+                if (image.Format != PixelFormats.Bgra32)
+                    image = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0);
                 int width = image.PixelWidth, height = image.PixelHeight;
                 var pixels = new byte[checked(width * height * 4)];
                 image.CopyPixels(pixels, width * 4, 0);
@@ -32,7 +38,7 @@ namespace VanyaTools.Native
                     var points = new List<PatternPoint>();
                     using (var context = geometry.Open())
                     {
-                        foreach (var loop in AlphaMaskVectorizer.TraceOutline(visible, width, height))
+                        foreach (var loop in AlphaMaskVectorizer.TraceOutline(visible, width, height, .8))
                         {
                             for (int i = 0; i < loop.Length; i++)
                             {
@@ -68,15 +74,20 @@ namespace VanyaTools.Native
             matrix.Scale(scale, scale);
             matrix.Rotate(item.Angle);
             matrix.Translate(item.Center.X, item.Center.Y);
-            var silhouette = asset.Silhouette.Clone();
-            silhouette.Transform = new MatrixTransform(matrix);
-            silhouette.Freeze();
-            return silhouette;
+            return Transform(asset.Silhouette, matrix);
+        }
+
+        private static Geometry Transform(Geometry geometry, Matrix matrix)
+        {
+            var transformed = geometry.Clone();
+            transformed.Transform = new MatrixTransform(matrix);
+            transformed.Freeze();
+            return transformed;
         }
 
         internal static Geometry Reserve(PatternAsset hero, PatternPlacement item, double gap)
         {
-            Geometry shape = At(hero, item);
+            Geometry shape = At(hero, new PatternPlacement { Size = item.Size, Angle = item.Angle });
             if (gap <= 0) return shape;
             var pen = new Pen(Brushes.Black, gap * 2) { LineJoin = PenLineJoin.Round };
             var edge = shape.GetWidenedPathGeometry(pen, GeometryTolerance, ToleranceType.Absolute);
@@ -86,19 +97,28 @@ namespace VanyaTools.Native
             return reserve;
         }
 
-        internal static void LeaveRoom(List<PatternPlacement> items, IReadOnlyList<PatternAsset> motifs, Geometry reserve)
+        internal static Geometry MoveReserve(Geometry reserve, PatternPoint center)
+        {
+            var matrix = Matrix.Identity;
+            matrix.Translate(center.X, center.Y);
+            if (reserve.Transform != null) matrix = reserve.Transform.Value * matrix;
+            return Transform(reserve, matrix);
+        }
+
+        internal static List<PatternPlacement> LeaveRoom(IReadOnlyList<PatternPlacement> items, Geometry[] silhouettes,
+            Geometry reserve, System.Threading.CancellationToken cancellation)
         {
             Rect bounds = reserve.Bounds;
-            items.RemoveAll(item =>
+            var result = new List<PatternPlacement>(items.Count);
+            for (int i = 0; i < items.Count; i++)
             {
-                PatternAsset motif = motifs[item.Motif];
-                var size = PatternTransform.Fit(motif.Size, item);
-                var area = new Rect(item.Center.X - size.RotatedWidth / 2, item.Center.Y - size.RotatedHeight / 2,
-                    size.RotatedWidth, size.RotatedHeight);
-                if (!bounds.IntersectsWith(area)) return false;
-                return reserve.FillContainsWithDetail(At(motif, item), GeometryTolerance,
-                    ToleranceType.Absolute) != IntersectionDetail.Empty;
-            });
+                cancellation.ThrowIfCancellationRequested();
+                Geometry silhouette = silhouettes[i];
+                if (!bounds.IntersectsWith(silhouette.Bounds) || reserve.FillContainsWithDetail(silhouette,
+                    GeometryTolerance, ToleranceType.Absolute) == IntersectionDetail.Empty)
+                    result.Add(items[i]);
+            }
+            return result;
         }
     }
 }

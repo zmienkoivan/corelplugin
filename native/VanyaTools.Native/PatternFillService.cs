@@ -24,7 +24,7 @@ namespace VanyaTools.Native
         internal object Shape;
         internal int Id;
         internal PatternFootprint Footprint;
-        internal PatternPoint Size => Footprint.Size;
+        internal PatternPoint Size;
         internal BitmapSource Preview;
         internal Geometry Silhouette;
         internal bool OutlineFallback;
@@ -152,7 +152,7 @@ namespace VanyaTools.Native
                     shape.GetBoundingBox(out left, out bottom, out width, out height, true);
                     if (width < 0 || height < 0 || !Finite(width + height) || Math.Max(width, height) <= .0001)
                         throw new InvalidOperationException("Один из элементов узора имеет нулевой размер.");
-                    var asset = new PatternAsset { Shape = captured.Shape, Id = captured.Id };
+                    var asset = new PatternAsset { Shape = captured.Shape, Id = captured.Id, Size = new PatternPoint(width, height) };
                     previews.Add(asset.Id, asset);
                     string temporary = Path.Combine(Path.GetTempPath(), "Vanya-Pattern-" + Guid.NewGuid().ToString("N"));
                     string path = SportArtworkPreview.Sidecar(temporary);
@@ -164,18 +164,23 @@ namespace VanyaTools.Native
                     }
                     catch (Exception error) { Log.Error("Could not read pattern motif preview.", error); }
                     finally { TryRestore(() => File.Delete(path), "pattern thumbnail cleanup"); }
-                    var size = new PatternPoint(width, height);
-                    asset.OutlineFallback = asset.Preview == null;
-                    try { asset.Silhouette = PatternSilhouette.Read(asset.Preview, size, out asset.Footprint); }
-                    catch (Exception error)
-                    {
-                        Log.Error("Could not trace pattern silhouette.", error);
-                        asset.OutlineFallback = true;
-                        asset.Silhouette = PatternSilhouette.Read(null, size, out asset.Footprint);
-                    }
                     return asset;
                 }
             });
+        }
+
+        // The bitmap is frozen during capture. Geometry preparation needs no Corel calls.
+        internal static void PrepareSilhouette(PatternAsset asset)
+        {
+            if (asset.Silhouette != null) return;
+            asset.OutlineFallback = asset.Preview == null;
+            try { asset.Silhouette = PatternSilhouette.Read(asset.Preview, asset.Size, out asset.Footprint); }
+            catch (Exception error)
+            {
+                Log.Error("Could not trace pattern silhouette.", error);
+                asset.OutlineFallback = true;
+                asset.Silhouette = PatternSilhouette.Read(null, asset.Size, out asset.Footprint);
+            }
         }
 
         internal static PatternFrame FrameFor(PatternEditorSession session, double allowance)
