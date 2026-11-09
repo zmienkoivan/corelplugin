@@ -32,6 +32,45 @@ namespace VanyaTools.Native
         internal PatternPoint[] Cell;
     }
 
+    internal readonly struct PatternBox
+    {
+        internal readonly double Left, Bottom, Right, Top;
+
+        internal PatternBox(double left, double bottom, double right, double top)
+        { Left = left; Bottom = bottom; Right = right; Top = top; }
+
+        internal bool Overlaps(PatternBox other) =>
+            Left < other.Right && Right > other.Left && Bottom < other.Top && Top > other.Bottom;
+    }
+
+    internal readonly struct PatternTransform
+    {
+        internal readonly double Scale, Width, Height, RotatedWidth, RotatedHeight;
+
+        private PatternTransform(double scale, double width, double height, PatternPoint rotated)
+        {
+            Scale = scale; Width = width * scale; Height = height * scale;
+            RotatedWidth = rotated.X * scale; RotatedHeight = rotated.Y * scale;
+        }
+
+        internal static PatternPoint RotatedSize(double width, double height, double angle)
+        {
+            double radians = angle * Math.PI / 180;
+            double sin = Math.Abs(Math.Sin(radians)), cos = Math.Abs(Math.Cos(radians));
+            return new PatternPoint(width * cos + height * sin, width * sin + height * cos);
+        }
+
+        internal static PatternTransform Fit(PatternPoint size, PatternPlacement item)
+        {
+            var rotated = RotatedSize(size.X, size.Y, item.Angle);
+            return new PatternTransform(item.Size / Math.Max(rotated.X, rotated.Y), size.X, size.Y, rotated);
+        }
+
+        internal PatternBox Bounds(PatternPoint center, double clearance = 0) =>
+            new PatternBox(center.X - RotatedWidth / 2 - clearance, center.Y - RotatedHeight / 2 - clearance,
+                center.X + RotatedWidth / 2 + clearance, center.Y + RotatedHeight / 2 + clearance);
+    }
+
     internal static class PatternFillLayout
     {
         internal const int MaximumElements = 2400;
@@ -148,6 +187,25 @@ namespace VanyaTools.Native
             }
             if (result.Count == 0) throw new InvalidOperationException("В контуре нет ячеек с таким зазором. Уменьшите зазор.");
             return result;
+        }
+
+        internal static void LeaveRoom(List<PatternPlacement> items, IReadOnlyList<PatternPoint> motifSizes, PatternBox reserve)
+        {
+            items.RemoveAll(item =>
+            {
+                if (item.Cell == null) return PatternTransform.Fit(motifSizes[item.Motif], item).Bounds(item.Center).Overlaps(reserve);
+
+                var polygon = item.Cell;
+                var bounds = new PatternBox(polygon.Min(p => p.X), polygon.Min(p => p.Y),
+                    polygon.Max(p => p.X), polygon.Max(p => p.Y));
+                if (!bounds.Overlaps(reserve)) return false;
+                var overlap = Clip(polygon.ToList(), -1, 0, -reserve.Left);
+                if (overlap.Count < 3) return false;
+                overlap = Clip(overlap, 1, 0, reserve.Right);
+                if (overlap.Count < 3) return false;
+                overlap = Clip(overlap, 0, -1, -reserve.Bottom);
+                return overlap.Count >= 3 && Clip(overlap, 0, 1, reserve.Top).Count >= 3;
+            });
         }
 
         private static List<PatternPoint> Clip(List<PatternPoint> polygon, double nx, double ny, double cut)

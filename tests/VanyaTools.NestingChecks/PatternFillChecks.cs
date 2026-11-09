@@ -63,6 +63,36 @@ internal static class PatternFillChecks
             }
     }
 
+    internal static void Focus()
+    {
+        var hero = new PatternPlacement { Center = new PatternPoint(105, 80), Size = 72, Angle = 32 };
+        var heroSize = new PatternPoint(90, 40);
+        var transform = PatternTransform.Fit(heroSize, hero);
+        var reserve = transform.Bounds(hero.Center, 7);
+        Require(Math.Abs(Math.Max(transform.RotatedWidth, transform.RotatedHeight) - 72) < 1e-8 &&
+            Math.Abs(reserve.Right - reserve.Left - transform.RotatedWidth - 14) < 1e-8,
+            "The rotated hero or its physical clearance is incorrectly sized.");
+
+        var options = new PatternFillOptions { Mode = PatternFillMode.Staggered, SizeMm = 25, GapMm = 2,
+            AngleVariation = 50 };
+        var items = PatternFillLayout.Build(210, 160, 2, options);
+        var sizes = new[] { new PatternPoint(25, 25), new PatternPoint(15, 30) };
+        int original = items.Count;
+        PatternFillLayout.LeaveRoom(items, sizes, reserve);
+        Require(items.Count > 0 && items.Count < original && items.All(p =>
+            !PatternTransform.Fit(sizes[p.Motif], p).Bounds(p.Center).Overlaps(reserve)),
+            "A background motif enters the reserved zone.");
+
+        var corner = new PatternPlacement { Cell = new[] { new PatternPoint(0, 0),
+            new PatternPoint(12, 0), new PatternPoint(0, 12) } };
+        var touches = new PatternPlacement { Cell = new[] { new PatternPoint(9, 9),
+            new PatternPoint(14, 9), new PatternPoint(9, 14) } };
+        var cells = new List<PatternPlacement> { corner, touches };
+        PatternFillLayout.LeaveRoom(cells, new PatternPoint[0], new PatternBox(8, 8, 13, 13));
+        Require(cells.Count == 1 && ReferenceEquals(cells[0], corner),
+            "Texture exclusion should remove only cells intersecting the reserved zone.");
+    }
+
     private static bool Contains(IReadOnlyList<PatternPoint> cell, double x, double y)
     {
         for (int i = 0; i < cell.Count; i++)
