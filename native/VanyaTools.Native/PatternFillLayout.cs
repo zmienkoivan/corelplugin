@@ -29,18 +29,51 @@ namespace VanyaTools.Native
         internal int Motif;
         internal double Size, Angle;
         internal PatternPoint Center;
-        internal PatternPoint[] Cell;
     }
 
-    internal readonly struct PatternBox
+    internal sealed class PatternFootprint
     {
-        internal readonly double Left, Bottom, Right, Top;
+        internal readonly PatternPoint Size;
+        internal readonly PatternPoint[] Hull;
+        internal readonly PatternPoint Center;
 
-        internal PatternBox(double left, double bottom, double right, double top)
-        { Left = left; Bottom = bottom; Right = right; Top = top; }
+        internal PatternFootprint(PatternPoint size, IEnumerable<PatternPoint> outline = null)
+        {
+            Size = size;
+            Hull = outline == null ? Rectangle(size) : ConvexHull(outline);
+            if (Hull.Length < 3) Hull = Rectangle(size);
+            Center = new PatternPoint(Hull.Average(p => p.X), Hull.Average(p => p.Y));
+        }
 
-        internal bool Overlaps(PatternBox other) =>
-            Left < other.Right && Right > other.Left && Bottom < other.Top && Top > other.Bottom;
+        private static PatternPoint[] Rectangle(PatternPoint size)
+        {
+            double x = Math.Max(.0001, size.X) / 2, y = Math.Max(.0001, size.Y) / 2;
+            return new[] { new PatternPoint(-x, -y), new PatternPoint(x, -y),
+                new PatternPoint(x, y), new PatternPoint(-x, y) };
+        }
+
+        private static PatternPoint[] ConvexHull(IEnumerable<PatternPoint> points)
+        {
+            var sorted = points.Distinct().OrderBy(p => p.X).ThenBy(p => p.Y).ToArray();
+            if (sorted.Length < 3) return sorted;
+            var hull = new List<PatternPoint>();
+            foreach (var point in sorted) Add(point, 0);
+            int lower = hull.Count;
+            for (int i = sorted.Length - 2; i >= 0; i--) Add(sorted[i], lower - 1);
+            hull.RemoveAt(hull.Count - 1);
+            return hull.ToArray();
+
+            void Add(PatternPoint point, int floor)
+            {
+                while (hull.Count >= floor + 2)
+                {
+                    var a = hull[hull.Count - 2]; var b = hull[hull.Count - 1];
+                    if ((b.X - a.X) * (point.Y - a.Y) - (b.Y - a.Y) * (point.X - a.X) > 0) break;
+                    hull.RemoveAt(hull.Count - 1);
+                }
+                hull.Add(point);
+            }
+        }
     }
 
     internal readonly struct PatternTransform
@@ -66,16 +99,13 @@ namespace VanyaTools.Native
             return new PatternTransform(item.Size / Math.Max(rotated.X, rotated.Y), size.X, size.Y, rotated);
         }
 
-        internal PatternBox Bounds(PatternPoint center, double clearance = 0) =>
-            new PatternBox(center.X - RotatedWidth / 2 - clearance, center.Y - RotatedHeight / 2 - clearance,
-                center.X + RotatedWidth / 2 + clearance, center.Y + RotatedHeight / 2 + clearance);
     }
 
     internal static class PatternFillLayout
     {
         internal const int MaximumElements = 2400;
 
-        internal static List<PatternPlacement> Build(double width, double height, int motifs, PatternFillOptions options)
+        internal static List<PatternPlacement> Build(double width, double height, IReadOnlyList<PatternFootprint> motifs, PatternFillOptions options)
         {
             if (!Finite(width) || !Finite(height) || width <= 0 || height <= 0)
                 throw new ArgumentException("Выбранный контур должен иметь ширину и высоту.");
@@ -85,17 +115,17 @@ namespace VanyaTools.Native
             if (!Finite(options.Angle) || Math.Abs(options.Angle) > 360 ||
                 !Finite(options.AngleVariation) || options.AngleVariation < 0 || options.AngleVariation > 180)
                 throw new ArgumentException("Поворот от −360° до 360°, разброс от 0° до 180°.");
+            if (motifs.Count == 0) throw new ArgumentException("Добавьте фоновые фигуры в набор.");
             if (options.Texture)
             {
                 if (options.GapMm > options.SizeMm / 2)
                     throw new ArgumentException("Зазор фактуры должен быть не больше половины размера ячейки.");
-                return Texture(width, height, options);
+                return PlaceInCells(TextureCells(width, height, options), motifs, options);
             }
-            if (motifs < 1) throw new ArgumentException("Сначала запомните элементы из выделения.");
             if (!Finite(options.MinScale) || !Finite(options.MaxScale) || options.MinScale < .1 ||
                 options.MaxScale > 3 || options.MinScale > options.MaxScale)
                 throw new ArgumentException("Задайте диапазон размеров от 10% до 300%, сначала меньшее значение.");
-            return Motifs(width, height, motifs, options);
+            return Motifs(width, height, motifs.Count, options);
         }
 
         private static List<PatternPlacement> Motifs(double width, double height, int motifs, PatternFillOptions options)
@@ -108,6 +138,7 @@ namespace VanyaTools.Native
             double firstX = (width - (cols - 1) * pitch) / 2;
             double firstY = (height + (rows - 1) * pitch) / 2;
             var random = new Random(options.Seed);
+            int[] order = scattered ? Shuffle(motifs, random) : null;
             var result = new List<PatternPlacement>();
             for (int row = 0; row < rows; row++)
             {
@@ -124,7 +155,7 @@ namespace VanyaTools.Native
                         y = Math.Max(0, Math.Min(height, y + Signed(random) * space));
                     }
                     if (x + size / 2 <= 0 || x - size / 2 >= width) continue;
-                    int index = scattered ? random.Next(motifs) : (result.Count + (int)((uint)options.Seed % (uint)motifs)) % motifs;
+                    int index = scattered ? order[result.Count % motifs] : (result.Count + (int)((uint)options.Seed % (uint)motifs)) % motifs;
                     result.Add(new PatternPlacement { Center = new PatternPoint(x, y), Motif = index, Size = size,
                         Angle = options.Angle + Signed(random) * options.AngleVariation });
                     if (result.Count > MaximumElements) CheckCount(result.Count, 1);
@@ -133,7 +164,7 @@ namespace VanyaTools.Native
             return result;
         }
 
-        private static List<PatternPlacement> Texture(double width, double height, PatternFillOptions options)
+        internal static List<PatternPoint[]> TextureCells(double width, double height, PatternFillOptions options)
         {
             bool scales = options.Mode == PatternFillMode.Crocodile;
             double pitchX = options.SizeMm * (scales ? 1.28 : 1);
@@ -153,7 +184,7 @@ namespace VanyaTools.Native
                         row + Signed(random) * (scales ? .19 : .41));
 
             double middleX = (cols - 1) / 2d, middleY = (rows - 1) / 2d;
-            var result = new List<PatternPlacement>();
+            var result = new List<PatternPoint[]>();
             for (int row = 1; row < rows - 1; row++)
             {
                 for (int col = 1; col < cols - 1; col++)
@@ -182,30 +213,59 @@ namespace VanyaTools.Native
                     }).ToArray();
                     if (points.Max(p => p.X) > 0 && points.Min(p => p.X) < width &&
                         points.Max(p => p.Y) > 0 && points.Min(p => p.Y) < height)
-                        result.Add(new PatternPlacement { Cell = points });
+                        result.Add(points);
                 }
             }
             if (result.Count == 0) throw new InvalidOperationException("В контуре нет ячеек с таким зазором. Уменьшите зазор.");
             return result;
         }
 
-        internal static void LeaveRoom(List<PatternPlacement> items, IReadOnlyList<PatternPoint> motifSizes, PatternBox reserve)
+        private static List<PatternPlacement> PlaceInCells(List<PatternPoint[]> cells, IReadOnlyList<PatternFootprint> motifs,
+            PatternFillOptions options)
         {
-            items.RemoveAll(item =>
+            var random = new Random(options.Seed);
+            int[] order = Shuffle(motifs.Count, random);
+            var result = new List<PatternPlacement>(cells.Count);
+            foreach (var cell in cells)
             {
-                if (item.Cell == null) return PatternTransform.Fit(motifSizes[item.Motif], item).Bounds(item.Center).Overlaps(reserve);
+                int index = order[result.Count % order.Length];
+                var motif = motifs[index];
+                double angle = options.Angle + Signed(random) * options.AngleVariation;
+                double radians = angle * Math.PI / 180, cos = Math.Cos(radians), sin = Math.Sin(radians);
+                var center = new PatternPoint(cell.Average(p => p.X), cell.Average(p => p.Y));
+                double scale = Double.PositiveInfinity;
+                for (int edge = 0; edge < cell.Length; edge++)
+                {
+                    var a = cell[edge]; var b = cell[(edge + 1) % cell.Length];
+                    double nx = b.Y - a.Y, ny = a.X - b.X;
+                    double localX = nx * cos + ny * sin, localY = -nx * sin + ny * cos;
+                    double support = 0;
+                    foreach (var point in motif.Hull)
+                        support = Math.Max(support, localX * (point.X - motif.Center.X) + localY * (point.Y - motif.Center.Y));
+                    if (support > 1e-10)
+                        scale = Math.Min(scale, (nx * (a.X - center.X) + ny * (a.Y - center.Y)) / support);
+                }
+                if (!Finite(scale) || scale <= 0) continue;
+                // Position the visible silhouette even when the bitmap has transparent padding.
+                double x = center.X - scale * (motif.Center.X * cos - motif.Center.Y * sin);
+                double y = center.Y - scale * (motif.Center.X * sin + motif.Center.Y * cos);
+                var rotated = PatternTransform.RotatedSize(motif.Size.X, motif.Size.Y, angle);
+                result.Add(new PatternPlacement { Motif = index, Center = new PatternPoint(x, y), Angle = angle,
+                    Size = scale * Math.Max(rotated.X, rotated.Y) });
+            }
+            if (result.Count == 0) throw new InvalidOperationException("Уменьшите зазор, чтобы разместить фигуры в ячейках.");
+            return result;
+        }
 
-                var polygon = item.Cell;
-                var bounds = new PatternBox(polygon.Min(p => p.X), polygon.Min(p => p.Y),
-                    polygon.Max(p => p.X), polygon.Max(p => p.Y));
-                if (!bounds.Overlaps(reserve)) return false;
-                var overlap = Clip(polygon.ToList(), -1, 0, -reserve.Left);
-                if (overlap.Count < 3) return false;
-                overlap = Clip(overlap, 1, 0, reserve.Right);
-                if (overlap.Count < 3) return false;
-                overlap = Clip(overlap, 0, -1, -reserve.Bottom);
-                return overlap.Count >= 3 && Clip(overlap, 0, 1, reserve.Top).Count >= 3;
-            });
+        private static int[] Shuffle(int count, Random random)
+        {
+            var order = Enumerable.Range(0, count).ToArray();
+            for (int i = count - 1; i > 0; i--)
+            {
+                int j = random.Next(i + 1), previous = order[i];
+                order[i] = order[j]; order[j] = previous;
+            }
+            return order;
         }
 
         private static List<PatternPoint> Clip(List<PatternPoint> polygon, double nx, double ny, double cut)

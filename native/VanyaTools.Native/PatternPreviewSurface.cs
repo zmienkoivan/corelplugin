@@ -42,23 +42,21 @@ namespace VanyaTools.Native
             drawing.DrawGeometry(Brushes.White, new Pen(Brushes.SlateGray, hairline), _frame.Geometry);
             if (_draft != null)
             {
-                var cellBrush = new SolidColorBrush(_draft.Color);
+                var lightOutline = new Pen(new SolidColorBrush(Color.FromArgb(100, 55, 75, 86)), hairline * .75);
                 drawing.PushClip(_frame.Geometry);
                 foreach (var item in _draft.Items)
                 {
-                    if (item.Cell == null) DrawMotif(drawing, _draft.Motifs[item.Motif], item, Brushes.SteelBlue);
-                    else drawing.DrawGeometry(cellBrush, null, CellGeometry(item.Cell,
-                        _draft.Options.Mode == PatternFillMode.Pebbles ? .37 : .11));
+                    var motif = _draft.Motifs[item.Motif];
+                    DrawMotif(drawing, motif, item, Brushes.SteelBlue);
+                    if (_draft.Options.Texture) DrawGuide(drawing, PatternSilhouette.At(motif, item), lightOutline);
                 }
                 if (_draft.Hero != null)
                 {
                     DrawMotif(drawing, _session.Hero, _draft.Hero, Brushes.MediumVioletRed);
-                    if (_draft.Reserve.HasValue)
+                    if (_draft.Reserve != null)
                     {
-                        var reserve = _draft.Reserve.Value;
                         var guide = new Pen(Brushes.DeepSkyBlue, hairline) { DashStyle = DashStyles.Dash };
-                        drawing.DrawRectangle(null, guide,
-                            new Rect(reserve.Left, _frame.Height - reserve.Top, reserve.Right - reserve.Left, reserve.Top - reserve.Bottom));
+                        DrawGuide(drawing, _draft.Reserve, guide);
                     }
                 }
                 drawing.Pop();
@@ -85,22 +83,11 @@ namespace VanyaTools.Native
             drawing.Pop();
         }
 
-        private Geometry CellGeometry(PatternPoint[] vertices, double rounding)
+        private void DrawGuide(DrawingContext drawing, Geometry geometry, Pen pen)
         {
-            var geometry = new StreamGeometry();
-            using (var context = geometry.Open())
-            {
-                int count = vertices.Length;
-                context.BeginFigure(ToView(PatternPoint.Between(vertices[0], vertices[count - 1], rounding)), true, true);
-                for (int i = 0; i < count; i++)
-                {
-                    var corner = vertices[i];
-                    if (i > 0) context.LineTo(ToView(PatternPoint.Between(corner, vertices[i - 1], rounding)), true, false);
-                    context.QuadraticBezierTo(ToView(corner),
-                        ToView(PatternPoint.Between(corner, vertices[(i + 1) % count], rounding)), true, false);
-                }
-            }
-            return geometry;
+            drawing.PushTransform(new MatrixTransform(1, 0, 0, -1, 0, _frame.Height));
+            drawing.DrawGeometry(null, pen, geometry);
+            drawing.Pop();
         }
 
         private Point ToView(PatternPoint point) => new Point(point.X, _frame.Height - point.Y);

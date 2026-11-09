@@ -3,7 +3,6 @@ using System.Globalization;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -15,7 +14,6 @@ namespace VanyaTools.Native
         internal double Allowance, HeroSize, HeroAngle;
         internal double HeroX = 50, HeroY = 50, HeroGap = 5;
         internal bool UseHero = true;
-        internal Color Color = Color.FromRgb(58, 78, 67);
     }
 
     internal sealed class PatternFillWindow : Window
@@ -27,14 +25,11 @@ namespace VanyaTools.Native
         private readonly ValueField _heroX, _heroY, _heroSize, _heroAngle, _heroGap;
         private readonly CheckBox _useHero;
         private readonly StackPanel _motifFields, _heroFields;
-        private readonly FrameworkElement _colorField;
-        private readonly Border _swatch;
         private readonly Button _apply;
         private readonly TextBlock _message;
         private readonly DispatcherTimer _refresh = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(70) };
         private PatternFrame _frame;
         private double _frameAllowance = Double.NaN;
-        private Color _cellColor;
         private int _seed;
         private bool _ready;
 
@@ -45,7 +40,7 @@ namespace VanyaTools.Native
         {
             _session = session;
             _frame = session.Seam;
-            _cellColor = initial.Color; _seed = initial.Layout.Seed;
+            _seed = initial.Layout.Seed;
             Title = "Паттерн по контуру · Vanya Tools";
             Width = Math.Min(1180, SystemParameters.WorkArea.Width - 28);
             Height = Math.Min(840, SystemParameters.WorkArea.Height - 28);
@@ -79,10 +74,10 @@ namespace VanyaTools.Native
             DockerTheme.UseTheme(frame, Border.BackgroundProperty, DockerTheme.SurfaceBackground);
             root.Children.Add(frame);
 
-            var pattern = DockerLayout.ToolGroup("Заполнение", "Пунктир на детали показывает линию шва. Голубой пунктир отмечает свободную зону вокруг главного элемента. Повторы, пересекающие эту зону, пропускаются.");
+            var pattern = DockerLayout.ToolGroup("Заполнение", "Пунктир на детали показывает линию шва. Голубой пунктир повторяет силуэт главного элемента с заданным зазором. Повторы, пересекающие эту зону, пропускаются.");
             settings.Children.Add(pattern);
             _mode = new ComboBox { ItemsSource = new[] { "Ряды", "Вразбежку", "Случайно", "Крокодиловая кожа", "Галька" },
-                SelectedIndex = session.Motifs.Length == 0 && !initial.Layout.Texture ? (int)PatternFillMode.Crocodile : (int)initial.Layout.Mode,
+                SelectedIndex = (int)initial.Layout.Mode,
                 MinHeight = 27, Margin = new Thickness(0, 0, 0, 6) };
             pattern.Children.Add(_mode);
             double sliderSize = Math.Max(100, Math.Min(1000, Math.Max(session.Seam.Width, session.Seam.Height)));
@@ -96,12 +91,7 @@ namespace VanyaTools.Native
             _motifFields = new StackPanel(); pattern.Children.Add(_motifFields);
             _min = AddField(_motifFields, "Размер от, %", 10, 300, initial.Layout.MinScale * 100, 300);
             _max = AddField(_motifFields, "Размер до, %", 10, 300, initial.Layout.MaxScale * 100, 300);
-            _variation = AddField(_motifFields, "Разброс поворота, ±°", 0, 180, initial.Layout.AngleVariation, 180);
-            _swatch = new Border { Width = 29, Height = 16, Background = new SolidColorBrush(_cellColor) };
-            var color = Button("", (_, __) => PickColor());
-            color.Content = _swatch; color.ToolTip = "Выбрать цвет ячеек";
-            _colorField = DockerLayout.FieldRow("Цвет ячеек", color);
-            pattern.Children.Add(_colorField);
+            _variation = AddField(pattern, "Разброс поворота, ±°", 0, 180, initial.Layout.AngleVariation, 180);
             pattern.Children.Add(Button("Другой вариант", (_, __) => { _seed = unchecked(_seed + 7919); QueuePreview(); }));
 
             var hero = DockerLayout.ToolGroup("Главный элемент", "Щёлкните по детали или перетащите главный элемент. Координаты считаются от левого и верхнего краёв внешнего габарита детали. Размер задаёт длинную сторону с учётом поворота.");
@@ -148,15 +138,13 @@ namespace VanyaTools.Native
             try
             {
                 var options = new PatternFillOptions { Mode = (PatternFillMode)_mode.SelectedIndex,
-                    SizeMm = _size.Read(), GapMm = _gap.Read(), Angle = _angle.Read(), Seed = _seed };
+                    SizeMm = _size.Read(), GapMm = _gap.Read(), Angle = _angle.Read(), AngleVariation = _variation.Read(), Seed = _seed };
                 _motifFields.Visibility = options.Texture ? Visibility.Collapsed : Visibility.Visible;
-                _colorField.Visibility = options.Texture ? Visibility.Visible : Visibility.Collapsed;
                 bool useHero = _useHero.IsChecked == true && _session.Hero != null;
                 _heroFields.Visibility = useHero ? Visibility.Visible : Visibility.Collapsed;
                 if (!options.Texture)
                 {
                     options.MinScale = _min.Read() / 100; options.MaxScale = _max.Read() / 100;
-                    options.AngleVariation = _variation.Read();
                 }
                 double allowance = _allowance.Read();
                 if (_frameAllowance != allowance)
@@ -165,10 +153,9 @@ namespace VanyaTools.Native
                     _frameAllowance = allowance;
                 }
                 var motifs = useHero ? _session.Motifs.Where(asset => asset.Id != _session.Hero.Id).ToArray() : _session.Motifs;
-                var items = PatternFillLayout.Build(_frame.Width, _frame.Height, motifs.Length, options);
-                var next = new PatternEditorSettings { Layout = options, Allowance = allowance, Color = _cellColor, UseHero = useHero || _session.Hero == null };
-                var draft = new PatternDraft { Frame = _frame, Options = options, Motifs = motifs, Items = items,
-                    Allowance = allowance, Color = _cellColor };
+                var items = PatternFillLayout.Build(_frame.Width, _frame.Height, motifs.Select(asset => asset.Footprint).ToArray(), options);
+                var next = new PatternEditorSettings { Layout = options, Allowance = allowance, UseHero = useHero || _session.Hero == null };
+                var draft = new PatternDraft { Frame = _frame, Options = options, Motifs = motifs, Items = items, Allowance = allowance };
                 if (useHero)
                 {
                     next.HeroX = _heroX.Read(); next.HeroY = _heroY.Read(); next.HeroSize = _heroSize.Read();
@@ -176,15 +163,16 @@ namespace VanyaTools.Native
                     var center = new PatternPoint(_frame.Width * next.HeroX / 100,
                         _frame.Height * (1 - next.HeroY / 100));
                     draft.Hero = new PatternPlacement { Center = center, Size = next.HeroSize, Angle = next.HeroAngle };
-                    draft.Reserve = PatternTransform.Fit(_session.Hero.Size, draft.Hero).Bounds(center, next.HeroGap);
-                    PatternFillLayout.LeaveRoom(items, motifs.Select(asset => asset.Size).ToArray(), draft.Reserve.Value);
+                    draft.Reserve = PatternSilhouette.Reserve(_session.Hero, draft.Hero, next.HeroGap);
+                    PatternSilhouette.LeaveRoom(items, motifs, draft.Reserve);
                 }
                 Settings = next;
                 Draft = draft;
-                int missing = options.Texture ? 0 : motifs.Count(asset => asset.Preview == null);
-                if (useHero && _session.Hero.Preview == null) missing++;
-                string message = "Повторов: " + items.Count + (useHero ? " · главный элемент" : "");
-                if (missing > 0) message += " · миниатюры недоступны: " + missing;
+                int fallback = motifs.Count(asset => asset.OutlineFallback);
+                if (useHero && _session.Hero.OutlineFallback) fallback++;
+                int used = items.Select(item => item.Motif).Distinct().Count();
+                string message = "Повторов: " + items.Count + " · фигур в раскладке: " + used + " из " + motifs.Length;
+                if (fallback > 0) message += " · по габаритам: " + fallback;
                 ShowMessage(message, false);
             }
             catch (Exception error)
@@ -193,15 +181,6 @@ namespace VanyaTools.Native
             }
             _preview.Update(_frame, Draft);
             _apply.IsEnabled = Draft != null;
-        }
-
-        private void PickColor()
-        {
-            Color? color = WindowsColorPicker.Pick(new WindowInteropHelper(this).Handle, _cellColor);
-            if (!color.HasValue) return;
-            _cellColor = color.Value;
-            _swatch.Background = new SolidColorBrush(_cellColor);
-            QueuePreview();
         }
 
         private void ShowMessage(string message, bool error)

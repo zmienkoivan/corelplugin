@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -10,25 +11,39 @@ namespace VanyaTools.Native
         private readonly PatternFillService _service = new PatternFillService();
         private readonly Action<string, bool> _status;
         private readonly TextBlock _motifs, _hero, _message;
-        private readonly Button _forgetHero;
+        private readonly ListBox _motifList;
+        private readonly Button _forgetHero, _removeMotifs;
         private PatternEditorSettings _settings = new PatternEditorSettings();
 
         internal PatternFillTab(Action<string, bool> status)
         {
             _status = status;
             var panel = DockerLayout.ToolGroup("Паттерн по контуру",
-                "Запомните фоновые объекты. При необходимости отдельно выберите главный элемент или группу. " +
+                "Добавьте фоновые фигуры из выделения. При необходимости отдельно выберите главный элемент или группу. " +
                 "Затем выделите замкнутый контур детали и откройте настройки. " +
-                "Для готовых фактур достаточно контура. Узор создаётся отдельным PowerClip по кнопке «Применить в Corel».");
+                "«Галька» и «Крокодиловая кожа» распределяют ваши фигуры по ячейкам.");
             panel.Margin = new Thickness(8);
             Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-            panel.Children.Add(Button("Запомнить элементы узора", (_, __) => Run(() =>
+            panel.Children.Add(Button("Добавить выделение в набор", (_, __) => Run(() =>
             {
-                _motifs.Text = "Элементов в наборе: " + _service.Remember();
-                Report("Набор сохранён.", false);
+                int count = _service.AddMotifs();
+                RefreshMotifs();
+                Report(count == 0 ? "Выделенные фигуры уже в наборе." : "Добавлено фигур · " + count, false);
             })));
-            _motifs = Note("Для рядов и случайной раскладки");
+            _motifs = Note("");
             panel.Children.Add(_motifs);
+            _motifList = new ListBox { SelectionMode = SelectionMode.Extended,
+                DisplayMemberPath = nameof(PatternSource.Label), MaxHeight = 144 };
+            panel.Children.Add(_motifList);
+            _removeMotifs = Button("Удалить выбранные из набора", (_, __) =>
+            {
+                var ids = _motifList.SelectedItems.Cast<PatternSource>().Select(source => source.Id).ToArray();
+                _service.RemoveMotifs(ids);
+                RefreshMotifs();
+            });
+            panel.Children.Add(_removeMotifs);
+            _motifList.SelectionChanged += (_, __) => _removeMotifs.IsEnabled = _motifList.SelectedItems.Count > 0;
+            RefreshMotifs();
 
             _forgetHero = Button("×", (_, __) =>
             {
@@ -52,6 +67,15 @@ namespace VanyaTools.Native
             panel.Children.Add(DockerTheme.Primary(Button("Настроить паттерн…", (_, __) => Run(Edit))));
             _message = Note("");
             panel.Children.Add(_message);
+        }
+
+        private void RefreshMotifs()
+        {
+            var sources = _service.Motifs.ToArray();
+            _motifs.Text = "Фоновые фигуры · " + sources.Length;
+            _motifList.ItemsSource = sources;
+            _motifList.Visibility = _removeMotifs.Visibility = sources.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+            _removeMotifs.IsEnabled = false;
         }
 
         private void Edit()

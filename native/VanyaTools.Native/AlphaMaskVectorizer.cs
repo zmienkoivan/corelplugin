@@ -38,36 +38,17 @@ namespace VanyaTools.Native
             if (mergeAdjacent)
                 BridgeSinglePixelGaps(visible, width, height);
 
-            var edges = new List<Edge>();
-            var outgoing = new Dictionary<long, List<int>>();
-            for (int y = 0; y < height; y++)
-            for (int x = 0; x < width; x++)
-            {
-                if (!visible[y * width + x]) continue;
-                if (y == 0 || !visible[(y - 1) * width + x])
-                    AddEdge(edges, outgoing, x, y, x + 1, y, 0);
-                if (x == width - 1 || !visible[y * width + x + 1])
-                    AddEdge(edges, outgoing, x + 1, y, x + 1, y + 1, 1);
-                if (y == height - 1 || !visible[(y + 1) * width + x])
-                    AddEdge(edges, outgoing, x + 1, y + 1, x, y + 1, 2);
-                if (x == 0 || !visible[y * width + x - 1])
-                    AddEdge(edges, outgoing, x, y + 1, x, y, 3);
-            }
-
             double scaleX = shapeWidth / width, scaleY = shapeHeight / height;
             double pixelMm = Math.Max(scaleX, scaleY);
             double tolerance = Math.Max(simplifyToleranceMm,
                 pixelMm * (0.75 + Math.Max(0, Math.Min(100, smoothing)) / 100.0
                           + (100 - Math.Max(0, Math.Min(100, detail))) / 200.0));
-            bool[] used = new bool[edges.Count];
             dynamic range = app.CreateShapeRange();
             int outerCount = 0, holeCount = 0;
             try
             {
-                for (int i = 0; i < edges.Count; i++)
+                foreach (List<GridPoint> loop in TraceLoops(visible, width, height))
                 {
-                    if (used[i]) continue;
-                    List<GridPoint> loop = FollowLoop(i, edges, outgoing, used);
                     if (loop.Count < 3) continue;
                     if (SignedArea(loop) <= 0)
                     {
@@ -100,6 +81,40 @@ namespace VanyaTools.Native
                 try { range.Delete(); } catch { }
                 throw;
             }
+        }
+
+        internal static IEnumerable<(int X, int Y)[]> TraceOutline(bool[] visible, int width, int height)
+        {
+            foreach (var loop in TraceLoops(visible, width, height))
+            {
+                if (loop.Count < 3) continue;
+                var simplified = SimplifyClosed(loop, 1, 1, .35);
+                var points = simplified.Count >= 3 ? simplified : loop;
+                yield return points.ConvertAll(point => (point.X, point.Y)).ToArray();
+            }
+        }
+
+        private static IEnumerable<List<GridPoint>> TraceLoops(bool[] visible, int width, int height)
+        {
+            var edges = new List<Edge>();
+            var outgoing = new Dictionary<long, List<int>>();
+            for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                if (!visible[y * width + x]) continue;
+                if (y == 0 || !visible[(y - 1) * width + x])
+                    AddEdge(edges, outgoing, x, y, x + 1, y, 0);
+                if (x == width - 1 || !visible[y * width + x + 1])
+                    AddEdge(edges, outgoing, x + 1, y, x + 1, y + 1, 1);
+                if (y == height - 1 || !visible[(y + 1) * width + x])
+                    AddEdge(edges, outgoing, x + 1, y + 1, x, y + 1, 2);
+                if (x == 0 || !visible[y * width + x - 1])
+                    AddEdge(edges, outgoing, x, y + 1, x, y, 3);
+            }
+
+            var used = new bool[edges.Count];
+            for (int i = 0; i < edges.Count; i++)
+                if (!used[i]) yield return FollowLoop(i, edges, outgoing, used);
         }
 
         private static void BridgeSinglePixelGaps(bool[] visible, int width, int height)

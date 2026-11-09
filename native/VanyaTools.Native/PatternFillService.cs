@@ -9,12 +9,25 @@ using System.Windows.Media.Imaging;
 
 namespace VanyaTools.Native
 {
+    internal sealed class PatternSource
+    {
+        internal readonly object Shape;
+        internal readonly int Id;
+        public string Label { get; }
+
+        internal PatternSource(object shape, int id, string label)
+        { Shape = shape; Id = id; Label = label; }
+    }
+
     internal sealed class PatternAsset
     {
         internal object Shape;
         internal int Id;
-        internal PatternPoint Size;
+        internal PatternFootprint Footprint;
+        internal PatternPoint Size => Footprint.Size;
         internal BitmapSource Preview;
+        internal Geometry Silhouette;
+        internal bool OutlineFallback;
     }
 
     internal sealed class PatternFrame
@@ -42,23 +55,37 @@ namespace VanyaTools.Native
         internal PatternAsset[] Motifs;
         internal List<PatternPlacement> Items;
         internal PatternPlacement Hero;
-        internal PatternBox? Reserve;
+        internal Geometry Reserve;
         internal double Allowance;
-        internal Color Color;
     }
 
     internal sealed class PatternFillService
     {
         private object _motifDocument, _heroDocument, _resultDocument, _result;
-        private (object Shape, int Id)[] _motifs = new (object, int)[0];
-        private (object Shape, int Id) _hero;
+        private readonly List<PatternSource> _motifs = new List<PatternSource>();
+        private PatternSource _hero;
         private double _lastAllowance;
 
-        internal int Remember()
+        internal IReadOnlyList<PatternSource> Motifs => _motifs;
+
+        internal int AddMotifs()
         {
-            var selection = CaptureSelection(out object doc, 64, "Выделите от 1 до 64 объектов узора. Группа считается одним элементом.");
-            _motifDocument = doc; _motifs = selection;
-            return selection.Length;
+            const int maximum = 64;
+            var selection = CaptureSelection(out object doc, maximum, "Выделите от 1 до 64 объектов узора. Группа считается одним элементом.");
+            bool sameDocument = SameObject(doc, _motifDocument);
+            var ids = sameDocument ? new HashSet<int>(_motifs.Select(source => source.Id)) : new HashSet<int>();
+            var added = selection.Where(source => ids.Add(source.Id)).ToArray();
+            if (ids.Count > maximum) throw new InvalidOperationException("В наборе помещается до 64 фигур. Удалите лишние из списка.");
+            if (!sameDocument) _motifs.Clear();
+            _motifDocument = doc;
+            _motifs.AddRange(added);
+            return added.Length;
+        }
+
+        internal void RemoveMotifs(IEnumerable<int> ids)
+        {
+            var selected = new HashSet<int>(ids);
+            _motifs.RemoveAll(source => selected.Contains(source.Id));
         }
 
         internal void RememberHero()
@@ -68,18 +95,25 @@ namespace VanyaTools.Native
 
         internal void ForgetHero()
         {
-            _hero = default; _heroDocument = null;
+            _hero = null; _heroDocument = null;
         }
 
-        private static (object Shape, int Id)[] CaptureSelection(out object document, int limit, string hint)
+        private static PatternSource[] CaptureSelection(out object document, int limit, string hint)
         {
             dynamic app = CorelApp.Get(), doc = app.ActiveDocument;
             if (doc == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
             dynamic selection = app.ActiveSelectionRange;
             int count = selection == null ? 0 : Convert.ToInt32(selection.Count);
             if (count == 0 || count > limit) throw new InvalidOperationException(hint);
-            var shapes = new List<(object Shape, int Id)>(count);
-            foreach (dynamic shape in selection) shapes.Add(((object)shape, Convert.ToInt32(shape.StaticID)));
+            var shapes = new List<PatternSource>(count);
+            foreach (dynamic shape in selection)
+            {
+                int id = Convert.ToInt32(shape.StaticID), type = Convert.ToInt32(shape.Type);
+                string name = Convert.ToString(shape.Name);
+                if (String.IsNullOrWhiteSpace(name))
+                    name = type == CorelConstants.CdrBitmapShape ? "Растр" : type == CorelConstants.CdrGroupShape ? "Группа" : "Объект";
+                shapes.Add(new PatternSource((object)shape, id, name + " · #" + id));
+            }
             if (shapes.Count != count) throw new InvalidOperationException("Выделение изменилось. Повторите выбор.");
             document = (object)doc;
             return shapes.ToArray();
@@ -109,7 +143,7 @@ namespace VanyaTools.Native
                 }
                 return session;
 
-                PatternAsset ReadAsset((object Shape, int Id) captured)
+                PatternAsset ReadAsset(PatternSource captured)
                 {
                     if (previews.TryGetValue(captured.Id, out PatternAsset cached)) return cached;
                     VerifyAsset(captured.Shape, captured.Id);
@@ -118,7 +152,7 @@ namespace VanyaTools.Native
                     shape.GetBoundingBox(out left, out bottom, out width, out height, true);
                     if (width < 0 || height < 0 || !Finite(width + height) || Math.Max(width, height) <= .0001)
                         throw new InvalidOperationException("Один из элементов узора имеет нулевой размер.");
-                    var asset = new PatternAsset { Shape = captured.Shape, Id = captured.Id, Size = new PatternPoint(width, height) };
+                    var asset = new PatternAsset { Shape = captured.Shape, Id = captured.Id };
                     previews.Add(asset.Id, asset);
                     string temporary = Path.Combine(Path.GetTempPath(), "Vanya-Pattern-" + Guid.NewGuid().ToString("N"));
                     string path = SportArtworkPreview.Sidecar(temporary);
@@ -130,6 +164,15 @@ namespace VanyaTools.Native
                     }
                     catch (Exception error) { Log.Error("Could not read pattern motif preview.", error); }
                     finally { TryRestore(() => File.Delete(path), "pattern thumbnail cleanup"); }
+                    var size = new PatternPoint(width, height);
+                    asset.OutlineFallback = asset.Preview == null;
+                    try { asset.Silhouette = PatternSilhouette.Read(asset.Preview, size, out asset.Footprint); }
+                    catch (Exception error)
+                    {
+                        Log.Error("Could not trace pattern silhouette.", error);
+                        asset.OutlineFallback = true;
+                        asset.Silhouette = PatternSilhouette.Read(null, size, out asset.Footprint);
+                    }
                     return asset;
                 }
             });
@@ -157,7 +200,7 @@ namespace VanyaTools.Native
             if (!SameObject((object)app.ActiveDocument, session.Document) ||
                 !SameObject(SelectedContour(session.Application), session.Target))
                 throw new InvalidOperationException("Выделение изменилось. Снова откройте окно паттерна.");
-            if (!draft.Options.Texture) foreach (var motif in draft.Motifs) VerifyAsset(motif.Shape, motif.Id);
+            foreach (var motif in draft.Motifs) VerifyAsset(motif.Shape, motif.Id);
             if (draft.Hero != null) VerifyAsset(session.Hero.Shape, session.Hero.Id);
 
             int unit = Convert.ToInt32(doc.Unit);
@@ -168,29 +211,13 @@ namespace VanyaTools.Native
             {
                 doc.Unit = CorelConstants.CdrMillimeter;
                 dynamic layer = doc.ActiveLayer, range = app.CreateShapeRange();
-                dynamic color = draft.Options.Texture
-                    ? app.CreateRGBColor((int)draft.Color.R, (int)draft.Color.G, (int)draft.Color.B) : null;
                 app.Optimization = true;
                 doc.BeginCommandGroup("Vanya Tools · паттерн по контуру"); started = true;
                 frame = layer.CreateCurve((dynamic)draft.Frame.Curve);
                 frame.Fill.ApplyNoFill();
                 frame.Outline.SetNoOutline();
                 frame.Name = "Vanya · паттерн";
-                foreach (var item in draft.Items)
-                {
-                    if (item.Cell == null)
-                    {
-                        AddMotif(draft.Motifs[item.Motif], item);
-                        continue;
-                    }
-                    dynamic curve = MakeCell((object)doc, item.Cell, draft.Frame.Left, draft.Frame.Bottom,
-                        draft.Options.Mode == PatternFillMode.Pebbles ? .37 : .11);
-                    dynamic shape = layer.CreateCurve(curve);
-                    created.Add((object)shape);
-                    shape.Fill.ApplyUniformFill(color);
-                    shape.Outline.SetNoOutline();
-                    range.Add(shape);
-                }
+                foreach (var item in draft.Items) AddMotif(draft.Motifs[item.Motif], item);
                 if (draft.Hero != null) AddMotif(session.Hero, draft.Hero);
                 range.AddToPowerClip(frame, 0);
                 frame.CreateSelection();
@@ -338,26 +365,6 @@ namespace VanyaTools.Native
             double x = originX + item.Center.X, y = originY + item.Center.Y;
             copy.Move(x - left - width / 2, y - bottom - height / 2);
             if (Math.Abs(item.Angle) > .0001) copy.RotateEx(item.Angle, x, y);
-        }
-
-        private static object MakeCell(object document, PatternPoint[] vertices, double left, double bottom, double rounding)
-        {
-            dynamic doc = document, curve = doc.CreateCurve();
-            int count = vertices.Length;
-            PatternPoint first = PatternPoint.Between(vertices[0], vertices[count - 1], rounding);
-            dynamic path = curve.CreateSubPath(left + first.X, bottom + first.Y);
-            for (int i = 0; i < count; i++)
-            {
-                PatternPoint corner = vertices[i];
-                PatternPoint start = PatternPoint.Between(corner, vertices[(i + count - 1) % count], rounding);
-                PatternPoint end = PatternPoint.Between(corner, vertices[(i + 1) % count], rounding);
-                if (i != 0) path.AppendLineSegment(left + start.X, bottom + start.Y, false);
-                PatternPoint a = PatternPoint.Between(start, corner, 2d / 3), b = PatternPoint.Between(end, corner, 2d / 3);
-                path.AppendCurveSegment2(left + end.X, bottom + end.Y, left + a.X, bottom + a.Y,
-                    left + b.X, bottom + b.Y, false);
-            }
-            path.Closed = true;
-            return (object)curve;
         }
 
         private static bool Finite(double value) => !Double.IsNaN(value) && !Double.IsInfinity(value);
