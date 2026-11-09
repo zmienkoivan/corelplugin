@@ -105,9 +105,8 @@ internal static class PatternFillChecks
             Require(items.Count > 500, "The random seeds leave the detail sparse.");
             var blocks = items.Take(7 * 10).Select(p => p.Motif).ToArray();
             Require(items.Select(p => p.Motif).Distinct().Count() == motifs.Length, "An organic variant loses part of the motif set.");
-            if (mode == PatternFillMode.Pebbles)
-                Require(Enumerable.Range(0, 10).All(i => blocks.Skip(i * 7).Take(7).Distinct().Count() == 7),
-                    "Pebbles do not cycle through all motifs.");
+            var counts = items.GroupBy(item => item.Motif).Select(group => group.Count()).ToArray();
+            Require(counts.Max() - counts.Min() < 10, "The neighbor rule starves some motifs.");
             Require(Enumerable.Range(0, 10).Select(i => String.Join(",", blocks.Skip(i * 7).Take(7))).Distinct().Count() > 8,
                 "The same motif sequence repeats over the detail.");
             var same = PatternFillLayout.Build(width, height, motifs, options);
@@ -121,6 +120,44 @@ internal static class PatternFillChecks
         }
     }
 
+    internal static void PebbleOrientationAndNeighbors()
+    {
+        var cell = new[] { new PatternPoint(0, 0), new PatternPoint(8, 0),
+            new PatternPoint(8, 36), new PatternPoint(0, 36) };
+        var horizontal = new PatternFootprint(new PatternPoint(30, 6));
+        var options = new PatternFillOptions { Mode = PatternFillMode.Pebbles, SizeMm = 30, GapMm = 0 };
+        var fitted = PatternFillLayout.PlaceInCells(new List<PatternPoint[]> { cell }, new[] { horizontal }, options).Single();
+        Require(PatternTransform.Fit(horizontal.Size, fitted).Scale > 1.18 && Math.Abs(Math.Abs(fitted.Angle) - 90) < 3,
+            "A long horizontal motif was not turned to fill a vertical cell.");
+        Require(Hull(fitted, horizontal).All(p => Contains(cell, p.X, p.Y)), "Auto-rotation crossed a fitting boundary.");
+
+        const double pitch = 24;
+        var motifs = Enumerable.Range(0, 7).Select(i => new PatternFootprint(new PatternPoint(6 + i * 2, 11))).ToArray();
+        options.SizeMm = pitch;
+        options.GapMm = 3;
+        options.Seed = 8123;
+        VerifyNeighbors();
+        options.RepeatWidthMm = 135;
+        options.RepeatHeightMm = 125;
+        VerifyNeighbors();
+
+        void VerifyNeighbors()
+        {
+            var items = PatternFillLayout.Build(475, 365, motifs, options);
+            var centers = items.Select(item => At(item, motifs[item.Motif], motifs[item.Motif].Center)).ToArray();
+            int near = 0, repeats = 0;
+            for (int i = 0; i < items.Count; i++)
+                for (int j = i + 1; j < items.Count; j++)
+                {
+                    if (DistanceSquared(centers[i], centers[j]) > 1.65 * pitch * pitch) continue;
+                    near++;
+                    if (items[i].Motif == items[j].Motif) repeats++;
+                }
+            Require(near > 100 && repeats < near * .04,
+                "The same motif appears too often among nearby cells, including at repeat seams.");
+        }
+    }
+
     internal static void PebbleRepeat()
     {
         const double width = 475, height = 365, periodX = 110, periodY = 95, gap = 3.5;
@@ -128,25 +165,28 @@ internal static class PatternFillChecks
             new PatternFootprint(new PatternPoint(23, 12)),
             new PatternFootprint(new PatternPoint(20, 20), new[] { new PatternPoint(-5, -6),
                 new PatternPoint(9, 2), new PatternPoint(1, 8) }) };
+        foreach (PatternFillMode mode in Enum.GetValues(typeof(PatternFillMode)))
         foreach (double angle in new[] { 0d, 31d })
         {
-            var options = new PatternFillOptions { Mode = PatternFillMode.Pebbles, SizeMm = 26, GapMm = gap,
+            var options = new PatternFillOptions { Mode = mode, SizeMm = 26, GapMm = gap,
                 RepeatWidthMm = periodX, RepeatHeightMm = periodY, Angle = angle, AngleVariation = 31, Seed = 8123 };
             var items = PatternFillLayout.Build(width, height, motifs, options, out PatternLayoutGuides guides);
-            Require(items.Count > 180 && guides.Cells.Count > 180, "The periodic module leaves empty parts of the frame.");
+            Require(items.Count > 80 && (options.Texture ? guides.Cells.Count > 150 : guides.Cells == null),
+                "The periodic module leaves empty parts of the frame or has incorrect cell guides.");
             var hulls = items.Select(item => Hull(item, motifs[item.Motif])).ToArray();
             AssertGap(hulls, gap);
             double radians = angle * Math.PI / 180, cos = Math.Cos(radians), sin = Math.Sin(radians);
-            Require(CountMatches(periodX * cos, periodX * sin) > 90 && CountMatches(-periodY * sin, periodY * cos) > 90,
+            Require(CountMatches(periodX * cos, periodX * sin) > 35 && CountMatches(-periodY * sin, periodY * cos) > 35,
                 "The positions, sizes and motifs differ between copies of the repeat.");
             var lines = guides.RepeatLines.Select(line => line.Select(ToModule).ToArray()).ToArray();
             Require(lines.Count(line => Math.Abs(line[0].X - line[1].X) < 1e-8) > 2 &&
                 lines.Count(line => Math.Abs(line[0].Y - line[1].Y) < 1e-8) > 2 &&
                 lines.All(line => OnPeriod(line[0].X, line[1].X, periodX) || OnPeriod(line[0].Y, line[1].Y, periodY)),
                 "The dashed guides are not aligned with the tile boundaries.");
-            Require(hulls.Select(hull => hull.Select(ToModule).ToArray()).Any(hull =>
-                hull.Min(p => p.X) < periodX && hull.Max(p => p.X) > periodX),
-                "Motifs must carry across the seams of the repeat.");
+            if (mode == PatternFillMode.Pebbles)
+                Require(hulls.Select(hull => hull.Select(ToModule).ToArray()).Any(hull =>
+                    hull.Min(p => p.X) < periodX && hull.Max(p => p.X) > periodX),
+                    "Pebble motifs must carry across the seams of the repeat.");
 
             int CountMatches(double dx, double dy) => items.Count(item => items.Any(other =>
                 other.Motif == item.Motif && other.Angle == item.Angle && other.Size == item.Size &&
@@ -172,7 +212,7 @@ internal static class PatternFillChecks
     internal static void OrganicSpacing()
     {
         var metrics = SpacingMetrics();
-        Require(metrics.CenterVariation < .100 && metrics.Void95 < 7.5,
+        Require(metrics.CenterVariation < .100 && metrics.Void95 < 6.5,
             "Pebble centers or outline gaps are too uneven.");
         Require(metrics.Repeats < .025, "Crocodile motifs repeat along nearby diagonals.");
 

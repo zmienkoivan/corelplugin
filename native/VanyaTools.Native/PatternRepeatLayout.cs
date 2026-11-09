@@ -6,7 +6,7 @@ namespace VanyaTools.Native
 {
     internal static partial class PatternFillLayout
     {
-        private static List<PatternPlacement> RepeatPebbles(double width, double height,
+        private static List<PatternPlacement> RepeatPattern(double width, double height,
             IReadOnlyList<PatternFootprint> motifs, PatternFillOptions options, out PatternLayoutGuides guides)
         {
             double repeatWidth = options.RepeatWidthMm, repeatHeight = options.RepeatHeightMm;
@@ -14,32 +14,12 @@ namespace VanyaTools.Native
                 repeatHeight < options.SizeMm || repeatWidth > 5000 || repeatHeight > 5000)
                 throw new ArgumentException("Ширина и высота рапорта должны быть от размера ячейки до 5000 мм.");
 
-            double cols = Math.Max(1, Math.Round(repeatWidth / options.SizeMm));
-            double rows = Math.Max(1, Math.Round(repeatHeight / options.SizeMm));
-            CheckCount(cols, rows);
             CheckCount(Math.Max(1, Math.Floor(width / Math.Max(repeatWidth, repeatHeight))),
                 Math.Max(1, Math.Floor(height / Math.Max(repeatWidth, repeatHeight))));
-            var seeds = RelaxSeeds(ScatterSeeds((int)cols, (int)rows, options.Seed, true), true);
-            var scratch = new List<PatternPoint>(16);
-            var buffer = new List<PatternPoint>(16);
-            var cells = new List<PatternPoint[]>();
-            double pitchX = repeatWidth / cols, pitchY = repeatHeight / rows;
-            for (int row = 0; row < rows; row++)
-                for (int col = 0; col < cols; col++)
-                {
-                    var bucket = seeds[col, row];
-                    if (bucket == null) continue;
-                    foreach (var seed in bucket)
-                    {
-                        var cell = BuildCell(seed, seeds, col, row, pitchX, pitchY, options.GapMm, scratch, buffer, true);
-                        if (cell.Count < 3) continue;
-                        cells.Add(cell.Select(p => new PatternPoint(p.X * pitchX, p.Y * pitchY)).ToArray());
-                    }
-                }
-
-            CheckCount(cells.Count, 1);
-            var module = PlaceInCells(cells, motifs, options);
-            PatternPebbleSpacing.Balance(module, motifs, options.GapMm, repeatWidth, repeatHeight);
+            var cells = options.Texture ? RepeatCells(repeatWidth, repeatHeight, options) : null;
+            var module = cells == null ? Motifs(repeatWidth, repeatHeight, motifs.Count, options) : PlaceInCells(cells, motifs, options);
+            if (options.Mode == PatternFillMode.Pebbles)
+                PatternPebbleSpacing.Balance(module, motifs, options.GapMm, repeatWidth, repeatHeight);
 
             double radians = options.Angle * Math.PI / 180, cos = Math.Cos(radians), sin = Math.Sin(radians);
             double localWidth = Math.Abs(cos) * width + Math.Abs(sin) * height;
@@ -51,11 +31,10 @@ namespace VanyaTools.Native
             {
                 var motif = motifs[item.Motif];
                 double scale = PatternTransform.Fit(motif.Size, item).Scale;
-                double angle = item.Angle * Math.PI / 180, c = Math.Cos(angle), s = Math.Sin(angle);
-                var hull = motif.Hull.Select(p => new PatternPoint(item.Center.X + scale * (p.X * c - p.Y * s),
-                    item.Center.Y + scale * (p.X * s + p.Y * c))).ToArray();
+                var hull = motif.At(item);
                 var bounds = Bounds(hull.Select(ToFrame).ToArray());
                 var center = ToFrame(item.Center);
+                var cell = item.Cell.Select(ToFrame).ToArray();
                 double finalAngle = item.Angle + options.Angle;
                 var size = PatternTransform.RotatedSize(motif.Size.X, motif.Size.Y, finalAngle);
                 double finalSize = scale * Math.Max(size.X, size.Y);
@@ -64,7 +43,8 @@ namespace VanyaTools.Native
                     var offset = Rotate(dx, dy);
                     if (!OnFrame(bounds, offset)) return;
                     placed.Add(new PatternPlacement { Motif = item.Motif, Angle = finalAngle, Size = finalSize,
-                        Center = new PatternPoint(center.X + offset.X, center.Y + offset.Y) });
+                        Center = new PatternPoint(center.X + offset.X, center.Y + offset.Y),
+                        Cell = Offset(cell, offset) });
                     CheckCount(placed.Count, 1);
                 });
             }
@@ -72,18 +52,18 @@ namespace VanyaTools.Native
             if (placed.Count == 0)
                 throw new InvalidOperationException("В пределах детали нет фигур. Измените размер рапорта или выберите другой вариант.");
 
-            var cellGuides = new List<PatternPoint[]>();
-            foreach (var cell in cells)
-            {
-                var path = cell.Select(ToFrame).ToArray();
-                var bounds = Bounds(path);
-                Repeat(Bounds(cell), (dx, dy) =>
+            var cellGuides = cells == null ? null : new List<PatternPoint[]>();
+            if (cells != null)
+                foreach (var cell in cells)
                 {
-                    var offset = Rotate(dx, dy);
-                    if (OnFrame(bounds, offset))
-                        cellGuides.Add(path.Select(p => new PatternPoint(p.X + offset.X, p.Y + offset.Y)).ToArray());
-                });
-            }
+                    var path = cell.Select(ToFrame).ToArray();
+                    var bounds = Bounds(path);
+                    Repeat(Bounds(cell), (dx, dy) =>
+                    {
+                        var offset = Rotate(dx, dy);
+                        if (OnFrame(bounds, offset)) cellGuides.Add(Offset(path, offset));
+                    });
+                }
 
             var lines = new List<PatternPoint[]>();
             for (int col = (int)Math.Ceiling(left / repeatWidth); col * repeatWidth <= right; col++)
@@ -115,6 +95,38 @@ namespace VanyaTools.Native
                 var rotated = Rotate(point.X - repeatWidth / 2, point.Y - repeatHeight / 2);
                 return new PatternPoint(width / 2 + rotated.X, height / 2 + rotated.Y);
             }
+
+            PatternPoint[] Offset(PatternPoint[] points, PatternPoint offset) =>
+                points.Select(p => new PatternPoint(p.X + offset.X, p.Y + offset.Y)).ToArray();
+        }
+
+        private static List<PatternPoint[]> RepeatCells(double repeatWidth, double repeatHeight, PatternFillOptions options)
+        {
+            bool scales = options.Mode == PatternFillMode.Crocodile;
+            double cols = Math.Max(1, Math.Round(repeatWidth / (options.SizeMm * (scales ? 1.28 : 1))));
+            double rows = Math.Max(1, Math.Round(repeatHeight / (options.SizeMm * (scales ? .74 : 1))));
+            CheckCount(cols, rows);
+            var seeds = ScatterSeeds((int)cols, (int)rows, options.Seed, true);
+            if (!scales) seeds = RelaxSeeds(seeds, true);
+            var scratch = new List<PatternPoint>(16);
+            var buffer = new List<PatternPoint>(16);
+            var cells = new List<PatternPoint[]>();
+            double pitchX = repeatWidth / cols, pitchY = repeatHeight / rows;
+            for (int row = 0; row < rows; row++)
+                for (int col = 0; col < cols; col++)
+                {
+                    var bucket = seeds[col, row];
+                    if (bucket == null) continue;
+                    foreach (var seed in bucket)
+                    {
+                        var cell = BuildCell(seed, seeds, col, row, pitchX, pitchY, options.GapMm, scratch, buffer, true);
+                        if (cell.Count < 3) continue;
+                        cells.Add(cell.Select(p => new PatternPoint(p.X * pitchX, p.Y * pitchY)).ToArray());
+                    }
+                }
+
+            CheckCount(cells.Count, 1);
+            return cells;
         }
 
         private static (double Left, double Bottom, double Right, double Top) Bounds(PatternPoint[] points) =>

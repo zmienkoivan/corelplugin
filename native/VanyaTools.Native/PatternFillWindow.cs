@@ -27,7 +27,7 @@ namespace VanyaTools.Native
         private readonly ValueField _size, _gap, _allowance, _angle, _min, _max, _variation;
         private readonly ValueField _heroX, _heroY, _heroSize, _heroAngle, _heroGap;
         private readonly CheckBox _useHero, _repeat, _showCells, _showRepeatBorders;
-        private readonly StackPanel _motifFields, _heroFields, _pebbleFields, _repeatFields;
+        private readonly StackPanel _motifFields, _heroFields, _repeatFields;
         private readonly ValueField _repeatWidth, _repeatHeight;
         private readonly Button _apply;
         private readonly TextBlock _message;
@@ -88,7 +88,7 @@ namespace VanyaTools.Native
             DockerTheme.UseTheme(frame, Border.BackgroundProperty, DockerTheme.SurfaceBackground);
             root.Children.Add(frame);
 
-            var pattern = DockerLayout.ToolGroup("Заполнение", "Пунктир на детали показывает линию шва. Голубой пунктир повторяет силуэт главного элемента с заданным зазором. Повторы, пересекающие эту зону, пропускаются.");
+            var pattern = DockerLayout.ToolGroup("Заполнение", "Пунктир на детали показывает линию шва. Голубой пунктир повторяет силуэт главного элемента с заданным зазором. Рисунки рядом подгоняются под свободное место.");
             settings.Children.Add(pattern);
             _mode = new ComboBox { ItemsSource = new[] { "Ряды", "Вразбежку", "Случайно", "Крокодиловая кожа", "Галька" },
                 SelectedIndex = (int)initial.Layout.Mode,
@@ -108,17 +108,15 @@ namespace VanyaTools.Native
             _variation = AddField(pattern, "Разброс поворота, ±°", 0, 180, initial.Layout.AngleVariation, 180);
             pattern.Children.Add(Button("Другой вариант", (_, __) => { _seed = unchecked(_seed + 7919); QueuePreview(); }));
 
-            _pebbleFields = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
-            pattern.Children.Add(_pebbleFields);
-            _showCells = new CheckBox { Content = "Контуры ячеек", Margin = new Thickness(0, 0, 0, 5),
+            _showCells = new CheckBox { Content = "Контуры ячеек", Margin = new Thickness(0, 6, 0, 5),
                 ToolTip = "Контуры первоначальной посадки. При уплотнении фигуры могут выходить за эти линии." };
-            _pebbleFields.Children.Add(_showCells);
+            pattern.Children.Add(_showCells);
             _repeat = new CheckBox { Content = "Повторять рапорт", IsChecked = initial.Layout.Repeat,
                 Margin = new Thickness(0, 0, 0, 5),
                 ToolTip = "Один блок повторяется по ширине и высоте. Поворот поворачивает весь рапорт." };
-            _pebbleFields.Children.Add(_repeat);
+            pattern.Children.Add(_repeat);
             _repeatFields = new StackPanel();
-            _pebbleFields.Children.Add(_repeatFields);
+            pattern.Children.Add(_repeatFields);
             double defaultRepeatSize = Math.Min(5000, Math.Max(150, initial.Layout.SizeMm * 5));
             double repeatSliderMax = Math.Max(500, sliderSize);
             _repeatWidth = AddField(_repeatFields, "Ширина рапорта, мм", .5, 5000,
@@ -169,11 +167,16 @@ namespace VanyaTools.Native
 
         private void UpdateGuideControls()
         {
-            bool pebbles = _mode.SelectedIndex == (int)PatternFillMode.Pebbles;
-            bool repeat = pebbles && _repeat.IsChecked == true;
-            _pebbleFields.Visibility = pebbles ? Visibility.Visible : Visibility.Collapsed;
+            var mode = (PatternFillMode)_mode.SelectedIndex;
+            bool pebbles = mode == PatternFillMode.Pebbles;
+            bool texture = pebbles || mode == PatternFillMode.Crocodile;
+            bool repeat = _repeat.IsChecked == true;
+            _variation.View.IsEnabled = !pebbles;
+            _variation.View.ToolTip = pebbles ? "В «Гальке» поворот рисунка подбирается автоматически по форме ячейки." : null;
+            ToolTipService.SetShowOnDisabled(_variation.View, pebbles);
+            _showCells.Visibility = texture ? Visibility.Visible : Visibility.Collapsed;
             _repeatFields.Visibility = repeat ? Visibility.Visible : Visibility.Collapsed;
-            _preview.ShowGuides(pebbles && _showCells.IsChecked == true, repeat && _showRepeatBorders.IsChecked == true);
+            _preview.ShowGuides(texture && _showCells.IsChecked == true, repeat && _showRepeatBorders.IsChecked == true);
         }
 
         private void SetPosition(double x, double y)
@@ -198,9 +201,12 @@ namespace VanyaTools.Native
             Draft = null;
             try
             {
-                var options = new PatternFillOptions { Mode = (PatternFillMode)_mode.SelectedIndex,
-                    SizeMm = _size.Read(), GapMm = _gap.Read(), Angle = _angle.Read(), AngleVariation = _variation.Read(), Seed = _seed };
-                if (options.Mode == PatternFillMode.Pebbles && _repeat.IsChecked == true)
+                var mode = (PatternFillMode)_mode.SelectedIndex;
+                if (!_variation.TryRead(out double variation))
+                    variation = mode == PatternFillMode.Pebbles ? 0 : _variation.Read();
+                var options = new PatternFillOptions { Mode = mode,
+                    SizeMm = _size.Read(), GapMm = _gap.Read(), Angle = _angle.Read(), AngleVariation = variation, Seed = _seed };
+                if (_repeat.IsChecked == true)
                 {
                     options.RepeatWidthMm = _repeatWidth.Read();
                     options.RepeatHeightMm = _repeatHeight.Read();
@@ -297,7 +303,7 @@ namespace VanyaTools.Native
                 _reserveSize = settings.HeroSize; _reserveAngle = settings.HeroAngle; _reserveGap = settings.HeroGap;
             }
             draft.Reserve = PatternSilhouette.MoveReserve(_reserve, draft.Hero.Center);
-            draft.Items = PatternSilhouette.LeaveRoom(_layoutItems, _layoutSilhouettes, draft.Reserve, cancellation);
+            draft.Items = PatternHeroFill.Adjust(_layoutItems, _layoutSilhouettes, motifs, options, draft.Reserve, cancellation);
             return draft;
         }
 
@@ -387,7 +393,7 @@ namespace VanyaTools.Native
                 throw new ArgumentException("«" + _label + "» — от " + _minimum + " до " + _maximum + ".");
             }
 
-            private bool TryRead(out double value) =>
+            internal bool TryRead(out double value) =>
                 Double.TryParse(_input.Text.Trim().Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out value) &&
                 value >= _minimum && value <= _maximum;
 

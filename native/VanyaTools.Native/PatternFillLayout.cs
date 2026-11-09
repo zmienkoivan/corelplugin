@@ -13,7 +13,7 @@ namespace VanyaTools.Native
         internal double Angle, AngleVariation;
         internal int Seed;
         internal double RepeatWidthMm, RepeatHeightMm;
-        internal bool Repeat => Mode == PatternFillMode.Pebbles && RepeatWidthMm > 0;
+        internal bool Repeat => RepeatWidthMm > 0;
         internal bool Texture => Mode == PatternFillMode.Crocodile || Mode == PatternFillMode.Pebbles;
     }
 
@@ -31,6 +31,7 @@ namespace VanyaTools.Native
         internal int Motif;
         internal double Size, Angle;
         internal PatternPoint Center;
+        internal PatternPoint[] Cell;
     }
 
     internal sealed class PatternFootprint
@@ -45,6 +46,14 @@ namespace VanyaTools.Native
             Hull = outline == null ? Rectangle(size) : ConvexHull(outline);
             if (Hull.Length < 3) Hull = Rectangle(size);
             Center = new PatternPoint(Hull.Average(p => p.X), Hull.Average(p => p.Y));
+        }
+
+        internal PatternPoint[] At(PatternPlacement item)
+        {
+            double scale = PatternTransform.Fit(Size, item).Scale;
+            double radians = item.Angle * Math.PI / 180, cos = Math.Cos(radians), sin = Math.Sin(radians);
+            return Hull.Select(p => new PatternPoint(item.Center.X + scale * (p.X * cos - p.Y * sin),
+                item.Center.Y + scale * (p.X * sin + p.Y * cos))).ToArray();
         }
 
         private static PatternPoint[] Rectangle(PatternPoint size)
@@ -133,20 +142,18 @@ namespace VanyaTools.Native
             {
                 if (options.GapMm > options.SizeMm / 2)
                     throw new ArgumentException("Зазор фактуры должен быть не больше половины размера ячейки.");
-                if (options.Repeat) return RepeatPebbles(width, height, motifs, options, out guides);
+                if (options.Repeat) return RepeatPattern(width, height, motifs, options, out guides);
                 var cells = TextureCells(width, height, options);
                 var items = PlaceInCells(cells, motifs, options);
-                if (options.Mode == PatternFillMode.Pebbles)
-                {
-                    PatternPebbleSpacing.Balance(items, motifs, options.GapMm);
-                    guides = new PatternLayoutGuides { Cells = cells };
-                }
+                if (options.Mode == PatternFillMode.Pebbles) PatternPebbleSpacing.Balance(items, motifs, options.GapMm);
+                guides = new PatternLayoutGuides { Cells = cells };
                 return items;
             }
             if (!Finite(options.MinScale) || !Finite(options.MaxScale) || options.MinScale < .1 ||
                 options.MaxScale > 3 || options.MinScale > options.MaxScale)
                 throw new ArgumentException("Задайте диапазон размеров от 10% до 300%, сначала меньшее значение.");
-            return Motifs(width, height, motifs.Count, options);
+            return options.Repeat ? RepeatPattern(width, height, motifs, options, out guides) :
+                Motifs(width, height, motifs.Count, options);
         }
 
         private static List<PatternPlacement> Motifs(double width, double height, int motifs, PatternFillOptions options)
@@ -154,32 +161,53 @@ namespace VanyaTools.Native
             bool scattered = options.Mode == PatternFillMode.Random;
             double largest = options.SizeMm * options.MaxScale;
             double pitch = largest + options.GapMm + (scattered ? largest * .22 : 0);
+            bool repeat = options.Repeat, staggered = options.Mode == PatternFillMode.Staggered;
             double cols = Math.Ceiling(width / pitch), rows = Math.Ceiling(height / pitch);
+            if (repeat)
+            {
+                double minimum = largest + options.GapMm;
+                if (width < minimum || height < minimum)
+                    throw new ArgumentException("Рапорт должен вмещать самый крупный рисунок с зазором.");
+                cols = Math.Max(1, Math.Floor(width / pitch));
+                rows = Math.Max(1, Math.Floor(height / pitch));
+                if (staggered && rows > 1 && rows % 2 != 0) rows--;
+            }
             CheckCount(cols, rows);
-            double firstX = (width - (cols - 1) * pitch) / 2;
-            double firstY = (height + (rows - 1) * pitch) / 2;
+            double pitchX = repeat ? width / cols : pitch, pitchY = repeat ? height / rows : pitch;
+            double firstX = (width - (cols - 1) * pitchX) / 2;
+            double firstY = (height + (rows - 1) * pitchY) / 2;
             var random = new Random(options.Seed);
             int[] order = scattered ? Shuffle(motifs, random) : null;
             var result = new List<PatternPlacement>();
             for (int row = 0; row < rows; row++)
             {
-                double shift = options.Mode == PatternFillMode.Staggered && cols > 1 && (row & 1) != 0 ? pitch / 2 : 0;
-                int first = shift == 0 ? 0 : -1;
+                double shift = staggered && (repeat || cols > 1) && (row & 1) != 0 ? pitchX / 2 : 0;
+                int first = repeat || shift == 0 ? 0 : -1;
                 for (int col = first; col < cols; col++)
                 {
                     double size = options.SizeMm * (options.MinScale + random.NextDouble() * (options.MaxScale - options.MinScale));
-                    double x = firstX + col * pitch + shift, y = firstY - row * pitch;
+                    double columnX = firstX + col * pitchX + shift, rowY = firstY - row * pitchY;
+                    double x = columnX, y = rowY;
                     if (scattered)
                     {
-                        double space = (pitch - size - options.GapMm) / 2;
-                        x = Math.Max(0, Math.Min(width, x + Signed(random) * space));
-                        y = Math.Max(0, Math.Min(height, y + Signed(random) * space));
+                        x += Signed(random) * (pitchX - size - options.GapMm) / 2;
+                        y += Signed(random) * (pitchY - size - options.GapMm) / 2;
+                        if (!repeat)
+                        {
+                            x = Math.Max(0, Math.Min(width, x));
+                            y = Math.Max(0, Math.Min(height, y));
+                        }
                     }
-                    if (x + size / 2 <= 0 || x - size / 2 >= width) continue;
+                    if (!repeat && (x + size / 2 <= 0 || x - size / 2 >= width)) continue;
                     if (scattered && result.Count > 0 && result.Count % motifs == 0) Shuffle(order, random, result[result.Count - 1].Motif);
                     int index = scattered ? order[result.Count % motifs] : (result.Count + (int)((uint)options.Seed % (uint)motifs)) % motifs;
+                    double halfWidth = (pitchX - options.GapMm) / 2, halfHeight = (pitchY - options.GapMm) / 2;
                     result.Add(new PatternPlacement { Center = new PatternPoint(x, y), Motif = index, Size = size,
-                        Angle = options.Angle + Signed(random) * options.AngleVariation });
+                        Angle = (repeat ? 0 : options.Angle) + Signed(random) * options.AngleVariation,
+                        Cell = new[] { new PatternPoint(columnX - halfWidth, rowY - halfHeight),
+                            new PatternPoint(columnX + halfWidth, rowY - halfHeight),
+                            new PatternPoint(columnX + halfWidth, rowY + halfHeight),
+                            new PatternPoint(columnX - halfWidth, rowY + halfHeight) } });
                     if (result.Count > MaximumElements) CheckCount(result.Count, 1);
                 }
             }
@@ -367,110 +395,161 @@ namespace VanyaTools.Native
             return x * x + y * y;
         }
 
-        private static List<PatternPlacement> PlaceInCells(List<PatternPoint[]> cells, IReadOnlyList<PatternFootprint> motifs,
-            PatternFillOptions options)
+        internal static List<PatternPlacement> PlaceInCells(List<PatternPoint[]> cells, IReadOnlyList<PatternFootprint> motifs,
+            PatternFillOptions options, bool allowEmpty = false)
         {
             var random = new Random(options.Seed);
             bool pebbles = options.Mode == PatternFillMode.Pebbles;
-            int[] order = pebbles ? Shuffle(motifs.Count, random) : null;
             var result = new List<PatternPlacement>(cells.Count);
+            var fitBounds = new List<PatternPoint>(16);
             var centers = new List<PatternPoint>(16);
             var buffer = new List<PatternPoint>(16);
-            var edges = new List<(double X, double Y, double Limit, double Support)>(16);
-            int[] useCounts = pebbles ? null : new int[motifs.Count];
-            var neighborDistances = pebbles ? null : new double[motifs.Count];
-            var placedCenters = pebbles ? null : new List<PatternPoint>(cells.Count);
-            int offset = 0;
+            var cellEdges = new List<(double X, double Y, double Limit, double Width)>(16);
+            var supports = new List<(double X, double Y, double Limit, double Support)>(16);
+            var useCounts = new int[motifs.Count];
+            var neighborDistances = new double[motifs.Count];
+            var placedCenters = new List<PatternPoint>(cells.Count);
+            var period = options.Repeat ? new PatternPoint(options.RepeatWidthMm, options.RepeatHeightMm) : default;
+            double baseAngle = options.Repeat ? 0 : options.Angle;
+            double drift = options.SizeMm * .07;
             foreach (var cell in cells)
             {
-                var center = pebbles ? AreaCenter(cell) : new PatternPoint(cell.Average(p => p.X), cell.Average(p => p.Y));
-                var target = center;
-                int index = pebbles ? order[offset] :
-                    ChooseCrocodileMotif(result, placedCenters, center, options.SizeMm, useCounts, neighborDistances, random);
+                var target = pebbles ? AreaCenter(cell) : new PatternPoint(cell.Average(p => p.X), cell.Average(p => p.Y));
+                int index = ChooseNeighborMotif(result, placedCenters, target, options.SizeMm, useCounts,
+                    neighborDistances, random, period);
                 var motif = motifs[index];
-                double angle = (options.Repeat ? 0 : options.Angle) + Signed(random) * options.AngleVariation;
-                double radians = angle * Math.PI / 180, cos = Math.Cos(radians), sin = Math.Sin(radians);
-                double scale = Double.PositiveInfinity, limit = Double.PositiveInfinity;
-                edges.Clear();
-                for (int edge = 0; edge < cell.Length; edge++)
+                var center = target;
+                double angle = baseAngle, scale = 0;
+                cellEdges.Clear();
+                for (int i = 0; i < cell.Length; i++)
                 {
-                    var a = cell[edge]; var b = cell[(edge + 1) % cell.Length];
+                    var a = cell[i]; var b = cell[(i + 1) % cell.Length];
                     double nx = b.Y - a.Y, ny = a.X - b.X;
-                    double localX = nx * cos + ny * sin, localY = -nx * sin + ny * cos;
-                    double support = 0, opposite = 0;
-                    foreach (var point in motif.Hull)
-                    {
-                        double projection = localX * (point.X - motif.Center.X) + localY * (point.Y - motif.Center.Y);
-                        support = Math.Max(support, projection);
-                        opposite = Math.Min(opposite, projection);
-                    }
-                    if (support <= 1e-10) continue;
                     double cut = nx * a.X + ny * a.Y;
-                    edges.Add((nx, ny, cut, support));
-                    scale = Math.Min(scale, (cut - nx * center.X - ny * center.Y) / support);
-                    double width = cut - cell.Min(p => nx * p.X + ny * p.Y);
-                    limit = Math.Min(limit, width / (support - opposite));
+                    cellEdges.Add((nx, ny, cut, cut - cell.Min(p => nx * p.X + ny * p.Y)));
                 }
-                if (!Finite(scale) || scale <= 0) continue;
-
-                // For a given scale, clip the cell by the motif's supports to find all valid translations.
-                for (int step = 0; step < 7 && limit > scale * 1.005; step++)
+                fitBounds.Clear();
+                if (pebbles)
                 {
-                    double candidate = (scale + limit) / 2;
-                    centers.Clear();
-                    if (pebbles)
+                    fitBounds.Add(new PatternPoint(target.X - drift, target.Y - drift));
+                    fitBounds.Add(new PatternPoint(target.X + drift, target.Y - drift));
+                    fitBounds.Add(new PatternPoint(target.X + drift, target.Y + drift));
+                    fitBounds.Add(new PatternPoint(target.X - drift, target.Y + drift));
+                    TryAngle(baseAngle);
+                    for (int turn = 30; turn <= 180; turn += 30)
                     {
-                        double drift = options.SizeMm * .18;
-                        centers.Add(new PatternPoint(target.X - drift, target.Y - drift));
-                        centers.Add(new PatternPoint(target.X + drift, target.Y - drift));
-                        centers.Add(new PatternPoint(target.X + drift, target.Y + drift));
-                        centers.Add(new PatternPoint(target.X - drift, target.Y + drift));
+                        TryAngle(baseAngle + turn);
+                        if (turn < 180) TryAngle(baseAngle - turn);
                     }
-                    else centers.AddRange(cell);
-                    foreach (var edge in edges)
+                    for (int step = 10; step >= 1; step /= 3)
                     {
-                        Clip(centers, edge.X, edge.Y, edge.Limit - edge.Support * candidate, buffer);
-                        var previous = centers; centers = buffer; buffer = previous;
-                        if (centers.Count == 0) break;
+                        double best = angle;
+                        TryAngle(best - step);
+                        TryAngle(best + step);
                     }
-                    if (centers.Count == 0)
-                    {
-                        limit = candidate;
-                        continue;
-                    }
-                    scale = candidate;
-                    center = new PatternPoint(centers.Average(p => p.X), centers.Average(p => p.Y));
                 }
+                else
+                {
+                    fitBounds.AddRange(cell);
+                    TryAngle(baseAngle + Signed(random) * options.AngleVariation);
+                }
+                if (scale <= 0) continue;
+
+                double radians = angle * Math.PI / 180, cos = Math.Cos(radians), sin = Math.Sin(radians);
                 double x = center.X - scale * (motif.Center.X * cos - motif.Center.Y * sin);
                 double y = center.Y - scale * (motif.Center.X * sin + motif.Center.Y * cos);
                 var rotated = PatternTransform.RotatedSize(motif.Size.X, motif.Size.Y, angle);
                 result.Add(new PatternPlacement { Motif = index, Center = new PatternPoint(x, y), Angle = angle,
-                    Size = scale * Math.Max(rotated.X, rotated.Y) });
-                if (!pebbles)
+                    Size = scale * Math.Max(rotated.X, rotated.Y), Cell = cell });
+                useCounts[index]++;
+                placedCenters.Add(center);
+
+                void TryAngle(double candidateAngle)
                 {
-                    useCounts[index]++;
-                    placedCenters.Add(center);
+                    double turn = candidateAngle * Math.PI / 180, c = Math.Cos(turn), s = Math.Sin(turn);
+                    double candidateScale = Double.PositiveInfinity, limit = Double.PositiveInfinity;
+                    var candidateCenter = target;
+                    supports.Clear();
+                    foreach (var edge in cellEdges)
+                    {
+                        double localX = edge.X * c + edge.Y * s, localY = -edge.X * s + edge.Y * c;
+                        double support = 0, opposite = 0;
+                        foreach (var point in motif.Hull)
+                        {
+                            double projection = localX * (point.X - motif.Center.X) + localY * (point.Y - motif.Center.Y);
+                            support = Math.Max(support, projection);
+                            opposite = Math.Min(opposite, projection);
+                        }
+                        if (support <= 1e-10) continue;
+                        supports.Add((edge.X, edge.Y, edge.Limit, support));
+                        candidateScale = Math.Min(candidateScale,
+                            (edge.Limit - edge.X * target.X - edge.Y * target.Y) / support);
+                        limit = Math.Min(limit, edge.Width / (support - opposite));
+                    }
+                    // Keep the current angle when the gain would be below the precision of the fit.
+                    double required = scale * 1.005;
+                    if (!Finite(candidateScale) || candidateScale <= 0 || limit <= required) return;
+                    if (candidateScale < required)
+                    {
+                        if (!TryCenter(required, out candidateCenter)) return;
+                        candidateScale = required;
+                    }
+                    for (int step = 0; step < 7 && limit > candidateScale * 1.005; step++)
+                    {
+                        double mid = (candidateScale + limit) / 2;
+                        if (TryCenter(mid, out var nextCenter))
+                        {
+                            candidateScale = mid;
+                            candidateCenter = nextCenter;
+                        }
+                        else limit = mid;
+                    }
+                    if (candidateScale <= scale) return;
+                    angle = candidateAngle;
+                    scale = candidateScale;
+                    center = candidateCenter;
                 }
-                else if (++offset == order.Length)
+
+                bool TryCenter(double candidate, out PatternPoint centerForScale)
                 {
-                    Shuffle(order, random, index);
-                    offset = 0;
+                    centers.Clear();
+                    centers.AddRange(fitBounds);
+                    foreach (var edge in supports)
+                    {
+                        Clip(centers, edge.X, edge.Y, edge.Limit - edge.Support * candidate, buffer);
+                        var previous = centers; centers = buffer; buffer = previous;
+                        if (centers.Count == 0)
+                        {
+                            centerForScale = default;
+                            return false;
+                        }
+                    }
+                    centerForScale = new PatternPoint(centers.Average(p => p.X), centers.Average(p => p.Y));
+                    return true;
                 }
             }
-            if (result.Count == 0) throw new InvalidOperationException("Уменьшите зазор, чтобы разместить фигуры в ячейках.");
+            if (result.Count == 0 && !allowEmpty)
+                throw new InvalidOperationException("Уменьшите зазор, чтобы разместить фигуры в ячейках.");
             return result;
         }
 
-        private static int ChooseCrocodileMotif(List<PatternPlacement> placed, List<PatternPoint> centers,
-            PatternPoint center, double pitch, int[] useCounts, double[] nearest, Random random)
+        private static int ChooseNeighborMotif(List<PatternPlacement> placed, List<PatternPoint> centers,
+            PatternPoint center, double pitch, int[] useCounts, double[] nearest, Random random, PatternPoint period)
         {
             double radius = pitch * 1.65;
             double radiusSquared = radius * radius;
             for (int i = 0; i < nearest.Length; i++) nearest[i] = radiusSquared;
+            bool repeat = period.X > 0 && period.Y > 0;
             for (int i = 0; i < placed.Count; i++)
             {
                 int motif = placed[i].Motif;
-                nearest[motif] = Math.Min(nearest[motif], SquaredDistance(center, centers[i]));
+                double dx = center.X - centers[i].X, dy = center.Y - centers[i].Y;
+                if (repeat)
+                {
+                    dx -= Math.Round(dx / period.X) * period.X;
+                    dy -= Math.Round(dy / period.Y) * period.Y;
+                }
+                nearest[motif] = Math.Min(nearest[motif], dx * dx + dy * dy);
             }
 
             int best = 0;
@@ -508,14 +587,15 @@ namespace VanyaTools.Native
             }
         }
 
-        private static void Clip(IReadOnlyList<PatternPoint> polygon, double nx, double ny, double cut,
+        internal static void Clip(IReadOnlyList<PatternPoint> polygon, double nx, double ny, double cut,
             List<PatternPoint> result)
         {
             result.Clear();
             PatternPoint previous = polygon[polygon.Count - 1];
             double previousDistance = nx * previous.X + ny * previous.Y - cut;
-            foreach (var current in polygon)
+            for (int i = 0; i < polygon.Count; i++)
             {
+                var current = polygon[i];
                 double distance = nx * current.X + ny * current.Y - cut;
                 if ((distance <= 0) != (previousDistance <= 0))
                     result.Add(PatternPoint.Between(previous, current, previousDistance / (previousDistance - distance)));

@@ -22,9 +22,10 @@ internal static class Program
         Check("Contour improvement keeps a valid result", Improvement);
         Check("Pattern motifs preserve transforms, gaps and edge bleed", PatternFillChecks.Motifs);
         Check("Crocodile and pebble cells fit visible motifs with bleed and gaps", PatternFillChecks.Textures);
-        Check("Organic variants shuffle all seven motifs and reproduce the same seed", PatternFillChecks.OrganicVariety);
+        Check("Organic variants use all seven motifs and reproduce the same seed", PatternFillChecks.OrganicVariety);
         Check("Pebbles balance gaps and crocodile avoids diagonal repeats", PatternFillChecks.OrganicSpacing);
-        Check("Pebble repeat preserves motifs and clearance across guided seams", PatternFillChecks.PebbleRepeat);
+        Check("Pebbles optimize rotation and vary nearby motifs across repeat seams", PatternFillChecks.PebbleOrientationAndNeighbors);
+        Check("All repeat modes preserve motifs and clearance across guided seams", PatternFillChecks.PebbleRepeat);
         Console.WriteLine(_failed == 0 ? "All nesting checks passed." : _failed + " nesting checks failed.");
         Environment.ExitCode = _failed == 0 ? 0 : 1;
     }
