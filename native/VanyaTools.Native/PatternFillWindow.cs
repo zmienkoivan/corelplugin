@@ -23,6 +23,7 @@ namespace VanyaTools.Native
     {
         private readonly PatternEditorSession _session;
         private readonly PatternPreviewSurface _preview;
+        private readonly HashSet<int> _mirroredIds;
         private readonly ComboBox _mode;
         private readonly ValueField _size, _gap, _allowance, _angle, _min, _max, _variation;
         private readonly ValueField _heroX, _heroY, _heroSize, _heroAngle, _heroGap;
@@ -43,6 +44,8 @@ namespace VanyaTools.Native
         private PatternFillOptions _layoutOptions;
         private bool _layoutUsesHero;
         private List<PatternPlacement> _layoutItems;
+        private PatternAsset[] _layoutMotifs;
+        private HashSet<int> _layoutMirrors;
         private Geometry[] _layoutSilhouettes;
         private Geometry _layoutCellGuides, _layoutRepeatGuides;
         private Geometry _reserve;
@@ -54,6 +57,7 @@ namespace VanyaTools.Native
         internal PatternFillWindow(PatternEditorSession session, PatternEditorSettings initial)
         {
             _session = session;
+            _mirroredIds = new HashSet<int>(session.MirroredIds);
             _frame = session.Seam;
             _seed = initial.Layout.Seed;
             Title = "Паттерн по контуру · Vanya Tools";
@@ -94,18 +98,18 @@ namespace VanyaTools.Native
                 SelectedIndex = (int)initial.Layout.Mode,
                 MinHeight = 27, Margin = new Thickness(0, 0, 0, 6) };
             pattern.Children.Add(_mode);
-            double sliderSize = Math.Max(100, Math.Min(1000, Math.Max(session.Seam.Width, session.Seam.Height)));
-            _size = AddField(pattern, "Размер элементов / ячейки, мм", .5, 2000, initial.Layout.SizeMm, sliderSize);
-            _gap = AddField(pattern, "Зазор между повторами, мм", 0, 1000, initial.Layout.GapMm, 80);
+            if (session.Motifs.Length > 0) pattern.Children.Add(MirroringControls());
+            _size = AddField(pattern, "Размер элементов / ячейки, мм", .5, 2000, initial.Layout.SizeMm);
+            _gap = AddField(pattern, "Зазор между повторами, мм", 0, 1000, initial.Layout.GapMm);
             _allowance = AddField(pattern, "Припуск на шов, мм", 0, 100,
-                session.Replace ? session.ExistingAllowance : initial.Allowance, 40);
+                session.Replace ? session.ExistingAllowance : initial.Allowance);
             _allowance.View.IsEnabled = !session.Replace;
             _allowance.View.ToolTip = session.Replace ? "Для нового припуска выделите исходный контур детали." : "Припуск строится наружу от контура детали.";
-            _angle = AddField(pattern, "Поворот, °", -360, 360, initial.Layout.Angle, 360);
+            _angle = AddField(pattern, "Поворот, °", -360, 360, initial.Layout.Angle);
             _motifFields = new StackPanel(); pattern.Children.Add(_motifFields);
-            _min = AddField(_motifFields, "Размер от, %", 10, 300, initial.Layout.MinScale * 100, 300);
-            _max = AddField(_motifFields, "Размер до, %", 10, 300, initial.Layout.MaxScale * 100, 300);
-            _variation = AddField(pattern, "Разброс поворота, ±°", 0, 180, initial.Layout.AngleVariation, 180);
+            _min = AddField(_motifFields, "Размер от, %", 10, 300, initial.Layout.MinScale * 100);
+            _max = AddField(_motifFields, "Размер до, %", 10, 300, initial.Layout.MaxScale * 100);
+            _variation = AddField(pattern, "Разброс поворота, ±°", 0, 180, initial.Layout.AngleVariation);
             pattern.Children.Add(Button("Другой вариант", (_, __) => { _seed = unchecked(_seed + 7919); QueuePreview(); }));
 
             _showCells = new CheckBox { Content = "Контуры ячеек", Margin = new Thickness(0, 6, 0, 5),
@@ -118,11 +122,10 @@ namespace VanyaTools.Native
             _repeatFields = new StackPanel();
             pattern.Children.Add(_repeatFields);
             double defaultRepeatSize = Math.Min(5000, Math.Max(150, initial.Layout.SizeMm * 5));
-            double repeatSliderMax = Math.Max(500, sliderSize);
             _repeatWidth = AddField(_repeatFields, "Ширина рапорта, мм", .5, 5000,
-                initial.Layout.Repeat ? initial.Layout.RepeatWidthMm : defaultRepeatSize, repeatSliderMax);
+                initial.Layout.Repeat ? initial.Layout.RepeatWidthMm : defaultRepeatSize);
             _repeatHeight = AddField(_repeatFields, "Высота рапорта, мм", .5, 5000,
-                initial.Layout.Repeat ? initial.Layout.RepeatHeightMm : defaultRepeatSize, repeatSliderMax);
+                initial.Layout.Repeat ? initial.Layout.RepeatHeightMm : defaultRepeatSize);
             _showRepeatBorders = new CheckBox { Content = "Пунктир границ рапорта", IsChecked = true,
                 Margin = new Thickness(0, 0, 0, 5) };
             _repeatFields.Children.Add(_showRepeatBorders);
@@ -135,11 +138,11 @@ namespace VanyaTools.Native
             hero.Children.Add(_useHero);
             _heroFields = new StackPanel(); hero.Children.Add(_heroFields);
             double suggested = Math.Max(.5, Math.Min(2000, Math.Min(session.Seam.Width, session.Seam.Height) * .35));
-            _heroSize = AddField(_heroFields, "Размер, мм", .5, 2000, initial.HeroSize > 0 ? initial.HeroSize : suggested, sliderSize);
-            _heroX = AddField(_heroFields, "От левого края, %", 0, 100, initial.HeroX, 100);
-            _heroY = AddField(_heroFields, "От верхнего края, %", 0, 100, initial.HeroY, 100);
-            _heroAngle = AddField(_heroFields, "Поворот главного элемента, °", -360, 360, initial.HeroAngle, 360);
-            _heroGap = AddField(_heroFields, "Свободная зона, мм", 0, 1000, initial.HeroGap, 80);
+            _heroSize = AddField(_heroFields, "Размер, мм", .5, 2000, initial.HeroSize > 0 ? initial.HeroSize : suggested);
+            _heroX = AddField(_heroFields, "От левого края, %", 0, 100, initial.HeroX);
+            _heroY = AddField(_heroFields, "От верхнего края, %", 0, 100, initial.HeroY);
+            _heroAngle = AddField(_heroFields, "Поворот главного элемента, °", -360, 360, initial.HeroAngle);
+            _heroGap = AddField(_heroFields, "Свободная зона, мм", 0, 1000, initial.HeroGap);
             _heroFields.Children.Add(Button("По центру", (_, __) => SetPosition(50, 50)));
             _preview.HeroPositionChanged += SetPosition;
             _mode.SelectionChanged += (_, __) => { UpdateGuideControls(); QueuePreview(); };
@@ -165,15 +168,38 @@ namespace VanyaTools.Native
             QueuePreview();
         }
 
+        private Expander MirroringControls()
+        {
+            var list = new StackPanel { Margin = new Thickness(4, 2, 4, 3) };
+            var expander = new Expander { Header = "Зеркалирование…", Margin = new Thickness(0, 0, 0, 6),
+                Content = new ScrollViewer { Content = list, MaxHeight = 190,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled },
+                ToolTip = "Отмеченные фоновые рисунки отражаются по горизонтали перед поворотом." };
+            foreach (var asset in _session.Motifs)
+            {
+                var row = new DockPanel();
+                var image = new Image { Source = asset.Preview, Width = 40, Height = 28, Margin = new Thickness(1, 1, 5, 1) };
+                DockPanel.SetDock(image, Dock.Left);
+                row.Children.Add(image);
+                row.Children.Add(new TextBlock { Text = asset.Label, TextTrimming = TextTrimming.CharacterEllipsis,
+                    VerticalAlignment = VerticalAlignment.Center });
+                var choice = new CheckBox { Content = row, IsChecked = _mirroredIds.Contains(asset.Id),
+                    HorizontalContentAlignment = HorizontalAlignment.Stretch, ToolTip = asset.Label };
+                System.Windows.Automation.AutomationProperties.SetName(choice, asset.Label);
+                choice.Checked += (_, __) => { _mirroredIds.Add(asset.Id); QueuePreview(); };
+                choice.Unchecked += (_, __) => { _mirroredIds.Remove(asset.Id); QueuePreview(); };
+                list.Children.Add(choice);
+            }
+            return expander;
+        }
+
         private void UpdateGuideControls()
         {
             var mode = (PatternFillMode)_mode.SelectedIndex;
-            bool pebbles = mode == PatternFillMode.Pebbles;
-            bool texture = pebbles || mode == PatternFillMode.Crocodile;
+            bool texture = mode == PatternFillMode.Pebbles || mode == PatternFillMode.Crocodile;
             bool repeat = _repeat.IsChecked == true;
-            _variation.View.IsEnabled = !pebbles;
-            _variation.View.ToolTip = pebbles ? "В «Гальке» поворот рисунка подбирается автоматически по форме ячейки." : null;
-            ToolTipService.SetShowOnDisabled(_variation.View, pebbles);
+            _variation.View.Visibility = texture ? Visibility.Collapsed : Visibility.Visible;
             _showCells.Visibility = texture ? Visibility.Visible : Visibility.Collapsed;
             _repeatFields.Visibility = repeat ? Visibility.Visible : Visibility.Collapsed;
             _preview.ShowGuides(texture && _showCells.IsChecked == true, repeat && _showRepeatBorders.IsChecked == true);
@@ -203,7 +229,7 @@ namespace VanyaTools.Native
             {
                 var mode = (PatternFillMode)_mode.SelectedIndex;
                 if (!_variation.TryRead(out double variation))
-                    variation = mode == PatternFillMode.Pebbles ? 0 : _variation.Read();
+                    variation = mode == PatternFillMode.Pebbles || mode == PatternFillMode.Crocodile ? 0 : _variation.Read();
                 var options = new PatternFillOptions { Mode = mode,
                     SizeMm = _size.Read(), GapMm = _gap.Read(), Angle = _angle.Read(), AngleVariation = variation, Seed = _seed };
                 if (_repeat.IsChecked == true)
@@ -232,7 +258,8 @@ namespace VanyaTools.Native
                 }
                 PatternFrame frame = _frame;
                 var cancellation = _closing.Token;
-                PatternDraft draft = await Task.Run(() => BuildDraft(frame, next, useHero, cancellation), cancellation);
+                var mirrors = new HashSet<int>(_mirroredIds);
+                PatternDraft draft = await Task.Run(() => BuildDraft(frame, next, useHero, mirrors, cancellation), cancellation);
                 if (!_ready) return;
                 _preview.Update(frame, draft);
                 if (revision != _revision) return;
@@ -260,17 +287,18 @@ namespace VanyaTools.Native
         }
 
         private PatternDraft BuildDraft(PatternFrame frame, PatternEditorSettings settings, bool useHero,
-            CancellationToken cancellation)
+            HashSet<int> mirroredIds, CancellationToken cancellation)
         {
             var options = settings.Layout;
-            var motifs = useHero ? _session.Motifs.Where(asset => asset.Id != _session.Hero.Id).ToArray() : _session.Motifs;
-            if (_layoutFrame != frame || useHero != _layoutUsesHero || !SameLayout(_layoutOptions, options))
+            if (_layoutFrame != frame || useHero != _layoutUsesHero || !SameLayout(_layoutOptions, options) ||
+                !_layoutMirrors.SetEquals(mirroredIds))
             {
-                foreach (var motif in motifs)
+                var motifs = _session.Motifs.Where(asset => !useHero || asset.Id != _session.Hero.Id).Select(asset =>
                 {
                     cancellation.ThrowIfCancellationRequested();
-                    PatternFillService.PrepareSilhouette(motif);
-                }
+                    PatternFillService.PrepareSilhouette(asset);
+                    return mirroredIds.Contains(asset.Id) ? asset.MirrorHorizontally() : asset;
+                }).ToArray();
                 var items = PatternFillLayout.Build(frame.Width, frame.Height, motifs.Select(asset => asset.Footprint).ToArray(),
                     options, out PatternLayoutGuides guides);
                 Geometry[] silhouettes = null;
@@ -286,11 +314,13 @@ namespace VanyaTools.Native
                 _layoutCellGuides = GuideGeometry(guides?.Cells, true);
                 _layoutRepeatGuides = GuideGeometry(guides?.RepeatLines, false);
                 _layoutItems = items;
+                _layoutMotifs = motifs;
+                _layoutMirrors = mirroredIds;
                 _layoutSilhouettes = silhouettes;
                 _layoutFrame = frame; _layoutOptions = options; _layoutUsesHero = useHero;
             }
 
-            var draft = new PatternDraft { Frame = frame, Options = options, Motifs = motifs,
+            var draft = new PatternDraft { Frame = frame, Options = options, Motifs = _layoutMotifs, MirroredIds = mirroredIds,
                 Items = _layoutItems, Allowance = settings.Allowance,
                 CellGuides = _layoutCellGuides, RepeatGuides = _layoutRepeatGuides };
             if (!useHero) return draft;
@@ -303,7 +333,7 @@ namespace VanyaTools.Native
                 _reserveSize = settings.HeroSize; _reserveAngle = settings.HeroAngle; _reserveGap = settings.HeroGap;
             }
             draft.Reserve = PatternSilhouette.MoveReserve(_reserve, draft.Hero.Center);
-            draft.Items = PatternHeroFill.Adjust(_layoutItems, _layoutSilhouettes, motifs, options, draft.Reserve, cancellation);
+            draft.Items = PatternHeroFill.Adjust(_layoutItems, _layoutSilhouettes, _layoutMotifs, options, draft.Reserve, cancellation);
             return draft;
         }
 
@@ -333,9 +363,9 @@ namespace VanyaTools.Native
             DockerTheme.UseTheme(_message, TextBlock.ForegroundProperty, error ? DockerTheme.ErrorTextBrush : DockerTheme.MutedTextBrush);
         }
 
-        private ValueField AddField(Panel parent, string label, double minimum, double maximum, double value, double sliderMax)
+        private ValueField AddField(Panel parent, string label, double minimum, double maximum, double value)
         {
-            var field = new ValueField(label, minimum, maximum, value, sliderMax, QueuePreview);
+            var field = new ValueField(label, minimum, maximum, value, QueuePreview);
             parent.Children.Add(field.View);
             return field;
         }
@@ -352,39 +382,51 @@ namespace VanyaTools.Native
             private readonly string _label;
             private readonly double _minimum, _maximum;
             private readonly TextBox _input;
-            private readonly Slider _slider;
+            private double _lastValue;
             private bool _sync;
             internal FrameworkElement View { get; }
 
-            internal ValueField(string label, double minimum, double maximum, double value, double sliderMax, Action changed)
+            internal ValueField(string label, double minimum, double maximum, double value, Action changed)
             {
                 _label = label; _minimum = minimum; _maximum = maximum;
-                _input = new TextBox { Width = 60, MinHeight = 24, VerticalContentAlignment = VerticalAlignment.Center };
-                _slider = new Slider { Minimum = minimum, Maximum = sliderMax,
-                    VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 7, 0) };
+                _input = new TextBox { MinWidth = 46, MinHeight = 26, VerticalContentAlignment = VerticalAlignment.Center,
+                    HorizontalContentAlignment = HorizontalAlignment.Center, Margin = new Thickness(3, 0, 3, 0) };
                 Set(value);
-                _slider.ValueChanged += (_, __) =>
-                {
-                    if (_sync) return;
-                    Set(Math.Round(_slider.Value, 1)); changed();
-                };
                 _input.TextChanged += (_, __) =>
                 {
                     if (_sync) return;
-                    if (TryRead(out double entered))
-                    {
-                        _sync = true;
-                        _slider.Value = entered;
-                        _sync = false;
-                    }
+                    if (TryRead(out double entered)) _lastValue = entered;
                     changed();
                 };
-                var row = DockerLayout.Trailing(_slider, _input);
-                var layout = DockerLayout.LabeledField(label, row);
-                layout.Margin = new Thickness(0, 0, 0, 5);
-                View = layout;
+                var row = new Grid();
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.ColumnDefinitions.Add(new ColumnDefinition());
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.Children.Add(StepButton("−", "Уменьшить", -.1));
+                Grid.SetColumn(_input, 1);
+                row.Children.Add(_input);
+                var plus = StepButton("+", "Увеличить", .1);
+                Grid.SetColumn(plus, 2);
+                row.Children.Add(plus);
+                View = DockerLayout.FieldRow(label, row, 116);
                 System.Windows.Automation.AutomationProperties.SetName(_input, label);
-                System.Windows.Automation.AutomationProperties.SetName(_slider, label);
+
+                Button StepButton(string symbol, string action, double step)
+                {
+                    var button = Button(symbol, (sender, args) =>
+                    {
+                        double next = Math.Max(_minimum, Math.Min(_maximum, Math.Round(_lastValue + step, 8)));
+                        if (next == _lastValue && TryRead(out _)) return;
+                        Set(next);
+                        changed();
+                    });
+                    button.Width = 28;
+                    button.MinHeight = 26;
+                    button.Padding = new Thickness(1);
+                    button.ToolTip = action + " на 0,1";
+                    System.Windows.Automation.AutomationProperties.SetName(button, action + " · " + label);
+                    return button;
+                }
             }
 
             internal double Read()
@@ -400,8 +442,8 @@ namespace VanyaTools.Native
             internal void Set(double value)
             {
                 _sync = true;
-                _input.Text = value.ToString("0.##", CultureInfo.CurrentCulture);
-                _slider.Value = value;
+                _lastValue = value;
+                _input.Text = value.ToString("0.########", CultureInfo.CurrentCulture);
                 _sync = false;
             }
         }

@@ -3,6 +3,7 @@ namespace VanyaTools.Native
     internal static class CorelConstants
     {
         public const int CdrBitmapShape = 5;
+        public const int CdrFlipHorizontal = 1;
         public const int CdrCurveShape = 3;
         public const int CdrGroupShape = 7;
         public const int CdrTextShape = 6;

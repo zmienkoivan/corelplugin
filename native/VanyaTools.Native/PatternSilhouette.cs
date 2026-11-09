@@ -71,7 +71,7 @@ namespace VanyaTools.Native
         {
             double scale = PatternTransform.Fit(asset.Size, item).Scale;
             var matrix = Matrix.Identity;
-            matrix.Scale(scale, scale);
+            matrix.Scale(asset.Mirrored ? -scale : scale, scale);
             matrix.Rotate(item.Angle);
             matrix.Translate(item.Center.X, item.Center.Y);
             return Transform(asset.Silhouette, matrix);

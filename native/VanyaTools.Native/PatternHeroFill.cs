@@ -81,14 +81,14 @@ namespace VanyaTools.Native
                     if (area > Tolerance) windows.Add((polygon, area));
                 }
 
-                fit.Angle = options.Mode == PatternFillMode.Pebbles ? options.Angle : item.Angle;
+                fit.Angle = options.Texture ? options.Angle : item.Angle;
                 PatternPlacement best = null;
                 double bestScale = PatternTransform.Fit(asset.Size, item).Scale * .35;
                 foreach (var window in windows.OrderByDescending(window => window.Area).Take(4))
                 {
                     cancellation.ThrowIfCancellationRequested();
                     var fitted = PatternFillLayout.PlaceInCells(new List<PatternPoint[]> { window.Polygon.ToArray() },
-                        new[] { asset.Footprint }, fit, allowEmpty: true).SingleOrDefault();
+                        new[] { asset.Footprint }, fit, allowEmpty: true, fixedAngle: !options.Texture).SingleOrDefault();
                     if (fitted == null) continue;
                     double scale = PatternTransform.Fit(asset.Size, fitted).Scale;
                     if (scale <= bestScale || reserve.FillContainsWithDetail(PatternSilhouette.At(asset, fitted),

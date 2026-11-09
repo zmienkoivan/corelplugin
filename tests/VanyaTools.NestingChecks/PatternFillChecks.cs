@@ -125,12 +125,17 @@ internal static class PatternFillChecks
         var cell = new[] { new PatternPoint(0, 0), new PatternPoint(8, 0),
             new PatternPoint(8, 36), new PatternPoint(0, 36) };
         var horizontal = new PatternFootprint(new PatternPoint(30, 6));
-        var options = new PatternFillOptions { Mode = PatternFillMode.Pebbles, SizeMm = 30, GapMm = 0 };
-        var fitted = PatternFillLayout.PlaceInCells(new List<PatternPoint[]> { cell }, new[] { horizontal }, options).Single();
-        Require(PatternTransform.Fit(horizontal.Size, fitted).Scale > 1.18 && Math.Abs(Math.Abs(fitted.Angle) - 90) < 3,
-            "A long horizontal motif was not turned to fill a vertical cell.");
-        Require(Hull(fitted, horizontal).All(p => Contains(cell, p.X, p.Y)), "Auto-rotation crossed a fitting boundary.");
+        var options = new PatternFillOptions { SizeMm = 30, GapMm = 0 };
+        foreach (var mode in new[] { PatternFillMode.Pebbles, PatternFillMode.Crocodile })
+        {
+            options.Mode = mode;
+            var fitted = PatternFillLayout.PlaceInCells(new List<PatternPoint[]> { cell }, new[] { horizontal }, options).Single();
+            Require(PatternTransform.Fit(horizontal.Size, fitted).Scale > 1.18 && Math.Abs(Math.Abs(fitted.Angle) - 90) < 3,
+                "A long horizontal motif was not turned to fill a vertical cell.");
+            Require(Hull(fitted, horizontal).All(p => Contains(cell, p.X, p.Y)), "Auto-rotation crossed a fitting boundary.");
+        }
 
+        options.Mode = PatternFillMode.Pebbles;
         const double pitch = 24;
         var motifs = Enumerable.Range(0, 7).Select(i => new PatternFootprint(new PatternPoint(6 + i * 2, 11))).ToArray();
         options.SizeMm = pitch;

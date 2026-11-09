@@ -396,7 +396,7 @@ namespace VanyaTools.Native
         }
 
         internal static List<PatternPlacement> PlaceInCells(List<PatternPoint[]> cells, IReadOnlyList<PatternFootprint> motifs,
-            PatternFillOptions options, bool allowEmpty = false)
+            PatternFillOptions options, bool allowEmpty = false, bool fixedAngle = false)
         {
             var random = new Random(options.Seed);
             bool pebbles = options.Mode == PatternFillMode.Pebbles;
@@ -435,7 +435,11 @@ namespace VanyaTools.Native
                     fitBounds.Add(new PatternPoint(target.X + drift, target.Y - drift));
                     fitBounds.Add(new PatternPoint(target.X + drift, target.Y + drift));
                     fitBounds.Add(new PatternPoint(target.X - drift, target.Y + drift));
-                    TryAngle(baseAngle);
+                }
+                else fitBounds.AddRange(cell);
+                TryAngle(baseAngle);
+                if (!fixedAngle)
+                {
                     for (int turn = 30; turn <= 180; turn += 30)
                     {
                         TryAngle(baseAngle + turn);
@@ -447,11 +451,6 @@ namespace VanyaTools.Native
                         TryAngle(best - step);
                         TryAngle(best + step);
                     }
-                }
-                else
-                {
-                    fitBounds.AddRange(cell);
-                    TryAngle(baseAngle + Signed(random) * options.AngleVariation);
                 }
                 if (scale <= 0) continue;
 

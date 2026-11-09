@@ -14,6 +14,7 @@ namespace VanyaTools.Native
         internal readonly object Shape;
         internal readonly int Id;
         public string Label { get; }
+        internal bool Mirrored;
 
         internal PatternSource(object shape, int id, string label)
         { Shape = shape; Id = id; Label = label; }
@@ -27,7 +28,16 @@ namespace VanyaTools.Native
         internal PatternPoint Size;
         internal BitmapSource Preview;
         internal Geometry Silhouette;
-        internal bool OutlineFallback;
+        internal string Label;
+        internal bool OutlineFallback, Mirrored;
+
+        internal PatternAsset MirrorHorizontally()
+        {
+            var copy = (PatternAsset)MemberwiseClone();
+            copy.Mirrored = true;
+            copy.Footprint = new PatternFootprint(Size, Footprint.Hull.Select(point => new PatternPoint(-point.X, point.Y)));
+            return copy;
+        }
     }
 
     internal sealed class PatternFrame
@@ -44,6 +54,7 @@ namespace VanyaTools.Native
         internal PatternFrame Seam;
         internal PatternAsset[] Motifs;
         internal PatternAsset Hero;
+        internal int[] MirroredIds = Array.Empty<int>();
         internal bool Replace;
         internal double ExistingAllowance;
     }
@@ -54,6 +65,7 @@ namespace VanyaTools.Native
         internal PatternFillOptions Options;
         internal PatternAsset[] Motifs;
         internal List<PatternPlacement> Items;
+        internal HashSet<int> MirroredIds;
         internal PatternPlacement Hero;
         internal Geometry Reserve, CellGuides, RepeatGuides;
         internal double Allowance;
@@ -133,8 +145,10 @@ namespace VanyaTools.Native
                 var previews = new Dictionary<int, PatternAsset>();
                 try
                 {
-                    session.Motifs = SameObject(session.Document, _motifDocument)
-                        ? _motifs.Select(ReadAsset).ToArray() : new PatternAsset[0];
+                    bool hasMotifs = SameObject(session.Document, _motifDocument);
+                    session.Motifs = hasMotifs ? _motifs.Select(ReadAsset).ToArray() : Array.Empty<PatternAsset>();
+                    if (hasMotifs)
+                        session.MirroredIds = _motifs.Where(source => source.Mirrored).Select(source => source.Id).ToArray();
                     if (SameObject(session.Document, _heroDocument)) session.Hero = ReadAsset(_hero);
                 }
                 finally
@@ -152,7 +166,8 @@ namespace VanyaTools.Native
                     shape.GetBoundingBox(out left, out bottom, out width, out height, true);
                     if (width < 0 || height < 0 || !Finite(width + height) || Math.Max(width, height) <= .0001)
                         throw new InvalidOperationException("Один из элементов узора имеет нулевой размер.");
-                    var asset = new PatternAsset { Shape = captured.Shape, Id = captured.Id, Size = new PatternPoint(width, height) };
+                    var asset = new PatternAsset { Shape = captured.Shape, Id = captured.Id, Label = captured.Label,
+                        Size = new PatternPoint(width, height) };
                     previews.Add(asset.Id, asset);
                     string temporary = Path.Combine(Path.GetTempPath(), "Vanya-Pattern-" + Guid.NewGuid().ToString("N"));
                     string path = SportArtworkPreview.Sidecar(temporary);
@@ -228,6 +243,7 @@ namespace VanyaTools.Native
                 frame.CreateSelection();
                 if (session.Replace) target.Delete();
                 _result = (object)frame; _resultDocument = (object)doc; _lastAllowance = draft.Allowance;
+                foreach (var source in _motifs) source.Mirrored = draft.MirroredIds.Contains(source.Id);
                 return created.Count;
 
                 void AddMotif(PatternAsset asset, PatternPlacement item)
@@ -348,6 +364,7 @@ namespace VanyaTools.Native
         private static void PlaceMotif(object shape, PatternAsset asset, PatternPlacement item, double originX, double originY)
         {
             dynamic copy = shape;
+            if (asset.Mirrored) copy.Flip(CorelConstants.CdrFlipHorizontal);
             double scale = PatternTransform.Fit(asset.Size, item).Scale;
             if (Math.Abs(scale - 1) > .000001) copy.Stretch(scale, scale, true);
             double left, bottom, width, height;

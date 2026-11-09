@@ -89,8 +89,10 @@ namespace VanyaTools.Native
             double width = Math.Max(.05, size.Width), height = Math.Max(.05, size.Height);
             var area = new Rect(center.X - width / 2, center.Y - height / 2, width, height);
             drawing.PushTransform(new RotateTransform(-item.Angle, center.X, center.Y));
+            if (asset.Mirrored) drawing.PushTransform(new ScaleTransform(-1, 1, center.X, center.Y));
             if (asset.Preview != null) drawing.DrawImage(asset.Preview, area);
             else drawing.DrawRectangle(fallback, null, area);
+            if (asset.Mirrored) drawing.Pop();
             drawing.Pop();
         }
 
