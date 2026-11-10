@@ -16,9 +16,9 @@ namespace VanyaTools.Native
 
         internal event Action<double, double> HeroPositionChanged;
 
-        internal PatternPreviewSurface(PatternEditorSession session)
+        internal PatternPreviewSurface(PatternEditorSession session, PatternFrame initialFrame)
         {
-            _session = session; _frame = session.Seam;
+            _session = session; _frame = initialFrame;
             ClipToBounds = true;
             ToolTip = "Перетащите главный элемент или щёлкните там, где должен быть его центр.";
         }
@@ -62,6 +62,8 @@ namespace VanyaTools.Native
                 if (_draft.Hero != null)
                 {
                     DrawMotif(drawing, _session.Hero, _draft.Hero, Brushes.MediumVioletRed);
+                    if (_draft.HeroCopies != null)
+                        foreach (var item in _draft.HeroCopies) DrawMotif(drawing, _session.Hero, item, Brushes.MediumVioletRed);
                     if (_draft.Reserve != null)
                     {
                         var guide = new Pen(Brushes.DeepSkyBlue, hairline) { DashStyle = DashStyles.Dash };
@@ -73,7 +75,7 @@ namespace VanyaTools.Native
                 drawing.Pop();
             }
 
-            if (!ReferenceEquals(_frame, _session.Seam))
+            if (_session.Seam != null && !ReferenceEquals(_frame, _session.Seam))
             {
                 drawing.PushTransform(new TranslateTransform(_session.Seam.Left - _frame.Left, _frame.Top - _session.Seam.Top));
                 drawing.DrawGeometry(null, new Pen(Brushes.SlateGray, hairline) { DashStyle = DashStyles.Dash }, _session.Seam.Geometry);
@@ -139,8 +141,15 @@ namespace VanyaTools.Native
 
         private void MoveHero(Point point)
         {
-            double xPercent = Math.Max(0, Math.Min(100, (point.X - _origin.X) * 100 / (_scale * _frame.Width)));
-            double yPercent = Math.Max(0, Math.Min(100, (point.Y - _origin.Y) * 100 / (_scale * _frame.Height)));
+            double x = (point.X - _origin.X) / _scale, y = _frame.Height - (point.Y - _origin.Y) / _scale;
+            double width = _frame.Width, height = _frame.Height;
+            if (_frame.Bottle != null)
+            {
+                var projected = _frame.Bottle.Project(new PatternPoint(x + _frame.BottleOrigin.X, y + _frame.BottleOrigin.Y));
+                x = projected.X; y = projected.Y; width = _frame.Bottle.Width; height = _frame.Bottle.Slant;
+            }
+            double xPercent = Math.Max(0, Math.Min(100, x * 100 / width));
+            double yPercent = Math.Max(0, Math.Min(100, (1 - y / height) * 100));
             HeroPositionChanged?.Invoke(xPercent, yPercent);
         }
     }

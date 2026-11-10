@@ -16,10 +16,7 @@ namespace VanyaTools.Native
 
             CheckCount(Math.Max(1, Math.Floor(width / Math.Max(repeatWidth, repeatHeight))),
                 Math.Max(1, Math.Floor(height / Math.Max(repeatWidth, repeatHeight))));
-            var cells = options.Texture ? RepeatCells(repeatWidth, repeatHeight, options) : null;
-            var module = cells == null ? Motifs(repeatWidth, repeatHeight, motifs.Count, options) : PlaceInCells(cells, motifs, options);
-            if (options.Mode == PatternFillMode.Pebbles)
-                PatternPebbleSpacing.Balance(module, motifs, options.GapMm, repeatWidth, repeatHeight);
+            var module = RepeatModule(motifs, options, out var cells);
 
             double radians = options.Angle * Math.PI / 180, cos = Math.Cos(radians), sin = Math.Sin(radians);
             double localWidth = Math.Abs(cos) * width + Math.Abs(sin) * height;
@@ -98,6 +95,18 @@ namespace VanyaTools.Native
 
             PatternPoint[] Offset(PatternPoint[] points, PatternPoint offset) =>
                 points.Select(p => new PatternPoint(p.X + offset.X, p.Y + offset.Y)).ToArray();
+        }
+
+        internal static List<PatternPlacement> RepeatModule(IReadOnlyList<PatternFootprint> motifs,
+            PatternFillOptions options, out List<PatternPoint[]> cells, double motifAngle = 0)
+        {
+            double width = options.RepeatWidthMm, height = options.RepeatHeightMm;
+            cells = options.Texture ? RepeatCells(width, height, options) : null;
+            var module = cells == null ? Motifs(width, height, motifs.Count, options, motifAngle) :
+                PlaceInCells(cells, motifs, options, motifAngle: motifAngle);
+            if (options.Mode == PatternFillMode.Pebbles)
+                PatternPebbleSpacing.Balance(module, motifs, options.GapMm, width, height);
+            return module;
         }
 
         private static List<PatternPoint[]> RepeatCells(double repeatWidth, double repeatHeight, PatternFillOptions options)

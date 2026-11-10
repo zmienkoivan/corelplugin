@@ -16,7 +16,8 @@ namespace VanyaTools.Native
         internal PatternFillOptions Layout = new PatternFillOptions();
         internal double Allowance, HeroSize, HeroAngle;
         internal double HeroX = 50, HeroY = 50, HeroGap = 5;
-        internal bool UseHero = true;
+        internal bool UseHero = true, BottleWhole;
+        internal double BottleTop = 70, BottleBottom = 70, BottleHeight = 100;
     }
 
     internal sealed class PatternFillWindow : Window
@@ -29,7 +30,8 @@ namespace VanyaTools.Native
         private readonly ValueField _heroX, _heroY, _heroSize, _heroAngle, _heroGap;
         private readonly CheckBox _useHero, _repeat, _showCells, _showRepeatBorders;
         private readonly StackPanel _motifFields, _heroFields, _repeatFields;
-        private readonly ValueField _repeatWidth, _repeatHeight;
+        private readonly ValueField _repeatWidth, _repeatHeight, _bottleTop, _bottleBottom, _bottleHeight;
+        private readonly CheckBox _bottleWhole, _bottleTaper;
         private readonly Button _apply;
         private readonly TextBlock _message;
         private readonly DispatcherTimer _refresh = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(70) };
@@ -42,7 +44,8 @@ namespace VanyaTools.Native
         // Used by one preview task at a time. Moving the hero reuses the placement and contour calculations.
         private PatternFrame _layoutFrame;
         private PatternFillOptions _layoutOptions;
-        private bool _layoutUsesHero;
+        private bool _layoutUsesHero, _layoutBottleWhole;
+        private List<PatternPlacement[]> _bottleGroups;
         private List<PatternPlacement> _layoutItems;
         private PatternAsset[] _layoutMotifs;
         private HashSet<int> _layoutMirrors;
@@ -58,9 +61,9 @@ namespace VanyaTools.Native
         {
             _session = session;
             _mirroredIds = new HashSet<int>(session.MirroredIds);
-            _frame = session.Seam;
+            _frame = session.BottleMode ? BottleFrame(initial) : session.Seam;
             _seed = initial.Layout.Seed;
-            Title = "Паттерн по контуру · Vanya Tools";
+            Title = session.BottleMode ? "Паттерн для бутылки · Vanya Tools" : "Паттерн по контуру · Vanya Tools";
             Width = Math.Min(1180, SystemParameters.WorkArea.Width - 28);
             Height = Math.Min(840, SystemParameters.WorkArea.Height - 28);
             MinWidth = 680; MinHeight = 480; WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -86,11 +89,33 @@ namespace VanyaTools.Native
             var settings = new StackPanel { Margin = new Thickness(1, 0, 12, 0) };
             var scroll = new ScrollViewer { Content = settings, Width = 282, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             DockPanel.SetDock(scroll, Dock.Left); root.Children.Add(scroll);
-            _preview = new PatternPreviewSurface(session);
+            _preview = new PatternPreviewSurface(session, _frame);
             var frame = new Border { Child = _preview, BorderThickness = new Thickness(1), ClipToBounds = true };
             DockerTheme.UseTheme(frame, Border.BorderBrushProperty, DockerTheme.BorderBrush);
             DockerTheme.UseTheme(frame, Border.BackgroundProperty, DockerTheme.SurfaceBackground);
             root.Children.Add(frame);
+
+            if (session.BottleMode)
+            {
+                var bottle = DockerLayout.ToolGroup("Размеры бутылки",
+                    "Измерьте диаметр на границе печати и высоту кольца вдоль оси бутылки. Для конуса укажите второй диаметр. Оранжевые линии показывают стык.");
+                settings.Children.Add(bottle);
+                _bottleTop = AddField(bottle, "Диаметр сверху, мм", 1, 1000, initial.BottleTop);
+                _bottleTaper = new CheckBox { Content = "Конусная бутылка", IsChecked = initial.BottleTop != initial.BottleBottom,
+                    Margin = new Thickness(0, 0, 0, 4) };
+                bottle.Children.Add(_bottleTaper);
+                _bottleBottom = AddField(bottle, "Диаметр снизу, мм", 1, 1000, initial.BottleBottom);
+                _bottleBottom.View.Visibility = _bottleTaper.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+                _bottleTaper.Checked += (_, __) => { _bottleBottom.View.Visibility = Visibility.Visible; QueuePreview(); };
+                _bottleTaper.Unchecked += (_, __) => { _bottleBottom.View.Visibility = Visibility.Collapsed; QueuePreview(); };
+                _bottleHeight = AddField(bottle, "Высота кольца, мм", 1, 1000, initial.BottleHeight);
+                _bottleWhole = new CheckBox { Content = "Целые рисунки у края", IsChecked = initial.BottleWhole,
+                    ToolTip = "У верхнего, нижнего и стыковых краёв рисунки сдвигаются внутрь или уменьшаются, если есть место.",
+                    Margin = new Thickness(0, 3, 0, 4) };
+                _bottleWhole.Checked += (_, __) => QueuePreview();
+                _bottleWhole.Unchecked += (_, __) => QueuePreview();
+                bottle.Children.Add(_bottleWhole);
+            }
 
             var pattern = DockerLayout.ToolGroup("Заполнение", "Пунктир на детали показывает линию шва. Голубой пунктир повторяет силуэт главного элемента с заданным зазором. Рисунки рядом подгоняются под свободное место.");
             settings.Children.Add(pattern);
@@ -103,9 +128,10 @@ namespace VanyaTools.Native
             _gap = AddField(pattern, "Зазор между повторами, мм", 0, 1000, initial.Layout.GapMm);
             _allowance = AddField(pattern, "Припуск на шов, мм", 0, 100,
                 session.Replace ? session.ExistingAllowance : initial.Allowance);
+            _allowance.View.Visibility = session.BottleMode ? Visibility.Collapsed : Visibility.Visible;
             _allowance.View.IsEnabled = !session.Replace;
             _allowance.View.ToolTip = session.Replace ? "Для нового припуска выделите исходный контур детали." : "Припуск строится наружу от контура детали.";
-            _angle = AddField(pattern, "Поворот, °", -360, 360, initial.Layout.Angle);
+            _angle = AddField(pattern, session.BottleMode ? "Поворот рисунков, °" : "Поворот, °", -360, 360, initial.Layout.Angle);
             _motifFields = new StackPanel(); pattern.Children.Add(_motifFields);
             _min = AddField(_motifFields, "Размер от, %", 10, 300, initial.Layout.MinScale * 100);
             _max = AddField(_motifFields, "Размер до, %", 10, 300, initial.Layout.MaxScale * 100);
@@ -118,6 +144,7 @@ namespace VanyaTools.Native
             _repeat = new CheckBox { Content = "Повторять рапорт", IsChecked = initial.Layout.Repeat,
                 Margin = new Thickness(0, 0, 0, 5),
                 ToolTip = "Один блок повторяется по ширине и высоте. Поворот поворачивает весь рапорт." };
+            _repeat.Visibility = session.BottleMode ? Visibility.Collapsed : Visibility.Visible;
             pattern.Children.Add(_repeat);
             _repeatFields = new StackPanel();
             pattern.Children.Add(_repeatFields);
@@ -126,9 +153,10 @@ namespace VanyaTools.Native
                 initial.Layout.Repeat ? initial.Layout.RepeatWidthMm : defaultRepeatSize);
             _repeatHeight = AddField(_repeatFields, "Высота рапорта, мм", .5, 5000,
                 initial.Layout.Repeat ? initial.Layout.RepeatHeightMm : defaultRepeatSize);
-            _showRepeatBorders = new CheckBox { Content = "Пунктир границ рапорта", IsChecked = true,
+            _showRepeatBorders = new CheckBox { Content = session.BottleMode ? "Линии стыка" : "Пунктир границ рапорта", IsChecked = true,
                 Margin = new Thickness(0, 0, 0, 5) };
-            _repeatFields.Children.Add(_showRepeatBorders);
+            if (session.BottleMode) pattern.Children.Add(_showRepeatBorders);
+            else _repeatFields.Children.Add(_showRepeatBorders);
 
             var hero = DockerLayout.ToolGroup("Главный элемент", "Щёлкните по детали или перетащите главный элемент. Координаты считаются от левого и верхнего краёв внешнего габарита детали. Размер задаёт длинную сторону с учётом поворота.");
             settings.Children.Add(hero);
@@ -137,9 +165,10 @@ namespace VanyaTools.Native
                 Margin = new Thickness(0, 0, 0, 5) };
             hero.Children.Add(_useHero);
             _heroFields = new StackPanel(); hero.Children.Add(_heroFields);
-            double suggested = Math.Max(.5, Math.Min(2000, Math.Min(session.Seam.Width, session.Seam.Height) * .35));
+            double suggested = Math.Max(.5, Math.Min(2000, Math.Min(_frame.Bottle?.Width ?? _frame.Width,
+                _frame.Bottle?.Slant ?? _frame.Height) * .35));
             _heroSize = AddField(_heroFields, "Размер, мм", .5, 2000, initial.HeroSize > 0 ? initial.HeroSize : suggested);
-            _heroX = AddField(_heroFields, "От левого края, %", 0, 100, initial.HeroX);
+            _heroX = AddField(_heroFields, session.BottleMode ? "От стыка по окружности, %" : "От левого края, %", 0, 100, initial.HeroX);
             _heroY = AddField(_heroFields, "От верхнего края, %", 0, 100, initial.HeroY);
             _heroAngle = AddField(_heroFields, "Поворот главного элемента, °", -360, 360, initial.HeroAngle);
             _heroGap = AddField(_heroFields, "Свободная зона, мм", 0, 1000, initial.HeroGap);
@@ -198,11 +227,12 @@ namespace VanyaTools.Native
         {
             var mode = (PatternFillMode)_mode.SelectedIndex;
             bool texture = mode == PatternFillMode.Pebbles || mode == PatternFillMode.Crocodile;
-            bool repeat = _repeat.IsChecked == true;
+            bool repeat = !_session.BottleMode && _repeat.IsChecked == true;
             _variation.View.Visibility = texture ? Visibility.Collapsed : Visibility.Visible;
             _showCells.Visibility = texture ? Visibility.Visible : Visibility.Collapsed;
             _repeatFields.Visibility = repeat ? Visibility.Visible : Visibility.Collapsed;
-            _preview.ShowGuides(texture && _showCells.IsChecked == true, repeat && _showRepeatBorders.IsChecked == true);
+            _preview.ShowGuides(texture && _showCells.IsChecked == true,
+                (_session.BottleMode || repeat) && _showRepeatBorders.IsChecked == true);
         }
 
         private void SetPosition(double x, double y)
@@ -232,7 +262,7 @@ namespace VanyaTools.Native
                     variation = mode == PatternFillMode.Pebbles || mode == PatternFillMode.Crocodile ? 0 : _variation.Read();
                 var options = new PatternFillOptions { Mode = mode,
                     SizeMm = _size.Read(), GapMm = _gap.Read(), Angle = _angle.Read(), AngleVariation = variation, Seed = _seed };
-                if (_repeat.IsChecked == true)
+                if (!_session.BottleMode && _repeat.IsChecked == true)
                 {
                     options.RepeatWidthMm = _repeatWidth.Read();
                     options.RepeatHeightMm = _repeatHeight.Read();
@@ -244,13 +274,22 @@ namespace VanyaTools.Native
                 {
                     options.MinScale = _min.Read() / 100; options.MaxScale = _max.Read() / 100;
                 }
-                double allowance = _allowance.Read();
-                if (_frameAllowance != allowance)
+                double allowance = _session.BottleMode ? 0 : _allowance.Read();
+                var next = new PatternEditorSettings { Layout = options, Allowance = allowance, UseHero = useHero || _session.Hero == null };
+                if (_session.BottleMode)
+                {
+                    next.BottleTop = _bottleTop.Read();
+                    next.BottleBottom = _bottleTaper.IsChecked == true ? _bottleBottom.Read() : next.BottleTop;
+                    next.BottleHeight = _bottleHeight.Read(); next.BottleWhole = _bottleWhole.IsChecked == true;
+                    var profile = _frame.Bottle;
+                    if (profile.TopDiameter != next.BottleTop || profile.BottomDiameter != next.BottleBottom ||
+                        profile.Height != next.BottleHeight) _frame = BottleFrame(next);
+                }
+                else if (_frameAllowance != allowance)
                 {
                     _frame = PatternFillService.FrameFor(_session, allowance);
                     _frameAllowance = allowance;
                 }
-                var next = new PatternEditorSettings { Layout = options, Allowance = allowance, UseHero = useHero || _session.Hero == null };
                 if (useHero)
                 {
                     next.HeroX = _heroX.Read(); next.HeroY = _heroY.Read(); next.HeroSize = _heroSize.Read();
@@ -270,6 +309,9 @@ namespace VanyaTools.Native
                 int used = draft.Items.Select(item => item.Motif).Distinct().Count();
                 string message = "Повторов: " + draft.Items.Count + " · фигур в раскладке: " + used + " из " + draft.Motifs.Length;
                 if (fallback > 0) message += " · по габаритам: " + fallback;
+                if (frame.Bottle != null)
+                    message += " · по верху " + frame.Bottle.CircumferenceAt(frame.Bottle.Slant).ToString("0.#") +
+                        " мм · по низу " + frame.Bottle.CircumferenceAt(0).ToString("0.#") + " мм";
                 ShowMessage(message, false);
                 _apply.IsEnabled = true;
             }
@@ -291,7 +333,7 @@ namespace VanyaTools.Native
         {
             var options = settings.Layout;
             if (_layoutFrame != frame || useHero != _layoutUsesHero || !SameLayout(_layoutOptions, options) ||
-                !_layoutMirrors.SetEquals(mirroredIds))
+                !_layoutMirrors.SetEquals(mirroredIds) || _layoutBottleWhole != settings.BottleWhole)
             {
                 var motifs = _session.Motifs.Where(asset => !useHero || asset.Id != _session.Hero.Id).Select(asset =>
                 {
@@ -299,10 +341,17 @@ namespace VanyaTools.Native
                     PatternFillService.PrepareSilhouette(asset);
                     return mirroredIds.Contains(asset.Id) ? asset.MirrorHorizontally() : asset;
                 }).ToArray();
-                var items = PatternFillLayout.Build(frame.Width, frame.Height, motifs.Select(asset => asset.Footprint).ToArray(),
-                    options, out PatternLayoutGuides guides);
+                PatternLayoutGuides guides;
+                List<PatternPlacement> items;
+                if (frame.Bottle != null)
+                {
+                    _bottleGroups = PatternBottleLayout.Build(frame, motifs, options, settings.BottleWhole, cancellation, out guides);
+                    items = _bottleGroups.SelectMany(group => group).ToList();
+                }
+                else items = PatternFillLayout.Build(frame.Width, frame.Height, motifs.Select(asset => asset.Footprint).ToArray(),
+                    options, out guides);
                 Geometry[] silhouettes = null;
-                if (useHero)
+                if (useHero && frame.Bottle == null)
                 {
                     silhouettes = new Geometry[items.Count];
                     for (int i = 0; i < items.Count; i++)
@@ -318,13 +367,21 @@ namespace VanyaTools.Native
                 _layoutMirrors = mirroredIds;
                 _layoutSilhouettes = silhouettes;
                 _layoutFrame = frame; _layoutOptions = options; _layoutUsesHero = useHero;
+                _layoutBottleWhole = settings.BottleWhole;
             }
 
             var draft = new PatternDraft { Frame = frame, Options = options, Motifs = _layoutMotifs, MirroredIds = mirroredIds,
                 Items = _layoutItems, Allowance = settings.Allowance,
                 CellGuides = _layoutCellGuides, RepeatGuides = _layoutRepeatGuides };
+            if (useHero) PatternFillService.PrepareSilhouette(_session.Hero);
+            if (frame.Bottle != null)
+            {
+                if (useHero) PatternBottleLayout.AddHero(draft, _session.Hero, settings, _bottleGroups, cancellation);
+                if (draft.Items.Count == 0 && draft.Hero == null)
+                    throw new InvalidOperationException("Рисунки не помещаются. Уменьшите размер или зазор.");
+                return draft;
+            }
             if (!useHero) return draft;
-            PatternFillService.PrepareSilhouette(_session.Hero);
             draft.Hero = new PatternPlacement { Size = settings.HeroSize, Angle = settings.HeroAngle,
                 Center = new PatternPoint(frame.Width * settings.HeroX / 100, frame.Height * (1 - settings.HeroY / 100)) };
             if (_reserve == null || _reserveSize != settings.HeroSize || _reserveAngle != settings.HeroAngle || _reserveGap != settings.HeroGap)
@@ -336,6 +393,9 @@ namespace VanyaTools.Native
             draft.Items = PatternHeroFill.Adjust(_layoutItems, _layoutSilhouettes, _layoutMotifs, options, draft.Reserve, cancellation);
             return draft;
         }
+
+        private PatternFrame BottleFrame(PatternEditorSettings settings) =>
+            PatternBottleLayout.Frame(new PatternBottle(settings.BottleTop, settings.BottleBottom, settings.BottleHeight), _session.BottleCenter);
 
         private static Geometry GuideGeometry(IReadOnlyList<PatternPoint[]> paths, bool closed)
         {

@@ -26,6 +26,7 @@ internal static class Program
         Check("Pebbles balance gaps and crocodile avoids diagonal repeats", PatternFillChecks.OrganicSpacing);
         Check("Organic modes optimize rotation and pebbles vary motifs across repeat seams", PatternFillChecks.PebbleOrientationAndNeighbors);
         Check("All repeat modes preserve motifs and clearance across guided seams", PatternFillChecks.PebbleRepeat);
+        Check("Bottle profiles match both circumferences and join at the seam", PatternFillChecks.BottleProfile);
         Console.WriteLine(_failed == 0 ? "All nesting checks passed." : _failed + " nesting checks failed.");
         Environment.ExitCode = _failed == 0 ? 0 : 1;
     }

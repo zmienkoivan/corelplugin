@@ -156,7 +156,7 @@ namespace VanyaTools.Native
                 Motifs(width, height, motifs.Count, options);
         }
 
-        private static List<PatternPlacement> Motifs(double width, double height, int motifs, PatternFillOptions options)
+        private static List<PatternPlacement> Motifs(double width, double height, int motifs, PatternFillOptions options, double motifAngle = 0)
         {
             bool scattered = options.Mode == PatternFillMode.Random;
             double largest = options.SizeMm * options.MaxScale;
@@ -203,7 +203,7 @@ namespace VanyaTools.Native
                     int index = scattered ? order[result.Count % motifs] : (result.Count + (int)((uint)options.Seed % (uint)motifs)) % motifs;
                     double halfWidth = (pitchX - options.GapMm) / 2, halfHeight = (pitchY - options.GapMm) / 2;
                     result.Add(new PatternPlacement { Center = new PatternPoint(x, y), Motif = index, Size = size,
-                        Angle = (repeat ? 0 : options.Angle) + Signed(random) * options.AngleVariation,
+                        Angle = (repeat ? motifAngle : options.Angle) + Signed(random) * options.AngleVariation,
                         Cell = new[] { new PatternPoint(columnX - halfWidth, rowY - halfHeight),
                             new PatternPoint(columnX + halfWidth, rowY - halfHeight),
                             new PatternPoint(columnX + halfWidth, rowY + halfHeight),
@@ -396,7 +396,7 @@ namespace VanyaTools.Native
         }
 
         internal static List<PatternPlacement> PlaceInCells(List<PatternPoint[]> cells, IReadOnlyList<PatternFootprint> motifs,
-            PatternFillOptions options, bool allowEmpty = false, bool fixedAngle = false)
+            PatternFillOptions options, bool allowEmpty = false, bool fixedAngle = false, double motifAngle = 0)
         {
             var random = new Random(options.Seed);
             bool pebbles = options.Mode == PatternFillMode.Pebbles;
@@ -410,7 +410,7 @@ namespace VanyaTools.Native
             var neighborDistances = new double[motifs.Count];
             var placedCenters = new List<PatternPoint>(cells.Count);
             var period = options.Repeat ? new PatternPoint(options.RepeatWidthMm, options.RepeatHeightMm) : default;
-            double baseAngle = options.Repeat ? 0 : options.Angle;
+            double baseAngle = options.Repeat ? motifAngle : options.Angle;
             double drift = options.SizeMm * .07;
             foreach (var cell in cells)
             {

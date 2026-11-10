@@ -45,13 +45,17 @@ namespace VanyaTools.Native
         internal object Curve;
         internal double Left, Bottom, Width, Height;
         internal double Top => Bottom + Height;
-        internal Geometry Geometry;
+        internal Geometry Geometry, BottleClip;
+        internal PatternBottle Bottle;
+        internal PatternPoint BottleOrigin;
     }
 
     internal sealed class PatternEditorSession
     {
-        internal object Application, Document, Target;
+        internal object Application, Document, Target, BottlePage, BottleSelection;
         internal PatternFrame Seam;
+        internal PatternPoint BottleCenter;
+        internal bool BottleMode => BottlePage != null;
         internal PatternAsset[] Motifs;
         internal PatternAsset Hero;
         internal int[] MirroredIds = Array.Empty<int>();
@@ -67,6 +71,7 @@ namespace VanyaTools.Native
         internal List<PatternPlacement> Items;
         internal HashSet<int> MirroredIds;
         internal PatternPlacement Hero;
+        internal PatternPlacement[] HeroCopies;
         internal Geometry Reserve, CellGuides, RepeatGuides;
         internal double Allowance;
     }
@@ -77,6 +82,7 @@ namespace VanyaTools.Native
         private readonly List<PatternSource> _motifs = new List<PatternSource>();
         private PatternSource _hero;
         private double _lastAllowance;
+        private bool _resultWasBottle;
 
         internal IReadOnlyList<PatternSource> Motifs => _motifs;
 
@@ -131,17 +137,40 @@ namespace VanyaTools.Native
             return shapes.ToArray();
         }
 
-        internal PatternEditorSession OpenEditor()
+        internal PatternEditorSession OpenEditor() => Open(false);
+
+        internal PatternEditorSession OpenBottleEditor() => Open(true);
+
+        private PatternEditorSession Open(bool bottle)
         {
             dynamic app = CorelApp.Get(), doc = app.ActiveDocument;
             if (doc == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
-            object target = SelectedContour((object)app);
-            bool replace = SameObject((object)doc, _resultDocument) && SameObject(target, _result);
+            object target = bottle ? null : SelectedContour((object)app);
+            bool replace = _resultWasBottle == bottle && SameObject((object)doc, _resultDocument);
+            if (bottle && replace)
+            {
+                dynamic selected = app.ActiveSelectionRange;
+                if (selected != null && Convert.ToInt32(selected.Count) == 1) target = (object)selected.Shapes.Item[1];
+            }
+            replace = replace && SameObject(target, _result);
             var session = new PatternEditorSession { Application = app, Document = doc, Target = target,
                 Replace = replace, ExistingAllowance = replace ? _lastAllowance : 0 };
             return InMillimeters((object)doc, () =>
             {
-                session.Seam = ReadFrame(GetOutline(target));
+                if (bottle)
+                {
+                    dynamic page = doc.ActivePage, selection = app.CreateShapeRange(), selected = app.ActiveSelectionRange;
+                    if (page == null) throw new InvalidOperationException("Откройте страницу CorelDRAW.");
+                    if (selected != null)
+                        foreach (dynamic shape in selected) selection.Add(shape);
+                    double x = 0, y = 0, width = 0, height = 0;
+                    if (replace) ((dynamic)target).GetBoundingBox(out x, out y, out width, out height, true);
+                    else page.GetBoundingBox(ref x, ref y, ref width, ref height);
+                    session.BottlePage = (object)page;
+                    session.BottleSelection = (object)selection;
+                    session.BottleCenter = new PatternPoint(x + width / 2, y + height / 2);
+                }
+                else session.Seam = ReadFrame(GetOutline(target));
                 var previews = new Dictionary<int, PatternAsset>();
                 try
                 {
@@ -153,7 +182,7 @@ namespace VanyaTools.Native
                 }
                 finally
                 {
-                    if (previews.Count > 0) TryRestore(() => ((dynamic)target).CreateSelection(), "pattern contour selection");
+                    if (previews.Count > 0) TryRestore(() => RestoreSelection(session), "pattern source selection");
                 }
                 return session;
 
@@ -218,7 +247,8 @@ namespace VanyaTools.Native
         {
             dynamic app = session.Application, doc = session.Document, target = session.Target;
             if (!SameObject((object)app.ActiveDocument, session.Document) ||
-                !SameObject(SelectedContour(session.Application), session.Target))
+                (session.BottleMode && !SameObject((object)doc.ActivePage, session.BottlePage)) ||
+                ((!session.BottleMode || session.Replace) && !SameObject(SelectedContour(session.Application), session.Target)))
                 throw new InvalidOperationException("Выделение изменилось. Снова откройте окно паттерна.");
             foreach (var motif in draft.Motifs) VerifyAsset(motif.Shape, motif.Id);
             if (draft.Hero != null) VerifyAsset(session.Hero.Shape, session.Hero.Id);
@@ -232,17 +262,22 @@ namespace VanyaTools.Native
                 doc.Unit = CorelConstants.CdrMillimeter;
                 dynamic layer = doc.ActiveLayer, range = app.CreateShapeRange();
                 app.Optimization = true;
-                doc.BeginCommandGroup("Vanya Tools · паттерн по контуру"); started = true;
-                frame = layer.CreateCurve((dynamic)draft.Frame.Curve);
+                doc.BeginCommandGroup(session.BottleMode ? "Vanya Tools · развёртка бутылки" : "Vanya Tools · паттерн по контуру");
+                started = true;
+                object curve = session.BottleMode ? BottleCurve((object)doc, draft.Frame) : draft.Frame.Curve;
+                frame = layer.CreateCurve((dynamic)curve);
                 frame.Fill.ApplyNoFill();
                 frame.Outline.SetNoOutline();
-                frame.Name = "Vanya · паттерн";
+                frame.Name = session.BottleMode ? "Vanya · развёртка бутылки" : "Vanya · паттерн";
                 foreach (var item in draft.Items) AddMotif(draft.Motifs[item.Motif], item);
                 if (draft.Hero != null) AddMotif(session.Hero, draft.Hero);
-                range.AddToPowerClip(frame, 0);
+                if (draft.HeroCopies != null)
+                    foreach (var item in draft.HeroCopies) AddMotif(session.Hero, item);
+                if (created.Count != 0) range.AddToPowerClip(frame, 0);
                 frame.CreateSelection();
                 if (session.Replace) target.Delete();
                 _result = (object)frame; _resultDocument = (object)doc; _lastAllowance = draft.Allowance;
+                _resultWasBottle = session.BottleMode;
                 foreach (var source in _motifs) source.Mirrored = draft.MirroredIds.Contains(source.Id);
                 return created.Count;
 
@@ -262,7 +297,7 @@ namespace VanyaTools.Native
                     TryRestore(() => ((dynamic)shape).Delete(), "partial pattern shape");
                 }
                 if (frame != null) TryRestore(() => frame.Delete(), "partial pattern frame");
-                if (started) TryRestore(() => target.CreateSelection(), "pattern selection");
+                if (started) TryRestore(() => RestoreSelection(session), "pattern selection");
                 throw;
             }
             finally
@@ -271,6 +306,34 @@ namespace VanyaTools.Native
                 TryRestore(() => doc.Unit = unit, "document unit");
                 TryRestore(() => app.Optimization = optimized, "drawing optimization");
                 if (started && !optimized) TryRestore(() => app.ActiveWindow.Refresh(), "drawing refresh");
+            }
+        }
+
+        private static object BottleCurve(object document, PatternFrame frame)
+        {
+            dynamic curve = ((dynamic)document).CreateCurve();
+            var start = frame.Bottle.Start;
+            double x = frame.Left - frame.BottleOrigin.X, y = frame.Bottom - frame.BottleOrigin.Y;
+            dynamic path = curve.CreateSubPath(x + start.X, y + start.Y);
+            foreach (var edge in frame.Bottle.Outline())
+            {
+                if (edge.Curved)
+                    path.AppendCurveSegment2(x + edge.End.X, y + edge.End.Y, x + edge.First.X, y + edge.First.Y,
+                        x + edge.Second.X, y + edge.Second.Y);
+                else path.AppendLineSegment(x + edge.End.X, y + edge.End.Y);
+            }
+            path.Closed = true;
+            return (object)curve;
+        }
+
+        private static void RestoreSelection(PatternEditorSession session)
+        {
+            if (!session.BottleMode) ((dynamic)session.Target).CreateSelection();
+            else
+            {
+                dynamic selection = session.BottleSelection;
+                if (Convert.ToInt32(selection.Count) == 0) ((dynamic)session.Document).ClearSelection();
+                else selection.CreateSelection();
             }
         }
 

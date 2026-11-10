@@ -13,14 +13,14 @@ namespace VanyaTools.Native
         private readonly TextBlock _motifs, _hero, _message;
         private readonly ListBox _motifList;
         private readonly Button _forgetHero, _removeMotifs;
-        private PatternEditorSettings _settings = new PatternEditorSettings();
+        private PatternEditorSettings _settings = new PatternEditorSettings(), _bottleSettings = new PatternEditorSettings();
 
         internal PatternFillTab(Action<string, bool> status)
         {
             _status = status;
             var panel = DockerLayout.ToolGroup("Паттерн по контуру",
                 "Добавьте фоновые фигуры из выделения. При необходимости отдельно выберите главный элемент или группу. " +
-                "Затем выделите замкнутый контур детали и откройте настройки. " +
+                "Для паттерна по детали выделите замкнутый контур. Развёртка бутылки строится по размерам. " +
                 "«Галька» и «Крокодиловая кожа» распределяют ваши фигуры по ячейкам.");
             panel.Margin = new Thickness(8);
             Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
@@ -57,14 +57,16 @@ namespace VanyaTools.Native
             panel.Children.Add(DockerLayout.Trailing(Button("Запомнить главный элемент", (_, __) => Run(() =>
             {
                 _service.RememberHero();
-                _settings.UseHero = true; _settings.HeroSize = 0;
+                _settings.UseHero = _bottleSettings.UseHero = true;
+                _settings.HeroSize = _bottleSettings.HeroSize = 0;
                 _hero.Text = "Главный элемент выбран";
                 _forgetHero.Visibility = Visibility.Visible;
                 Report("Теперь выделите контур детали.", false);
             })), _forgetHero));
             _hero = Note("По желанию, отдельно от фонового узора");
             panel.Children.Add(_hero);
-            panel.Children.Add(DockerTheme.Primary(Button("Настроить паттерн…", (_, __) => Run(Edit))));
+            panel.Children.Add(DockerTheme.Primary(Button("Настроить паттерн…", (_, __) => Run(() => Edit(false)))));
+            panel.Children.Add(Button("Паттерн для бутылки…", (_, __) => Run(() => Edit(true))));
             _message = Note("");
             panel.Children.Add(_message);
         }
@@ -78,18 +80,19 @@ namespace VanyaTools.Native
             _removeMotifs.IsEnabled = false;
         }
 
-        private void Edit()
+        private void Edit(bool bottle)
         {
             PatternEditorSession session;
             using (DockerUiWatchdog.Trace(Dispatcher, "Pattern preview capture"))
-                session = _service.OpenEditor();
-            var window = new PatternFillWindow(session, _settings);
+                session = bottle ? _service.OpenBottleEditor() : _service.OpenEditor();
+            var window = new PatternFillWindow(session, bottle ? _bottleSettings : _settings);
             var owner = PresentationSource.FromVisual(this) as HwndSource;
             if (owner != null) new WindowInteropHelper(window).Owner = owner.Handle;
             if (window.ShowDialog() != true) return;
-            _settings = window.Settings;
             using (DockerUiWatchdog.Trace(Dispatcher, "Pattern insertion"))
                 Report("Паттерн готов · объектов: " + _service.Apply(session, window.Draft), false);
+            if (bottle) _bottleSettings = window.Settings;
+            else _settings = window.Settings;
         }
 
         private void Run(Action action)

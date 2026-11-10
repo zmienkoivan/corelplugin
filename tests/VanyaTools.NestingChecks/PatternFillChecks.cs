@@ -214,6 +214,39 @@ internal static class PatternFillChecks
         AssertGap(repeated.Select(item => Hull(item, motifs[0])).ToArray(), 6);
     }
 
+    internal static void BottleProfile()
+    {
+        foreach (var size in new[] { (70d, 70d, 95d), (61d, 82d, 102d), (82d, 61d, 102d), (70.000001d, 70d, 95d), (100d, 15d, 12d) })
+        {
+            var profile = new PatternBottle(size.Item1, size.Item2, size.Item3);
+            Require(Math.Abs(profile.CircumferenceAt(0) - Math.PI * size.Item2) < 1e-8 &&
+                Math.Abs(profile.CircumferenceAt(profile.Slant) - Math.PI * size.Item1) < 1e-8,
+                "The two circumference lengths do not match the bottle diameters.");
+            var left = profile.Map(0, 0);
+            var right = profile.Map(profile.Width, 0);
+            Require(Math.Abs(Math.Sqrt(DistanceSquared(left, profile.Map(0, profile.Slant))) - profile.Slant) < 1e-8 &&
+                Math.Abs(Math.Sqrt(DistanceSquared(right, profile.Map(profile.Width, profile.Slant))) - profile.Slant) < 1e-8,
+                "The two seam edges have different lengths.");
+            double rotation = (profile.RotationAt(profile.Width) - profile.RotationAt(0)) * Math.PI / 180;
+            foreach (double height in new[] { 0d, profile.Slant * .37, profile.Slant })
+            {
+                var point = profile.Map(profile.Width * .21, height);
+                var projected = profile.Project(point);
+                Require(Math.Abs(projected.X - profile.Width * .21) < 1e-8 && Math.Abs(projected.Y - height) < 1e-8,
+                    "The pointer position did not map back to the surface.");
+                var copy = profile.Map(profile.Width * 1.21, height);
+                double x = point.X - left.X, y = point.Y - left.Y;
+                var rotated = new PatternPoint(right.X + x * Math.Cos(rotation) - y * Math.Sin(rotation),
+                    right.Y + x * Math.Sin(rotation) + y * Math.Cos(rotation));
+                Require(DistanceSquared(rotated, copy) < 1e-16,
+                    "The geometry across the two sides of the seam cannot align.");
+            }
+            var edge = profile.Outline().Last();
+            Require(DistanceSquared(edge.End, profile.Map(0, profile.Slant)) < 1e-16,
+                "The outline does not finish at the top of the first seam edge.");
+        }
+    }
+
     internal static void OrganicSpacing()
     {
         var metrics = SpacingMetrics();
