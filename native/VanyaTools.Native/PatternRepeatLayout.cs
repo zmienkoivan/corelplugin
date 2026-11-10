@@ -146,7 +146,7 @@ namespace VanyaTools.Native
             for (int row = 0; row < rows; row++)
                 for (int column = 0; column < columns; column++)
                 {
-                    double x = column + .5 + (row % 2) * .5 + Signed(random) * .16;
+                    double x = column + .25 + (row % 2) * .5 + Signed(random) * .16;
                     double y = row + .5 + Signed(random) * .13;
                     AddSeed(result, new PatternPoint(Wrap(x, columns), y));
                 }

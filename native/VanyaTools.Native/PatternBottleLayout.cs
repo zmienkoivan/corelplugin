@@ -35,7 +35,7 @@ namespace VanyaTools.Native
                 Left = pageCenter.X - bounds.Width / 2, Bottom = pageCenter.Y - bounds.Height / 2 };
         }
 
-        internal static List<PatternPlacement[]> Build(PatternFrame frame, PatternAsset[] motifs, PatternFillOptions options,
+        internal static List<PatternPlacement> Build(PatternFrame frame, PatternAsset[] motifs, PatternFillOptions options,
             bool whole, CancellationToken cancellation, out PatternLayoutGuides guides)
         {
             if (motifs.Length == 0) throw new ArgumentException("Добавьте фоновые фигуры в набор.");
@@ -56,42 +56,35 @@ namespace VanyaTools.Native
                 settings, out _, options.Angle, wrapHeight: false);
             double yOffset = (bottle.Slant - settings.RepeatHeightMm) / 2;
             var obstacles = new List<Pose>();
-            var groups = new List<PatternPlacement[]>();
+            var placed = new List<PatternPlacement>();
             var missed = new List<PatternPlacement>();
-            int count = 0;
             foreach (var item in module)
             {
                 cancellation.ThrowIfCancellationRequested();
                 var center = new PatternPoint(item.Center.X, item.Center.Y + yOffset);
-                var group = Place(frame, motifs[item.Motif].Footprint, item, center, options.GapMm, whole, obstacles);
-                if (group == null)
+                var motif = motifs[item.Motif].Footprint;
+                var pose = Place(frame, motif, item, center, options.GapMm, whole, obstacles);
+                if (pose != null)
                 {
-                    if (options.Texture)
-                        for (int repeat = -1; repeat <= 1; repeat++)
-                        {
-                            double shift = repeat * bottle.Width;
-                            if (item.Cell.Max(p => p.X) + shift <= 0 || item.Cell.Min(p => p.X) + shift >= bottle.Width) continue;
-                            double u = center.X + shift;
-                            var retry = AtBottle(frame, motifs[item.Motif].Footprint, item.Motif, u, center.Y,
-                                item.Angle + bottle.RotationAt(u), PatternTransform.Fit(motifs[item.Motif].Size, item).Scale).Item;
-                            retry.Cell = MapCell(frame, item.Cell, shift, yOffset);
-                            if (retry.Cell != null) missed.Add(retry);
-                        }
-                    continue;
+                    obstacles.Add(pose);
+                    placed.Add(pose.Item);
                 }
-                var visible = group.Where(pose => pose.Visible).Select(pose => pose.Item).ToArray();
-                count += visible.Length;
-                if (count > PatternFillLayout.MaximumElements)
-                    throw new InvalidOperationException("Увеличьте размер фигур. В развёртке помещается до 2400 копий.");
-                obstacles.AddRange(group);
-                groups.Add(visible);
+                else if (options.Texture)
+                    for (int repeat = -1; repeat <= 1; repeat++)
+                    {
+                        double shift = repeat * bottle.Width;
+                        if (item.Cell.Max(point => point.X) + shift <= 0 || item.Cell.Min(point => point.X) + shift >= bottle.Width) continue;
+                        double u = center.X + shift;
+                        var retry = AtBottle(frame, motif, item.Motif, u, center.Y, item.Angle + bottle.RotationAt(u),
+                            PatternTransform.Fit(motif.Size, item).Scale).Item;
+                        retry.Cell = MapCell(frame, item.Cell, shift, yOffset);
+                        if (retry.Cell != null) missed.Add(retry);
+                    }
             }
 
-            var placed = groups.SelectMany(group => group).ToList();
             Recover(frame, motifs, options, placed, missed, Geometry.Empty, cancellation);
             if (placed.Count > PatternFillLayout.MaximumElements)
                 throw new InvalidOperationException("Увеличьте размер фигур. В развёртке помещается до 2400 копий.");
-            for (int i = count; i < placed.Count; i++) groups.Add(new[] { placed[i] });
 
             var cellGuides = options.Texture ? placed.Where(item => item.Cell != null).Select(item => item.Cell).ToArray() : null;
             guides = new PatternLayoutGuides { Cells = cellGuides, RepeatLines = new[]
@@ -99,39 +92,30 @@ namespace VanyaTools.Native
                 new[] { OnFrame(frame, 0, 0), OnFrame(frame, 0, bottle.Slant) },
                 new[] { OnFrame(frame, bottle.Width, 0), OnFrame(frame, bottle.Width, bottle.Slant) }
             } };
-            return groups;
+            return placed;
         }
 
         internal static void AddHero(PatternDraft draft, PatternAsset hero, PatternEditorSettings settings,
-            List<PatternPlacement[]> groups, CancellationToken cancellation)
+            List<PatternPlacement> items, CancellationToken cancellation)
         {
             var bottle = draft.Frame.Bottle;
             var item = new PatternPlacement { Size = settings.HeroSize, Angle = settings.HeroAngle };
             var center = new PatternPoint(bottle.Width * settings.HeroX / 100, bottle.Slant * (1 - settings.HeroY / 100));
-            var poses = Place(draft.Frame, hero.Footprint, item, center, settings.HeroGap * 2,
+            var pose = Place(draft.Frame, hero.Footprint, item, center, settings.HeroGap * 2,
                 settings.BottleWhole, Array.Empty<Pose>());
-            if (poses == null) throw new InvalidOperationException("Главный рисунок не помещается. Уменьшите размер или свободную зону.");
-            var visible = poses.Where(pose => pose.Visible).Select(pose => pose.Item).ToArray();
-            draft.Hero = visible[0];
-            draft.HeroCopies = visible.Skip(1).ToArray();
-
-            foreach (var pose in poses)
-            {
-                var reserve = PatternSilhouette.Reserve(hero, pose.Item, settings.HeroGap, draft.Options.Mode == PatternFillMode.Pebbles);
-                reserve = PatternSilhouette.MoveReserve(reserve, pose.Item.Center);
-                draft.Reserve = draft.Reserve == null ? reserve : Geometry.Combine(draft.Reserve, reserve,
-                    GeometryCombineMode.Union, null, Tolerance, ToleranceType.Absolute);
-            }
-            draft.Reserve.Freeze();
+            if (pose == null) throw new InvalidOperationException("Главный рисунок не помещается. Уменьшите размер или свободную зону.");
+            draft.Hero = pose.Item;
+            draft.Reserve = PatternSilhouette.MoveReserve(PatternSilhouette.Reserve(hero, pose.Item, settings.HeroGap,
+                draft.Options.Mode == PatternFillMode.Pebbles), pose.Item.Center);
 
             var keep = new List<PatternPlacement>();
             var lost = new List<PatternPlacement>();
             Rect bounds = draft.Reserve.Bounds;
-            foreach (var group in groups)
+            foreach (var placement in items)
             {
                 cancellation.ThrowIfCancellationRequested();
-                if (group.Any(IntersectsReserve)) lost.AddRange(group.Where(placement => placement.Cell != null));
-                else keep.AddRange(group);
+                if (!IntersectsReserve(placement)) keep.Add(placement);
+                else if (placement.Cell != null) lost.Add(placement);
             }
 
             Recover(draft.Frame, draft.Motifs, draft.Options, keep, lost, draft.Reserve, cancellation);
@@ -153,7 +137,6 @@ namespace VanyaTools.Native
             List<PatternPlacement> keep, List<PatternPlacement> lost, Geometry reserve, CancellationToken cancellation)
         {
             if (lost.Count == 0) return;
-            var bottle = frame.Bottle;
             var region = Rect.Empty;
             foreach (var placement in lost) region.Union(Bounds(placement.Cell));
             region.Inflate(Tolerance, Tolerance);
@@ -161,55 +144,29 @@ namespace VanyaTools.Native
                 GeometryCombineMode.Exclude, null, Tolerance, ToleranceType.Absolute);
             var blocked = Geometry.Combine(reserve, outside, GeometryCombineMode.Union,
                 null, Tolerance, ToleranceType.Absolute);
-            var posesByItem = new Dictionary<PatternPlacement, Pose>();
             PatternHeroFill.Refit(keep, lost, motifs, options, blocked, cancellation, Fits);
 
             bool Fits(PatternPlacement placement)
             {
                 var motif = motifs[placement.Motif].Footprint;
-                if (Relation(frame, motif.At(placement)) != IntersectionDetail.FullyContains)
-                    return false;
-                var local = bottle.Project(new PatternPoint(placement.Center.X + frame.BottleOrigin.X,
-                    placement.Center.Y + frame.BottleOrigin.Y));
-                var hull = motif.At(placement);
-                double reach = hull.Max(p => Distance(p, placement.Center));
-                double gap = options.GapMm;
-                double seamReach = bottle.SeamReach(reach + gap, local.Y);
-                return (local.X > seamReach || ClearsSeam(local.X + bottle.Width)) &&
-                    (bottle.Width - local.X > seamReach || ClearsSeam(local.X - bottle.Width));
-
-                bool ClearsSeam(double u)
-                {
-                    double angle = placement.Angle + bottle.RotationAt(u) - bottle.RotationAt(local.X);
-                    var ghost = AtBottle(frame, motif, placement.Motif, u, local.Y, angle,
-                        PatternTransform.Fit(motif.Size, placement).Scale);
-                    foreach (var existing in keep)
-                    {
-                        cancellation.ThrowIfCancellationRequested();
-                        if (!posesByItem.TryGetValue(existing, out var other))
-                        {
-                            other = new Pose(existing, motifs[existing.Motif].Footprint.At(existing));
-                            posesByItem.Add(existing, other);
-                        }
-                        if (!Separated(ghost, other, gap)) return false;
-                    }
-                    return Separated(ghost, new Pose(placement, hull), 0);
-                }
+                return FitsSides(frame, motif, placement, options.GapMm) &&
+                    Relation(frame, motif.At(placement)) == IntersectionDetail.FullyContains;
             }
         }
 
-        private static List<Pose> Place(PatternFrame frame, PatternFootprint motif, PatternPlacement item, PatternPoint center,
+        private static Pose Place(PatternFrame frame, PatternFootprint motif, PatternPlacement item, PatternPoint center,
             double gap, bool whole, IReadOnlyList<Pose> obstacles)
         {
             var bottle = frame.Bottle;
             double sourceScale = PatternTransform.Fit(motif.Size, item).Scale;
+            double sourceReach = Distance(motif.Size, default) * sourceScale / 2;
+            var extent = new PatternFootprint(motif.Size);
+            double u = bottle.Wrap(center.X), pad = gap / 2 + EdgeInset;
             for (int attempt = 0; attempt < 8; attempt++)
             {
                 double factor = Math.Pow(.84, attempt), scale = sourceScale * factor;
-                var local = new PatternPlacement { Size = item.Size * factor, Angle = item.Angle };
-                var localHull = motif.At(local);
-                double reach = localHull.Max(p => Distance(p, default));
-                double u = bottle.Wrap(center.X), v = center.Y;
+                var localHull = motif.At(new PatternPlacement { Size = item.Size * factor, Angle = item.Angle });
+                double reach = sourceReach * factor, v = center.Y;
                 if (whole)
                 {
                     var limits = Bounds(localHull);
@@ -219,32 +176,84 @@ namespace VanyaTools.Native
                 }
                 else if (v + reach < 0 || v - reach > bottle.Slant) return null;
 
-                var poses = new List<Pose>(3);
-                var primary = CreatePose(u);
-                if (whole && !bottle.InsideRims(primary.Hull, frame.BottleOrigin, EdgeInset / 2)) continue;
-                poses.Add(primary);
-                double seamReach = bottle.SeamReach(reach + gap, v);
-                if (u <= seamReach) poses.Add(CreatePose(u + bottle.Width));
-                if (bottle.Width - u <= seamReach) poses.Add(CreatePose(u - bottle.Width));
-                if (!poses.Any(pose => pose.Visible)) return null;
-                if (poses.Any(pose => obstacles.Any(other => !Separated(pose, other, gap)))) continue;
-                if (poses.Count > 1 && poses.Any(pose => poses.Any(other => !ReferenceEquals(pose, other) &&
-                    !Separated(pose, other, 0)))) continue;
-                return poses;
+                double seamReach = bottle.SeamReach(reach + pad, v);
+                var pose = Create(u);
+                if (Fits(pose, u)) return AttachCell(pose, u);
+                if (u > seamReach && bottle.Width - u > seamReach) continue;
 
-                Pose CreatePose(double x)
+                bool left = u <= bottle.Width / 2;
+                var shifted = AlongSide(left, left ? u : bottle.Width - u) ?? AlongSide(!left, 0);
+                if (shifted != null) return shifted;
+
+                Pose AlongSide(bool fromLeft, double distance)
                 {
-                    var pose = AtBottle(frame, motif, item.Motif, x, v, item.Angle + bottle.RotationAt(x), scale);
-                    pose.Visible = Relation(frame, pose.Hull) != IntersectionDetail.Empty;
-                    if (pose.Visible && item.Cell != null)
+                    double far = Math.Min(seamReach, bottle.Width / 2);
+                    double near = Math.Min(far, distance);
+                    double x = Position(near);
+                    var candidate = Create(x);
+                    if (!ClearsSides(frame, extent.At(candidate.Item), x, v, reach, pad))
                     {
-                        double dx = x - center.X, dy = center.Y - item.Center.Y;
-                        pose.Item.Cell = MapCell(frame, item.Cell, dx, dy);
+                        x = Position(far);
+                        candidate = Create(x);
+                        for (int step = 0; step < 8; step++)
+                        {
+                            double middle = (near + far) / 2, probeX = Position(middle);
+                            var probe = Create(probeX);
+                            if (ClearsSides(frame, extent.At(probe.Item), probeX, v, reach, pad))
+                            {
+                                far = middle; x = probeX; candidate = probe;
+                            }
+                            else near = middle;
+                        }
                     }
-                    return pose;
+                    return Fits(candidate, x) ? AttachCell(candidate, x) : null;
+
+                    double Position(double value) => fromLeft ? value : bottle.Width - value;
+                }
+
+                Pose Create(double x) => AtBottle(frame, motif, item.Motif, x, v, item.Angle + bottle.RotationAt(x), scale);
+
+                bool Fits(Pose candidate, double x) =>
+                    ClearsSides(frame, extent.At(candidate.Item), x, v, reach, pad) &&
+                    (!whole || bottle.InsideRims(candidate.Hull, frame.BottleOrigin, EdgeInset / 2)) &&
+                    Relation(frame, candidate.Hull) != IntersectionDetail.Empty &&
+                    obstacles.All(other => Separated(candidate, other, gap));
+
+                Pose AttachCell(Pose candidate, double x)
+                {
+                    if (item.Cell != null)
+                    {
+                        double shift = Math.Round((x - center.X) / bottle.Width) * bottle.Width;
+                        candidate.Item.Cell = MapCell(frame, item.Cell, shift, center.Y - item.Center.Y);
+                    }
+                    return candidate;
                 }
             }
             return null;
+        }
+
+        internal static bool FitsSides(PatternFrame frame, PatternFootprint motif, PatternPlacement placement, double gap)
+        {
+            var extent = new PatternFootprint(motif.Size).At(placement);
+            var local = frame.Bottle.Project(new PatternPoint(placement.Center.X + frame.BottleOrigin.X,
+                placement.Center.Y + frame.BottleOrigin.Y));
+            double reach = extent.Max(point => Distance(point, placement.Center));
+            return ClearsSides(frame, extent, local.X, local.Y, reach, gap / 2 + EdgeInset);
+        }
+
+        private static bool ClearsSides(PatternFrame frame, PatternPoint[] hull, double u, double v, double reach, double pad)
+        {
+            var bottle = frame.Bottle;
+            double limit = bottle.SeamReach(reach + pad, v);
+            return (u > limit || Clears(0, 1)) && (bottle.Width - u > limit || Clears(bottle.Width, -1));
+
+            bool Clears(double seam, int side)
+            {
+                var a = OnFrame(frame, seam, 0);
+                var b = OnFrame(frame, seam, bottle.Slant);
+                return hull.All(point => side * ((b.Y - a.Y) * (point.X - a.X) - (b.X - a.X) * (point.Y - a.Y)) >=
+                    pad * bottle.Slant - 1e-8);
+            }
         }
 
         private static PatternPoint[] MapCell(PatternFrame frame, PatternPoint[] cell, double dx, double dy)
@@ -313,11 +322,10 @@ namespace VanyaTools.Native
         internal static PatternPoint[][] CenterMarks(PatternFrame frame)
         {
             double center = frame.Bottle.Width / 2, height = frame.Bottle.Slant;
-            double length = Math.Min(2, height / 4);
             return new[]
             {
-                new[] { OnFrame(frame, center, 0), OnFrame(frame, center, length) },
-                new[] { OnFrame(frame, center, height - length), OnFrame(frame, center, height) }
+                new[] { OnFrame(frame, center, -4), OnFrame(frame, center, -2) },
+                new[] { OnFrame(frame, center, height + 2), OnFrame(frame, center, height + 4) }
             };
         }
 
@@ -341,7 +349,6 @@ namespace VanyaTools.Native
             internal readonly PatternPlacement Item;
             internal readonly PatternPoint[] Hull;
             internal readonly Rect Bounds;
-            internal bool Visible;
 
             internal Pose(PatternPlacement item, PatternPoint[] hull)
             {

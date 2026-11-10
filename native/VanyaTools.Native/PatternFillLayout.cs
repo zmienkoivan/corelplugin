@@ -176,6 +176,7 @@ namespace VanyaTools.Native
             CheckCount(cols, rows);
             double pitchX = repeat ? width / cols : pitch, pitchY = repeat ? height / rows : pitch;
             double firstX = (width - (cols - 1) * pitchX) / 2;
+            if (staggered && repeat && !wrapHeight) firstX -= pitchX / 4;
             double firstY = (height + (rows - 1) * pitchY) / 2;
             var random = new Random(options.Seed);
             int[] order = scattered ? Shuffle(motifs, random) : null;

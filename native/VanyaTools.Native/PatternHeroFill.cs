@@ -21,11 +21,54 @@ namespace VanyaTools.Native
             return kept;
         }
 
+        internal static void FillVoids(PatternDraft draft, IReadOnlyList<PatternPlacement> baseline, CancellationToken cancellation)
+        {
+            var frame = draft.Frame;
+            var options = draft.Options;
+            if (frame.Bottle == null && options.Repeat) return;
+            int[] fillers = Enumerable.Range(0, draft.Motifs.Length).Where(index => draft.Motifs[index].IsFiller).ToArray();
+            if (fillers.Length == 0 || baseline.Count == 0) return;
+
+            double maximumSize = Math.Min(12, options.SizeMm * .45);
+            if (maximumSize < .5) return;
+            int limit = Math.Min(PatternFillLayout.MaximumElements,
+                draft.Items.Count + Math.Max(1, Math.Min(32, baseline.Count / 3)));
+            if (draft.Items.Count >= limit) return;
+
+            var random = new Random(options.Seed);
+            var candidates = baseline.Where(item => item.Cell != null).OrderBy(_ => random.Next()).Take(160)
+                .Select((item, i) => new PatternPlacement { Cell = item.Cell, Size = maximumSize,
+                    Angle = item.Angle, Motif = fillers[i % fillers.Length] }).ToArray();
+            var placed = new List<PatternPlacement>(draft.Items);
+            Geometry clip = frame.BottleClip;
+            if (clip == null)
+            {
+                clip = frame.Geometry.Clone();
+                clip.Transform = new MatrixTransform(clip.Transform.Value * new Matrix(1, 0, 0, -1, 0, frame.Height));
+                clip.Freeze();
+            }
+
+            Refit(placed, candidates, draft.Motifs, options, draft.Reserve ?? Geometry.Empty, cancellation,
+                Fits, fillers, maximumSize, limit);
+            draft.Items = placed;
+
+            bool Fits(PatternPlacement placement)
+            {
+                var asset = draft.Motifs[placement.Motif];
+                if (frame.Bottle != null && !PatternBottleLayout.FitsSides(frame, asset.Footprint, placement, options.GapMm))
+                    return false;
+                return clip.FillContainsWithDetail(PatternSilhouette.At(asset, placement), Tolerance,
+                    ToleranceType.Absolute) == IntersectionDetail.FullyContains;
+            }
+        }
+
         internal static void Refit(List<PatternPlacement> kept, IReadOnlyList<PatternPlacement> lost, PatternAsset[] motifs,
-            PatternFillOptions options, Geometry reserve, CancellationToken cancellation, Func<PatternPlacement, bool> accepts = null)
+            PatternFillOptions options, Geometry reserve, CancellationToken cancellation, Func<PatternPlacement, bool> accepts = null,
+            int[] variants = null, double maximumSize = double.PositiveInfinity, int limit = PatternFillLayout.MaximumElements)
         {
             if (lost.Count == 0) return;
             var edge = ReadBoundary(reserve);
+            var alternatives = variants ?? Enumerable.Range(0, motifs.Length).Where(index => !motifs[index].IsFiller).ToArray();
 
             Rect nearby = Rect.Empty;
             foreach (var item in lost) nearby.Union(Bounds(item.Cell));
@@ -44,6 +87,7 @@ namespace VanyaTools.Native
                 Mode = options.Mode == PatternFillMode.Pebbles ? PatternFillMode.Pebbles : PatternFillMode.Crocodile };
             foreach (var item in lost)
             {
+                if (kept.Count >= limit) break;
                 cancellation.ThrowIfCancellationRequested();
                 var original = motifs[item.Motif];
                 var cellBounds = Bounds(item.Cell);
@@ -98,7 +142,7 @@ namespace VanyaTools.Native
                 PatternPlacement best = Fit(item.Motif);
                 double covered = CoveredArea(best);
                 if (accepts != null && candidates.Length > 0 && (best == null || covered < Area(best.Cell) * .55))
-                    foreach (int alternative in Enumerable.Range(0, motifs.Length).Where(index => index != item.Motif)
+                    foreach (int alternative in alternatives.Where(index => index != item.Motif)
                         .OrderBy(index => neighbors.Count(neighbor => neighbor.Motif == index))
                         .ThenBy(index => (index - item.Motif + motifs.Length) % motifs.Length).Take(4))
                     {
@@ -134,6 +178,11 @@ namespace VanyaTools.Native
                         var fitted = PatternFillLayout.PlaceInCells(new List<PatternPoint[]> { polygon },
                             new[] { asset.Footprint }, fit, allowEmpty: true, fixedAngle: !options.Texture).SingleOrDefault();
                         if (fitted == null) continue;
+                        if (fitted.Size > maximumSize)
+                        {
+                            fitted.Size = maximumSize;
+                            if (!asset.Footprint.At(fitted).All(point => Inside(point, polygon))) continue;
+                        }
                         double scale = PatternTransform.Fit(asset.Size, fitted).Scale;
                         if (scale <= bestScale || reserve.FillContainsWithDetail(PatternSilhouette.At(asset, fitted),
                             Tolerance, ToleranceType.Absolute) != IntersectionDetail.Empty) continue;

@@ -46,7 +46,6 @@ namespace VanyaTools.Native
         private PatternFrame _layoutFrame;
         private PatternFillOptions _layoutOptions;
         private bool _layoutUsesHero, _layoutBottleWhole;
-        private List<PatternPlacement[]> _bottleGroups;
         private List<PatternPlacement> _layoutItems;
         private PatternAsset[] _layoutMotifs;
         private HashSet<int> _layoutMirrors;
@@ -111,14 +110,14 @@ namespace VanyaTools.Native
                 _bottleTaper.Unchecked += (_, __) => { _bottleBottom.View.Visibility = Visibility.Collapsed; QueuePreview(); };
                 _bottleHeight = AddField(bottle, "Высота кольца, мм", 1, 1000, initial.BottleHeight);
                 _bottleWhole = new CheckBox { Content = "Целые рисунки сверху и снизу", IsChecked = initial.BottleWhole,
-                    ToolTip = "У верхней и нижней кромок рисунки сохраняются целиком. Слева и справа рисунок продолжается через стык.",
+                    ToolTip = "Галочка сохраняет рисунки целиком у верхней и нижней кромок. У стыка фигурки всегда целые.",
                     Margin = new Thickness(0, 3, 0, 4) };
                 _bottleWhole.Checked += (_, __) => QueuePreview();
                 _bottleWhole.Unchecked += (_, __) => QueuePreview();
                 bottle.Children.Add(_bottleWhole);
                 _bottleCenterMarks = new CheckBox { Content = "Риски центра сверху и снизу",
                     IsChecked = initial.BottleCenterMarks, Margin = new Thickness(0, 0, 0, 4),
-                    ToolTip = "Две короткие линии напротив стыка. Появляются в предпросмотре и в готовой развёртке." };
+                    ToolTip = "Две короткие линии напротив стыка с отступом 2 мм от кромок." };
                 _bottleCenterMarks.Checked += (_, __) => QueuePreview();
                 _bottleCenterMarks.Unchecked += (_, __) => QueuePreview();
                 bottle.Children.Add(_bottleCenterMarks);
@@ -165,7 +164,7 @@ namespace VanyaTools.Native
             if (session.BottleMode) pattern.Children.Add(_showRepeatBorders);
             else _repeatFields.Children.Add(_showRepeatBorders);
 
-            var hero = DockerLayout.ToolGroup("Главный элемент", "Щёлкните по детали или перетащите главный элемент. Координаты считаются от левого и верхнего краёв внешнего габарита детали. Размер задаёт длинную сторону с учётом поворота.");
+            var hero = DockerLayout.ToolGroup("Главный элемент", "Угловые ручки меняют масштаб. Круглая ручка поворачивает рисунок. Чтобы переместить его, потяните за сам рисунок.");
             settings.Children.Add(hero);
             hero.Visibility = session.Hero == null ? Visibility.Collapsed : Visibility.Visible;
             _useHero = new CheckBox { Content = "Добавить главный элемент", IsChecked = session.Hero != null && initial.UseHero,
@@ -181,6 +180,7 @@ namespace VanyaTools.Native
             _heroGap = AddField(_heroFields, "Свободная зона, мм", 0, 1000, initial.HeroGap);
             _heroFields.Children.Add(Button("По центру", (_, __) => SetPosition(50, 50)));
             _preview.HeroPositionChanged += SetPosition;
+            _preview.HeroTransformChanged += SetHeroTransform;
             _mode.SelectionChanged += (_, __) => { UpdateGuideControls(); QueuePreview(); };
             _repeat.Checked += (_, __) => { UpdateGuideControls(); QueuePreview(); };
             _repeat.Unchecked += (_, __) => { UpdateGuideControls(); QueuePreview(); };
@@ -207,11 +207,11 @@ namespace VanyaTools.Native
         private Expander MirroringControls()
         {
             var list = new StackPanel { Margin = new Thickness(4, 2, 4, 3) };
-            var expander = new Expander { Header = "Зеркалирование…", Margin = new Thickness(0, 0, 0, 6),
+            var expander = new Expander { Header = "Зеркальные варианты…", Margin = new Thickness(0, 0, 0, 6),
                 Content = new ScrollViewer { Content = list, MaxHeight = 190,
                     VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                     HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled },
-                ToolTip = "Отмеченные фоновые рисунки отражаются по горизонтали перед поворотом." };
+                ToolTip = "Отметьте рисунки, для которых можно использовать и исходник, и отражение по горизонтали." };
             foreach (var asset in _session.Motifs)
             {
                 var row = new DockPanel();
@@ -246,6 +246,17 @@ namespace VanyaTools.Native
         {
             _heroX.Set(Math.Round(x, 1));
             _heroY.Set(Math.Round(y, 1));
+            QueuePreview();
+        }
+
+        private void SetHeroTransform(double size, double angle)
+        {
+            size = Math.Max(.5, Math.Min(2000, Math.Round(size, 1)));
+            angle = Math.Round(angle, 1);
+            if (_heroSize.TryRead(out double currentSize) && _heroAngle.TryRead(out double currentAngle) &&
+                currentSize == size && currentAngle == angle) return;
+            _heroSize.Set(size);
+            _heroAngle.Set(angle);
             QueuePreview();
         }
 
@@ -308,15 +319,20 @@ namespace VanyaTools.Native
                 var mirrors = new HashSet<int>(_mirroredIds);
                 PatternDraft draft = await Task.Run(() => BuildDraft(frame, next, useHero, mirrors, cancellation), cancellation);
                 if (!_ready) return;
-                _preview.Update(frame, draft);
+                _preview.Update(frame, draft, next.HeroAngle);
                 if (revision != _revision) return;
                 Settings = next;
                 Draft = draft;
                 int fallback = draft.Motifs.Count(asset => asset.OutlineFallback);
                 if (useHero && _session.Hero.OutlineFallback) fallback++;
                 int used = draft.Items.Select(item => item.Motif).Distinct().Count();
-                string message = "Повторов: " + draft.Items.Count + " · фигур в раскладке: " + used + " из " + draft.Motifs.Length;
+                string message = "Повторов: " + draft.Items.Count + " · вариантов в раскладке: " + used + " из " + draft.Motifs.Length;
                 if (fallback > 0) message += " · по габаритам: " + fallback;
+                if (draft.Motifs.Any(motif => motif.IsFiller))
+                {
+                    if (frame.Bottle == null && options.Repeat) message += " · мини-фигуры доступны без рапорта";
+                    else message += " · мини-фигур: " + draft.Items.Count(item => draft.Motifs[item.Motif].IsFiller);
+                }
                 if (frame.Bottle != null)
                     message += " · по верху " + frame.Bottle.CircumferenceAt(frame.Bottle.Slant).ToString("0.#") +
                         " мм · по низу " + frame.Bottle.CircumferenceAt(0).ToString("0.#") + " мм";
@@ -343,18 +359,23 @@ namespace VanyaTools.Native
             if (_layoutFrame != frame || useHero != _layoutUsesHero || !SameLayout(_layoutOptions, options) ||
                 !_layoutMirrors.SetEquals(mirroredIds) || _layoutBottleWhole != settings.BottleWhole)
             {
-                var motifs = _session.Motifs.Where(asset => !useHero || asset.Id != _session.Hero.Id).Select(asset =>
+                var variants = new List<PatternAsset>();
+                var fillers = new List<PatternAsset>();
+                foreach (var asset in _session.Motifs)
                 {
                     cancellation.ThrowIfCancellationRequested();
+                    if (useHero && asset.Id == _session.Hero.Id) continue;
                     PatternFillService.PrepareSilhouette(asset);
-                    return mirroredIds.Contains(asset.Id) ? asset.MirrorHorizontally() : asset;
-                }).ToArray();
+                    var destination = asset.IsFiller ? fillers : variants;
+                    destination.Add(asset);
+                    if (mirroredIds.Contains(asset.Id)) destination.Add(asset.MirrorHorizontally());
+                }
+                var motifs = variants.ToArray();
                 PatternLayoutGuides guides;
                 List<PatternPlacement> items;
                 if (frame.Bottle != null)
                 {
-                    _bottleGroups = PatternBottleLayout.Build(frame, motifs, options, settings.BottleWhole, cancellation, out guides);
-                    items = _bottleGroups.SelectMany(group => group).ToList();
+                    items = PatternBottleLayout.Build(frame, motifs, options, settings.BottleWhole, cancellation, out guides);
                 }
                 else items = PatternFillLayout.Build(frame.Width, frame.Height, motifs.Select(asset => asset.Footprint).ToArray(),
                     options, out guides);
@@ -371,7 +392,7 @@ namespace VanyaTools.Native
                 _layoutCellGuides = GuideGeometry(guides?.Cells, true);
                 _layoutRepeatGuides = GuideGeometry(guides?.RepeatLines, false);
                 _layoutItems = items;
-                _layoutMotifs = motifs;
+                _layoutMotifs = variants.Concat(fillers).ToArray();
                 _layoutMirrors = mirroredIds;
                 _layoutSilhouettes = silhouettes;
                 _layoutFrame = frame; _layoutOptions = options; _layoutUsesHero = useHero;
@@ -387,15 +408,20 @@ namespace VanyaTools.Native
                 if (settings.BottleCenterMarks) draft.CenterMarks = GuideGeometry(PatternBottleLayout.CenterMarks(frame), false);
                 if (useHero)
                 {
-                    PatternBottleLayout.AddHero(draft, _session.Hero, settings, _bottleGroups, cancellation);
+                    PatternBottleLayout.AddHero(draft, _session.Hero, settings, _layoutItems, cancellation);
                     if (options.Texture)
                         draft.CellGuides = GuideGeometry(draft.Items.Where(item => item.Cell != null).Select(item => item.Cell).ToArray(), true);
                 }
+                PatternHeroFill.FillVoids(draft, _layoutItems, cancellation);
                 if (draft.Items.Count == 0 && draft.Hero == null)
                     throw new InvalidOperationException("Рисунки не помещаются. Уменьшите размер или зазор.");
                 return draft;
             }
-            if (!useHero) return draft;
+            if (!useHero)
+            {
+                PatternHeroFill.FillVoids(draft, _layoutItems, cancellation);
+                return draft;
+            }
             draft.Hero = new PatternPlacement { Size = settings.HeroSize, Angle = settings.HeroAngle,
                 Center = new PatternPoint(frame.Width * settings.HeroX / 100, frame.Height * (1 - settings.HeroY / 100)) };
             if (_reserve == null || _reserveSize != settings.HeroSize || _reserveAngle != settings.HeroAngle || _reserveGap != settings.HeroGap)
@@ -405,6 +431,7 @@ namespace VanyaTools.Native
             }
             draft.Reserve = PatternSilhouette.MoveReserve(_reserve, draft.Hero.Center);
             draft.Items = PatternHeroFill.Adjust(_layoutItems, _layoutSilhouettes, _layoutMotifs, options, draft.Reserve, cancellation);
+            PatternHeroFill.FillVoids(draft, _layoutItems, cancellation);
             return draft;
         }
 

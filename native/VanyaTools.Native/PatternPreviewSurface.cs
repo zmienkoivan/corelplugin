@@ -12,21 +12,27 @@ namespace VanyaTools.Native
         private PatternDraft _draft;
         private Point _origin;
         private double _scale;
-        private bool _dragging, _showCells, _showRepeatBorders;
+        private bool _showCells, _showRepeatBorders;
+        private enum DragMode { None, Move, Scale, Rotate }
+        private DragMode _drag;
+        private Point _dragCenter;
+        private Vector _dragVector, _moveOffset;
+        private double _heroAngle, _dragAngle, _dragScale;
 
         internal event Action<double, double> HeroPositionChanged;
+        internal event Action<double, double> HeroTransformChanged;
 
         internal PatternPreviewSurface(PatternEditorSession session, PatternFrame initialFrame)
         {
             _session = session; _frame = initialFrame;
             ClipToBounds = true;
-            ToolTip = "Перетащите главный элемент или щёлкните там, где должен быть его центр.";
+            ToolTip = "Потяните за угол для масштаба, за кружок для поворота или за рисунок для перемещения.";
         }
 
-        internal void Update(PatternFrame frame, PatternDraft draft)
+        internal void Update(PatternFrame frame, PatternDraft draft, double heroAngle)
         {
-            _frame = frame; _draft = draft;
-            Cursor = draft?.Hero == null ? Cursors.Arrow : Cursors.SizeAll;
+            _frame = frame; _draft = draft; _heroAngle = heroAngle;
+            if (draft?.Hero == null) Cursor = Cursors.Arrow;
             InvalidateVisual();
         }
 
@@ -41,7 +47,8 @@ namespace VanyaTools.Native
         {
             base.OnRender(drawing);
             drawing.DrawRectangle(Brushes.Transparent, null, new Rect(RenderSize));
-            _scale = Math.Min((RenderSize.Width - 40) / _frame.Width, (RenderSize.Height - 40) / _frame.Height);
+            double markSpace = _draft?.CenterMarks == null ? 0 : 8;
+            _scale = Math.Min((RenderSize.Width - 40) / _frame.Width, (RenderSize.Height - 40) / (_frame.Height + markSpace));
             if (_scale <= 0) return;
             _origin = new Point((RenderSize.Width - _frame.Width * _scale) / 2, (RenderSize.Height - _frame.Height * _scale) / 2);
             drawing.PushTransform(new MatrixTransform(_scale, 0, 0, _scale, _origin.X, _origin.Y));
@@ -63,19 +70,17 @@ namespace VanyaTools.Native
                 if (_draft.Hero != null)
                 {
                     DrawMotif(drawing, _session.Hero, _draft.Hero, Brushes.MediumVioletRed);
-                    if (_draft.HeroCopies != null)
-                        foreach (var item in _draft.HeroCopies) DrawMotif(drawing, _session.Hero, item, Brushes.MediumVioletRed);
                     if (_draft.Reserve != null)
                     {
                         var guide = new Pen(Brushes.DeepSkyBlue, hairline) { DashStyle = DashStyles.Dash };
                         DrawGuide(drawing, _draft.Reserve, guide);
                     }
                 }
-                if (_draft.CenterMarks != null)
-                    DrawGuide(drawing, _draft.CenterMarks, new Pen(Brushes.Black, Math.Max(hairline, .15)));
                 if (_showRepeatBorders && _draft.RepeatGuides != null)
                     DrawGuide(drawing, _draft.RepeatGuides, new Pen(Brushes.OrangeRed, hairline * 1.25) { DashStyle = DashStyles.Dash });
                 drawing.Pop();
+                if (_draft.CenterMarks != null)
+                    DrawGuide(drawing, _draft.CenterMarks, new Pen(Brushes.Black, Math.Max(hairline, .15)));
             }
 
             if (_session.Seam != null && !ReferenceEquals(_frame, _session.Seam))
@@ -85,7 +90,48 @@ namespace VanyaTools.Native
                 drawing.Pop();
             }
             drawing.Pop();
+            if (_draft?.Hero != null) DrawHeroHandles(drawing);
         }
+
+        private void DrawHeroHandles(DrawingContext drawing)
+        {
+            var corners = HeroCorners(out var top, out var rotation);
+            var pen = new Pen(Brushes.DodgerBlue, 1);
+            for (int i = 0; i < corners.Length; i++)
+            {
+                drawing.DrawLine(pen, corners[i], corners[(i + 1) % corners.Length]);
+                drawing.DrawRectangle(Brushes.White, pen, new Rect(corners[i].X - 3.5, corners[i].Y - 3.5, 7, 7));
+            }
+            drawing.DrawLine(pen, top, rotation);
+            drawing.DrawEllipse(Brushes.White, pen, rotation, 4.5, 4.5);
+        }
+
+        private Point[] HeroCorners(out Point top, out Point rotation)
+        {
+            var item = _draft.Hero;
+            var center = ToScreen(item.Center);
+            var size = PatternTransform.Fit(_session.Hero.Size, item);
+            double x = size.Width * _scale / 2, y = size.Height * _scale / 2;
+            var transform = new RotateTransform(-item.Angle, center.X, center.Y);
+            top = transform.Transform(new Point(center.X, center.Y - y));
+            rotation = transform.Transform(new Point(center.X, center.Y - y - 18));
+            return new[] { transform.Transform(new Point(center.X - x, center.Y - y)),
+                transform.Transform(new Point(center.X + x, center.Y - y)),
+                transform.Transform(new Point(center.X + x, center.Y + y)),
+                transform.Transform(new Point(center.X - x, center.Y + y)) };
+        }
+
+        private DragMode HitHandle(Point point)
+        {
+            var corners = HeroCorners(out _, out var rotation);
+            if ((point - rotation).Length <= 8) return DragMode.Rotate;
+            foreach (var corner in corners)
+                if ((point - corner).Length <= 8) return DragMode.Scale;
+            return DragMode.Move;
+        }
+
+        private Point ToScreen(PatternPoint point) =>
+            new Point(_origin.X + point.X * _scale, _origin.Y + (_frame.Height - point.Y) * _scale);
 
         private void DrawMotif(DrawingContext drawing, PatternAsset asset, PatternPlacement item, Brush fallback)
         {
@@ -119,23 +165,39 @@ namespace VanyaTools.Native
             base.OnMouseLeftButtonDown(e);
             if (_draft?.Hero == null || _scale <= 0) return;
             Point point = e.GetPosition(this);
-            if (!new Rect(_origin.X, _origin.Y, _frame.Width * _scale, _frame.Height * _scale).Contains(point)) return;
-            _dragging = CaptureMouse();
-            MoveHero(point);
+            var mode = HitHandle(point);
+            if (mode == DragMode.Move &&
+                !new Rect(_origin.X, _origin.Y, _frame.Width * _scale, _frame.Height * _scale).Contains(point)) return;
+            if (!CaptureMouse()) return;
+            _drag = mode;
+            var hero = _draft.Hero;
+            _dragCenter = ToScreen(hero.Center);
+            _dragVector = point - _dragCenter;
+            var size = PatternTransform.Fit(_session.Hero.Size, hero);
+            _dragScale = size.Scale;
+            _dragAngle = _heroAngle;
+            var unrotated = new RotateTransform(hero.Angle).Transform(new Point(_dragVector.X, _dragVector.Y));
+            _moveOffset = Math.Abs(unrotated.X) <= size.Width * _scale / 2 && Math.Abs(unrotated.Y) <= size.Height * _scale / 2
+                ? -_dragVector : default;
+            if (mode == DragMode.Move && _moveOffset.LengthSquared == 0) MoveHero(point);
             e.Handled = true;
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
-            if (_dragging && e.LeftButton == MouseButtonState.Pressed) MoveHero(e.GetPosition(this));
+            if (_draft?.Hero == null || _scale <= 0) return;
+            var point = e.GetPosition(this);
+            if (_drag != DragMode.None && e.LeftButton == MouseButtonState.Pressed) DragTo(point);
+            var mode = _drag == DragMode.None ? HitHandle(point) : _drag;
+            Cursor = mode == DragMode.Rotate ? Cursors.Hand : mode == DragMode.Scale ? Cursors.SizeNWSE : Cursors.SizeAll;
         }
 
         protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
         {
             base.OnMouseLeftButtonUp(e);
-            if (!_dragging) return;
-            MoveHero(e.GetPosition(this));
+            if (_drag == DragMode.None) return;
+            DragTo(e.GetPosition(this));
             ReleaseMouseCapture();
             e.Handled = true;
         }
@@ -143,7 +205,32 @@ namespace VanyaTools.Native
         protected override void OnLostMouseCapture(MouseEventArgs e)
         {
             base.OnLostMouseCapture(e);
-            _dragging = false;
+            _drag = DragMode.None;
+        }
+
+        private void DragTo(Point point)
+        {
+            if (_drag == DragMode.Move)
+            {
+                MoveHero(point + _moveOffset);
+                return;
+            }
+
+            var vector = point - _dragCenter;
+            double scale = _dragScale;
+            if (_drag == DragMode.Scale)
+            {
+                if (_dragVector.Length < 1e-6) return;
+                scale *= vector.Length / _dragVector.Length;
+            }
+            else
+            {
+                if (vector.Length < 1) return;
+                _dragAngle = (_dragAngle - Vector.AngleBetween(_dragVector, vector)) % 360;
+                _dragVector = vector;
+            }
+            var rotated = PatternTransform.RotatedSize(_session.Hero.Size.X, _session.Hero.Size.Y, _dragAngle);
+            HeroTransformChanged?.Invoke(scale * Math.Max(rotated.X, rotated.Y), _dragAngle);
         }
 
         private void MoveHero(Point point)
