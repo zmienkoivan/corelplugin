@@ -58,7 +58,8 @@ namespace VanyaTools.Native
                     if (_draft.Options.Texture) DrawGuide(drawing, PatternSilhouette.At(motif, item), lightOutline);
                 }
                 if (_showCells && _draft.CellGuides != null)
-                    DrawGuide(drawing, _draft.CellGuides, new Pen(Brushes.MediumPurple, hairline) { DashStyle = DashStyles.Dot });
+                    DrawGuide(drawing, _draft.CellGuides, new Pen(Brushes.MediumPurple, hairline) { DashStyle = DashStyles.Dot },
+                        _frame.Bottle == null ? null : _draft.Reserve);
                 if (_draft.Hero != null)
                 {
                     DrawMotif(drawing, _session.Hero, _draft.Hero, Brushes.MediumVioletRed);
@@ -98,10 +99,14 @@ namespace VanyaTools.Native
             drawing.Pop();
         }
 
-        private void DrawGuide(DrawingContext drawing, Geometry geometry, Pen pen)
+        private void DrawGuide(DrawingContext drawing, Geometry geometry, Pen pen, Geometry reserve = null)
         {
             drawing.PushTransform(new MatrixTransform(1, 0, 0, -1, 0, _frame.Height));
+            if (reserve != null)
+                drawing.PushClip(new CombinedGeometry(GeometryCombineMode.Exclude,
+                    new RectangleGeometry(new Rect(0, 0, _frame.Width, _frame.Height)), reserve));
             drawing.DrawGeometry(null, pen, geometry);
+            if (reserve != null) drawing.Pop();
             drawing.Pop();
         }
 

@@ -43,6 +43,34 @@ namespace VanyaTools.Native
             return new PatternPoint(Width * (.5 + bearing / (_slope * 2 * Math.PI)), v);
         }
 
+        internal bool InsideRims(PatternPoint[] outline, PatternPoint origin, double inset)
+        {
+            double apex = _slope == 0 ? 0 : _bottomRadius / _slope;
+            bool enclosesApex = _slope != 0;
+            for (int i = 0; i < outline.Length; i++)
+            {
+                var point = outline[i];
+                var a = new PatternPoint(point.X + origin.X, point.Y + origin.Y);
+                if (!InRange(a)) return false;
+                if (_slope == 0) continue;
+
+                var b = outline[(i + 1) % outline.Length];
+                double dx = b.X - point.X, dy = b.Y - point.Y;
+                // A straight edge can cut inside the inner arc even if both vertices clear it.
+                enclosesApex &= dx * (-a.Y - apex) + dy * a.X >= 0;
+                double nearest = -(a.X * dx + (a.Y + apex) * dy) / (dx * dx + dy * dy);
+                if (nearest > 0 && nearest < 1 && !InRange(new PatternPoint(a.X + dx * nearest, a.Y + dy * nearest)))
+                    return false;
+            }
+            return !enclosesApex;
+
+            bool InRange(PatternPoint point)
+            {
+                double v = Project(point).Y;
+                return v >= inset && v <= Slant - inset;
+            }
+        }
+
         internal double RotationAt(double u) => -Bearing(u) * 180 / Math.PI;
 
         internal double SeamReach(double reach, double v)

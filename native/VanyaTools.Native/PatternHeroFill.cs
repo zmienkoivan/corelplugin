@@ -17,24 +17,36 @@ namespace VanyaTools.Native
             var kept = PatternSilhouette.LeaveRoom(items, silhouettes, reserve, cancellation);
             if (kept.Count == items.Count) return kept;
             var retained = new HashSet<PatternPlacement>(kept);
-            var lost = items.Where(item => !retained.Contains(item)).ToArray();
+            Refit(kept, items.Where(item => !retained.Contains(item)).ToArray(), motifs, options, reserve, cancellation);
+            return kept;
+        }
+
+        internal static void Refit(List<PatternPlacement> kept, IReadOnlyList<PatternPlacement> lost, PatternAsset[] motifs,
+            PatternFillOptions options, Geometry reserve, CancellationToken cancellation, Func<PatternPlacement, bool> accepts = null)
+        {
+            if (lost.Count == 0) return;
             var edge = ReadBoundary(reserve);
-            if (edge.Count == 0) return kept;
+            if (edge.Count == 0) return;
 
             Rect nearby = Rect.Empty;
             foreach (var item in lost) nearby.Union(Bounds(item.Cell));
             nearby.Inflate(options.GapMm + Tolerance, options.GapMm + Tolerance);
             var blockers = new List<Obstacle>();
-            for (int i = 0; i < items.Count; i++)
-                if (retained.Contains(items[i]) && nearby.IntersectsWith(silhouettes[i].Bounds))
-                    blockers.Add(new Obstacle(motifs[items[i].Motif].Footprint.At(items[i])));
+            foreach (var item in kept)
+            {
+                var motif = motifs[item.Motif];
+                var size = PatternTransform.Fit(motif.Size, item);
+                var area = new Rect(item.Center.X - size.RotatedWidth / 2, item.Center.Y - size.RotatedHeight / 2,
+                    size.RotatedWidth, size.RotatedHeight);
+                if (nearby.IntersectsWith(area)) blockers.Add(new Obstacle(motif.Footprint.At(item), item.Motif));
+            }
 
             var fit = new PatternFillOptions { SizeMm = options.SizeMm,
                 Mode = options.Mode == PatternFillMode.Pebbles ? PatternFillMode.Pebbles : PatternFillMode.Crocodile };
             foreach (var item in lost)
             {
                 cancellation.ThrowIfCancellationRequested();
-                var asset = motifs[item.Motif];
+                var original = motifs[item.Motif];
                 var cellBounds = Bounds(item.Cell);
                 var center = new PatternPoint(item.Cell.Average(p => p.X), item.Cell.Average(p => p.Y));
                 bool crossesBoundary = edge.Any(segment =>
@@ -82,26 +94,45 @@ namespace VanyaTools.Native
                 }
 
                 fit.Angle = options.Texture ? options.Angle : item.Angle;
-                PatternPlacement best = null;
-                double bestScale = PatternTransform.Fit(asset.Size, item).Scale * .35;
-                foreach (var window in windows.OrderByDescending(window => window.Area).Take(4))
-                {
-                    cancellation.ThrowIfCancellationRequested();
-                    var fitted = PatternFillLayout.PlaceInCells(new List<PatternPoint[]> { window.Polygon.ToArray() },
-                        new[] { asset.Footprint }, fit, allowEmpty: true, fixedAngle: !options.Texture).SingleOrDefault();
-                    if (fitted == null) continue;
-                    double scale = PatternTransform.Fit(asset.Size, fitted).Scale;
-                    if (scale <= bestScale || reserve.FillContainsWithDetail(PatternSilhouette.At(asset, fitted),
-                        Tolerance, ToleranceType.Absolute) != IntersectionDetail.Empty) continue;
-                    best = fitted;
-                    bestScale = scale;
-                }
+                var candidates = windows.OrderByDescending(window => window.Area).Take(4)
+                    .Select(window => window.Polygon.ToArray()).ToArray();
+                PatternPlacement best = Fit(item.Motif);
+                if (best == null && accepts != null && candidates.Length > 0)
+                    foreach (int alternative in Enumerable.Range(0, motifs.Length).Where(index => index != item.Motif)
+                        .OrderBy(index => neighbors.Count(neighbor => neighbor.Motif == index))
+                        .ThenBy(index => (index - item.Motif + motifs.Length) % motifs.Length).Take(4))
+                    {
+                        best = Fit(alternative);
+                        if (best != null) break;
+                    }
                 if (best == null) continue;
-                best.Motif = item.Motif;
                 kept.Add(best);
-                blockers.Add(new Obstacle(asset.Footprint.At(best)));
+                blockers.Add(new Obstacle(motifs[best.Motif].Footprint.At(best), best.Motif));
+
+                PatternPlacement Fit(int index)
+                {
+                    var asset = motifs[index];
+                    double minimumSize = PatternTransform.Fit(original.Size, item).Scale *
+                        Math.Max(original.Size.X, original.Size.Y) * .35;
+                    double bestScale = minimumSize / Math.Max(asset.Size.X, asset.Size.Y);
+                    PatternPlacement choice = null;
+                    foreach (var polygon in candidates)
+                    {
+                        cancellation.ThrowIfCancellationRequested();
+                        var fitted = PatternFillLayout.PlaceInCells(new List<PatternPoint[]> { polygon },
+                            new[] { asset.Footprint }, fit, allowEmpty: true, fixedAngle: !options.Texture).SingleOrDefault();
+                        if (fitted == null) continue;
+                        double scale = PatternTransform.Fit(asset.Size, fitted).Scale;
+                        if (scale <= bestScale || reserve.FillContainsWithDetail(PatternSilhouette.At(asset, fitted),
+                            Tolerance, ToleranceType.Absolute) != IntersectionDetail.Empty) continue;
+                        fitted.Motif = index;
+                        if (accepts != null && !accepts(fitted)) continue;
+                        choice = fitted;
+                        bestScale = scale;
+                    }
+                    return choice;
+                }
             }
-            return kept;
         }
 
         private static void Cut(IReadOnlyList<PatternPoint> polygon, PatternPoint sample, PatternPoint edge,
@@ -203,11 +234,12 @@ namespace VanyaTools.Native
         {
             internal readonly PatternPoint[] Hull;
             internal readonly Rect Bounds;
+            internal readonly int Motif;
             internal readonly (PatternPoint Start, PatternPoint End)[] Edges;
 
-            internal Obstacle(PatternPoint[] hull)
+            internal Obstacle(PatternPoint[] hull, int motif)
             {
-                Hull = hull;
+                Hull = hull; Motif = motif;
                 Bounds = PatternHeroFill.Bounds(hull);
                 Edges = hull.Select((p, i) => (p, hull[(i + 1) % hull.Length])).ToArray();
             }

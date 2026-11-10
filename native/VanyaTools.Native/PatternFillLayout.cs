@@ -63,7 +63,7 @@ namespace VanyaTools.Native
                 new PatternPoint(x, y), new PatternPoint(-x, y) };
         }
 
-        private static PatternPoint[] ConvexHull(IEnumerable<PatternPoint> points)
+        internal static PatternPoint[] ConvexHull(IEnumerable<PatternPoint> points)
         {
             var sorted = points.Distinct().OrderBy(p => p.X).ThenBy(p => p.Y).ToArray();
             if (sorted.Length < 3) return sorted;
@@ -156,7 +156,8 @@ namespace VanyaTools.Native
                 Motifs(width, height, motifs.Count, options);
         }
 
-        private static List<PatternPlacement> Motifs(double width, double height, int motifs, PatternFillOptions options, double motifAngle = 0)
+        private static List<PatternPlacement> Motifs(double width, double height, int motifs, PatternFillOptions options,
+            double motifAngle = 0, bool wrapHeight = true)
         {
             bool scattered = options.Mode == PatternFillMode.Random;
             double largest = options.SizeMm * options.MaxScale;
@@ -170,7 +171,7 @@ namespace VanyaTools.Native
                     throw new ArgumentException("Рапорт должен вмещать самый крупный рисунок с зазором.");
                 cols = Math.Max(1, Math.Floor(width / pitch));
                 rows = Math.Max(1, Math.Floor(height / pitch));
-                if (staggered && rows > 1 && rows % 2 != 0) rows--;
+                if (wrapHeight && staggered && rows > 1 && rows % 2 != 0) rows--;
             }
             CheckCount(cols, rows);
             double pitchX = repeat ? width / cols : pitch, pitchY = repeat ? height / rows : pitch;

@@ -109,8 +109,8 @@ namespace VanyaTools.Native
                 _bottleTaper.Checked += (_, __) => { _bottleBottom.View.Visibility = Visibility.Visible; QueuePreview(); };
                 _bottleTaper.Unchecked += (_, __) => { _bottleBottom.View.Visibility = Visibility.Collapsed; QueuePreview(); };
                 _bottleHeight = AddField(bottle, "Высота кольца, мм", 1, 1000, initial.BottleHeight);
-                _bottleWhole = new CheckBox { Content = "Целые рисунки у края", IsChecked = initial.BottleWhole,
-                    ToolTip = "У верхнего, нижнего и стыковых краёв рисунки сдвигаются внутрь или уменьшаются, если есть место.",
+                _bottleWhole = new CheckBox { Content = "Целые рисунки сверху и снизу", IsChecked = initial.BottleWhole,
+                    ToolTip = "У верхней и нижней кромок рисунки сохраняются целиком. Слева и справа рисунок продолжается через стык.",
                     Margin = new Thickness(0, 3, 0, 4) };
                 _bottleWhole.Checked += (_, __) => QueuePreview();
                 _bottleWhole.Unchecked += (_, __) => QueuePreview();
@@ -119,7 +119,7 @@ namespace VanyaTools.Native
 
             var pattern = DockerLayout.ToolGroup("Заполнение", "Пунктир на детали показывает линию шва. Голубой пунктир повторяет силуэт главного элемента с заданным зазором. Рисунки рядом подгоняются под свободное место.");
             settings.Children.Add(pattern);
-            _mode = new ComboBox { ItemsSource = new[] { "Ряды", "Вразбежку", "Случайно", "Крокодиловая кожа", "Галька" },
+            _mode = new ComboBox { ItemsSource = new[] { "Ряды", session.BottleMode ? "Кирпичики · со сдвигом рядов" : "Вразбежку", "Случайно", "Крокодиловая кожа", "Галька" },
                 SelectedIndex = (int)initial.Layout.Mode,
                 MinHeight = 27, Margin = new Thickness(0, 0, 0, 6) };
             pattern.Children.Add(_mode);
@@ -139,7 +139,7 @@ namespace VanyaTools.Native
             pattern.Children.Add(Button("Другой вариант", (_, __) => { _seed = unchecked(_seed + 7919); QueuePreview(); }));
 
             _showCells = new CheckBox { Content = "Контуры ячеек", Margin = new Thickness(0, 6, 0, 5),
-                ToolTip = "Контуры первоначальной посадки. При уплотнении фигуры могут выходить за эти линии." };
+                ToolTip = "Контуры плиток. При уплотнении фигуры могут выходить за эти линии." };
             pattern.Children.Add(_showCells);
             _repeat = new CheckBox { Content = "Повторять рапорт", IsChecked = initial.Layout.Repeat,
                 Margin = new Thickness(0, 0, 0, 5),
@@ -376,7 +376,12 @@ namespace VanyaTools.Native
             if (useHero) PatternFillService.PrepareSilhouette(_session.Hero);
             if (frame.Bottle != null)
             {
-                if (useHero) PatternBottleLayout.AddHero(draft, _session.Hero, settings, _bottleGroups, cancellation);
+                if (useHero)
+                {
+                    PatternBottleLayout.AddHero(draft, _session.Hero, settings, _bottleGroups, cancellation);
+                    if (options.Texture)
+                        draft.CellGuides = GuideGeometry(draft.Items.Where(item => item.Cell != null).Select(item => item.Cell).ToArray(), true);
+                }
                 if (draft.Items.Count == 0 && draft.Hero == null)
                     throw new InvalidOperationException("Рисунки не помещаются. Уменьшите размер или зазор.");
                 return draft;

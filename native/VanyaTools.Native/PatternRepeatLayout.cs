@@ -98,11 +98,11 @@ namespace VanyaTools.Native
         }
 
         internal static List<PatternPlacement> RepeatModule(IReadOnlyList<PatternFootprint> motifs,
-            PatternFillOptions options, out List<PatternPoint[]> cells, double motifAngle = 0)
+            PatternFillOptions options, out List<PatternPoint[]> cells, double motifAngle = 0, bool wrapHeight = true)
         {
             double width = options.RepeatWidthMm, height = options.RepeatHeightMm;
             cells = options.Texture ? RepeatCells(width, height, options) : null;
-            var module = cells == null ? Motifs(width, height, motifs.Count, options, motifAngle) :
+            var module = cells == null ? Motifs(width, height, motifs.Count, options, motifAngle, wrapHeight) :
                 PlaceInCells(cells, motifs, options, motifAngle: motifAngle);
             if (options.Mode == PatternFillMode.Pebbles)
                 PatternPebbleSpacing.Balance(module, motifs, options.GapMm, width, height);
