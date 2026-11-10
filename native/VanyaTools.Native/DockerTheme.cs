@@ -355,6 +355,8 @@ namespace VanyaTools.Native
 </ResourceDictionary>");
             resources[typeof(Button)] = ButtonStyle(ButtonBackground, ButtonHover, ButtonPressed,
                 TextBrush, BorderBrush, DisabledBackground, DisabledText, true);
+            resources[typeof(RepeatButton)] = ButtonStyle(ButtonBackground, ButtonHover, ButtonPressed,
+                TextBrush, BorderBrush, DisabledBackground, DisabledText, true, typeof(RepeatButton));
             foreach (var type in new[] { typeof(CheckBox), typeof(RadioButton) })
             {
                 var style = new Style(type);
@@ -374,9 +376,10 @@ namespace VanyaTools.Native
 
         private static Style ButtonStyle(string normal, string hover, string pressed,
             string foreground, string outline, string disabledBackground = null, string disabledForeground = null,
-            bool theme = false)
+            bool theme = false, Type buttonType = null)
         {
-            var style = new Style(typeof(Button));
+            buttonType = buttonType ?? typeof(Button);
+            var style = new Style(buttonType);
             style.Setters.Add(new Setter(Control.ForegroundProperty, StyleBrush(foreground, theme)));
             style.Setters.Add(new Setter(Control.FontFamilyProperty, new FontFamily("Segoe UI")));
             style.Setters.Add(new Setter(Control.FontSizeProperty, 11.0));
@@ -409,7 +412,7 @@ namespace VanyaTools.Native
                 new Binding("Padding") { RelativeSource = RelativeSource.TemplatedParent });
             border.AppendChild(content);
 
-            var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
+            var template = new ControlTemplate(buttonType) { VisualTree = border };
             var over = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
             over.Setters.Add(new Setter(Border.BackgroundProperty, StyleBrush(hover, theme)) { TargetName = "Chrome" });
             template.Triggers.Add(over);

@@ -52,10 +52,11 @@ namespace VanyaTools.Native
 
     internal sealed class PatternEditorSession
     {
-        internal object Application, Document, Target, BottlePage, BottleSelection;
+        internal object Application, Document, Target, BottleSelection;
+        internal int BottlePageIndex;
         internal PatternFrame Seam;
         internal PatternPoint BottleCenter;
-        internal bool BottleMode => BottlePage != null;
+        internal bool BottleMode => BottlePageIndex > 0;
         internal PatternAsset[] Motifs;
         internal PatternAsset Hero;
         internal int[] MirroredIds = Array.Empty<int>();
@@ -72,7 +73,7 @@ namespace VanyaTools.Native
         internal HashSet<int> MirroredIds;
         internal PatternPlacement Hero;
         internal PatternPlacement[] HeroCopies;
-        internal Geometry Reserve, CellGuides, RepeatGuides;
+        internal Geometry Reserve, CellGuides, RepeatGuides, CenterMarks;
         internal double Allowance;
     }
 
@@ -166,7 +167,7 @@ namespace VanyaTools.Native
                     double x = 0, y = 0, width = 0, height = 0;
                     if (replace) ((dynamic)target).GetBoundingBox(out x, out y, out width, out height, true);
                     else page.GetBoundingBox(ref x, ref y, ref width, ref height);
-                    session.BottlePage = (object)page;
+                    session.BottlePageIndex = Convert.ToInt32(page.Index);
                     session.BottleSelection = (object)selection;
                     session.BottleCenter = new PatternPoint(x + width / 2, y + height / 2);
                 }
@@ -246,10 +247,16 @@ namespace VanyaTools.Native
         internal int Apply(PatternEditorSession session, PatternDraft draft)
         {
             dynamic app = session.Application, doc = session.Document, target = session.Target;
-            if (!SameObject((object)app.ActiveDocument, session.Document) ||
-                (session.BottleMode && !SameObject((object)doc.ActivePage, session.BottlePage)) ||
-                ((!session.BottleMode || session.Replace) && !SameObject(SelectedContour(session.Application), session.Target)))
-                throw new InvalidOperationException("Выделение изменилось. Снова откройте окно паттерна.");
+            if (!SameObject((object)app.ActiveDocument, session.Document))
+                throw new InvalidOperationException("Активный документ изменился. Снова откройте окно паттерна.");
+            if (session.BottleMode && Convert.ToInt32(doc.ActivePage.Index) != session.BottlePageIndex)
+                throw new InvalidOperationException("Активная страница изменилась. Снова откройте окно паттерна.");
+            if (!session.BottleMode || session.Replace)
+            {
+                dynamic selected = SelectedContour(session.Application);
+                if (Convert.ToInt32(selected.StaticID) != Convert.ToInt32(target.StaticID))
+                    throw new InvalidOperationException("Выделение изменилось. Снова откройте окно паттерна.");
+            }
             foreach (var motif in draft.Motifs) VerifyAsset(motif.Shape, motif.Id);
             if (draft.Hero != null) VerifyAsset(session.Hero.Shape, session.Hero.Id);
 
@@ -273,13 +280,25 @@ namespace VanyaTools.Native
                 if (draft.Hero != null) AddMotif(session.Hero, draft.Hero);
                 if (draft.HeroCopies != null)
                     foreach (var item in draft.HeroCopies) AddMotif(session.Hero, item);
+                int motifCount = created.Count;
+                if (draft.CenterMarks != null)
+                    foreach (var line in PatternBottleLayout.CenterMarks(draft.Frame))
+                    {
+                        dynamic mark = layer.CreateLineSegment(draft.Frame.Left + line[0].X, draft.Frame.Bottom + line[0].Y,
+                            draft.Frame.Left + line[1].X, draft.Frame.Bottom + line[1].Y);
+                        created.Add((object)mark);
+                        mark.Name = "Vanya · метка центра бутылки";
+                        mark.Outline.Color.RGBAssign(0, 0, 0);
+                        mark.Outline.Width = .15;
+                        range.Add(mark);
+                    }
                 if (created.Count != 0) range.AddToPowerClip(frame, 0);
                 frame.CreateSelection();
                 if (session.Replace) target.Delete();
                 _result = (object)frame; _resultDocument = (object)doc; _lastAllowance = draft.Allowance;
                 _resultWasBottle = session.BottleMode;
                 foreach (var source in _motifs) source.Mirrored = draft.MirroredIds.Contains(source.Id);
-                return created.Count;
+                return motifCount;
 
                 void AddMotif(PatternAsset asset, PatternPlacement item)
                 {

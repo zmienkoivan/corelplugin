@@ -71,6 +71,8 @@ namespace VanyaTools.Native
                         DrawGuide(drawing, _draft.Reserve, guide);
                     }
                 }
+                if (_draft.CenterMarks != null)
+                    DrawGuide(drawing, _draft.CenterMarks, new Pen(Brushes.Black, Math.Max(hairline, .15)));
                 if (_showRepeatBorders && _draft.RepeatGuides != null)
                     DrawGuide(drawing, _draft.RepeatGuides, new Pen(Brushes.OrangeRed, hairline * 1.25) { DashStyle = DashStyles.Dash });
                 drawing.Pop();

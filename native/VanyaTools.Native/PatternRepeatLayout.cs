@@ -101,22 +101,23 @@ namespace VanyaTools.Native
             PatternFillOptions options, out List<PatternPoint[]> cells, double motifAngle = 0, bool wrapHeight = true)
         {
             double width = options.RepeatWidthMm, height = options.RepeatHeightMm;
-            cells = options.Texture ? RepeatCells(width, height, options) : null;
+            cells = options.Texture ? RepeatCells(width, height, options, wrapHeight) : null;
             var module = cells == null ? Motifs(width, height, motifs.Count, options, motifAngle, wrapHeight) :
                 PlaceInCells(cells, motifs, options, motifAngle: motifAngle);
             if (options.Mode == PatternFillMode.Pebbles)
-                PatternPebbleSpacing.Balance(module, motifs, options.GapMm, width, height);
+                PatternPebbleSpacing.Balance(module, motifs, options.GapMm, width, height, wrapHeight);
             return module;
         }
 
-        private static List<PatternPoint[]> RepeatCells(double repeatWidth, double repeatHeight, PatternFillOptions options)
+        private static List<PatternPoint[]> RepeatCells(double repeatWidth, double repeatHeight, PatternFillOptions options, bool wrapHeight)
         {
             bool scales = options.Mode == PatternFillMode.Crocodile;
             double cols = Math.Max(1, Math.Round(repeatWidth / (options.SizeMm * (scales ? 1.28 : 1))));
-            double rows = Math.Max(1, Math.Round(repeatHeight / (options.SizeMm * (scales ? .74 : 1))));
+            double rows = Math.Max(1, Math.Round(repeatHeight / (options.SizeMm * (scales ? .74 : wrapHeight ? 1 : .87))));
             CheckCount(cols, rows);
-            var seeds = ScatterSeeds((int)cols, (int)rows, options.Seed, true);
-            if (!scales) seeds = RelaxSeeds(seeds, true);
+            var seeds = wrapHeight ? ScatterSeeds((int)cols, (int)rows, options.Seed, true) :
+                BrickSeeds((int)cols, (int)rows, options.Seed);
+            if (!scales && wrapHeight) seeds = RelaxSeeds(seeds, true);
             var scratch = new List<PatternPoint>(16);
             var buffer = new List<PatternPoint>(16);
             var cells = new List<PatternPoint[]>();
@@ -128,7 +129,7 @@ namespace VanyaTools.Native
                     if (bucket == null) continue;
                     foreach (var seed in bucket)
                     {
-                        var cell = BuildCell(seed, seeds, col, row, pitchX, pitchY, options.GapMm, scratch, buffer, true);
+                        var cell = BuildCell(seed, seeds, col, row, pitchX, pitchY, options.GapMm, scratch, buffer, true, wrapHeight);
                         if (cell.Count < 3) continue;
                         cells.Add(cell.Select(p => new PatternPoint(p.X * pitchX, p.Y * pitchY)).ToArray());
                     }
@@ -136,6 +137,20 @@ namespace VanyaTools.Native
 
             CheckCount(cells.Count, 1);
             return cells;
+        }
+
+        private static List<PatternPoint>[,] BrickSeeds(int columns, int rows, int seed)
+        {
+            var random = new Random(seed);
+            var result = new List<PatternPoint>[columns, rows];
+            for (int row = 0; row < rows; row++)
+                for (int column = 0; column < columns; column++)
+                {
+                    double x = column + .5 + (row % 2) * .5 + Signed(random) * .16;
+                    double y = row + .5 + Signed(random) * .13;
+                    AddSeed(result, new PatternPoint(Wrap(x, columns), y));
+                }
+            return result;
         }
 
         private static (double Left, double Bottom, double Right, double Top) Bounds(PatternPoint[] points) =>

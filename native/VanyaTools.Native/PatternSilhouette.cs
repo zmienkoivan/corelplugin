@@ -85,10 +85,23 @@ namespace VanyaTools.Native
             return transformed;
         }
 
-        internal static Geometry Reserve(PatternAsset hero, PatternPlacement item, double gap)
+        internal static Geometry Reserve(PatternAsset hero, PatternPlacement item, double gap, bool pebble = false)
         {
-            Geometry shape = At(hero, new PatternPlacement { Size = item.Size, Angle = item.Angle });
-            if (gap <= 0) return shape;
+            var local = new PatternPlacement { Size = item.Size, Angle = item.Angle };
+            Geometry shape;
+            if (pebble)
+            {
+                var outline = hero.Footprint.At(local);
+                var cell = new StreamGeometry();
+                using (var path = cell.Open())
+                {
+                    path.BeginFigure(new Point(outline[0].X, outline[0].Y), true, true);
+                    for (int i = 1; i < outline.Length; i++) path.LineTo(new Point(outline[i].X, outline[i].Y), true, false);
+                }
+                shape = cell;
+            }
+            else shape = At(hero, local);
+            if (gap <= 0) { shape.Freeze(); return shape; }
             var pen = new Pen(Brushes.Black, gap * 2) { LineJoin = PenLineJoin.Round };
             var edge = shape.GetWidenedPathGeometry(pen, GeometryTolerance, ToleranceType.Absolute);
             var reserve = Geometry.Combine(shape, edge, GeometryCombineMode.Union, null,

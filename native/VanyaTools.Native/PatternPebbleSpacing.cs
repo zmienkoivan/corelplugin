@@ -9,7 +9,7 @@ namespace VanyaTools.Native
         private const double MaximumGrowth = 1.4;
 
         internal static void Balance(List<PatternPlacement> items, IReadOnlyList<PatternFootprint> motifs, double gap,
-            double periodX = 0, double periodY = 0)
+            double periodX = 0, double periodY = 0, bool wrapHeight = true)
         {
             var shapes = items.Select(item => new Envelope(item, motifs[item.Motif])).ToArray();
             bool repeat = periodX > 0 && periodY > 0;
@@ -25,7 +25,8 @@ namespace VanyaTools.Native
                     }
                     double reachX = a.ReachX + b.ReachX + gap, reachY = a.ReachY + b.ReachY + gap;
                     int firstX = (int)Math.Ceiling((-reachX - dx) / periodX), lastX = (int)Math.Floor((reachX - dx) / periodX);
-                    int firstY = (int)Math.Ceiling((-reachY - dy) / periodY), lastY = (int)Math.Floor((reachY - dy) / periodY);
+                    int firstY = wrapHeight ? (int)Math.Ceiling((-reachY - dy) / periodY) : 0;
+                    int lastY = wrapHeight ? (int)Math.Floor((reachY - dy) / periodY) : 0;
                     for (int y = firstY; y <= lastY; y++)
                         for (int x = firstX; x <= lastX; x++)
                         {

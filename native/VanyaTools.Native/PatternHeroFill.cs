@@ -26,7 +26,6 @@ namespace VanyaTools.Native
         {
             if (lost.Count == 0) return;
             var edge = ReadBoundary(reserve);
-            if (edge.Count == 0) return;
 
             Rect nearby = Rect.Empty;
             foreach (var item in lost) nearby.Union(Bounds(item.Cell));
@@ -97,17 +96,30 @@ namespace VanyaTools.Native
                 var candidates = windows.OrderByDescending(window => window.Area).Take(4)
                     .Select(window => window.Polygon.ToArray()).ToArray();
                 PatternPlacement best = Fit(item.Motif);
-                if (best == null && accepts != null && candidates.Length > 0)
+                double covered = CoveredArea(best);
+                if (accepts != null && candidates.Length > 0 && (best == null || covered < Area(best.Cell) * .55))
                     foreach (int alternative in Enumerable.Range(0, motifs.Length).Where(index => index != item.Motif)
                         .OrderBy(index => neighbors.Count(neighbor => neighbor.Motif == index))
                         .ThenBy(index => (index - item.Motif + motifs.Length) % motifs.Length).Take(4))
                     {
-                        best = Fit(alternative);
-                        if (best != null) break;
+                        var candidate = Fit(alternative);
+                        double area = CoveredArea(candidate);
+                        if (area <= covered * 1.15) continue;
+                        best = candidate;
+                        covered = area;
+                        if (covered >= Area(best.Cell) * .65) break;
                     }
                 if (best == null) continue;
                 kept.Add(best);
                 blockers.Add(new Obstacle(motifs[best.Motif].Footprint.At(best), best.Motif));
+
+                double CoveredArea(PatternPlacement placement)
+                {
+                    if (placement == null) return 0;
+                    var asset = motifs[placement.Motif];
+                    double scale = PatternTransform.Fit(asset.Size, placement).Scale;
+                    return Area(asset.Footprint.Hull) * scale * scale;
+                }
 
                 PatternPlacement Fit(int index)
                 {

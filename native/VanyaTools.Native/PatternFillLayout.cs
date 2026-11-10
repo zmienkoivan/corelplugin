@@ -308,22 +308,24 @@ namespace VanyaTools.Native
 
         private static List<PatternPoint> BuildCell(PatternPoint seed, List<PatternPoint>[,] seeds,
             int col, int row, double pitchX, double pitchY, double gap, List<PatternPoint> polygon,
-            List<PatternPoint> buffer, bool periodic = false)
+            List<PatternPoint> buffer, bool periodic = false, bool wrapHeight = true)
         {
             int cols = seeds.GetLength(0), rows = seeds.GetLength(1);
             double halfGap = gap / (2 * Math.Min(pitchX, pitchY));
             polygon.Clear();
-            polygon.Add(new PatternPoint(seed.X - 2, seed.Y - 2));
-            polygon.Add(new PatternPoint(seed.X + 2, seed.Y - 2));
-            polygon.Add(new PatternPoint(seed.X + 2, seed.Y + 2));
-            polygon.Add(new PatternPoint(seed.X - 2, seed.Y + 2));
+            double bottom = wrapHeight ? seed.Y - 2 : Math.Max(0, seed.Y - 2);
+            double top = wrapHeight ? seed.Y + 2 : Math.Min(rows, seed.Y + 2);
+            polygon.Add(new PatternPoint(seed.X - 2, bottom));
+            polygon.Add(new PatternPoint(seed.X + 2, bottom));
+            polygon.Add(new PatternPoint(seed.X + 2, top));
+            polygon.Add(new PatternPoint(seed.X - 2, top));
             // Stop once even the nearest seed in the remaining buckets cannot cut the cell.
             for (int ring = 0; ring <= 7 && polygon.Count >= 3; ring++)
             {
                 double radiusSquared = polygon.Max(p => SquaredDistance(p, seed));
                 if ((ring - 1) / 2d >= Math.Sqrt(radiusSquared) + halfGap) break;
-                int firstY = periodic ? row - ring : Math.Max(0, row - ring);
-                int lastY = periodic ? row + ring : Math.Min(rows - 1, row + ring);
+                int firstY = periodic && wrapHeight ? row - ring : Math.Max(0, row - ring);
+                int lastY = periodic && wrapHeight ? row + ring : Math.Min(rows - 1, row + ring);
                 int firstX = periodic ? col - ring : Math.Max(0, col - ring);
                 int lastX = periodic ? col + ring : Math.Min(cols - 1, col + ring);
                 for (int y = firstY; y <= lastY && polygon.Count >= 3; y++)

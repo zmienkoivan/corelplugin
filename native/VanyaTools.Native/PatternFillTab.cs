@@ -13,7 +13,11 @@ namespace VanyaTools.Native
         private readonly TextBlock _motifs, _hero, _message;
         private readonly ListBox _motifList;
         private readonly Button _forgetHero, _removeMotifs;
-        private PatternEditorSettings _settings = new PatternEditorSettings(), _bottleSettings = new PatternEditorSettings();
+        private PatternEditorSettings _settings = new PatternEditorSettings();
+        private PatternEditorSettings _bottleSettings = new PatternEditorSettings
+        {
+            Layout = new PatternFillOptions { Mode = PatternFillMode.Staggered }
+        };
 
         internal PatternFillTab(Action<string, bool> status)
         {

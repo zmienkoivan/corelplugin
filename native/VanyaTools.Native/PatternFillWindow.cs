@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -16,7 +17,7 @@ namespace VanyaTools.Native
         internal PatternFillOptions Layout = new PatternFillOptions();
         internal double Allowance, HeroSize, HeroAngle;
         internal double HeroX = 50, HeroY = 50, HeroGap = 5;
-        internal bool UseHero = true, BottleWhole;
+        internal bool UseHero = true, BottleWhole, BottleCenterMarks;
         internal double BottleTop = 70, BottleBottom = 70, BottleHeight = 100;
     }
 
@@ -31,7 +32,7 @@ namespace VanyaTools.Native
         private readonly CheckBox _useHero, _repeat, _showCells, _showRepeatBorders;
         private readonly StackPanel _motifFields, _heroFields, _repeatFields;
         private readonly ValueField _repeatWidth, _repeatHeight, _bottleTop, _bottleBottom, _bottleHeight;
-        private readonly CheckBox _bottleWhole, _bottleTaper;
+        private readonly CheckBox _bottleWhole, _bottleTaper, _bottleCenterMarks;
         private readonly Button _apply;
         private readonly TextBlock _message;
         private readonly DispatcherTimer _refresh = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(70) };
@@ -115,6 +116,12 @@ namespace VanyaTools.Native
                 _bottleWhole.Checked += (_, __) => QueuePreview();
                 _bottleWhole.Unchecked += (_, __) => QueuePreview();
                 bottle.Children.Add(_bottleWhole);
+                _bottleCenterMarks = new CheckBox { Content = "Риски центра сверху и снизу",
+                    IsChecked = initial.BottleCenterMarks, Margin = new Thickness(0, 0, 0, 4),
+                    ToolTip = "Две короткие линии напротив стыка. Появляются в предпросмотре и в готовой развёртке." };
+                _bottleCenterMarks.Checked += (_, __) => QueuePreview();
+                _bottleCenterMarks.Unchecked += (_, __) => QueuePreview();
+                bottle.Children.Add(_bottleCenterMarks);
             }
 
             var pattern = DockerLayout.ToolGroup("Заполнение", "Пунктир на детали показывает линию шва. Голубой пунктир повторяет силуэт главного элемента с заданным зазором. Рисунки рядом подгоняются под свободное место.");
@@ -281,6 +288,7 @@ namespace VanyaTools.Native
                     next.BottleTop = _bottleTop.Read();
                     next.BottleBottom = _bottleTaper.IsChecked == true ? _bottleBottom.Read() : next.BottleTop;
                     next.BottleHeight = _bottleHeight.Read(); next.BottleWhole = _bottleWhole.IsChecked == true;
+                    next.BottleCenterMarks = _bottleCenterMarks.IsChecked == true;
                     var profile = _frame.Bottle;
                     if (profile.TopDiameter != next.BottleTop || profile.BottomDiameter != next.BottleBottom ||
                         profile.Height != next.BottleHeight) _frame = BottleFrame(next);
@@ -376,6 +384,7 @@ namespace VanyaTools.Native
             if (useHero) PatternFillService.PrepareSilhouette(_session.Hero);
             if (frame.Bottle != null)
             {
+                if (settings.BottleCenterMarks) draft.CenterMarks = GuideGeometry(PatternBottleLayout.CenterMarks(frame), false);
                 if (useHero)
                 {
                     PatternBottleLayout.AddHero(draft, _session.Hero, settings, _bottleGroups, cancellation);
@@ -476,19 +485,26 @@ namespace VanyaTools.Native
                 View = DockerLayout.FieldRow(label, row, 116);
                 System.Windows.Automation.AutomationProperties.SetName(_input, label);
 
-                Button StepButton(string symbol, string action, double step)
+                RepeatButton StepButton(string symbol, string action, double step)
                 {
-                    var button = Button(symbol, (sender, args) =>
+                    var button = new RepeatButton
+                    {
+                        Content = symbol,
+                        Width = 28,
+                        MinHeight = 26,
+                        Padding = new Thickness(1),
+                        ClickMode = ClickMode.Press,
+                        Delay = 300,
+                        Interval = 60,
+                        ToolTip = action + " на 0,1"
+                    };
+                    button.Click += (sender, args) =>
                     {
                         double next = Math.Max(_minimum, Math.Min(_maximum, Math.Round(_lastValue + step, 8)));
                         if (next == _lastValue && TryRead(out _)) return;
                         Set(next);
                         changed();
-                    });
-                    button.Width = 28;
-                    button.MinHeight = 26;
-                    button.Padding = new Thickness(1);
-                    button.ToolTip = action + " на 0,1";
+                    };
                     System.Windows.Automation.AutomationProperties.SetName(button, action + " · " + label);
                     return button;
                 }
