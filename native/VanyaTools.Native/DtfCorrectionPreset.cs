@@ -17,7 +17,7 @@ namespace VanyaTools.Native
 
         internal static DtfCorrectionPreset FromOptions(DtfCorrectionOptions value) => new DtfCorrectionPreset {
             Format = FormatName, Version = 3, Settings = new DtfCorrectionPresetValues {
-                RemoveSemiTransparent = value.RemoveSemiTransparent, Threshold = value.Threshold, SmoothStairs = value.SmoothStairs,
+                RemoveSemiTransparent = value.RemoveSemiTransparent, Threshold = value.Threshold, SmoothStairs = value.SmoothStairs, StairStrength = value.StairStrength,
                 WhitenNearWhite = value.WhitenNearWhite, NearWhiteTolerance = value.NearWhiteTolerance,
                 Outline = value.Outline, RadiusMm = value.RadiusMm, ExpansionMm = value.ExpansionMm, OutlineColor = Hex(value.Color),
                 Knockout = value.Knockout, KnockoutColor = Hex(value.KnockoutColor), KnockoutTolerance = value.KnockoutTolerance,
@@ -31,7 +31,7 @@ namespace VanyaTools.Native
             if (!String.Equals(Format, FormatName, StringComparison.Ordinal) || Version<1 || Version>3 || Settings == null)
                 throw new InvalidDataException("Это не поддерживаемый пресет коррекции Vanya Tools.");
             var s = Settings;
-            if (s.Threshold < 0 || s.Threshold > 255 || s.NearWhiteTolerance < 0 || s.NearWhiteTolerance > 64 ||
+            if (s.Threshold < 0 || s.Threshold > 255 || s.StairStrength < 1 || s.StairStrength > 3 || s.NearWhiteTolerance < 0 || s.NearWhiteTolerance > 64 ||
                 s.KnockoutTolerance < (Version>=3 && s.KnockoutSoft ? -255 : 0) || s.KnockoutTolerance > 255 || !Range(s.RadiusMm,0,50) || !Range(s.ExpansionMm,0,50) ||
                 !Range(s.HalftoneRemoveMm,.05,5) || !Range(s.HalftoneGrowMm,.05,5) ||
                 !Range(s.HalftoneLpi,.5,200) || !Range(s.HalftoneAngle,-180,180) ||
@@ -39,7 +39,7 @@ namespace VanyaTools.Native
                 !Enum.IsDefined(typeof(DtfDotShape),s.HalftoneShape) || s.HalftoneColorBoost<0 || s.HalftoneColorBoost>100)
                 throw new InvalidDataException("В пресете есть недопустимые значения коррекции.");
             var value = new DtfCorrectionOptions { RemoveSemiTransparent=s.RemoveSemiTransparent, Threshold=s.Threshold,
-                SmoothStairs=s.SmoothStairs, WhitenNearWhite=s.WhitenNearWhite, NearWhiteTolerance=s.NearWhiteTolerance,
+                SmoothStairs=s.SmoothStairs, StairStrength=s.StairStrength, WhitenNearWhite=s.WhitenNearWhite, NearWhiteTolerance=s.NearWhiteTolerance,
                 Outline=s.Outline, RadiusMm=s.RadiusMm, ExpansionMm=s.ExpansionMm, Color=Color(s.OutlineColor),
                 Knockout=s.Knockout, KnockoutColor=Color(s.KnockoutColor), KnockoutTolerance=s.KnockoutTolerance,
                 KnockoutSoft=Version>=2 && s.KnockoutSoft, HalftoneShape=Version>=2 ? (DtfDotShape)s.HalftoneShape : DtfDotShape.Circle,
@@ -99,6 +99,7 @@ namespace VanyaTools.Native
         public bool RemoveSemiTransparent { get; set; }
         public int Threshold { get; set; } = 130;
         public bool SmoothStairs { get; set; }
+        public int StairStrength { get; set; } = 2;
         public bool WhitenNearWhite { get; set; }
         public int NearWhiteTolerance { get; set; } = 6;
         public bool Outline { get; set; }

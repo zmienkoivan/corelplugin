@@ -19,6 +19,8 @@ namespace VanyaTools.Native
         internal Color Color = Colors.White;
         internal int Tolerance = 10;
         internal int TrimPixels;
+        internal int StairStrength = StairCoverage.DefaultStrength;
+        internal bool SmoothStairs, AuditStairs;
         internal int RegionMode;
         internal BackgroundRemovalSeed[] Seeds = new BackgroundRemovalSeed[0];
         internal bool FromBorder => RegionMode != 1;
@@ -43,6 +45,7 @@ namespace VanyaTools.Native
         private readonly FrameworkElement _edgeColorFields;
         private readonly ComboBox _quality, _background, _regionMode;
         private readonly TextBlock _message, _metrics, _resultHint, _selectionHint;
+        private readonly StairEdgeControls _stairEdge;
         private readonly List<Point> _seeds = new List<Point>();
         private readonly RasterMaskEditor _maskEditor;
         private readonly Image _before, _after;
@@ -123,6 +126,8 @@ namespace VanyaTools.Native
             _trim = Field(Options.TrimPixels.ToString(CultureInfo.InvariantCulture));
             _settings.Children.Add(Labeled("Срез края · 0–8 px исходника", _trim));
             _trimSlider = Slider(0, 8, Math.Max(0, Math.Min(8, Options.TrimPixels))); _settings.Children.Add(_trimSlider);
+            _stairEdge = new StairEdgeControls(Options.SmoothStairs, Options.AuditStairs, Options.StairStrength, () => QueuePreview(false));
+            _settings.Children.Add(_stairEdge);
             _settings.Children.Add(new Separator { Margin = new Thickness(0, 8, 0, 8) });
             _quality = Choice("Авто · до 8 Мп", "Обзор · 1600 px", "Обзор · 2800 px", "Обзор · 4000 px", "Оригинал · точно");
             _settings.Children.Add(Labeled("Точность предпросмотра", _quality));
@@ -245,6 +250,8 @@ namespace VanyaTools.Native
             if (!Int32.TryParse(_trim.Text, out int trim) || trim < 0 || trim > 8)
             { ShowMessage("Срез края: от 0 до 8 пикселей исходника.", true); return false; }
             options = new BackgroundRemovalOptions { Color = color, Tolerance = tolerance, TrimPixels = trim,
+                SmoothStairs = _stairEdge.Repair.IsChecked == true, AuditStairs = _stairEdge.Audit.IsChecked == true,
+                StairStrength = (int)_stairEdge.Strength.Value,
                 RegionMode = _regionMode.SelectedIndex,
                 Protection = _maskEditor.Snapshot(0),
                 Seeds = _regionMode.SelectedIndex == 0 ? new BackgroundRemovalSeed[0] :
@@ -321,6 +328,7 @@ namespace VanyaTools.Native
                 {
                     if (_closed || revision != _revision || _applying) return;
                     _after.Source = result.Bitmap; _resultHint.Visibility = Visibility.Collapsed;
+                    _stairEdge.Note.Text = result.StairNote;
                     _wandOverlay.Source = result.WandSelection;
                     _after.Opacity = 1; _displayRevision = revision;
                     ApplyPreviewZoom();
@@ -369,7 +377,8 @@ namespace VanyaTools.Native
                 {
                     BackgroundRemovalProcessor.RemoveColor(source, output, colors,
                         options.Tolerance, options.TrimPixels, options.FromBorder, options.Seeds, cancellation, options.Protection);
-                    NativeRasterCorrection.AttachProcessedAlpha(source, output, cancellation, removalColors);
+                    NativeRasterCorrection.AttachProcessedAlpha(source, output, cancellation, removalColors,
+                        options.SmoothStairs ? options.StairStrength : 0, options.Protection);
                 }, cancellation).ConfigureAwait(false);
                 cancellation.ThrowIfCancellationRequested();
                 await OnUiAsync(() =>
@@ -400,6 +409,7 @@ namespace VanyaTools.Native
         private sealed class PreviewResult
         {
             internal BitmapSource Bitmap, WandSelection;
+            internal string StairNote;
         }
         private static PreviewInput PreparePreviewInput(BitmapSource original, PreviewInput cached, int quality,
             string workspace, CancellationToken cancellation)
@@ -452,10 +462,22 @@ namespace VanyaTools.Native
             BitmapSource result = LoadDetached(output);
             BitmapSource selection = fullSizeMask ? WandSelection(removed, result.PixelWidth, result.PixelHeight,
                 input.Bitmap.PixelWidth, input.Bitmap.PixelHeight, cancellation) : null;
+            string stairNote = "";
+            if (options.SmoothStairs || options.AuditStairs)
+            {
+                var pixels = DtfCorrectionPixels.Capture(result);
+                int before = options.AuditStairs && options.SmoothStairs ? pixels.CountStairs(options.StairStrength, cancellation) : 0;
+                if (options.SmoothStairs)
+                    pixels = pixels.RepairStairs(options.StairStrength, options.Protection, cancellation);
+                result = pixels.AuditStairs(options.AuditStairs, options.StairStrength, cancellation, out int after).Bitmap();
+                if (options.AuditStairs)
+                    stairNote = "Углы ступеней · " + (options.SmoothStairs ? before + " → " : "") + after +
+                        (input.Scale < 1 && !fullSizeMask ? " · обзор" : "");
+            }
             if (result.PixelWidth != input.Bitmap.PixelWidth || result.PixelHeight != input.Bitmap.PixelHeight)
                 result = DtfCorrectionPixels.Capture(new TransformedBitmap(result, new ScaleTransform(
                     (double)input.Bitmap.PixelWidth / result.PixelWidth, (double)input.Bitmap.PixelHeight / result.PixelHeight))).Bitmap();
-            return new PreviewResult { Bitmap = result, WandSelection = selection };
+            return new PreviewResult { Bitmap = result, WandSelection = selection, StairNote = stairNote };
         }
 
         private void ShowResultHint(string message)

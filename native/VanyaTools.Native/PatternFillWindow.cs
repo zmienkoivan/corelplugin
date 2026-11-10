@@ -98,7 +98,7 @@ namespace VanyaTools.Native
             if (session.BottleMode)
             {
                 var bottle = DockerLayout.ToolGroup("Размеры бутылки",
-                    "Измерьте диаметр на границе печати и высоту кольца вдоль оси бутылки. Для конуса укажите второй диаметр. Оранжевые линии показывают стык.");
+                    "Измерьте диаметры на границах печати и высоту кольца вдоль оси бутылки. Оранжевые пунктиры показывают два края одного оборота: при наклейке они сходятся в один стык.");
                 settings.Children.Add(bottle);
                 _bottleTop = AddField(bottle, "Диаметр сверху, мм", 1, 1000, initial.BottleTop);
                 _bottleTaper = new CheckBox { Content = "Конусная бутылка", IsChecked = initial.BottleTop != initial.BottleBottom,
@@ -159,7 +159,8 @@ namespace VanyaTools.Native
                 initial.Layout.Repeat ? initial.Layout.RepeatWidthMm : defaultRepeatSize);
             _repeatHeight = AddField(_repeatFields, "Высота рапорта, мм", .5, 5000,
                 initial.Layout.Repeat ? initial.Layout.RepeatHeightMm : defaultRepeatSize);
-            _showRepeatBorders = new CheckBox { Content = session.BottleMode ? "Линии стыка" : "Пунктир границ рапорта", IsChecked = true,
+            _showRepeatBorders = new CheckBox { Content = session.BottleMode ? "Пунктир стыка" : "Пунктир границ рапорта", IsChecked = true,
+                ToolTip = session.BottleMode ? "Два края развёртки, которые сходятся на стакане. Видны в предпросмотре." : null,
                 Margin = new Thickness(0, 0, 0, 5) };
             if (session.BottleMode) pattern.Children.Add(_showRepeatBorders);
             else _repeatFields.Children.Add(_showRepeatBorders);
@@ -334,8 +335,8 @@ namespace VanyaTools.Native
                     else message += " · мини-фигур: " + draft.Items.Count(item => draft.Motifs[item.Motif].IsFiller);
                 }
                 if (frame.Bottle != null)
-                    message += " · по верху " + frame.Bottle.CircumferenceAt(frame.Bottle.Slant).ToString("0.#") +
-                        " мм · по низу " + frame.Bottle.CircumferenceAt(0).ToString("0.#") + " мм";
+                    message += " · обхват сверху " + frame.Bottle.CircumferenceAt(frame.Bottle.Slant).ToString("0.#") +
+                        " мм · снизу " + frame.Bottle.CircumferenceAt(0).ToString("0.#") + " мм";
                 ShowMessage(message, false);
                 _apply.IsEnabled = true;
             }

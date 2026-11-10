@@ -8,7 +8,7 @@ namespace VanyaTools.Native
     {
         internal bool RemoveSemiTransparent, SmoothStairs, Outline, WhitenNearWhite;
         internal bool Resample300;
-        internal int Threshold = 130, StairsScale = 1, NearWhiteTolerance = 6;
+        internal int Threshold = 130, StairsScale = 1, StairStrength = StairCoverage.DefaultStrength, NearWhiteTolerance = 6;
         internal int MaximumOutputPixels = 70000000;
         internal double RadiusMm = 2 * 25.4 / 400, ExpansionMm = .175;
         internal byte[] OutlineColor;
@@ -68,8 +68,8 @@ namespace VanyaTools.Native
             if (options.RemoveSemiTransparent) ThresholdInPlace(current, options.Threshold, cancellation, alphaMask);
             if (options.SmoothStairs)
             {
-                current = Smooth(current, options.Threshold, options.StairsScale, Math.Min(32000000, options.MaximumOutputPixels),
-                    !options.RemoveSemiTransparent || alphaMask != null, cancellation);
+                current = Smooth(current, options.StairsScale, options.StairStrength, Math.Min(32000000, options.MaximumOutputPixels),
+                    !options.RemoveSemiTransparent || alphaMask != null, cancellation, alphaMask);
                 if (alphaMask != null) ThresholdInPlace(current, 128, cancellation, Mask(options.AlphaMask));
                 if(!cleanup) {
                     current = Trim(current, 2, out int left, out int top, cancellation);
@@ -187,8 +187,8 @@ namespace VanyaTools.Native
             }
         }
 
-        private static NativeRasterBuffer Smooth(NativeRasterBuffer source, int threshold, int fixedScale,
-            int maximumPixels, bool preserveAlpha, CancellationToken cancellation)
+        private static NativeRasterBuffer Smooth(NativeRasterBuffer source, int fixedScale, int strength,
+            int maximumPixels, bool preserveAlpha, CancellationToken cancellation, BitArray protection)
         {
             int width = source.Width, height = source.Height, count = source.Alpha.Length, channels = source.Channels;
             int scale = count <= 2000000 ? 4 : count <= 3500000 ? 3 : 2;
@@ -196,21 +196,8 @@ namespace VanyaTools.Native
             scale = Math.Min(scale, Math.Max(1, (int)Math.Sqrt((double)maximumPixels / count)));
             int outWidth = checked(width * scale), outHeight = checked(height * scale);
             int outCount = PixelCount(outWidth, outHeight, channels);
-            byte[] mask = new byte[count], originalAlpha = new byte[count];
-            for (int pixel = 0; pixel < count; pixel++)
-            {
-                if ((pixel & 4095) == 0) cancellation.ThrowIfCancellationRequested();
-                mask[pixel] = preserveAlpha ? source.Alpha[pixel] :
-                    source.Alpha[pixel] > 0 && source.Alpha[pixel] >= threshold ? (byte)255 : (byte)0;
-            }
-            Gaussian(mask, originalAlpha, width, height, 1, false, cancellation);
-            Gaussian(originalAlpha, mask, width, height, 1, true, cancellation);
-            for (int pixel = 0; pixel < count; pixel++)
-            {
-                int original = preserveAlpha ? source.Alpha[pixel] : source.Alpha[pixel] > 0 && source.Alpha[pixel] >= threshold ? 255 : 0;
-                originalAlpha[pixel] = (byte)original;
-            }
-            StairCoverage.Blend(mask, originalAlpha, width, height, !preserveAlpha && scale > 1, cancellation);
+            byte[] originalAlpha = source.Alpha;
+            byte[] mask = StairCoverage.Repair(originalAlpha, width, height, 1, 0, strength, cancellation, protection);
             byte[] colors = new byte[checked(outCount * channels)], alpha = new byte[outCount];
             double scaleX = (double)outWidth / width, scaleY = (double)outHeight / height;
             for (int y = 0; y < outHeight; y++)

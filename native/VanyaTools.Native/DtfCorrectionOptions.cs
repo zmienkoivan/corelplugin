@@ -6,8 +6,8 @@ namespace VanyaTools.Native
     {
         internal bool RemoveSemiTransparent, SmoothStairs, Outline, WhitenNearWhite;
         // One-time input preparation, not a persistent filter/preset setting.
-        internal bool Resample300;
-        internal int Threshold = 130, NearWhiteTolerance = 6, StairsScale = 1;
+        internal bool Resample300, AuditStairs;
+        internal int Threshold = 130, NearWhiteTolerance = 6, StairsScale = 1, StairStrength = 2;
         internal double RadiusMm = 2 * 25.4 / 400, ExpansionMm = .175;
         internal Color Color = Colors.White;
         internal bool Knockout, Halftone, HalftoneAlphaOnly = true, HalftoneAutoDot = true;

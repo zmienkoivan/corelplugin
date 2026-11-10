@@ -137,11 +137,11 @@ internal static class Program
         var options = new NativeRasterFilterOptions { SmoothStairs = true, StairsScale = 2 };
         var white = Uniform(3, 3, 5, 255, 0,0,0,0);
         var whiteResult = Run(white, options);
-        Check(whiteResult.Mode == 5 && whiteResult.Colors.All(value => value == 0), "CMYK white stays exactly zero across Gaussian coverage and interpolation");
+        Check(whiteResult.Mode == 5 && whiteResult.Colors.All(value => value == 0), "CMYK white stays exactly zero across coverage correction and interpolation");
         Check(whiteResult.CmykOrder.SequenceEqual(Order), "Smoothing carries the calibrated CMYK order");
         Check(whiteResult.Width == 6 && whiteResult.Height == 6 && whiteResult.DpiX == white.DpiX * 2 && whiteResult.DpiY == white.DpiY * 2, "Stair supersampling scales DPI with pixel dimensions");
         Check(whiteResult.Width / whiteResult.DpiX == white.Width / white.DpiX && whiteResult.Height / whiteResult.DpiY == white.Height / white.DpiY, "Stair smoothing preserves physical dimensions");
-        Check(whiteResult.Alpha.Any(value => value > 0 && value < 255), "Preserving-alpha smoothing does not threshold its new soft edge");
+        Check(whiteResult.Alpha.All(value => value == 255), "An opaque rectangle without stairs keeps opaque coverage");
         var rgbWhite = Uniform(3, 3, 4, 255, 255,255,255);
         Check(Run(rgbWhite, options).Colors.All(value => value == 255), "RGB white stays exactly 255 during weighted color interpolation");
         var solid = Uniform(3, 3, 5, 255, 9,19,29,39);
@@ -160,6 +160,14 @@ internal static class Program
         Check(budget.Width == 3 && budget.Height == 3, "Output budget prevents an unnecessary supersampling allocation");
         var diagonal = Uniform(32,32,4,0,255,255,255);
         for (int y=0;y<32;y++) for (int x=0;x<32;x++) if (x<=y) diagonal.Alpha[y*32+x]=255;
+        StairCoverage.Detect(diagonal.Alpha, 32, 32, 1, 0, 2, default, out int before);
+        var soft = Run(diagonal, new NativeRasterFilterOptions { SmoothStairs = true, StairsScale = 1 });
+        StairCoverage.Detect(soft.Alpha, 32, 32, 1, 0, 2, default, out int after);
+        Check(before > 0 && after < before, "The audit finds repeated elbows and repair reduces them");
+        Check(soft.Alpha.Any(value => value > 0 && value < 255), "Preserving-alpha smoothing keeps the corrected edge coverage");
+        var protectedPixels = new System.Collections.BitArray(diagonal.Alpha.Length, true);
+        Check(StairCoverage.Repair(diagonal.Alpha, 32, 32, 1, 0, 2, default, protectedPixels)
+            .SequenceEqual(diagonal.Alpha), "Stair repair respects protection");
         var one = Run(diagonal,new NativeRasterFilterOptions { SmoothStairs=true, RemoveSemiTransparent=true, StairsScale=1 });
         var two = Run(diagonal,new NativeRasterFilterOptions { SmoothStairs=true, RemoveSemiTransparent=true, StairsScale=2 });
         int sameGridChanges=one.Alpha.Where((a,i)=>a!=diagonal.Alpha[i]).Count();

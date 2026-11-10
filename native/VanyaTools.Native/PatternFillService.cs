@@ -17,6 +17,7 @@ namespace VanyaTools.Native
         public string Label { get; }
         internal bool IncludeMirror;
         internal BitmapSource Filler;
+        public BitmapSource Preview => Filler;
 
         internal PatternSource(object shape, int id, string label)
         { Shape = shape; Id = id; Label = label; }

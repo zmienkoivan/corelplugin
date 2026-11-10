@@ -101,6 +101,38 @@ namespace VanyaTools.Native
             => !semi && !white ? this : new DtfCorrectionPixels(Width, Height, DpiX, DpiY,
                 DtfRasterOperations.Audit(_pixels, semi, red, white, tolerance, markerR, markerG, markerB, cancellation));
 
+        internal DtfCorrectionPixels RepairStairs(int strength, RasterProtectionMask protection, CancellationToken cancellation)
+        {
+            var protectedPixels = protection?.Rasterize(Width, Height, DpiX, DpiY, 0, 0, cancellation);
+            return new DtfCorrectionPixels(Width, Height, DpiX, DpiY,
+                StairCoverage.RepairBgra(_pixels, Width, Height, strength, cancellation, protectedPixels));
+        }
+
+        internal int CountStairs(int strength, CancellationToken cancellation)
+        {
+            StairCoverage.Detect(_pixels, Width, Height, 4, 3, strength, cancellation, out int elbows);
+            return elbows;
+        }
+
+        internal DtfCorrectionPixels AuditStairs(bool enabled, int strength, CancellationToken cancellation, out int elbows)
+        {
+            elbows = 0;
+            if (!enabled) return this;
+            var marked = StairCoverage.Detect(_pixels, Width, Height, 4, 3, strength, cancellation, out elbows);
+            if (elbows == 0) return this;
+            var result = (byte[])_pixels.Clone();
+            for (int p = 0; p < marked.Length; p++)
+            {
+                if ((p & 4095) == 0) cancellation.ThrowIfCancellationRequested();
+                int i = p * 4;
+                if (marked[p] == 0 || result[i + 3] <= 32) continue;
+                result[i] = (byte)(result[i] / 4);
+                result[i + 1] = (byte)((result[i + 1] + 3 * 119) / 4);
+                result[i + 2] = (byte)((result[i + 2] + 3 * 255) / 4);
+            }
+            return new DtfCorrectionPixels(Width, Height, DpiX, DpiY, result);
+        }
+
         internal ThinAuditResult AnalyzeThickness(ThinAuditOptions options, CancellationToken cancellation) =>
             ThinElementAudit.Analyze(_pixels, Width, Height, Width * 25.4 / DpiX, Height * 25.4 / DpiY, options, cancellation);
 

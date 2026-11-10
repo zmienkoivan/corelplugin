@@ -63,6 +63,7 @@ namespace VanyaTools.Native
         private CancellationTokenSource _cancellation;
         private bool _busy;
         private string _stage, _lastModel, _lastOutput, _lastSource, _readyOutput;
+        private string _timingKey, _requestTimingKey;
         private string _importWarning;
         private string _localSourcePath;
         private BitmapSource _localPreviewSource;
@@ -382,7 +383,7 @@ namespace VanyaTools.Native
                 _edgeExpansion.ToolTip = "Наружная обводка в выбранных единицах мм/px";
                 _underlayHex.ToolTip = "Цвет обводки · HEX";
             }
-            _timer.Tick += (_, __) => _progress.Text = _stage + " · " + (int)_elapsed.Elapsed.TotalSeconds + " с";
+            _timer.Tick += (_, __) => _progress.Text = OperationTiming.Display(_stage, _elapsed.Elapsed, _timingKey);
             RestorePending();
             if (localStyles)
             {
@@ -545,6 +546,7 @@ namespace VanyaTools.Native
                 _localPreviewButton.Content = "Обновить выделение для предпросмотра";
                 if (!String.IsNullOrEmpty(previous))
                     try { File.Delete(previous); } catch { }
+                OperationTiming.Record(_timingKey, _elapsed.Elapsed);
                 Report("Предпросмотр готов. Пресеты и ползунки обновляют его сразу.", false);
             }
             catch (Exception ex)
@@ -636,7 +638,8 @@ namespace VanyaTools.Native
                 : "Платный запрос Replicate · стоимость зависит от времени обработки.";
             if (MessageBox.Show(price + " Продолжить?", "Vanya Tools", MessageBoxButton.YesNo,
                 MessageBoxImage.Information) != MessageBoxResult.Yes) return;
-            SetBusy(true, "Подготавливаю выделение…");
+            _requestTimingKey = "photo:" + action + ":" + model + (action == "background" ? ":" + backgroundModel.Variant : "");
+            SetBusy(true, "Подготавливаю выделение…", _requestTimingKey);
             try
             {
                 _importWarning = null;
@@ -695,7 +698,7 @@ namespace VanyaTools.Native
                 var dialog = new BackgroundRemovalWindow(source, _backgroundOptions, BackgroundVariants);
                 var owner = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
                 if (owner != null) new System.Windows.Interop.WindowInteropHelper(dialog).Owner = owner.Handle;
-                _timer.Stop(); _progress.Text = "Подбор удаления фона · без интернета.";
+                _timer.Stop(); _elapsed.Stop(); _progress.Text = "Подбор удаления фона · без интернета.";
                 bool accepted = dialog.ShowDialog() == true;
                 _backgroundOptions = dialog.Options;
                 if (!accepted || String.IsNullOrEmpty(dialog.OutputPath))
@@ -940,24 +943,15 @@ namespace VanyaTools.Native
             Log.Info("Stair smoothing (" + (preserveAlpha ? "preserve alpha" : "binary alpha") + "): " + width + "x" + height +
                 " -> " + outWidth + "x" + outHeight + ".");
             byte[] pixels = new byte[checked(stride * height)];
-            byte[] mask = new byte[length], work = new byte[length];
+            byte[] work = new byte[length];
             bgra.CopyPixels(pixels, stride, 0);
             for (int p = 0; p < length; p++)
             {
                 if ((p & 0xfffff) == 0) cancellation.ThrowIfCancellationRequested();
-                mask[p] = preserveAlpha ? pixels[p * 4 + 3] :
+                work[p] = preserveAlpha ? pixels[p * 4 + 3] :
                     pixels[p * 4 + 3] >= threshold && pixels[p * 4 + 3] > 0 ? (byte)255 : (byte)0;
             }
-            GaussianHorizontal(mask, work, width, height, 1, cancellation);
-            GaussianVertical(work, mask, width, height, 1, cancellation);
-            // Preserve original alpha separately while changing the blurred mask.
-            for (int p = 0; p < length; p++)
-            {
-                int original = preserveAlpha ? pixels[p * 4 + 3] :
-                    pixels[p * 4 + 3] >= threshold && pixels[p * 4 + 3] > 0 ? 255 : 0;
-                work[p] = (byte)original;
-            }
-            StairCoverage.Blend(mask, work, width, height, !preserveAlpha && scale > 1, cancellation);
+            byte[] mask = StairCoverage.Repair(work, width, height, 1, 0, StairCoverage.DefaultStrength, cancellation);
             byte[] resultPixels = new byte[checked(outWidth * outHeight * 4)];
             double scaleX = (double)outWidth / width, scaleY = (double)outHeight / height;
             for (int y = 0; y < outHeight; y++)
@@ -1624,6 +1618,7 @@ namespace VanyaTools.Native
                 try { retained = PendingRasterResults.Contains(PendingPath(), _readyOutput); }
                 catch (Exception historyError) { Log.Error("Result inserted; preserving native channels because deferred history is unavailable.", historyError); }
                 if (!retained) NativeRasterCorrection.CleanupResultCompanion(_readyOutput);
+                if (_elapsed.IsRunning) OperationTiming.Record(_timingKey, _elapsed.Elapsed);
                 _readyOutput = null; _lastInput = null; _lastSource = null; _rasterInsertionSource = null;
                 try { if (File.Exists(PendingPath())) File.Delete(PendingPath()); } catch { }
             }
@@ -1668,7 +1663,8 @@ namespace VanyaTools.Native
             if (!ready && key.Length < 8) { Report("Укажите ключ Replicate.", true); return; }
             if (!ready && MessageBox.Show("Продолжить запрос? При необходимости будет создан новый платный запуск.",
                 "Vanya Tools", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
-            SetBusy(true, ready ? "Вставляю результат…" : "Продолжаю запрос…");
+            SetBusy(true, ready ? "Вставляю результат…" : "Продолжаю запрос…",
+                ready ? "raster:insert" : _requestTimingKey);
             try
             {
                 _importWarning = null;
@@ -1698,9 +1694,14 @@ namespace VanyaTools.Native
             Dispatcher.BeginInvoke(new Action(() => { if (_busy) SetStage(message); }));
         }
 
-        private void SetStage(string message) { _stage = message; _progress.Text = message; _status(message, false); }
+        private void SetStage(string message)
+        {
+            _stage = message;
+            _progress.Text = _elapsed.IsRunning ? OperationTiming.Display(message, _elapsed.Elapsed, _timingKey) : message;
+            _status(message, false);
+        }
 
-        private void SetBusy(bool busy, string stage)
+        private void SetBusy(bool busy, string stage, string timingKey = null)
         {
             if (!busy) ReleaseNativeRasterInput();
             _busy = busy;
@@ -1729,6 +1730,7 @@ namespace VanyaTools.Native
             if (busy)
             {
                 _cancellation = new CancellationTokenSource();
+                _timingKey = timingKey ?? "raster:" + stage;
                 _elapsed.Restart(); _timer.Start(); SetStage(stage);
             }
             else

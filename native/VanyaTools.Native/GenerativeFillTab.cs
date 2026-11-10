@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,6 +11,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 
 namespace VanyaTools.Native
 {
@@ -39,6 +41,9 @@ namespace VanyaTools.Native
         private string _requestModel;
         private string _importWarning;
         private bool _busy;
+        private readonly Stopwatch _elapsed = new Stopwatch();
+        private readonly DispatcherTimer _clock = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        private string _stage, _timingKey;
 
         public GenerativeFillTab(Func<string> token,
             Func<string, string, GenerativeFillCapture.Prepared, string> import,
@@ -84,6 +89,7 @@ namespace VanyaTools.Native
             _bar = new ProgressBar { Height = 7, IsIndeterminate = true,
                 Visibility = Visibility.Collapsed };
             panel.Children.Add(_bar);
+            _clock.Tick += (_, __) => _progress.Text = OperationTiming.Display(_stage, _elapsed.Elapsed, _timingKey);
             RestorePending();
             SetBusy(false, null);
         }
@@ -129,7 +135,7 @@ namespace VanyaTools.Native
                 "Генеративное заполнение", MessageBoxButton.YesNo,
                 MessageBoxImage.Information) != MessageBoxResult.Yes) return;
 
-            SetBusy(true, "Подготавливаю фото и маску…");
+            SetBusy(true, "Подготавливаю фото и маску…", "fill:" + model.Id);
             try
             {
                 _importWarning = null;
@@ -211,6 +217,7 @@ namespace VanyaTools.Native
             SavePending();
             _resultPreview.Source = LoadPreview(result);
             cancellation.ThrowIfCancellationRequested();
+            OperationTiming.Record(_timingKey, _elapsed.Elapsed);
             InsertReady();
         }
 
@@ -244,11 +251,16 @@ namespace VanyaTools.Native
             if (!ready && MessageBox.Show("Продолжить запрос? Если он не был отправлен, может начаться новый платный запуск.",
                 "Генеративное заполнение", MessageBoxButton.YesNo,
                 MessageBoxImage.Information) != MessageBoxResult.Yes) return;
-            SetBusy(true, ready ? "Вставляю готовый результат…" : "Продолжаю запрос…");
+            SetBusy(true, ready ? "Вставляю готовый результат…" : "Продолжаю запрос…",
+                ready ? "fill:insert" : "fill:resume:" + _requestModel);
             try
             {
                 _importWarning = null;
-                if (ready) InsertReady();
+                if (ready)
+                {
+                    InsertReady();
+                    OperationTiming.Record(_timingKey, _elapsed.Elapsed);
+                }
                 else await Execute(key);
                 ReportOutcome();
             }
@@ -274,7 +286,12 @@ namespace VanyaTools.Native
             Dispatcher.BeginInvoke(new Action(() => { if (_busy) Progress(message); }));
         }
 
-        private void Progress(string message) { _progress.Text = message; _status(message, false); }
+        private void Progress(string message)
+        {
+            _stage = message;
+            _progress.Text = OperationTiming.Display(message, _elapsed.Elapsed, _timingKey);
+            _status(message, false);
+        }
         private void Report(string message, bool error) { _progress.Text = message; _status(message, error); }
         private void ReportOutcome()
         {
@@ -284,11 +301,23 @@ namespace VanyaTools.Native
             _importWarning = null;
         }
 
-        private void SetBusy(bool busy, string message)
+        private void SetBusy(bool busy, string message, string timingKey = null)
         {
             _busy = busy;
-            if (busy) _cancellation = new CancellationTokenSource();
-            else if (_cancellation != null) { _cancellation.Dispose(); _cancellation = null; }
+            if (busy)
+            {
+                _cancellation = new CancellationTokenSource();
+                _timingKey = timingKey;
+                _elapsed.Restart();
+                _clock.Start();
+            }
+            else
+            {
+                _clock.Stop();
+                _elapsed.Stop();
+                _cancellation?.Dispose();
+                _cancellation = null;
+            }
             _generate.IsEnabled = _prompt.IsEnabled = _model.IsEnabled = !busy;
             _cancel.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             _cancel.IsEnabled = busy;

@@ -1,11 +1,14 @@
 using System;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Interop;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 
 namespace VanyaTools.Native
 {
@@ -15,6 +18,11 @@ namespace VanyaTools.Native
         private readonly Action<string, bool> _status;
         private readonly Func<string> _token;
         private readonly Button _generateFillers;
+        private readonly ComboBox _fillerSet;
+        private const string FillerTimingKey = "pattern:fillers:google/nano-banana-2";
+        private const string FillerStage = "Готовлю мини-заполнители по стилю набора…";
+        private readonly Stopwatch _fillerElapsed = new Stopwatch();
+        private readonly DispatcherTimer _fillerClock = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         private CancellationTokenSource _fillerRequest;
         private BitmapSource[] _readyFillers;
         private object _fillerDocument;
@@ -45,7 +53,7 @@ namespace VanyaTools.Native
             _motifs = Note("");
             panel.Children.Add(_motifs);
             _motifList = new ListBox { SelectionMode = SelectionMode.Extended,
-                DisplayMemberPath = nameof(PatternSource.Label), MaxHeight = 144 };
+                ItemTemplate = MotifTemplate(), MaxHeight = 160 };
             panel.Children.Add(_motifList);
             _removeMotifs = Button("Удалить выбранные из набора", (_, __) =>
             {
@@ -55,6 +63,10 @@ namespace VanyaTools.Native
             });
             panel.Children.Add(_removeMotifs);
             _motifList.SelectionChanged += (_, __) => _removeMotifs.IsEnabled = _motifList.SelectedItems.Count > 0;
+            _fillerSet = new ComboBox { MinHeight = 27, SelectedIndex = 0, Margin = new Thickness(1, 4, 1, 0),
+                ItemsSource = new[] { "Звезда, шарик, квадрат, ромб", "Кольцо, треугольник, шестигранник, капсула", "Искра, капля, полумесяц, точки" },
+                ToolTip = "Форма мини-фигур. ИИ берёт из рисунков только палитру, обводку и фактуру." };
+            panel.Children.Add(_fillerSet);
             _generateFillers = Button("ИИ · мини-заполнители…", async (_, __) => await GenerateFillers());
             _generateFillers.ToolTip = "До четырёх миниатюр по стилю набора через Nano Banana 2.";
             panel.Children.Add(_generateFillers);
@@ -84,6 +96,7 @@ namespace VanyaTools.Native
             panel.Children.Add(Button("Паттерн для бутылки…", (_, __) => Run(() => Edit(true))));
             _message = Note("");
             panel.Children.Add(_message);
+            _fillerClock.Tick += (_, __) => _message.Text = OperationTiming.Display(FillerStage, _fillerElapsed.Elapsed, FillerTimingKey);
         }
 
         private void RefreshMotifs()
@@ -93,6 +106,28 @@ namespace VanyaTools.Native
             _motifList.ItemsSource = sources;
             _motifList.Visibility = _removeMotifs.Visibility = sources.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
             _removeMotifs.IsEnabled = false;
+        }
+
+        private static DataTemplate MotifTemplate()
+        {
+            var row = new FrameworkElementFactory(typeof(DockPanel));
+            var preview = new FrameworkElementFactory(typeof(Image));
+            preview.SetValue(Image.WidthProperty, 44d);
+            preview.SetValue(Image.HeightProperty, 36d);
+            preview.SetValue(Image.MarginProperty, new Thickness(0, 1, 5, 1));
+            preview.SetBinding(Image.SourceProperty, new Binding(nameof(PatternSource.Preview)));
+            var imageStyle = new Style(typeof(Image));
+            var hidden = new DataTrigger { Binding = new Binding(nameof(PatternSource.Preview)), Value = null };
+            hidden.Setters.Add(new Setter(VisibilityProperty, Visibility.Collapsed));
+            imageStyle.Triggers.Add(hidden);
+            preview.SetValue(StyleProperty, imageStyle);
+            row.AppendChild(preview);
+            var label = new FrameworkElementFactory(typeof(TextBlock));
+            label.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center);
+            label.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+            label.SetBinding(TextBlock.TextProperty, new Binding(nameof(PatternSource.Label)));
+            row.AppendChild(label);
+            return new DataTemplate { VisualTree = row };
         }
 
         private async Task GenerateFillers()
@@ -105,6 +140,7 @@ namespace VanyaTools.Native
                     string token = _token();
                     if (String.IsNullOrEmpty(token) || token.Length < 8)
                         throw new InvalidOperationException("Введите ключ Replicate в настройках.");
+                    int set = Math.Max(0, _fillerSet.SelectedIndex);
                     var reference = _service.FillerReference(out _fillerDocument);
                     var parent = Window.GetWindow(this);
                     const string question = "Отправить уменьшенные превью рисунков из набора в Nano Banana 2 через Replicate? Это один платный запрос.";
@@ -117,8 +153,12 @@ namespace VanyaTools.Native
                     {
                         _fillerRequest = request;
                         _generateFillers.Content = "Отменить генерацию";
-                        Report("Готовлю мини-заполнители по стилю набора…", false);
-                        _readyFillers = await Task.Run(() => PatternFillerAi.Generate(reference, token, request.Token), request.Token);
+                        _fillerSet.IsEnabled = false;
+                        _fillerElapsed.Restart();
+                        _fillerClock.Start();
+                        Report(OperationTiming.Display(FillerStage, _fillerElapsed.Elapsed, FillerTimingKey), false);
+                        _readyFillers = await Task.Run(() => PatternFillerAi.Generate(reference, token, set, request.Token), request.Token);
+                        OperationTiming.Record(FillerTimingKey, _fillerElapsed.Elapsed);
                     }
                 }
                 int count = _service.AddFillers(_fillerDocument, _readyFillers);
@@ -134,6 +174,9 @@ namespace VanyaTools.Native
             }
             finally
             {
+                _fillerClock.Stop();
+                _fillerElapsed.Stop();
+                _fillerSet.IsEnabled = true;
                 _fillerRequest = null;
                 if (_readyFillers == null) _fillerDocument = null;
                 _generateFillers.Content = _readyFillers == null ? "ИИ · мини-заполнители…" : "Добавить готовые мини-фигуры";

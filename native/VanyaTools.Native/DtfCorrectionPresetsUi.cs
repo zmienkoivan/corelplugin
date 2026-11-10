@@ -48,7 +48,7 @@ namespace VanyaTools.Native
                 Options=options.Copy(); _knockoutPick.IsChecked=false;
                 _units.SelectedIndex=0; _previousUnit=0;
                 _remove.IsChecked=options.RemoveSemiTransparent; _threshold.Text=options.Threshold.ToString(); _thresholdSlider.Value=options.Threshold;
-                _stairs.IsChecked=options.SmoothStairs; _outline.IsChecked=options.Outline;
+                _stairs.IsChecked=options.SmoothStairs; _stairEdge.Strength.Value=options.StairStrength; _outline.IsChecked=options.Outline;
                 _radius.Text=DtfOutlineUnits.Format(options.RadiusMm); _expansion.Text=DtfOutlineUnits.Format(options.ExpansionMm); _hex.Text=Hex(options.Color);
                 _whiten.IsChecked=options.WhitenNearWhite; _nearWhiteTolerance.Value=options.NearWhiteTolerance;
                 _knockout.IsChecked=options.Knockout; _knockoutHex.Text=Hex(options.KnockoutColor);_knockoutSoft.IsChecked=options.KnockoutSoft;_knockoutTolerance.Value=options.KnockoutTolerance;

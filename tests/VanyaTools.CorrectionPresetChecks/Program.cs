@@ -11,7 +11,7 @@ internal static class Program
     private static void Check(bool value,string message) { _checks++; if(!value) throw new Exception(message); }
     private static void Reject(Action action) { try {action();} catch(InvalidDataException) {_checks++;return;} throw new Exception("Invalid preset accepted"); }
     private static DtfCorrectionOptions Fixture() => new DtfCorrectionOptions {
-        RemoveSemiTransparent=true,Threshold=77,SmoothStairs=true,WhitenNearWhite=true,NearWhiteTolerance=12,
+        RemoveSemiTransparent=true,Threshold=77,SmoothStairs=true,StairStrength=3,AuditStairs=true,WhitenNearWhite=true,NearWhiteTolerance=12,
         Outline=true,RadiusMm=.127,ExpansionMm=.3,Color=Color.FromRgb(10,20,30),Knockout=true,
         KnockoutColor=Color.FromRgb(45,67,89),KnockoutTolerance=17,Halftone=true,HalftoneAlphaOnly=false,
         HalftoneAutoDot=false,HalftoneLpi=32,HalftoneAngle=-22.5,HalftoneDotMm=.7,GridOriginXmm=1337,GridOriginYmm=-120,StairsScale=4,Resample300=true };
@@ -23,7 +23,8 @@ internal static class Program
             string path=Path.Combine(root,"проба.vanya-correction.json");
             var source=Fixture(); DtfCorrectionPreset.Save(path,DtfCorrectionPreset.FromOptions(source));
             var preset=DtfCorrectionPreset.Load(path); var result=preset.ToOptions();
-            Check(result.RemoveSemiTransparent && result.Threshold==77 && result.SmoothStairs,"Threshold/stairs lost");
+            Check(result.RemoveSemiTransparent && result.Threshold==77 && result.SmoothStairs && result.StairStrength==3,"Threshold/stairs lost");
+            Check(!result.AuditStairs,"Preview-only stair audit persisted");
             Check(result.WhitenNearWhite && result.NearWhiteTolerance==12,"Whitening lost");
             Check(result.Outline && result.RadiusMm==.127 && result.ExpansionMm==.3 && result.Color==source.Color,"Physical outline or colour lost");
             Check(result.Knockout && result.KnockoutColor==source.KnockoutColor && result.KnockoutTolerance==17,"Knockout lost");
@@ -39,6 +40,9 @@ internal static class Program
             Check(result.GridOriginXmm==0 && result.GridOriginYmm==0 && result.StairsScale==1,"Source-specific geometry persisted");
             Check(!result.Resample300,"One-time input normalization persisted as a repeated preview filter");
             string json=File.ReadAllText(path);
+            string legacyPath=Path.Combine(root,"legacy.json");
+            File.WriteAllText(legacyPath,json.Replace("\"StairStrength\":3,",""));
+            Check(DtfCorrectionPreset.Load(legacyPath).ToOptions().StairStrength==2,"Older presets should use the default stair strength");
             Check(!json.Contains("GridOrigin") && !json.Contains("StairsScale") && !json.Contains("Dpi") && !json.Contains("SourcePath"),"Preset contains source-specific data");
             string bom=Path.Combine(root,"bom.json"); File.WriteAllText(bom,json,new UTF8Encoding(true));
             Check(DtfCorrectionPreset.Load(bom).ToOptions().HalftoneAngle==-22.5,"UTF-8 BOM rejected");

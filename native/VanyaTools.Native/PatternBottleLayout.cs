@@ -87,11 +87,7 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Увеличьте размер фигур. В развёртке помещается до 2400 копий.");
 
             var cellGuides = options.Texture ? placed.Where(item => item.Cell != null).Select(item => item.Cell).ToArray() : null;
-            guides = new PatternLayoutGuides { Cells = cellGuides, RepeatLines = new[]
-            {
-                new[] { OnFrame(frame, 0, 0), OnFrame(frame, 0, bottle.Slant) },
-                new[] { OnFrame(frame, bottle.Width, 0), OnFrame(frame, bottle.Width, bottle.Slant) }
-            } };
+            guides = new PatternLayoutGuides { Cells = cellGuides };
             return placed;
         }
 

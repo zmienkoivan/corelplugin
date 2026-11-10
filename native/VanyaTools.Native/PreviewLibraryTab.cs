@@ -31,7 +31,7 @@ namespace VanyaTools.Native
         private readonly Stopwatch _elapsed = new Stopwatch();
         private CancellationTokenSource _cancellation;
         private bool _busy;
-        private string _stage;
+        private string _stage, _timingKey;
 
         private static string SettingsPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -59,7 +59,7 @@ namespace VanyaTools.Native
             _progress = new ProgressBar { Height = 6, IsIndeterminate = true,
                 Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 0, 5) };
             publication.Children.Add(_progress);
-            _timer.Tick += (_, __) => _activity.Text = _stage + " · " + _elapsed.Elapsed.ToString(@"m\:ss");
+            _timer.Tick += (_, __) => _activity.Text = OperationTiming.Display(_stage, _elapsed.Elapsed, _timingKey);
             _link = new TextBox { IsReadOnly = true, FontSize = 11, MinHeight = 27,
                 VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(3, 1, 3, 1),
                 Margin = new Thickness(1, 1, 1, 3), ToolTip = "Готовая ссылка для просмотра принта" };
@@ -155,6 +155,7 @@ namespace VanyaTools.Native
                     captured, options, stage => Dispatcher.BeginInvoke(new Action(() =>
                     { _stage = stage == "processing" ? "Создание превью" : "Отправка изображения"; })),
                     _cancellation.Token));
+                OperationTiming.Record(_timingKey, _elapsed.Elapsed);
                 _link.Text = link;
                 SaveSettings(false);
                 _status("Превью опубликовано. Ссылка готова.", false);
@@ -174,7 +175,7 @@ namespace VanyaTools.Native
         {
             if (_busy || !Credentials(false)) return;
             SetBusy(true, "Обновление списка");
-            try { await LoadList(); }
+            try { await LoadList(); OperationTiming.Record(_timingKey, _elapsed.Elapsed); }
             catch (Exception error) { _status(error.Message, true); }
             finally { SetBusy(false, null); }
         }
@@ -222,6 +223,7 @@ namespace VanyaTools.Native
             {
                 string server = _server.Text.Trim(), key = _key.Password;
                 await Task.Run(() => PreviewAdminWorkerClient.Delete(server, key, id));
+                OperationTiming.Record(_timingKey, _elapsed.Elapsed);
                 if (_link.Text.Contains("/p/" + id)) _link.Text = "";
                 await LoadList();
                 _status("Превью удалено.", false);
@@ -275,7 +277,12 @@ namespace VanyaTools.Native
             _items.IsEnabled = _settings.IsEnabled = !busy;
             _cancel.Visibility = busy && _cancellation != null ? Visibility.Visible : Visibility.Collapsed;
             _progress.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
-            if (busy) { _stage = stage; _elapsed.Restart(); _timer.Start(); }
+            if (busy)
+            {
+                _stage = stage; _timingKey = "preview:" + stage;
+                _elapsed.Restart(); _timer.Start();
+                _activity.Text = OperationTiming.Display(_stage, _elapsed.Elapsed, _timingKey);
+            }
             else { _timer.Stop(); _elapsed.Stop(); _activity.Text = ""; }
         }
 

@@ -92,7 +92,7 @@ namespace VanyaTools.Native
             var nativeOptions = new NativeRasterFilterOptions {
                 Resample300 = options.Resample300,
                 RemoveSemiTransparent = options.RemoveSemiTransparent, Threshold = options.Threshold,
-                SmoothStairs = options.SmoothStairs, StairsScale = options.StairsScale,
+                SmoothStairs = options.SmoothStairs, StairsScale = options.StairsScale, StairStrength = options.StairStrength,
                 Outline = options.Outline, RadiusMm = options.RadiusMm, ExpansionMm = options.ExpansionMm,
                 OutlineColor = ColorSamples(buffer, options.Color), OutlineOpacity = options.Color.A,
                 WhitenNearWhite = options.WhitenNearWhite, NearWhiteTolerance = options.NearWhiteTolerance,
@@ -125,7 +125,7 @@ namespace VanyaTools.Native
                 colors[p*3]=bgra[p*4];colors[p*3+1]=bgra[p*4+1];colors[p*3+2]=bgra[p*4+2];alpha[p]=bgra[p*4+3];}
             var buffer=new NativeRasterBuffer(image.PixelWidth,image.PixelHeight,4,image.DpiX,image.DpiY,colors,alpha);
             var filters=new NativeRasterFilterOptions { Resample300=options.Resample300,
-                RemoveSemiTransparent=options.RemoveSemiTransparent,Threshold=options.Threshold,SmoothStairs=options.SmoothStairs,StairsScale=options.StairsScale,
+                RemoveSemiTransparent=options.RemoveSemiTransparent,Threshold=options.Threshold,SmoothStairs=options.SmoothStairs,StairsScale=options.StairsScale,StairStrength=options.StairStrength,
                 Outline=options.Outline,RadiusMm=options.RadiusMm,ExpansionMm=options.ExpansionMm,OutlineColor=ColorSamples(buffer,options.Color),OutlineOpacity=options.Color.A,
                 WhitenNearWhite=options.WhitenNearWhite,NearWhiteTolerance=options.NearWhiteTolerance,PrintPreparation=options.Preparation(),
                 AlphaMask=options.AlphaMask,WhiteMask=options.WhiteMask,KnockoutMask=options.KnockoutMask,HalftoneMask=options.HalftoneMask };
@@ -135,9 +135,23 @@ namespace VanyaTools.Native
 
         // Color-based background removal edits alpha only. Keep every native
         // color sample, even the now invisible samples outside the silhouette.
-        internal static void AttachProcessedAlpha(string source, string output, CancellationToken cancellation, Color[] backgroundColors = null)
+        internal static void AttachProcessedAlpha(string source, string output, CancellationToken cancellation, Color[] backgroundColors = null,
+            int stairStrength = 0, RasterProtectionMask protection = null)
         {
-            if (!HasSource(source)) return;
+            if (!HasSource(source))
+            {
+                if (stairStrength == 0) return;
+                var raster = Load(output);
+                BitmapSource bgra = raster.Format == PixelFormats.Bgra32 ? raster : new FormatConvertedBitmap(raster, PixelFormats.Bgra32, null, 0);
+                int stride = checked(bgra.PixelWidth * 4);
+                var pixels = new byte[checked(stride * bgra.PixelHeight)];
+                bgra.CopyPixels(pixels, stride, 0);
+                var mask = protection?.Rasterize(bgra.PixelWidth, bgra.PixelHeight, bgra.DpiX, bgra.DpiY, 0, 0, cancellation);
+                var repaired = StairCoverage.RepairBgra(pixels, bgra.PixelWidth, bgra.PixelHeight, stairStrength, cancellation, mask);
+                using (var stream = File.Create(output))
+                    FastRasterPng.Write(stream, repaired, bgra.PixelWidth, bgra.PixelHeight, bgra.DpiX, bgra.DpiY, cancellation);
+                return;
+            }
             var buffer = NativeRasterFiles.Read(source + NativeRasterFiles.Suffix, source, cancellation);
             BitmapSource image = Load(output);
             if (image.PixelWidth != buffer.Width || image.PixelHeight != buffer.Height)
@@ -172,6 +186,21 @@ namespace VanyaTools.Native
                     }
                 }
                 buffer.Alpha[p] = alpha;
+            }
+            if (stairStrength > 0)
+            {
+                var mask = protection?.Rasterize(buffer.Width, buffer.Height, buffer.DpiX, buffer.DpiY, 0, 0, cancellation);
+                byte[] repaired = StairCoverage.Repair(buffer.Alpha, buffer.Width, buffer.Height, 1, 0, stairStrength, cancellation, mask);
+                for (int p = 0; p < repaired.Length; p++)
+                {
+                    if ((p & 4095) == 0) cancellation.ThrowIfCancellationRequested();
+                    if (buffer.Alpha[p] > 32 || repaired[p] <= buffer.Alpha[p]) continue;
+                    int donor = StairCoverage.NearestVisible(buffer.Alpha, buffer.Width, buffer.Height, 1, 0,
+                        p % buffer.Width, p / buffer.Width);
+                    if (donor < 0) repaired[p] = buffer.Alpha[p];
+                    else Buffer.BlockCopy(buffer.Colors, donor * buffer.Channels, buffer.Colors, p * buffer.Channels, buffer.Channels);
+                }
+                Buffer.BlockCopy(repaired, 0, buffer.Alpha, 0, repaired.Length);
             }
             Save(output, buffer, cancellation);
         }

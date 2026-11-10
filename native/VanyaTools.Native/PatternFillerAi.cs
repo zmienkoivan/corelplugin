@@ -36,8 +36,15 @@ namespace VanyaTools.Native
             return result;
         }
 
+        private static readonly string[] PrimitiveSets =
+        {
+            "a five-pointed star (top left), a round ball or disk (top right), a square (bottom left), a diamond (bottom right)",
+            "an open ring (top left), a triangle (top right), a hexagon (bottom left), a rounded capsule (bottom right)",
+            "a four-pointed sparkle (top left), a water drop (top right), a crescent (bottom left), a small cluster of three dots (bottom right)"
+        };
+
         // Called only after the user confirms sending the reference in PatternFillTab.
-        internal static BitmapSource[] Generate(BitmapSource reference, string token, CancellationToken cancellation)
+        internal static BitmapSource[] Generate(BitmapSource reference, string token, int set, CancellationToken cancellation)
         {
             string path = Path.Combine(Path.GetTempPath(), "Vanya-Pattern-Fillers-" + Guid.NewGuid().ToString("N") + ".png");
             string input = AiPrintTab.DataUri(reference);
@@ -46,12 +53,13 @@ namespace VanyaTools.Native
                 ReplicateWorkerClient.Run(SublimationModels.Nano2, token, new Dictionary<string, object>
                 {
                     ["image_input"] = new[] { input },
-                    ["prompt"] = "The reference is a set of illustrations for a repeating print pattern. " +
-                        "Create four NEW small, simple accents that naturally belong to the same set. " +
-                        "Match its subject, line quality, palette, texture and rendering style. Prefer clear silhouettes. " +
-                        "Do not copy a complete reference illustration. Center one isolated accent in each quadrant of a 2x2 square sheet. " +
-                        "Leave generous empty gutters and margins. No frames, text, shadows, or mockup. " +
-                        "Use a flat vivid magenta #FF00FF background throughout. Do not use that magenta in the accents.",
+                    ["prompt"] = "Draw exactly these four simple geometric primitives: " + PrimitiveSets[set] + ". " +
+                        "Each outer silhouette must remain immediately recognizable as the specified primitive. " +
+                        "The reference images are style swatches only. Borrow their palette, stroke weight, shading, texture and level of detail. " +
+                        "Never reproduce, miniaturize, trace, or place any reference subject, character, animal, logo, or object inside a primitive. " +
+                        "Center one isolated primitive in each quadrant of a 2x2 square sheet. Leave generous empty gutters and margins. " +
+                        "No frames, text, cast shadows, or mockup. Use a flat vivid magenta #FF00FF background throughout. " +
+                        "Do not use that magenta in the primitives.",
                     ["output_format"] = "png",
                     ["aspect_ratio"] = "1:1",
                     ["resolution"] = "2K"

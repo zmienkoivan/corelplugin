@@ -28,6 +28,7 @@ namespace VanyaTools.Native
         private readonly string _workspace = Path.Combine(Path.GetTempPath(), "Vanya-Correction-" + Guid.NewGuid().ToString("N"));
         private readonly Func<string, string, DtfCorrectionOptions, CancellationToken, DtfCorrectionResult> _processor;
         private readonly CheckBox _remove, _stairs, _outline, _highlight, _highlightWhite, _whiten;
+        private readonly StairEdgeControls _stairEdge;
         private readonly TextBox _threshold, _radius, _expansion, _hex;
         private readonly Slider _thresholdSlider, _nearWhiteTolerance;
         private readonly ComboBox _units, _view, _marker;
@@ -140,8 +141,8 @@ namespace VanyaTools.Native
             _thresholdSlider = new Slider { Minimum = 0, Maximum = 255, Value = Options.Threshold,
                 IsSnapToTickEnabled = true, TickFrequency = 1, Margin = new Thickness(0, 0, 0, 6) };
             controls.Children.Add(_thresholdSlider);
-            _stairs = Check("Сгладить лесенку", Options.SmoothStairs); controls.Children.Add(_stairs);
-            _stairs.ToolTip = "Сглаживает край и цветовые границы. Порог применяется только при включённом удалении полупрозрачности.";
+            _stairEdge = new StairEdgeControls(Options.SmoothStairs, Options.AuditStairs, Options.StairStrength, QueuePreview);
+            _stairs = _stairEdge.Repair; controls.Children.Add(_stairEdge);
 
             controls.Children.Add(new Separator { Margin = new Thickness(0, 9, 0, 8) });
             _outline = Check("Обводка и сглаживание края", Options.Outline);
@@ -240,7 +241,7 @@ namespace VanyaTools.Native
             {
                 if (_syncing) return; _syncing = true; _threshold.Text = ((int)_thresholdSlider.Value).ToString(); _syncing = false; QueuePreview();
             };
-            foreach (var toggle in new[] { _remove, _stairs, _outline, _highlight, _highlightWhite, _whiten })
+            foreach (var toggle in new[] { _remove, _outline, _highlight, _highlightWhite, _whiten })
             { toggle.Checked += (_, __) => QueuePreview(); toggle.Unchecked += (_, __) => QueuePreview(); }
             _nearWhiteTolerance.ValueChanged += (_, __) =>
             { _nearWhiteValue.Text = ((int)_nearWhiteTolerance.Value).ToString(); QueuePreview(); };
@@ -348,6 +349,7 @@ namespace VanyaTools.Native
             }
             options = new DtfCorrectionOptions { Threshold = threshold, RadiusMm = radius, ExpansionMm = expansion,
                 RemoveSemiTransparent = remove, SmoothStairs = _stairs.IsChecked == true,
+                AuditStairs = _stairEdge.Audit.IsChecked == true, StairStrength = (int)_stairEdge.Strength.Value,
                 Outline = outline, Color = color, WhitenNearWhite = _whiten.IsChecked == true,
                 NearWhiteTolerance = (int)_nearWhiteTolerance.Value,
                 KnockoutMask = _maskEditor.Snapshot(0), HalftoneMask = _maskEditor.Snapshot(1),
@@ -395,7 +397,7 @@ namespace VanyaTools.Native
             bool highlightWhite = _highlightWhite.IsChecked == true;
             ThinAuditOptions thin = _thinEnabled.IsChecked == true ? ThinOptions() : null;
             Rect scene = new Rect(0, 0, _originalPixels.Width, _originalPixels.Height);
-            string thinNote = "";
+            string thinNote = "", stairNote = "";
             byte whiteRed = _nearWhiteMarker.R, whiteGreen = _nearWhiteMarker.G, whiteBlue = _nearWhiteMarker.B;
             // Capture only managed data on the UI thread. A BitmapFrame can
             // retain a decoder graph even when its top-level object is frozen.
@@ -421,14 +423,23 @@ namespace VanyaTools.Native
                         var beforeThin = AnalyzeThinPreview(before, thin, false, cancellation, out string beforeNote);
                         var afterThin = AnalyzeThinPreview(after, thin, false, cancellation, out string afterNote);
                         thinNote = beforeNote == afterNote ? afterNote : "Исходник: " + beforeNote + " Результат: " + afterNote;
-                        return Tuple.Create(
-                            before.Audit(highlight, red, highlightWhite, options.NearWhiteTolerance, whiteRed, whiteGreen, whiteBlue, cancellation).OverlayDiagnostic(beforeThin?.Overlay, cancellation),
-                            after.Audit(highlight, red, highlightWhite, options.NearWhiteTolerance, whiteRed, whiteGreen, whiteBlue, cancellation).OverlayDiagnostic(afterThin?.Overlay, cancellation));
+                        before = before.Audit(highlight, red, highlightWhite, options.NearWhiteTolerance, whiteRed, whiteGreen, whiteBlue, cancellation)
+                            .OverlayDiagnostic(beforeThin?.Overlay, cancellation).AuditStairs(options.AuditStairs, options.StairStrength, cancellation, out int beforeElbows);
+                        after = after.Audit(highlight, red, highlightWhite, options.NearWhiteTolerance, whiteRed, whiteGreen, whiteBlue, cancellation)
+                            .OverlayDiagnostic(afterThin?.Overlay, cancellation).AuditStairs(options.AuditStairs, options.StairStrength, cancellation, out int afterElbows);
+                        stairNote = StairNote(options, beforeElbows, afterElbows, false);
+                        return Tuple.Create(before, after);
                     }
                     input = overviewPath;
                     cancellation.ThrowIfCancellationRequested();
                     DtfCorrectionResult processed = processor(input, output, options, cancellation);
                     BitmapSource result = Load(output);
+                    if (options.AuditStairs)
+                    {
+                        original = overviewPixels.AuditStairs(true, options.StairStrength, cancellation, out int beforeElbows).Bitmap();
+                        result = DtfCorrectionPixels.Capture(result).AuditStairs(true, options.StairStrength, cancellation, out int afterElbows).Bitmap();
+                        stairNote = StairNote(options, beforeElbows, afterElbows, false);
+                    }
                     var aligned = Align(original, result, processed.OffsetMm, focus, cancellation, out Int32Rect bounds);
                     double sx = result.DpiX / originalPixels.DpiX, sy = result.DpiY / originalPixels.DpiY;
                     scene = new Rect(bounds.X / sx, bounds.Y / sy, bounds.Width / sx, bounds.Height / sy);
@@ -457,6 +468,7 @@ namespace VanyaTools.Native
                 _before.Source = images.Item1.Bitmap(); _after.Source = images.Item2.Bitmap(); _after.Opacity = 1;
                 ApplyPreviewZoom(); RestorePreviewCenter(anchor);
                 Options = options; _apply.IsEnabled = true;
+                _stairEdge.Note.Text = stairNote;
                 _thinNote.Text = thin == null ? "Красный — ниже минимума; жёлтый — между порогами; зелёный — около безопасного. Пересчёт автоматический." : thinNote;
                 ShowMessage("Обзор готов. При увеличении видимый участок уточняется автоматически.", false);
                 QueueDetail();
@@ -481,6 +493,9 @@ namespace VanyaTools.Native
                 });
             }
         }
+
+        private static string StairNote(DtfCorrectionOptions options, int before, int after, bool detail) =>
+            options.AuditStairs ? (detail ? "Фрагмент" : "Обзор") + " · углы ступеней на сетке · " + before + " → " + after : "";
 
         private async Task ApplyAsync()
         {

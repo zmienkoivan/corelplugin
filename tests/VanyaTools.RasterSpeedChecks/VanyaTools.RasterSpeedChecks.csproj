@@ -5,6 +5,7 @@
     <Compile Include="../../native/VanyaTools.Native/FastRasterPng.cs" Link="FastRasterPng.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfRasterOperations.cs" Link="DtfRasterOperations.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfCorrectionPixels.cs" Link="DtfCorrectionPixels.cs" />
+    <Compile Include="../../native/VanyaTools.Native/StairCoverage.cs" Link="StairCoverage.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfCorrectionOptions.cs" Link="DtfCorrectionOptions.cs" />
     <Compile Include="../../native/VanyaTools.Native/RasterProtectionMask.cs" Link="RasterProtectionMask.cs" />
     <Compile Include="../../native/VanyaTools.Native/DtfPrintPreparation.cs" Link="DtfPrintPreparation.cs" />

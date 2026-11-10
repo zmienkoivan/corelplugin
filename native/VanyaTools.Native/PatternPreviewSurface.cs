@@ -83,6 +83,8 @@ namespace VanyaTools.Native
                     DrawGuide(drawing, _draft.CenterMarks, new Pen(Brushes.Black, Math.Max(hairline, .15)));
             }
 
+            if (_showRepeatBorders && _frame.Bottle != null) DrawBottleSeam(drawing, hairline);
+
             if (_session.Seam != null && !ReferenceEquals(_frame, _session.Seam))
             {
                 drawing.PushTransform(new TranslateTransform(_session.Seam.Left - _frame.Left, _frame.Top - _session.Seam.Top));
@@ -91,6 +93,22 @@ namespace VanyaTools.Native
             }
             drawing.Pop();
             if (_draft?.Hero != null) DrawHeroHandles(drawing);
+        }
+
+        private void DrawBottleSeam(DrawingContext drawing, double hairline)
+        {
+            var bottle = _frame.Bottle;
+            double extension = Math.Min(3, 8 * hairline);
+            var backing = new Pen(Brushes.White, 3.5 * hairline);
+            var dashed = new Pen(Brushes.OrangeRed, 1.75 * hairline) { DashStyle = new DashStyle(new[] { 3d, 2d }, 0) };
+            foreach (double u in new[] { 0d, bottle.Width })
+            {
+                // The two sides represent the same seam after wrapping the bottle.
+                var bottom = ToView(PatternBottleLayout.OnFrame(_frame, u, -extension));
+                var top = ToView(PatternBottleLayout.OnFrame(_frame, u, bottle.Slant + extension));
+                drawing.DrawLine(backing, bottom, top);
+                drawing.DrawLine(dashed, bottom, top);
+            }
         }
 
         private void DrawHeroHandles(DrawingContext drawing)

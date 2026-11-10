@@ -138,7 +138,7 @@ namespace VanyaTools.Native
                     normalizeOnLoad: normalizeOnLoad);
                 var owner = PresentationSource.FromVisual(this) as HwndSource;
                 if (owner != null) new WindowInteropHelper(dialog).Owner = owner.Handle;
-                _timer.Stop(); _progress.Text = "Подбор коррекции в отдельном окне · без интернета.";
+                _timer.Stop(); _elapsed.Stop(); _progress.Text = "Подбор коррекции в отдельном окне · без интернета.";
                 if (dialog.ShowDialog() != true || dialog.Result == null)
                 { Report("Коррекция отменена. Исходник сохранён.", false); return; }
                 var result = dialog.Result;
@@ -177,7 +177,7 @@ namespace VanyaTools.Native
         {
             if (NativeRasterCorrection.HasSource(source))
                 return NativeRasterCorrection.Process(source, output, options, cancellation);
-            if(options.NeedsGeometry && (options.Halftone || options.HasProtection))
+            if (options.SmoothStairs || options.NeedsGeometry && (options.Halftone || options.HasProtection))
                 return NativeRasterCorrection.ProcessRgb(source,output,options,cancellation);
             if (!options.NeedsGeometry)
             {
@@ -215,20 +215,6 @@ namespace VanyaTools.Native
                 {
                     string next = Next(); ThresholdAlpha(current, next, options.Threshold, cancellation); current = next;
                 }
-                if (options.SmoothStairs)
-                {
-                    var bitmap = AiPrintTab.Bitmap(current);
-                    long pixels = (long)bitmap.PixelWidth * bitmap.PixelHeight;
-                    int scale = pixels <= 2000000 ? 4 : pixels <= 3500000 ? 3 : 2;
-                    if (options.StairsScale > 0) scale = Math.Max(1, Math.Min(4, options.StairsScale));
-                    scale = Math.Min(scale, Math.Max(1, (int)Math.Sqrt(32000000.0 / pixels)));
-                    RasterCaptureMemory.EnsureAvailable(pixels * scale * scale);
-                    string next = Next();
-                    SmoothOpaqueStairs(current, next, options.Threshold, cancellation, (crop, dpiX, dpiY) =>
-                    { offsetX -= crop.X * 25.4 / dpiX; offsetY -= crop.Y * 25.4 / dpiY; }, 32000000, scale,
-                        preserveAlpha: !options.RemoveSemiTransparent);
-                    current = next;
-                }
                 if (options.Halftone)
                 {
                     var prep = options.Preparation(-offsetX, -offsetY); prep.Knockout = false;
@@ -248,7 +234,7 @@ namespace VanyaTools.Native
                     // soft pixels introduced by the outline, not just the source.
                     string next = Next(); ThresholdAlpha(current, next, options.Threshold, cancellation); current = next;
                 }
-                if (options.WhitenNearWhite && !options.Halftone && (options.SmoothStairs || options.Outline))
+                if (options.WhitenNearWhite && !options.Halftone && options.Outline)
                 {
                     string next = Next(); DtfNearWhiteFilter.Process(current, next, options.NearWhiteTolerance, cancellation); current = next;
                 }

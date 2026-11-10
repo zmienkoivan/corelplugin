@@ -39,7 +39,7 @@ namespace VanyaTools.Native
         private CancellationTokenSource _cancellation;
         private Job _job;
         private bool _busy;
-        private string _stage;
+        private string _stage, _timingKey;
 
         private sealed class Job
         {
@@ -133,7 +133,7 @@ namespace VanyaTools.Native
                 Content = new ScrollViewer { Content = _history, MaxHeight = 220,
                     VerticalScrollBarVisibility = ScrollBarVisibility.Auto } };
             panel.Children.Add(_historyExpander);
-            _timer.Tick += (_, __) => _activity.Text = _stage + " · " + (int)_elapsed.Elapsed.TotalSeconds + " с";
+            _timer.Tick += (_, __) => _activity.Text = OperationTiming.Display(_stage, _elapsed.Elapsed, _timingKey);
             RestorePending();
             RestoreRecentResults();
             RefreshHistory();
@@ -186,11 +186,13 @@ namespace VanyaTools.Native
             { Report("Для продолжения нужен ключ Replicate.", true); return; }
             if (SublimationFailure.BlocksResume(_job.ProviderBlocked, File.Exists(_job.FinalPath)))
             { Report(SublimationFailure.SensitiveMessage, true); return; }
-            await Execute(key);
+            await Execute(key, resumed: true);
         }
 
-        private async Task Execute(string key)
+        private async Task Execute(string key, bool resumed = false)
         {
+            _timingKey = File.Exists(_job.FinalPath) ? "unfold:insert" :
+                "unfold:" + (resumed ? "resume:" : "") + _job.ModelId + ":" + (_job.Upscale ? "4x" : "base");
             SetBusy(true);
             _cancellation = new CancellationTokenSource();
             CancellationToken cancellation = _cancellation.Token;
@@ -273,6 +275,7 @@ namespace VanyaTools.Native
                     await RunSta(() => SublimationOutputProcessor.Prepare(generatedPath, finalPath, width, height, tiles));
                 }
                 cancellation.ThrowIfCancellationRequested();
+                OperationTiming.Record(_timingKey, _elapsed.Elapsed);
                 _resultPreview.Source = AiPrintTab.Bitmap(_job.FinalPath);
                 Directory.CreateDirectory(Path.GetDirectoryName(PendingPath()));
                 File.WriteAllText(PendingPath(), _job.FinalPath);
@@ -342,7 +345,7 @@ namespace VanyaTools.Native
             string name = _stage;
             await Task.Run(() => ReplicateWorkerClient.Run(model, key, input, output,
                 progress => Dispatcher.BeginInvoke(new Action(() =>
-                    _activity.Text = name + " · " + ProgressName(progress) + " · " + (int)_elapsed.Elapsed.TotalSeconds + " с")),
+                    _activity.Text = OperationTiming.Display(name + " · " + ProgressName(progress), _elapsed.Elapsed, _timingKey))),
                 cancellation), cancellation);
         }
 
@@ -583,7 +586,12 @@ namespace VanyaTools.Native
             _retry.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
         }
 
-        private void SetStage(string stage) { _stage = stage; _activity.Text = stage; Report(stage, false); }
+        private void SetStage(string stage)
+        {
+            _stage = stage;
+            _activity.Text = OperationTiming.Display(stage, _elapsed.Elapsed, _timingKey);
+            Report(stage, false);
+        }
         private void Cancel() { if (_busy && _cancellation != null) { _cancellation.Cancel(); _cancel.IsEnabled = false; SetStage("Останавливаю запрос…"); } }
         private void Report(string message, bool error)
         {

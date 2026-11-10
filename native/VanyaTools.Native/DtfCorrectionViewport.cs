@@ -24,7 +24,7 @@ namespace VanyaTools.Native
         private sealed class DetailFrame
         {
             internal DtfCorrectionPixels Before, After;
-            internal string Note;
+            internal string Note, StairNote;
         }
 
         private void CancelDetail(bool clear)
@@ -119,6 +119,7 @@ namespace VanyaTools.Native
                     _tileBounds = plan.Target; _tileRevision = settingsRevision;
                     _beforeDetail.Source = frame.Before.Bitmap(); _afterDetail.Source = frame.After.Bitmap(); PositionDetail();
                     if (thin != null) _thinNote.Text = frame.Note;
+                    _stairEdge.Note.Text = frame.StairNote;
                     ShowMessage("Видимый участок — из исходника. Зум и прокрутка уточняются автоматически.", false);
                 });
             }
@@ -197,6 +198,13 @@ namespace VanyaTools.Native
                 else result = corrected.Bitmap();
                 double sx = result.DpiX / source.DpiX, sy = result.DpiY / source.DpiY;
                 BitmapSource original = input.Bitmap();
+                string stairNote = "";
+                if (options.AuditStairs)
+                {
+                    original = input.AuditStairs(true, options.StairStrength, cancellation, out int beforeElbows).Bitmap();
+                    result = DtfCorrectionPixels.Capture(result).AuditStairs(true, options.StairStrength, cancellation, out int afterElbows).Bitmap();
+                    stairNote = StairNote(options, beforeElbows, afterElbows, true);
+                }
                 int ow = Math.Max(1, (int)Math.Round(input.Width * sx)), oh = Math.Max(1, (int)Math.Round(input.Height * sy));
                 if (ow != input.Width || oh != input.Height)
                 { var scaled = new TransformedBitmap(original, new ScaleTransform((double)ow / input.Width, (double)oh / input.Height)); scaled.Freeze(); original = scaled; }
@@ -211,7 +219,7 @@ namespace VanyaTools.Native
                 after = after.Audit(highlight, red, white, options.NearWhiteTolerance, marker.R, marker.G, marker.B, cancellation).OverlayDiagnostic(at?.Overlay, cancellation);
                 var focus = new Int32Rect((int)Math.Round((plan.Target.X - plan.Work.X) * sx), (int)Math.Round((plan.Target.Y - plan.Work.Y) * sy),
                     Math.Max(1, (int)Math.Round(plan.Target.Width * sx)), Math.Max(1, (int)Math.Round(plan.Target.Height * sy)));
-                return new DetailFrame { Before = before.Crop(focus, cancellation), After = after.Crop(focus, cancellation), Note = bn == an ? an : "Исходник: " + bn + " Результат: " + an };
+                return new DetailFrame { Before = before.Crop(focus, cancellation), After = after.Crop(focus, cancellation), Note = bn == an ? an : "Исходник: " + bn + " Результат: " + an, StairNote = stairNote };
             }
             finally { DeleteFile(inputPath); DeleteFile(outputPath); }
         }

@@ -40,7 +40,7 @@ namespace VanyaTools.Native
         private CancellationTokenSource _cancellation;
         private readonly DispatcherTimer _elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         private readonly Stopwatch _elapsed = new Stopwatch();
-        private string _stage;
+        private string _stage, _timingKey, _imageTimingKey;
         private bool _busy;
         private string _lastModel, _lastOutput, _readyOutput;
         private Dictionary<string, object> _lastInput;
@@ -168,7 +168,7 @@ namespace VanyaTools.Native
             _activityPanel.Children.Add(_activityText);
             _activityPanel.Children.Add(_activityBar);
             panel.Children.Add(_activityPanel);
-            _elapsedTimer.Tick += (_, __) => _activityText.Text = _stage + " · " + (int)_elapsed.Elapsed.TotalSeconds + " с";
+            _elapsedTimer.Tick += (_, __) => _activityText.Text = OperationTiming.Display(_stage, _elapsed.Elapsed, _timingKey);
             SetPrompt(); UpdateCost();
             RestorePendingResult();
         }
@@ -228,7 +228,8 @@ namespace VanyaTools.Native
             {
                 var operationTimer = Stopwatch.StartNew();
                 Log.Info("AI edit started. Model=" + model.Id + ".");
-                SetBusy(true, "Подготавливаю изображение…");
+                _imageTimingKey = "print-ai:" + (smart ? "restore:" : removeBackground ? "background:" : "edit:") + model.Id;
+                SetBusy(true, "Подготавливаю изображение…", _imageTimingKey);
                 Report("Подготавливаю изображение для Replicate…", false);
                 // Read WPF controls and encode the crop on the UI thread.
                 var prepareTimer = Stopwatch.StartNew();
@@ -274,7 +275,8 @@ namespace VanyaTools.Native
                 var operationTimer = Stopwatch.StartNew();
                 Log.Info("AI vectorization started. Model=recraft-ai/recraft-vectorize.");
                 _pipeline = null;
-                SetBusy(true, "Подготавливаю изображение для векторизации…");
+                _imageTimingKey = "print-ai:vector:recraft-ai/recraft-vectorize";
+                SetBusy(true, "Подготавливаю изображение для векторизации…", _imageTimingKey);
                 Report("Подготавливаю изображение для векторизации…", false);
                 var prepareTimer = Stopwatch.StartNew();
                 string data = await Task.Run(() => DataUri(Bitmap(file)));
@@ -320,7 +322,7 @@ namespace VanyaTools.Native
             try
             {
                 Log.Info("Font analysis started. Model=" + model.Id + ".");
-                SetBusy(true, "Анализирую выделенный текст…");
+                SetBusy(true, "Анализирую выделенный текст…", "font:" + model.Id);
                 _fontAnalysisText.Text = "Анализирую форму букв…";
                 var prepareTimer = Stopwatch.StartNew();
                 string data = await Task.Run(() => DataUri(FontReference(Bitmap(_source)), 2048, 2000000));
@@ -396,6 +398,7 @@ namespace VanyaTools.Native
                 }
                 catch (Exception ex) { Log.Info("Font token usage is unavailable: " + ex.Message); }
             }
+            OperationTiming.Record(_timingKey, _elapsed.Elapsed);
             _fontAnalysisText.Text = _fontPendingModel.Split(':')[0] + usage + "\n\n" + result;
             Log.Info("Font analysis succeeded; response bytes=" + new FileInfo(resultPath).Length + ".");
             Report("Анализ шрифта готов. Название и похожие варианты — оценка по изображению, а не гарантированное совпадение.", false);
@@ -422,12 +425,12 @@ namespace VanyaTools.Native
                 if (!_busy) return;
                 _stage = _cancellation != null && _cancellation.IsCancellationRequested
                     ? "Ожидаю подтверждение отмены…" : message;
-                _activityText.Text = _stage;
+                _activityText.Text = OperationTiming.Display(_stage, _elapsed.Elapsed, _timingKey);
                 Report(_stage, false);
             }));
         }
 
-        private void SetBusy(bool busy, string message)
+        private void SetBusy(bool busy, string message, string timingKey = null)
         {
             _busy = busy;
             _activityPanel.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
@@ -448,12 +451,13 @@ namespace VanyaTools.Native
             if (busy)
             {
                 _cancellation = new CancellationTokenSource();
+                _timingKey = timingKey;
                 _elapsed.Restart(); _elapsedTimer.Start();
-                _stage = message; _activityText.Text = message;
+                _stage = message; _activityText.Text = OperationTiming.Display(message, _elapsed.Elapsed, _timingKey);
             }
             else
             {
-                _elapsedTimer.Stop();
+                _elapsedTimer.Stop(); _elapsed.Stop();
                 if (_cancellation != null) { _cancellation.Dispose(); _cancellation = null; }
             }
         }
@@ -505,6 +509,7 @@ namespace VanyaTools.Native
             {
                 throw new InvalidOperationException("Файл готов, но вставка не удалась. Нажмите «Повторить вставку» — без новой оплаты. " + ex.GetBaseException().Message, ex);
             }
+            if (_elapsed.IsRunning) OperationTiming.Record(_timingKey, _elapsed.Elapsed);
             _readyOutput = null; _lastInput = null; _pipeline = null;
             try { if (File.Exists(PendingPath())) File.Delete(PendingPath()); } catch { }
         }
@@ -528,7 +533,8 @@ namespace VanyaTools.Native
             if (!local && key.Length < 8) { Report("Введите ключ Replicate.", true); return; }
             if (!local && MessageBox.Show("Продолжить предыдущий запрос? Если он отменён или завершился ошибкой, будет создан новый платный запрос с тем же изображением и настройками.",
                 "Повтор операции", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
-            SetBusy(true, local ? "Вставляю готовый результат…" : fontAnalysis ? "Повторяю анализ шрифта…" : "Продолжаю предыдущую операцию…");
+            SetBusy(true, local ? "Вставляю готовый результат…" : fontAnalysis ? "Повторяю анализ шрифта…" : "Продолжаю предыдущую операцию…",
+                local ? "print-ai:insert" : fontAnalysis ? "font:" + _fontPendingModel : _imageTimingKey);
             try
             {
                 if (local) InsertReadyResult();
