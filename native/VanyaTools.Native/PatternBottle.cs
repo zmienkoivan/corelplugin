@@ -89,11 +89,15 @@ namespace VanyaTools.Native
 
         internal PatternPoint Start => Map(0, 0);
 
-        internal IEnumerable<Edge> Outline()
+        internal IEnumerable<Edge> Outline(IEnumerable<PatternPoint> rightCut = null, IEnumerable<PatternPoint> leftCut = null)
         {
             foreach (var segment in Arc(0, Width, 0)) yield return segment;
+            if (rightCut != null)
+                foreach (var point in rightCut) yield return new Edge(point);
             yield return new Edge(Map(Width, Slant));
             foreach (var segment in Arc(Width, 0, Slant)) yield return segment;
+            if (leftCut != null)
+                foreach (var point in leftCut) yield return new Edge(point);
         }
 
         private IEnumerable<Edge> Arc(double start, double end, double v)

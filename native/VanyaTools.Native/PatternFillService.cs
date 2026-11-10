@@ -75,7 +75,8 @@ namespace VanyaTools.Native
         internal List<PatternPlacement> Items;
         internal HashSet<int> MirroredIds;
         internal PatternPlacement Hero;
-        internal Geometry Reserve, CellGuides, RepeatGuides, CenterMarks;
+        internal Geometry Reserve, CellGuides, RepeatGuides, CenterMarks, BottleCutView;
+        internal PatternPoint[][] BottleCutEdges;
         internal double Allowance;
     }
 
@@ -331,7 +332,7 @@ namespace VanyaTools.Native
                 app.Optimization = true;
                 doc.BeginCommandGroup(session.BottleMode ? "Vanya Tools · развёртка бутылки" : "Vanya Tools · паттерн по контуру");
                 started = true;
-                object curve = session.BottleMode ? BottleCurve((object)doc, draft.Frame) : draft.Frame.Curve;
+                object curve = session.BottleMode ? BottleCurve((object)doc, draft) : draft.Frame.Curve;
                 frame = layer.CreateCurve((dynamic)curve);
                 frame.Fill.ApplyNoFill();
                 frame.Outline.SetNoOutline();
@@ -443,13 +444,14 @@ namespace VanyaTools.Native
             }
         }
 
-        private static object BottleCurve(object document, PatternFrame frame)
+        private static object BottleCurve(object document, PatternDraft draft)
         {
+            var frame = draft.Frame;
             dynamic curve = ((dynamic)document).CreateCurve();
             var start = frame.Bottle.Start;
             double x = frame.Left - frame.BottleOrigin.X, y = frame.Bottom - frame.BottleOrigin.Y;
             dynamic path = curve.CreateSubPath(x + start.X, y + start.Y);
-            foreach (var edge in frame.Bottle.Outline())
+            foreach (var edge in PatternBottleLayout.CutOutline(draft))
             {
                 if (edge.Curved)
                     path.AppendCurveSegment2(x + edge.End.X, y + edge.End.Y, x + edge.First.X, y + edge.First.Y,

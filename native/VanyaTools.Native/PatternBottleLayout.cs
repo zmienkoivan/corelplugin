@@ -7,23 +7,14 @@ using System.Windows.Media;
 
 namespace VanyaTools.Native
 {
-    internal static class PatternBottleLayout
+    internal static partial class PatternBottleLayout
     {
         private const double Tolerance = .025;
         private const double EdgeInset = .06;
 
         internal static PatternFrame Frame(PatternBottle bottle, PatternPoint pageCenter)
         {
-            var geometry = new StreamGeometry();
-            using (var path = geometry.Open())
-            {
-                path.BeginFigure(Point(bottle.Start), true, true);
-                foreach (var edge in bottle.Outline())
-                {
-                    if (edge.Curved) path.BezierTo(Point(edge.First), Point(edge.Second), Point(edge.End), true, false);
-                    else path.LineTo(Point(edge.End), true, false);
-                }
-            }
+            var geometry = TraceOutline(bottle, bottle.Outline());
             Rect bounds = geometry.Bounds;
             var clip = geometry.Clone();
             clip.Transform = new TranslateTransform(-bounds.X, -bounds.Y);
@@ -33,6 +24,32 @@ namespace VanyaTools.Native
             return new PatternFrame { Bottle = bottle, BottleClip = clip, BottleOrigin = new PatternPoint(bounds.X, bounds.Y),
                 Geometry = geometry, Width = bounds.Width, Height = bounds.Height,
                 Left = pageCenter.X - bounds.Width / 2, Bottom = pageCenter.Y - bounds.Height / 2 };
+        }
+
+        internal static IEnumerable<PatternBottle.Edge> CutOutline(PatternDraft draft)
+        {
+            var frame = draft.Frame;
+            var cuts = draft.BottleCutEdges;
+            return cuts == null ? frame.Bottle.Outline() : frame.Bottle.Outline(
+                cuts[1].Select(ToBottle), cuts[0].Reverse().Select(ToBottle));
+
+            PatternPoint ToBottle(PatternPoint p) =>
+                new PatternPoint(p.X + frame.BottleOrigin.X, p.Y + frame.BottleOrigin.Y);
+        }
+
+        private static StreamGeometry TraceOutline(PatternBottle bottle, IEnumerable<PatternBottle.Edge> edges)
+        {
+            var geometry = new StreamGeometry();
+            using (var path = geometry.Open())
+            {
+                path.BeginFigure(Point(bottle.Start), true, true);
+                foreach (var edge in edges)
+                {
+                    if (edge.Curved) path.BezierTo(Point(edge.First), Point(edge.Second), Point(edge.End), true, false);
+                    else path.LineTo(Point(edge.End), true, false);
+                }
+            }
+            return geometry;
         }
 
         internal static List<PatternPlacement> Build(PatternFrame frame, PatternAsset[] motifs, PatternFillOptions options,
@@ -158,6 +175,7 @@ namespace VanyaTools.Native
             double sourceReach = Distance(motif.Size, default) * sourceScale / 2;
             var extent = new PatternFootprint(motif.Size);
             double u = bottle.Wrap(center.X), pad = gap / 2 + EdgeInset;
+            bool crossesSeam = false;
             for (int attempt = 0; attempt < 8; attempt++)
             {
                 double factor = Math.Pow(.84, attempt), scale = sourceScale * factor;
@@ -174,11 +192,13 @@ namespace VanyaTools.Native
 
                 double seamReach = bottle.SeamReach(reach + pad, v);
                 var pose = Create(u);
+                if (attempt == 0)
+                    crossesSeam = !ClearsSides(frame, extent.At(pose.Item), u, v, reach, 0);
                 if (Fits(pose, u)) return AttachCell(pose, u);
                 if (u > seamReach && bottle.Width - u > seamReach) continue;
 
-                bool left = u <= bottle.Width / 2;
-                var shifted = AlongSide(left, left ? u : bottle.Width - u) ?? AlongSide(!left, 0);
+                bool left = crossesSeam || u <= bottle.Width / 2;
+                var shifted = AlongSide(left, Math.Min(u, bottle.Width - u)) ?? AlongSide(!left, 0);
                 if (shifted != null) return shifted;
 
                 Pose AlongSide(bool fromLeft, double distance)
@@ -217,6 +237,7 @@ namespace VanyaTools.Native
 
                 Pose AttachCell(Pose candidate, double x)
                 {
+                    candidate.Item.CrossesBottleSeam = crossesSeam;
                     if (item.Cell != null)
                     {
                         double shift = Math.Round((x - center.X) / bottle.Width) * bottle.Width;

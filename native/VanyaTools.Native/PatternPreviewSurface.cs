@@ -47,17 +47,20 @@ namespace VanyaTools.Native
         {
             base.OnRender(drawing);
             drawing.DrawRectangle(Brushes.Transparent, null, new Rect(RenderSize));
+            var outline = _draft?.BottleCutView ?? _frame.Geometry;
+            Rect bounds = outline.Bounds;
             double markSpace = _draft?.CenterMarks == null ? 0 : 8;
-            _scale = Math.Min((RenderSize.Width - 40) / _frame.Width, (RenderSize.Height - 40) / (_frame.Height + markSpace));
+            _scale = Math.Min((RenderSize.Width - 40) / bounds.Width, (RenderSize.Height - 40) / (bounds.Height + markSpace));
             if (_scale <= 0) return;
-            _origin = new Point((RenderSize.Width - _frame.Width * _scale) / 2, (RenderSize.Height - _frame.Height * _scale) / 2);
+            _origin = new Point((RenderSize.Width - bounds.Width * _scale) / 2 - bounds.X * _scale,
+                (RenderSize.Height - bounds.Height * _scale) / 2 - bounds.Y * _scale);
             drawing.PushTransform(new MatrixTransform(_scale, 0, 0, _scale, _origin.X, _origin.Y));
             double hairline = 1 / _scale;
-            drawing.DrawGeometry(Brushes.White, new Pen(Brushes.SlateGray, hairline), _frame.Geometry);
+            drawing.DrawGeometry(Brushes.White, new Pen(Brushes.SlateGray, hairline), outline);
             if (_draft != null)
             {
                 var lightOutline = new Pen(new SolidColorBrush(Color.FromArgb(100, 55, 75, 86)), hairline * .75);
-                drawing.PushClip(_frame.Geometry);
+                drawing.PushClip(outline);
                 foreach (var item in _draft.Items)
                 {
                     var motif = _draft.Motifs[item.Motif];
@@ -99,15 +102,21 @@ namespace VanyaTools.Native
         {
             var bottle = _frame.Bottle;
             double extension = Math.Min(3, 8 * hairline);
-            var backing = new Pen(Brushes.White, 3.5 * hairline);
+            var backing = new Pen(Brushes.White, 3.5 * hairline) { DashStyle = new DashStyle(new[] { 1.5, 1d }, 0) };
             var dashed = new Pen(Brushes.OrangeRed, 1.75 * hairline) { DashStyle = new DashStyle(new[] { 3d, 2d }, 0) };
-            foreach (double u in new[] { 0d, bottle.Width })
+            for (int side = 0; side < 2; side++)
             {
-                // The two sides represent the same seam after wrapping the bottle.
-                var bottom = ToView(PatternBottleLayout.OnFrame(_frame, u, -extension));
-                var top = ToView(PatternBottleLayout.OnFrame(_frame, u, bottle.Slant + extension));
-                drawing.DrawLine(backing, bottom, top);
-                drawing.DrawLine(dashed, bottom, top);
+                double u = side == 0 ? 0 : bottle.Width;
+                var line = new StreamGeometry();
+                using (var path = line.Open())
+                {
+                    path.BeginFigure(ToView(PatternBottleLayout.OnFrame(_frame, u, -extension)), false, false);
+                    if (_draft?.BottleCutEdges != null)
+                        foreach (var point in _draft.BottleCutEdges[side]) path.LineTo(ToView(point), true, false);
+                    path.LineTo(ToView(PatternBottleLayout.OnFrame(_frame, u, bottle.Slant + extension)), true, false);
+                }
+                drawing.DrawGeometry(null, backing, line);
+                drawing.DrawGeometry(null, dashed, line);
             }
         }
 

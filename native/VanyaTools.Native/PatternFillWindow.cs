@@ -160,7 +160,7 @@ namespace VanyaTools.Native
             _repeatHeight = AddField(_repeatFields, "Высота рапорта, мм", .5, 5000,
                 initial.Layout.Repeat ? initial.Layout.RepeatHeightMm : defaultRepeatSize);
             _showRepeatBorders = new CheckBox { Content = session.BottleMode ? "Пунктир стыка" : "Пунктир границ рапорта", IsChecked = true,
-                ToolTip = session.BottleMode ? "Два края развёртки, которые сходятся на стакане. Видны в предпросмотре." : null,
+                ToolTip = session.BottleMode ? "Края развёртки сходятся на стакане. Для выступа слева строится ответная выемка справа." : null,
                 Margin = new Thickness(0, 0, 0, 5) };
             if (session.BottleMode) pattern.Children.Add(_showRepeatBorders);
             else _repeatFields.Children.Add(_showRepeatBorders);
@@ -414,6 +414,7 @@ namespace VanyaTools.Native
                         draft.CellGuides = GuideGeometry(draft.Items.Where(item => item.Cell != null).Select(item => item.Cell).ToArray(), true);
                 }
                 PatternHeroFill.FillVoids(draft, _layoutItems, cancellation);
+                PatternBottleLayout.CloseSeam(draft, _session.Hero, settings, cancellation);
                 if (draft.Items.Count == 0 && draft.Hero == null)
                     throw new InvalidOperationException("Рисунки не помещаются. Уменьшите размер или зазор.");
                 return draft;
