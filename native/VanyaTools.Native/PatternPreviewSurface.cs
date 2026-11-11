@@ -104,6 +104,12 @@ namespace VanyaTools.Native
             double extension = Math.Min(3, 8 * hairline);
             var backing = new Pen(Brushes.White, 3.5 * hairline) { DashStyle = new DashStyle(new[] { 1.5, 1d }, 0) };
             var dashed = new Pen(Brushes.OrangeRed, 1.75 * hairline) { DashStyle = new DashStyle(new[] { 3d, 2d }, 0) };
+            if (_draft?.BottleSeamGuide != null)
+            {
+                DrawGuide(drawing, _draft.BottleSeamGuide, backing);
+                DrawGuide(drawing, _draft.BottleSeamGuide, dashed);
+                return;
+            }
             for (int side = 0; side < 2; side++)
             {
                 double u = side == 0 ? 0 : bottle.Width;
@@ -111,8 +117,6 @@ namespace VanyaTools.Native
                 using (var path = line.Open())
                 {
                     path.BeginFigure(ToView(PatternBottleLayout.OnFrame(_frame, u, -extension)), false, false);
-                    if (_draft?.BottleCutEdges != null)
-                        foreach (var point in _draft.BottleCutEdges[side]) path.LineTo(ToView(point), true, false);
                     path.LineTo(ToView(PatternBottleLayout.OnFrame(_frame, u, bottle.Slant + extension)), true, false);
                 }
                 drawing.DrawGeometry(null, backing, line);

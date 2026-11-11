@@ -81,6 +81,22 @@ namespace VanyaTools.Native
             return Math.Asin(reach / radius) * Width / (2 * Math.PI * Math.Abs(_slope));
         }
 
+        internal PatternPoint Repeat(PatternPoint point, int turns)
+        {
+            double radians = turns * (RotationAt(Width) - RotationAt(0)) * Math.PI / 180;
+            var start = Map(0, 0); var end = Map(turns * Width, 0);
+            double x = point.X - start.X, y = point.Y - start.Y;
+            return new PatternPoint(end.X + x * Math.Cos(radians) - y * Math.Sin(radians),
+                end.Y + x * Math.Sin(radians) + y * Math.Cos(radians));
+        }
+
+        internal IEnumerable<Edge> Section(double start, double end)
+        {
+            foreach (var edge in Arc(start, end, 0)) yield return edge;
+            yield return new Edge(Map(end, Slant));
+            foreach (var edge in Arc(end, start, Slant)) yield return edge;
+        }
+
         internal double Wrap(double u)
         {
             double remainder = u % Width;

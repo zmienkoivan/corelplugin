@@ -32,7 +32,6 @@ namespace VanyaTools.Native
         internal double Size, Angle;
         internal PatternPoint Center;
         internal PatternPoint[] Cell;
-        internal bool CrossesBottleSeam;
     }
 
     internal sealed class PatternFootprint

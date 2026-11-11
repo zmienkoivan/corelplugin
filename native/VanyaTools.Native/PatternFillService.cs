@@ -75,8 +75,7 @@ namespace VanyaTools.Native
         internal List<PatternPlacement> Items;
         internal HashSet<int> MirroredIds;
         internal PatternPlacement Hero;
-        internal Geometry Reserve, CellGuides, RepeatGuides, CenterMarks, BottleCutView;
-        internal PatternPoint[][] BottleCutEdges;
+        internal Geometry Reserve, CellGuides, RepeatGuides, CenterMarks, BottleCutView, BottleSeamGuide;
         internal double Allowance;
     }
 
@@ -448,10 +447,28 @@ namespace VanyaTools.Native
         {
             var frame = draft.Frame;
             dynamic curve = ((dynamic)document).CreateCurve();
+            if (draft.BottleCutView != null)
+            {
+                var outline = draft.BottleCutView.GetFlattenedPathGeometry(.005, ToleranceType.Absolute);
+                foreach (var figure in outline.Figures)
+                {
+                    dynamic contour = curve.CreateSubPath(frame.Left + figure.StartPoint.X, frame.Top - figure.StartPoint.Y);
+                    foreach (var segment in figure.Segments)
+                    {
+                        if (segment is PolyLineSegment polyline)
+                            foreach (var point in polyline.Points)
+                                contour.AppendLineSegment(frame.Left + point.X, frame.Top - point.Y);
+                        else if (segment is LineSegment line)
+                            contour.AppendLineSegment(frame.Left + line.Point.X, frame.Top - line.Point.Y);
+                    }
+                    contour.Closed = figure.IsClosed;
+                }
+                return (object)curve;
+            }
             var start = frame.Bottle.Start;
             double x = frame.Left - frame.BottleOrigin.X, y = frame.Bottom - frame.BottleOrigin.Y;
             dynamic path = curve.CreateSubPath(x + start.X, y + start.Y);
-            foreach (var edge in PatternBottleLayout.CutOutline(draft))
+            foreach (var edge in frame.Bottle.Outline())
             {
                 if (edge.Curved)
                     path.AppendCurveSegment2(x + edge.End.X, y + edge.End.Y, x + edge.First.X, y + edge.First.Y,

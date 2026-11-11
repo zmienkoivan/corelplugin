@@ -55,8 +55,8 @@ namespace VanyaTools.Native
             bool Fits(PatternPlacement placement)
             {
                 var asset = draft.Motifs[placement.Motif];
-                if (frame.Bottle != null && !PatternBottleLayout.FitsSides(frame, asset.Footprint, placement, options.GapMm))
-                    return false;
+                if (frame.Bottle != null)
+                    return PatternBottleLayout.FitsOnRing(frame, draft.Motifs, placement, placed, options.GapMm, true);
                 return clip.FillContainsWithDetail(PatternSilhouette.At(asset, placement), Tolerance,
                     ToleranceType.Absolute) == IntersectionDetail.FullyContains;
             }

@@ -414,7 +414,7 @@ namespace VanyaTools.Native
                         draft.CellGuides = GuideGeometry(draft.Items.Where(item => item.Cell != null).Select(item => item.Cell).ToArray(), true);
                 }
                 PatternHeroFill.FillVoids(draft, _layoutItems, cancellation);
-                PatternBottleLayout.CloseSeam(draft, _session.Hero, settings, cancellation);
+                PatternBottleLayout.CloseSeam(draft, _session.Hero, cancellation);
                 if (draft.Items.Count == 0 && draft.Hero == null)
                     throw new InvalidOperationException("Рисунки не помещаются. Уменьшите размер или зазор.");
                 return draft;

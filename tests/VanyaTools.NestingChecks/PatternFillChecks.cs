@@ -235,6 +235,10 @@ internal static class PatternFillChecks
                 Require(Math.Abs(projected.X - profile.Width * .21) < 1e-8 && Math.Abs(projected.Y - height) < 1e-8,
                     "The pointer position did not map back to the surface.");
                 var copy = profile.Map(profile.Width * 1.21, height);
+                Require(DistanceSquared(profile.Repeat(point, 1), copy) < 1e-16 &&
+                    DistanceSquared(profile.Repeat(copy, -1), point) < 1e-16 &&
+                    DistanceSquared(profile.Repeat(point, 0), point) < 1e-16,
+                    "Moving a whole motif between periods changes its physical position.");
                 double x = point.X - left.X, y = point.Y - left.Y;
                 var rotated = new PatternPoint(right.X + x * Math.Cos(rotation) - y * Math.Sin(rotation),
                     right.Y + x * Math.Sin(rotation) + y * Math.Cos(rotation));
