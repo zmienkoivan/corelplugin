@@ -1,14 +1,10 @@
-using System;
-using System.Diagnostics;
+﻿using System;
 using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Interop;
 using System.Windows.Media.Imaging;
-using System.Windows.Threading;
 
 namespace VanyaTools.Native
 {
@@ -19,11 +15,8 @@ namespace VanyaTools.Native
         private readonly Func<string> _token;
         private readonly Button _generateFillers;
         private readonly ComboBox _fillerSet;
-        private const string FillerTimingKey = "pattern:fillers:google/nano-banana-2";
-        private const string FillerStage = "Готовлю мини-заполнители по стилю набора…";
-        private readonly Stopwatch _fillerElapsed = new Stopwatch();
-        private readonly DispatcherTimer _fillerClock = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-        private CancellationTokenSource _fillerRequest;
+        private PatternFillerPlan _fillerPlan;
+        private string _fillerPlanKey;
         private BitmapSource[] _readyFillers;
         private object _fillerDocument;
         private readonly TextBlock _motifs, _hero, _message;
@@ -64,11 +57,11 @@ namespace VanyaTools.Native
             panel.Children.Add(_removeMotifs);
             _motifList.SelectionChanged += (_, __) => _removeMotifs.IsEnabled = _motifList.SelectedItems.Count > 0;
             _fillerSet = new ComboBox { MinHeight = 27, SelectedIndex = 0, Margin = new Thickness(1, 4, 1, 0),
-                ItemsSource = new[] { "Звезда, шарик, квадрат, ромб", "Кольцо, треугольник, шестигранник, капсула", "Искра, капля, полумесяц, точки" },
-                ToolTip = "Форма мини-фигур. ИИ берёт из рисунков только палитру, обводку и фактуру." };
+                ItemsSource = new[] { "По набору · анализ ИИ", "Звезда, шарик, квадрат, ромб", "Кольцо, треугольник, шестигранник, капсула", "Искра, капля, полумесяц, точки" },
+                ToolTip = "Подбор по теме и стилю набора или готовые формы. Комплект можно изменить в окне перед генерацией." };
             panel.Children.Add(_fillerSet);
-            _generateFillers = Button("ИИ · мини-заполнители…", async (_, __) => await GenerateFillers());
-            _generateFillers.ToolTip = "До четырёх миниатюр по стилю набора через Nano Banana 2.";
+            _generateFillers = Button("ИИ · мини-заполнители…", (_, __) => GenerateFillers());
+            _generateFillers.ToolTip = "Предложить комплект по смыслу и стилю набора, проверить и создать до четырёх элементов через Nano Banana 2.";
             panel.Children.Add(_generateFillers);
             RefreshMotifs();
 
@@ -96,7 +89,6 @@ namespace VanyaTools.Native
             panel.Children.Add(Button("Паттерн для бутылки…", (_, __) => Run(() => Edit(true))));
             _message = Note("");
             panel.Children.Add(_message);
-            _fillerClock.Tick += (_, __) => _message.Text = OperationTiming.Display(FillerStage, _fillerElapsed.Elapsed, FillerTimingKey);
         }
 
         private void RefreshMotifs()
@@ -130,9 +122,8 @@ namespace VanyaTools.Native
             return new DataTemplate { VisualTree = row };
         }
 
-        private async Task GenerateFillers()
+        private void GenerateFillers()
         {
-            if (_fillerRequest != null) { _fillerRequest.Cancel(); return; }
             try
             {
                 if (_readyFillers == null)
@@ -140,33 +131,27 @@ namespace VanyaTools.Native
                     string token = _token();
                     if (String.IsNullOrEmpty(token) || token.Length < 8)
                         throw new InvalidOperationException("Введите ключ Replicate в настройках.");
-                    int set = Math.Max(0, _fillerSet.SelectedIndex);
                     var reference = _service.FillerReference(out _fillerDocument);
-                    var parent = Window.GetWindow(this);
-                    const string question = "Отправить уменьшенные превью рисунков из набора в Nano Banana 2 через Replicate? Это один платный запрос.";
-                    var choice = parent == null
-                        ? MessageBox.Show(question, "Мини-заполнители", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No)
-                        : MessageBox.Show(parent, question, "Мини-заполнители", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
-                    if (choice != MessageBoxResult.Yes) return;
-
-                    using (var request = new CancellationTokenSource())
+                    string key = PatternFillerAi.ReferenceKey(reference) + ":" + _fillerSet.SelectedIndex;
+                    var initial = _fillerPlan != null && key == _fillerPlanKey
+                        ? _fillerPlan.Copy() : PatternFillerBrief.Preset(_fillerSet.SelectedIndex - 1);
+                    var window = new PatternFillerWindow(reference, token, initial);
+                    var owner = PresentationSource.FromVisual(this) as HwndSource;
+                    if (owner != null) new WindowInteropHelper(window).Owner = owner.Handle;
+                    bool? accepted;
+                    try { accepted = window.ShowDialog(); }
+                    finally
                     {
-                        _fillerRequest = request;
-                        _generateFillers.Content = "Отменить генерацию";
-                        _fillerSet.IsEnabled = false;
-                        _fillerElapsed.Restart();
-                        _fillerClock.Start();
-                        Report(OperationTiming.Display(FillerStage, _fillerElapsed.Elapsed, FillerTimingKey), false);
-                        _readyFillers = await Task.Run(() => PatternFillerAi.Generate(reference, token, set, request.Token), request.Token);
-                        OperationTiming.Record(FillerTimingKey, _fillerElapsed.Elapsed);
+                        _fillerPlan = window.Plan.Copy(); _fillerPlanKey = key;
                     }
+                    if (accepted != true) return;
+                    _readyFillers = window.Result;
                 }
                 int count = _service.AddFillers(_fillerDocument, _readyFillers);
                 _readyFillers = null; _fillerDocument = null;
                 RefreshMotifs();
                 Report("Мини-заполнители добавлены · " + count, false);
             }
-            catch (OperationCanceledException) { Report("Генерация мини-заполнителей отменена.", false); }
             catch (Exception error)
             {
                 Log.Error("Pattern filler generation or capture failed.", error);
@@ -174,10 +159,6 @@ namespace VanyaTools.Native
             }
             finally
             {
-                _fillerClock.Stop();
-                _fillerElapsed.Stop();
-                _fillerSet.IsEnabled = true;
-                _fillerRequest = null;
                 if (_readyFillers == null) _fillerDocument = null;
                 _generateFillers.Content = _readyFillers == null ? "ИИ · мини-заполнители…" : "Добавить готовые мини-фигуры";
             }

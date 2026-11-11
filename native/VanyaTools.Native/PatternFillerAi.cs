@@ -36,16 +36,39 @@ namespace VanyaTools.Native
             return result;
         }
 
-        private static readonly string[] PrimitiveSets =
+        internal static string ReferenceKey(BitmapSource reference)
         {
-            "a five-pointed star (top left), a round ball or disk (top right), a square (bottom left), a diamond (bottom right)",
-            "an open ring (top left), a triangle (top right), a hexagon (bottom left), a rounded capsule (bottom right)",
-            "a four-pointed sparkle (top left), a water drop (top right), a crescent (bottom left), a small cluster of three dots (bottom right)"
-        };
+            var bitmap = new FormatConvertedBitmap(reference, PixelFormats.Bgra32, null, 0);
+            var pixels = new byte[checked(bitmap.PixelWidth * bitmap.PixelHeight * 4)];
+            bitmap.CopyPixels(pixels, bitmap.PixelWidth * 4, 0);
+            using (var hash = System.Security.Cryptography.SHA256.Create())
+                return bitmap.PixelWidth + "x" + bitmap.PixelHeight + ":" + Convert.ToBase64String(hash.ComputeHash(pixels));
+        }
 
-        // Called only after the user confirms sending the reference in PatternFillTab.
-        internal static BitmapSource[] Generate(BitmapSource reference, string token, int set, CancellationToken cancellation)
+        // Each call is made only after its own preview-upload confirmation.
+        internal static PatternFillerPlan Analyze(BitmapSource reference, string token, CancellationToken cancellation)
         {
+            string path = Path.Combine(Path.GetTempPath(), "Vanya-Pattern-Brief-" + Guid.NewGuid().ToString("N") + ".txt");
+            string input = AiPrintTab.DataUri(reference, 2048, 2000000);
+            try
+            {
+                ReplicateWorkerClient.Run(PatternFillerBrief.AnalysisModel, token, new Dictionary<string, object>
+                {
+                    ["image"] = input, ["prompt"] = PatternFillerBrief.AnalysisPrompt,
+                    ["max_tokens"] = 1400, ["max_image_resolution"] = 2.0
+                }, path, cancellation: cancellation);
+                cancellation.ThrowIfCancellationRequested();
+                if (new FileInfo(path).Length > 48000)
+                    throw new InvalidDataException("Анализатор вернул слишком длинное описание.");
+                return PatternFillerBrief.Parse(File.ReadAllText(path));
+            }
+            finally { Cleanup(path, input); }
+        }
+
+        // Called only after the user confirms sending the reference in PatternFillerWindow.
+        internal static BitmapSource[] Generate(BitmapSource reference, string token, PatternFillerPlan plan, CancellationToken cancellation)
+        {
+            string prompt = PatternFillerBrief.GenerationPrompt(plan);
             string path = Path.Combine(Path.GetTempPath(), "Vanya-Pattern-Fillers-" + Guid.NewGuid().ToString("N") + ".png");
             string input = AiPrintTab.DataUri(reference);
             try
@@ -53,13 +76,7 @@ namespace VanyaTools.Native
                 ReplicateWorkerClient.Run(SublimationModels.Nano2, token, new Dictionary<string, object>
                 {
                     ["image_input"] = new[] { input },
-                    ["prompt"] = "Draw exactly these four simple geometric primitives: " + PrimitiveSets[set] + ". " +
-                        "Each outer silhouette must remain immediately recognizable as the specified primitive. " +
-                        "The reference images are style swatches only. Borrow their palette, stroke weight, shading, texture and level of detail. " +
-                        "Never reproduce, miniaturize, trace, or place any reference subject, character, animal, logo, or object inside a primitive. " +
-                        "Center one isolated primitive in each quadrant of a 2x2 square sheet. Leave generous empty gutters and margins. " +
-                        "No frames, text, cast shadows, or mockup. Use a flat vivid magenta #FF00FF background throughout. " +
-                        "Do not use that magenta in the primitives.",
+                    ["prompt"] = prompt,
                     ["output_format"] = "png",
                     ["aspect_ratio"] = "1:1",
                     ["resolution"] = "2K"
@@ -67,13 +84,15 @@ namespace VanyaTools.Native
                 cancellation.ThrowIfCancellationRequested();
                 return Split(AiPrintTab.Bitmap(path), cancellation);
             }
-            finally
-            {
-                TryDelete(path);
-                TryDelete(path + ".cancel");
-                const string filePrefix = "replicate-file:";
-                if (input.StartsWith(filePrefix, StringComparison.Ordinal)) TryDelete(input.Substring(filePrefix.Length));
-            }
+            finally { Cleanup(path, input); }
+        }
+
+        private static void Cleanup(string path, string input)
+        {
+            TryDelete(path);
+            TryDelete(path + ".cancel");
+            const string filePrefix = "replicate-file:";
+            if (input.StartsWith(filePrefix, StringComparison.Ordinal)) TryDelete(input.Substring(filePrefix.Length));
         }
 
         internal static BitmapSource[] Split(BitmapSource sheet, CancellationToken cancellation)
