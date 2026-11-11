@@ -46,17 +46,19 @@ namespace VanyaTools.Native
         }
 
         // Each call is made only after its own preview-upload confirmation.
-        internal static PatternFillerPlan Analyze(BitmapSource reference, string token, CancellationToken cancellation)
+        internal static PatternFillerPlan Analyze(BitmapSource reference, string token, CancellationToken cancellation) =>
+            Analyze(reference, token, PatternFillerBrief.AnalysisModel, cancellation);
+
+        internal static PatternFillerPlan Analyze(BitmapSource reference, string token, string model, CancellationToken cancellation)
         {
+            PatternFillerBrief.FindAnalysisModel(model);
+            cancellation.ThrowIfCancellationRequested();
             string path = Path.Combine(Path.GetTempPath(), "Vanya-Pattern-Brief-" + Guid.NewGuid().ToString("N") + ".txt");
             string input = AiPrintTab.DataUri(reference, 2048, 2000000);
             try
             {
-                ReplicateWorkerClient.Run(PatternFillerBrief.AnalysisModel, token, new Dictionary<string, object>
-                {
-                    ["image"] = input, ["prompt"] = PatternFillerBrief.AnalysisPrompt,
-                    ["max_tokens"] = 1400, ["max_image_resolution"] = 2.0
-                }, path, cancellation: cancellation);
+                ReplicateWorkerClient.Run(model, token, PatternFillerBrief.AnalysisInput(model, input),
+                    path, cancellation: cancellation);
                 cancellation.ThrowIfCancellationRequested();
                 if (new FileInfo(path).Length > 48000)
                     throw new InvalidDataException("Анализатор вернул слишком длинное описание.");

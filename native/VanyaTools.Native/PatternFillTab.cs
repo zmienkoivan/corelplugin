@@ -17,6 +17,7 @@ namespace VanyaTools.Native
         private readonly ComboBox _fillerSet;
         private PatternFillerPlan _fillerPlan;
         private string _fillerPlanKey;
+        private string _fillerAnalysisModel = PatternFillerBrief.AnalysisModel;
         private BitmapSource[] _readyFillers;
         private object _fillerDocument;
         private readonly TextBlock _motifs, _hero, _message;
@@ -135,7 +136,7 @@ namespace VanyaTools.Native
                     string key = PatternFillerAi.ReferenceKey(reference) + ":" + _fillerSet.SelectedIndex;
                     var initial = _fillerPlan != null && key == _fillerPlanKey
                         ? _fillerPlan.Copy() : PatternFillerBrief.Preset(_fillerSet.SelectedIndex - 1);
-                    var window = new PatternFillerWindow(reference, token, initial);
+                    var window = new PatternFillerWindow(reference, token, initial, _fillerAnalysisModel);
                     var owner = PresentationSource.FromVisual(this) as HwndSource;
                     if (owner != null) new WindowInteropHelper(window).Owner = owner.Handle;
                     bool? accepted;
@@ -143,6 +144,7 @@ namespace VanyaTools.Native
                     finally
                     {
                         _fillerPlan = window.Plan.Copy(); _fillerPlanKey = key;
+                        _fillerAnalysisModel = window.AnalysisModel;
                     }
                     if (accepted != true) return;
                     _readyFillers = window.Result;

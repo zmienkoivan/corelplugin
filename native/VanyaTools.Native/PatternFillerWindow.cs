@@ -15,6 +15,7 @@ namespace VanyaTools.Native
     {
         private readonly BitmapSource _reference;
         private readonly string _token;
+        private readonly ComboBox _analysisModel;
         private readonly TextBox _theme, _style;
         private readonly TextBox[] _elements = new TextBox[4];
         private readonly StackPanel _fields;
@@ -27,13 +28,14 @@ namespace VanyaTools.Native
         private string _stage, _timingKey;
 
         internal BitmapSource[] Result { get; private set; }
+        internal string AnalysisModel => (_analysisModel.SelectedItem as PatternFillerBrief.AnalysisChoice)?.Id ?? PatternFillerBrief.AnalysisModel;
         internal PatternFillerPlan Plan => new PatternFillerPlan
         {
             Theme = _theme.Text.Trim(), Style = _style.Text.Trim(),
             Elements = Array.ConvertAll(_elements, input => input.Text.Trim())
         };
 
-        internal PatternFillerWindow(BitmapSource reference, string token, PatternFillerPlan initial)
+        internal PatternFillerWindow(BitmapSource reference, string token, PatternFillerPlan initial, string analysisModel = null)
         {
             _reference = reference; _token = token;
             initial = initial ?? new PatternFillerPlan();
@@ -56,7 +58,7 @@ namespace VanyaTools.Native
             buttons.ColumnDefinitions.Add(new ColumnDefinition());
             buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             _analyze = Button("Подобрать комплект · ИИ", async (_, __) => await Execute(true));
-            _analyze.ToolTip = "Отдельный платный анализ превью через Claude в Replicate. Предложит тему, стиль и четыре разных элемента. Повторный анализ заменит эти поля.";
+            _analyze.ToolTip = "Отдельный платный анализ превью через выбранную модель в Replicate. Предложит тему, стиль и четыре разных элемента. Повторный анализ заменит эти поля.";
             _generate = DockerTheme.Primary(Button("Создать мини-фигуры", async (_, __) => await Execute(false)));
             _generate.ToolTip = "Отдельный платный запрос Nano Banana 2. Использует показанное превью и отредактированный комплект.";
             _cancel = Button("Закрыть", (_, __) => CancelOrClose());
@@ -75,6 +77,11 @@ namespace VanyaTools.Native
             DockerTheme.UseTheme(frame, Border.BorderBrushProperty, DockerTheme.BorderBrush);
             DockerTheme.UseTheme(frame, Border.BackgroundProperty, DockerTheme.SurfaceBackground);
             preview.Children.Add(frame);
+            preview.Children.Add(new TextBlock { Text = "Анализатор", Margin = new Thickness(0, 12, 0, 4) });
+            _analysisModel = new ComboBox { ItemsSource = PatternFillerBrief.AnalysisModels, MinHeight = 30,
+                SelectedIndex = Math.Max(0, Array.FindIndex(PatternFillerBrief.AnalysisModels, item => item.Id == analysisModel)),
+                ToolTip = "Модель для следующего анализа. Смена не отправляет превью. Каждый запрос требует подтверждения." };
+            preview.Children.Add(_analysisModel);
 
             _fields = new StackPanel { Margin = new Thickness(0, 0, 1, 0) };
             root.Children.Add(new ScrollViewer { Content = _fields, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
@@ -117,8 +124,9 @@ namespace VanyaTools.Native
             try
             {
                 if (!analysis) { plan = Plan; plan.Validate(); }
+                string model = AnalysisModel;
                 string question = analysis
-                    ? "Отправить показанное превью набора в Claude через Replicate для подбора темы, стиля и комплекта? Это отдельный платный запрос."
+                    ? "Отправить показанное превью набора в " + PatternFillerBrief.FindAnalysisModel(model).Name + " через Replicate для подбора темы, стиля и комплекта? Это отдельный платный запрос."
                     : "Отправить показанное превью и выбранный комплект в Nano Banana 2 через Replicate? Это отдельный платный запрос генерации.";
                 if (MessageBox.Show(this, question, analysis ? "Анализ набора" : "Генерация мини-фигур",
                     MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
@@ -129,7 +137,7 @@ namespace VanyaTools.Native
                     SetBusy(true, analysis);
                     if (analysis)
                     {
-                        var proposed = await Task.Run(() => PatternFillerAi.Analyze(_reference, _token, request.Token), request.Token);
+                        var proposed = await Task.Run(() => PatternFillerAi.Analyze(_reference, _token, model, request.Token), request.Token);
                         if (_closed) return;
                         _theme.Text = proposed.Theme; _style.Text = proposed.Style;
                         for (int i = 0; i < 4; i++) _elements[i].Text = proposed.Elements[i];
@@ -151,7 +159,11 @@ namespace VanyaTools.Native
             catch (Exception error)
             {
                 Log.Error(analysis ? "Pattern set analysis failed." : "Pattern filler generation failed.", error);
-                if (!_closed) Report(error.GetBaseException().Message, true);
+                if (!_closed)
+                {
+                    Report(PatternFillerBrief.FailureMessage(error, analysis), true);
+                    _message.ToolTip = error.GetBaseException().Message;
+                }
             }
             finally
             {
@@ -162,12 +174,12 @@ namespace VanyaTools.Native
 
         private void SetBusy(bool busy, bool analysis)
         {
-            _fields.IsEnabled = _analyze.IsEnabled = _generate.IsEnabled = !busy;
+            _fields.IsEnabled = _analysisModel.IsEnabled = _analyze.IsEnabled = _generate.IsEnabled = !busy;
             _cancel.Content = busy ? "Отменить" : "Закрыть";
             _cancel.IsEnabled = true;
             if (!busy) return;
             _stage = analysis ? "Анализирую набор…" : "Создаю мини-фигуры…";
-            _timingKey = analysis ? "pattern:analysis:" + PatternFillerBrief.AnalysisModel : "pattern:fillers:google/nano-banana-2";
+            _timingKey = analysis ? "pattern:analysis:" + AnalysisModel : "pattern:fillers:google/nano-banana-2";
             _elapsed.Restart(); _clock.Start();
             Report(OperationTiming.Display(_stage, _elapsed.Elapsed, _timingKey), false);
         }
@@ -181,6 +193,7 @@ namespace VanyaTools.Native
         private void Report(string text, bool error)
         {
             _message.Text = text;
+            _message.ToolTip = null;
             DockerTheme.UseTheme(_message, TextBlock.ForegroundProperty, error ? DockerTheme.ErrorTextBrush : DockerTheme.MutedTextBrush);
         }
 
