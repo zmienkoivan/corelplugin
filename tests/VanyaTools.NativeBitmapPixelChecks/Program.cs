@@ -15,7 +15,7 @@ internal static class Program
     {
         try
         {
-            ValidPixels(); CoverageErrors(); FormatErrors();
+            ValidPixels(); CoverageErrors(); FormatErrors(); PatternFillerMatteChecks.Run();
             Console.WriteLine("Native bitmap pixel checks passed: " + _checks + ". No Corel, files or network.");
             return 0;
         }

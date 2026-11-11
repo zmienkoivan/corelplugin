@@ -36,9 +36,12 @@ namespace VanyaTools.Native
             if (draft.Items.Count >= limit) return;
 
             var random = new Random(options.Seed);
+            var variantRandom = new Random(unchecked(options.Seed ^ 0x4d495252));
+            var groups = fillers.GroupBy(index => draft.Motifs[index].Footprint.Family)
+                .Select(group => group.ToArray()).ToArray();
             var candidates = baseline.Where(item => item.Cell != null).OrderBy(_ => random.Next()).Take(160)
                 .Select((item, i) => new PatternPlacement { Cell = item.Cell, Size = maximumSize,
-                    Angle = item.Angle, Motif = fillers[i % fillers.Length] }).ToArray();
+                    Angle = item.Angle, Motif = PatternFillLayout.PickVariant(groups[i % groups.Length], variantRandom) }).ToArray();
             var placed = new List<PatternPlacement>(draft.Items);
             Geometry clip = frame.BottleClip;
             if (clip == null)
@@ -143,7 +146,7 @@ namespace VanyaTools.Native
                 double covered = CoveredArea(best);
                 if (accepts != null && candidates.Length > 0 && (best == null || covered < Area(best.Cell) * .55))
                     foreach (int alternative in alternatives.Where(index => index != item.Motif)
-                        .OrderBy(index => neighbors.Count(neighbor => neighbor.Motif == index))
+                        .OrderBy(index => neighbors.Count(neighbor => ReferenceEquals(motifs[neighbor.Motif].Footprint.Family, motifs[index].Footprint.Family)))
                         .ThenBy(index => (index - item.Motif + motifs.Length) % motifs.Length).Take(4))
                     {
                         var candidate = Fit(alternative);

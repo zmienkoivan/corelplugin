@@ -102,7 +102,7 @@ namespace VanyaTools.Native
         {
             double width = options.RepeatWidthMm, height = options.RepeatHeightMm;
             cells = options.Texture ? RepeatCells(width, height, options, wrapHeight) : null;
-            var module = cells == null ? Motifs(width, height, motifs.Count, options, motifAngle, wrapHeight) :
+            var module = cells == null ? Motifs(width, height, motifs, options, motifAngle, wrapHeight) :
                 PlaceInCells(cells, motifs, options, motifAngle: motifAngle);
             if (options.Mode == PatternFillMode.Pebbles)
                 PatternPebbleSpacing.Balance(module, motifs, options.GapMm, width, height, wrapHeight);

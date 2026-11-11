@@ -212,7 +212,7 @@ namespace VanyaTools.Native
                 Content = new ScrollViewer { Content = list, MaxHeight = 190,
                     VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                     HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled },
-                ToolTip = "Отметьте рисунки, для которых можно использовать и исходник, и отражение по горизонтали." };
+                ToolTip = "Для каждого повторения отмеченной картинки случайно выбирается обычный или зеркальный вариант." };
             foreach (var asset in _session.Motifs)
             {
                 var row = new DockPanel();

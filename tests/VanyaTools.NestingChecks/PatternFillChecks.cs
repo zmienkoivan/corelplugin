@@ -45,6 +45,57 @@ internal static class PatternFillChecks
         throw new Exception("Very dense patterns are not capped.");
     }
 
+
+    internal static void MirrorVariants()
+    {
+        var originals = Enumerable.Range(0, 7).Select(i => new PatternFootprint(new PatternPoint(10 + i, 12))).ToArray();
+        var variants = new List<PatternFootprint>();
+        foreach (var source in originals)
+        {
+            variants.Add(source);
+            if (Array.IndexOf(originals, source) % 2 == 1)
+                variants.Add(new PatternFootprint(source.Size,
+                    source.Hull.Select(p => new PatternPoint(-p.X, p.Y)), source));
+        }
+        foreach (PatternFillMode mode in Enum.GetValues(typeof(PatternFillMode)))
+            foreach (bool repeat in new[] { false, true })
+            {
+                var options = new PatternFillOptions { Mode = mode, SizeMm = 30, GapMm = 3,
+                    MinScale = .8, MaxScale = 1, Seed = 8123, AngleVariation = 25,
+                    RepeatWidthMm = repeat ? 300 : 0, RepeatHeightMm = repeat ? 250 : 0 };
+                var before = PatternFillLayout.Build(650, 450, originals, options);
+                var after = PatternFillLayout.Build(650, 450, variants, options);
+                string label = mode + (repeat ? " repeat" : "");
+                Require(before.Count == after.Count, label + ": mirrors changed the number of placements.");
+                for (int i = 0; i < before.Count; i++)
+                {
+                    var a = before[i]; var b = after[i];
+                    Require(ReferenceEquals(originals[a.Motif], variants[b.Motif].Family),
+                        label + ": mirrored copies changed source order/frequency.");
+                    Require(DistanceSquared(a.Center, b.Center) < 1e-12 &&
+                        Math.Abs(a.Angle - b.Angle) < 1e-8 && Math.Abs(a.Size - b.Size) < 1e-8,
+                        label + ": mirror selection changed symmetric geometry.");
+                }
+                Require(after.Any(p => !ReferenceEquals(variants[p.Motif], variants[p.Motif].Family)),
+                    label + ": enabled mirror variants are never used.");
+                Require(after.Any(p => Array.IndexOf(originals, variants[p.Motif]) % 2 == 1 &&
+                    ReferenceEquals(variants[p.Motif], variants[p.Motif].Family)),
+                    label + ": enabling mirrors removed the original orientation.");
+            }
+
+        var triangle = new PatternFootprint(new PatternPoint(12, 12), new[] {
+            new PatternPoint(-6, -6), new PatternPoint(6, -6), new PatternPoint(-5, 6) });
+        var triangleMirror = new PatternFootprint(triangle.Size,
+            triangle.Hull.Select(p => new PatternPoint(-p.X, p.Y)), triangle);
+        var shapes = new[] { triangle, triangleMirror, originals[0], originals[2] };
+        foreach (var mode in new[] { PatternFillMode.Crocodile, PatternFillMode.Pebbles })
+        {
+            var items = PatternFillLayout.Build(300, 220, shapes,
+                new PatternFillOptions { Mode = mode, SizeMm = 30, GapMm = 3, Seed = 8123 });
+            AssertGap(items.Select(p => Hull(p, shapes[p.Motif])).ToArray(), 3);
+        }
+    }
+
     internal static void Textures()
     {
         const double width = 325, height = 215;

@@ -9,5 +9,6 @@
   <ItemGroup>
     <Reference Include="Microsoft.CSharp" />
     <Compile Include="../../native/VanyaTools.Native/NativeBitmapPixelReader.cs" Link="NativeBitmapPixelReader.cs" />
+    <Compile Include="../../native/VanyaTools.Native/PatternFillerMatte.cs" Link="PatternFillerMatte.cs" />
   </ItemGroup>
 </Project>

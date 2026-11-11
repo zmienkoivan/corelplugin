@@ -39,9 +39,11 @@ namespace VanyaTools.Native
         internal readonly PatternPoint Size;
         internal readonly PatternPoint[] Hull;
         internal readonly PatternPoint Center;
+        internal readonly PatternFootprint Family;
 
-        internal PatternFootprint(PatternPoint size, IEnumerable<PatternPoint> outline = null)
+        internal PatternFootprint(PatternPoint size, IEnumerable<PatternPoint> outline = null, PatternFootprint source = null)
         {
+            Family = source?.Family ?? this;
             Size = size;
             Hull = outline == null ? Rectangle(size) : ConvexHull(outline);
             if (Hull.Length < 3) Hull = Rectangle(size);
@@ -153,10 +155,10 @@ namespace VanyaTools.Native
                 options.MaxScale > 3 || options.MinScale > options.MaxScale)
                 throw new ArgumentException("Задайте диапазон размеров от 10% до 300%, сначала меньшее значение.");
             return options.Repeat ? RepeatPattern(width, height, motifs, options, out guides) :
-                Motifs(width, height, motifs.Count, options);
+                Motifs(width, height, motifs, options);
         }
 
-        private static List<PatternPlacement> Motifs(double width, double height, int motifs, PatternFillOptions options,
+        private static List<PatternPlacement> Motifs(double width, double height, IReadOnlyList<PatternFootprint> motifs, PatternFillOptions options,
             double motifAngle = 0, bool wrapHeight = true)
         {
             bool scattered = options.Mode == PatternFillMode.Random;
@@ -179,7 +181,10 @@ namespace VanyaTools.Native
             if (staggered && repeat && !wrapHeight) firstX -= pitchX / 4;
             double firstY = (height + (rows - 1) * pitchY) / 2;
             var random = new Random(options.Seed);
-            int[] order = scattered ? Shuffle(motifs, random) : null;
+            var variantRandom = new Random(unchecked(options.Seed ^ 0x4d495252));
+            var groups = VariantGroups(motifs);
+            int[] order = scattered ? Shuffle(groups.Length, random) : null;
+            int lastFamily = -1;
             var result = new List<PatternPlacement>();
             for (int row = 0; row < rows; row++)
             {
@@ -201,8 +206,11 @@ namespace VanyaTools.Native
                         }
                     }
                     if (!repeat && (x + size / 2 <= 0 || x - size / 2 >= width)) continue;
-                    if (scattered && result.Count > 0 && result.Count % motifs == 0) Shuffle(order, random, result[result.Count - 1].Motif);
-                    int index = scattered ? order[result.Count % motifs] : (result.Count + (int)((uint)options.Seed % (uint)motifs)) % motifs;
+                    if (scattered && result.Count > 0 && result.Count % groups.Length == 0) Shuffle(order, random, lastFamily);
+                    int family = scattered ? order[result.Count % groups.Length] :
+                        (result.Count + (int)((uint)options.Seed % (uint)groups.Length)) % groups.Length;
+                    int index = PickVariant(groups[family], variantRandom);
+                    lastFamily = family;
                     double halfWidth = (pitchX - options.GapMm) / 2, halfHeight = (pitchY - options.GapMm) / 2;
                     result.Add(new PatternPlacement { Center = new PatternPoint(x, y), Motif = index, Size = size,
                         Angle = (repeat ? motifAngle : options.Angle) + Signed(random) * options.AngleVariation,
@@ -410,8 +418,13 @@ namespace VanyaTools.Native
             var buffer = new List<PatternPoint>(16);
             var cellEdges = new List<(double X, double Y, double Limit, double Width)>(16);
             var supports = new List<(double X, double Y, double Limit, double Support)>(16);
-            var useCounts = new int[motifs.Count];
-            var neighborDistances = new double[motifs.Count];
+            var groups = VariantGroups(motifs);
+            var families = new int[motifs.Count];
+            for (int family = 0; family < groups.Length; family++)
+                foreach (int variant in groups[family]) families[variant] = family;
+            var variantRandom = new Random(unchecked(options.Seed ^ 0x4d495252));
+            var useCounts = new int[groups.Length];
+            var neighborDistances = new double[groups.Length];
             var placedCenters = new List<PatternPoint>(cells.Count);
             var period = options.Repeat ? new PatternPoint(options.RepeatWidthMm, options.RepeatHeightMm) : default;
             double baseAngle = options.Repeat ? motifAngle : options.Angle;
@@ -419,8 +432,9 @@ namespace VanyaTools.Native
             foreach (var cell in cells)
             {
                 var target = pebbles ? AreaCenter(cell) : new PatternPoint(cell.Average(p => p.X), cell.Average(p => p.Y));
-                int index = ChooseNeighborMotif(result, placedCenters, target, options.SizeMm, useCounts,
-                    neighborDistances, random, period);
+                int family = ChooseNeighborMotif(result, placedCenters, target, options.SizeMm, useCounts,
+                    neighborDistances, random, period, families);
+                int index = PickVariant(groups[family], variantRandom);
                 var motif = motifs[index];
                 var center = target;
                 double angle = baseAngle, scale = 0;
@@ -464,7 +478,7 @@ namespace VanyaTools.Native
                 var rotated = PatternTransform.RotatedSize(motif.Size.X, motif.Size.Y, angle);
                 result.Add(new PatternPlacement { Motif = index, Center = new PatternPoint(x, y), Angle = angle,
                     Size = scale * Math.Max(rotated.X, rotated.Y), Cell = cell });
-                useCounts[index]++;
+                useCounts[family]++;
                 placedCenters.Add(center);
 
                 void TryAngle(double candidateAngle)
@@ -537,7 +551,7 @@ namespace VanyaTools.Native
         }
 
         private static int ChooseNeighborMotif(List<PatternPlacement> placed, List<PatternPoint> centers,
-            PatternPoint center, double pitch, int[] useCounts, double[] nearest, Random random, PatternPoint period)
+            PatternPoint center, double pitch, int[] useCounts, double[] nearest, Random random, PatternPoint period, int[] families)
         {
             double radius = pitch * 1.65;
             double radiusSquared = radius * radius;
@@ -545,7 +559,7 @@ namespace VanyaTools.Native
             bool repeat = period.X > 0 && period.Y > 0;
             for (int i = 0; i < placed.Count; i++)
             {
-                int motif = placed[i].Motif;
+                int motif = families[placed[i].Motif];
                 double dx = center.X - centers[i].X, dy = center.Y - centers[i].Y;
                 if (repeat)
                 {
@@ -568,6 +582,13 @@ namespace VanyaTools.Native
             }
             return best;
         }
+
+        internal static int[][] VariantGroups(IReadOnlyList<PatternFootprint> motifs) =>
+            Enumerable.Range(0, motifs.Count).GroupBy(index => motifs[index].Family)
+                .Select(group => group.ToArray()).ToArray();
+
+        internal static int PickVariant(int[] variants, Random random) =>
+            variants.Length == 1 ? variants[0] : variants[random.Next(variants.Length)];
 
         private static int[] Shuffle(int count, Random random)
         {

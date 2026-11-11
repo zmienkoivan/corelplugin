@@ -84,14 +84,7 @@ namespace VanyaTools.Native
             var bitmap = new FormatConvertedBitmap(sheet, PixelFormats.Bgra32, null, 0);
             var pixels = new byte[checked(width * height * 4)];
             bitmap.CopyPixels(pixels, width * 4, 0);
-            for (int y = 0; y < height; y++)
-            {
-                cancellation.ThrowIfCancellationRequested();
-                for (int i = y * width * 4; i < (y + 1) * width * 4; i += 4)
-                    if (pixels[i + 3] <= 8 || (pixels[i] >= 185 && pixels[i + 2] >= 185 && pixels[i + 1] <= 75 &&
-                        Math.Min(pixels[i], pixels[i + 2]) - pixels[i + 1] >= 125))
-                        pixels[i + 3] = 0;
-            }
+            PatternFillerMatte.Remove(pixels, width, height, cancellation);
             var result = new List<BitmapSource>(Count);
             for (int index = 0; index < Count; index++)
             {

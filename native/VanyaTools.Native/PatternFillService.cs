@@ -38,7 +38,7 @@ namespace VanyaTools.Native
         {
             var copy = (PatternAsset)MemberwiseClone();
             copy.Mirrored = true;
-            copy.Footprint = new PatternFootprint(Size, Footprint.Hull.Select(point => new PatternPoint(-point.X, point.Y)));
+            copy.Footprint = new PatternFootprint(Size, Footprint.Hull.Select(point => new PatternPoint(-point.X, point.Y)), Footprint);
             return copy;
         }
     }
