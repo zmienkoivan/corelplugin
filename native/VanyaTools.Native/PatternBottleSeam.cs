@@ -22,7 +22,7 @@ namespace VanyaTools.Native
             private readonly SeamSide _left, _right;
             private readonly bool _whole;
             private readonly CancellationToken _cancellation;
-            private readonly double _gap, _heroGap, _size, _step, _band;
+            private readonly double _gap, _heroGap, _size, _step, _band, _referenceSize, _minimumSize;
             private readonly int[] _coverage;
             private readonly List<SeamItem> _items;
             private readonly SeamItem _hero;
@@ -40,6 +40,13 @@ namespace VanyaTools.Native
                 _left = new SeamSide(draft.Frame, 0, 1);
                 _right = new SeamSide(draft.Frame, _bottle.Width, -1);
                 _items = draft.Items.Select(item => Make(draft.Motifs[item.Motif].Footprint, item)).ToList();
+                var regular = _items.Where(item => !_draft.Motifs[item.Flat.Item.Motif].IsFiller).ToArray();
+                var interior = regular.Where(item => item.Distance > _band + _size * .6).ToArray();
+                var sizes = (interior.Length >= 4 ? interior : regular).Select(MotifSize).OrderBy(size => size).ToArray();
+                _referenceSize = sizes.Length == 0 ? _size : sizes[sizes.Length / 2];
+                double ratio = draft.Options.Texture ? .75 : Math.Min(.75,
+                    draft.Options.MinScale / Math.Max(draft.Options.MinScale, draft.Options.MaxScale));
+                _minimumSize = Math.Max(.5, _referenceSize * ratio);
                 foreach (var item in _items) Count(item, 1);
                 if (draft.Hero != null)
                 {
@@ -60,10 +67,27 @@ namespace VanyaTools.Native
                     _cancellation.ThrowIfCancellationRequested();
                     PullCloser(index);
                 }
+                for (int i = _items.Count - 1; i >= 0; i--)
+                    if (SmallEdge(_items[i]))
+                    {
+                        Count(_items[i], -1);
+                        _items.RemoveAt(i);
+                    }
                 FillHoles();
                 SetCutOutline();
                 return _items.Select(item => item.Flat.Item).ToList();
             }
+
+            private double MotifSize(SeamItem entry)
+            {
+                var item = entry.Flat.Item;
+                var size = _draft.Motifs[item.Motif].Size;
+                return PatternTransform.Fit(size, item).Scale * Math.Max(size.X, size.Y);
+            }
+
+            private bool SmallEdge(SeamItem entry) =>
+                !_draft.Motifs[entry.Flat.Item.Motif].IsFiller &&
+                entry.Distance < _band + _size * .6 && MotifSize(entry) < _minimumSize - Tolerance;
 
             private void PullCloser(int index)
             {
@@ -101,7 +125,7 @@ namespace VanyaTools.Native
                 // Leave a straight seam on very wide sectors whose two flat edges
                 // would nearly touch each other around the tip of the cone.
                 if (Math.Abs(rightAngle - leftAngle) > 300) return;
-                foreach (int index in edgeItems.Where(i => _items[i].Flat.Item.CrossesBottleSeam)
+                foreach (int index in edgeItems.Where(i => _items[i].Flat.Item.CrossesBottleSeam || SmallEdge(_items[i]))
                     .OrderBy(i => _items[i].Joined.Item.Center.Y))
                 {
                     _cancellation.ThrowIfCancellationRequested();
@@ -110,8 +134,11 @@ namespace VanyaTools.Native
                     var footprint = _draft.Motifs[item.Motif].Footprint;
                     double angle = item.Angle + (original.Side == _right ? leftAngle - rightAngle : 0);
                     var rotated = PatternTransform.RotatedSize(footprint.Size.X, footprint.Size.Y, angle);
+                    double scale = PatternTransform.Fit(footprint.Size, item).Scale;
+                    if (SmallEdge(original))
+                        scale = _referenceSize * .9 / Math.Max(footprint.Size.X, footprint.Size.Y);
                     var crossing = new PatternPlacement { Motif = item.Motif, Angle = angle, Cell = item.Cell,
-                        Size = Math.Max(rotated.X, rotated.Y) * PatternTransform.Fit(footprint.Size, item).Scale,
+                        Size = Math.Max(rotated.X, rotated.Y) * scale,
                         Center = _left.Move(_left.Origin, 0, original.Joined.Item.Center.Y) };
                     double width = Bounds(new PatternFootprint(footprint.Size).At(crossing).Select(_left.Project).ToArray()).Width;
                     double maxDepth = Math.Min(Math.Min(width * .32, _size * .28), _bottle.Width * .045);
@@ -261,6 +288,7 @@ namespace VanyaTools.Native
                 var nearest = _items.Where(item => item.Distance < _band + _size &&
                     Math.Abs(item.Joined.Item.Center.Y - v) < _size).ToArray();
                 int[] variants = Enumerable.Range(0, _draft.Motifs.Length)
+                    .Where(i => !_draft.Motifs[i].IsFiller)
                     .OrderBy(i => nearest.Count(item => item.Flat.Item.Motif == i))
                     .ThenBy(i => (i + start) % _draft.Motifs.Length).Take(8).ToArray();
                 bool leftFirst = nearest.Count(item => item.Side == _left) <= nearest.Length / 2;
@@ -270,25 +298,27 @@ namespace VanyaTools.Native
                 double[] along = { v, v - alongStep, v + alongStep };
                 SeamItem best = null;
                 int bestScore = 0;
-                foreach (double size in new[] { .72, .55, .40, .28, .20 }.Select(factor => Math.Max(.5, _size * factor)))
+                foreach (double size in new[] { 1d, .9, .8 }.Select(factor => Math.Max(_minimumSize, _referenceSize * factor)))
                 {
                     foreach (var side in sides)
                     foreach (int motif in variants)
                     {
                         _cancellation.ThrowIfCancellationRequested();
                         var asset = _draft.Motifs[motif];
-                        if (asset.IsFiller && size > _size * .45) continue;
                         double baseAngle = _draft.Options.Angle + _bottle.RotationAt(side.U);
                         foreach (double rotation in new[] { 0d, 45d, -45d, 90d })
                         {
-                            var item = new PatternPlacement { Motif = motif, Angle = baseAngle + rotation,
-                                Size = size, Center = side.Origin };
+                            double angle = baseAngle + rotation;
+                            var rotated = PatternTransform.RotatedSize(asset.Size.X, asset.Size.Y, angle);
+                            var item = new PatternPlacement { Motif = motif, Angle = angle,
+                                Size = size * Math.Max(rotated.X, rotated.Y) / Math.Max(asset.Size.X, asset.Size.Y),
+                                Center = side.Origin };
                             double inward = EdgeInset - ExtentDistance(asset.Footprint, item, side);
                             foreach (double height in along)
                             foreach (double inset in new[] { 0d, _band * .55 })
                             {
                                 var placed = new PatternPlacement { Motif = motif, Angle = item.Angle,
-                                    Size = size, Center = side.Move(side.Origin, inward + inset, height) };
+                                    Size = item.Size, Center = side.Move(side.Origin, inward + inset, height) };
                                 var entry = Make(asset.Footprint, placed);
                                 int score = Score(entry, start, end);
                                 if (score <= bestScore || !Fits(asset.Footprint, entry, -1, true)) continue;
