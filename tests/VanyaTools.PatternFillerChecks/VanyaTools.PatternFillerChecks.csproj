@@ -8,5 +8,6 @@
     <Compile Include="../../native/VanyaTools.Native/PatternFillerBrief.cs" Link="PatternFillerBrief.cs" />
     <Compile Include="../../native/VanyaTools.Native/PatternFillerAi.cs" Link="PatternFillerAi.cs" />
     <Compile Include="../../native/VanyaTools.Native/PatternFillerMatte.cs" Link="PatternFillerMatte.cs" />
+    <Compile Include="../../native/VanyaTools.Native/PatternFillerExtraction.cs" Link="PatternFillerExtraction.cs" />
   </ItemGroup>
 </Project>

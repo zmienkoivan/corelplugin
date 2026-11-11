@@ -19,7 +19,7 @@ namespace VanyaTools.Native
         private readonly TextBox _theme, _style;
         private readonly TextBox[] _elements = new TextBox[4];
         private readonly StackPanel _fields;
-        private readonly Button _analyze, _generate, _cancel;
+        private readonly Button _analyze, _generate, _cancel, _review, _openSheet;
         private readonly TextBlock _message;
         private readonly Stopwatch _elapsed = new Stopwatch();
         private readonly DispatcherTimer _clock = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
@@ -28,6 +28,7 @@ namespace VanyaTools.Native
         private string _stage, _timingKey;
 
         internal BitmapSource[] Result { get; private set; }
+        internal PatternFillerResult Generation { get; private set; }
         internal string AnalysisModel => (_analysisModel.SelectedItem as PatternFillerBrief.AnalysisChoice)?.Id ?? PatternFillerBrief.AnalysisModel;
         internal PatternFillerPlan Plan => new PatternFillerPlan
         {
@@ -35,9 +36,9 @@ namespace VanyaTools.Native
             Elements = Array.ConvertAll(_elements, input => input.Text.Trim())
         };
 
-        internal PatternFillerWindow(BitmapSource reference, string token, PatternFillerPlan initial, string analysisModel = null)
+        internal PatternFillerWindow(BitmapSource reference, string token, PatternFillerPlan initial, string analysisModel = null, PatternFillerResult generation = null)
         {
-            _reference = reference; _token = token;
+            _reference = reference; _token = token; Generation = generation;
             initial = initial ?? new PatternFillerPlan();
             Title = "ИИ-заполнители · Vanya Tools";
             Width = Math.Min(760, SystemParameters.WorkArea.Width - 28);
@@ -82,6 +83,13 @@ namespace VanyaTools.Native
                 SelectedIndex = Math.Max(0, Array.FindIndex(PatternFillerBrief.AnalysisModels, item => item.Id == analysisModel)),
                 ToolTip = "Модель для следующего анализа. Смена не отправляет превью. Каждый запрос требует подтверждения." };
             preview.Children.Add(_analysisModel);
+            _review = Button("Готовый результат…", (_, __) => Review());
+            _review.IsEnabled = Generation != null;
+            _review.ToolTip = "Повторно посмотреть последний готовый лист без генерации и оплаты.";
+            preview.Children.Add(_review);
+            _openSheet = Button("Открыть готовый лист…", (_, __) => OpenSheet());
+            _openSheet.ToolTip = "Разделить сохранённый PNG-лист локально, без отправки в ИИ и оплаты.";
+            preview.Children.Add(_openSheet);
 
             _fields = new StackPanel { Margin = new Thickness(0, 0, 1, 0) };
             root.Children.Add(new ScrollViewer { Content = _fields, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
@@ -146,13 +154,18 @@ namespace VanyaTools.Native
                     {
                         var result = await Task.Run(() => PatternFillerAi.Generate(_reference, _token, plan, request.Token), request.Token);
                         if (_closed) return;
-                        Result = result;
+                        Generation = result;
+                        _review.IsEnabled = true;
                     }
                     OperationTiming.Record(_timingKey, _elapsed.Elapsed);
                 }
                 _request = null; _clock.Stop(); _elapsed.Stop();
                 if (analysis) Report("Комплект предложен. Проверьте элементы и нажмите «Создать мини-фигуры».", false);
-                else DialogResult = true;
+                else
+                {
+                    Report("Лист готов · выделено " + Generation.Count + " из 4. Проверьте фигуры перед добавлением.", false);
+                    Review();
+                }
             }
             catch (OperationCanceledException)
             { if (!_closed) Report("Запрос отменён. Поля сохранены.", false); }
@@ -174,7 +187,8 @@ namespace VanyaTools.Native
 
         private void SetBusy(bool busy, bool analysis)
         {
-            _fields.IsEnabled = _analysisModel.IsEnabled = _analyze.IsEnabled = _generate.IsEnabled = !busy;
+            _fields.IsEnabled = _analysisModel.IsEnabled = _analyze.IsEnabled = _generate.IsEnabled = _openSheet.IsEnabled = !busy;
+            _review.IsEnabled = !busy && Generation != null;
             _cancel.Content = busy ? "Отменить" : "Закрыть";
             _cancel.IsEnabled = true;
             if (!busy) return;
@@ -182,6 +196,28 @@ namespace VanyaTools.Native
             _timingKey = analysis ? "pattern:analysis:" + AnalysisModel : "pattern:fillers:google/nano-banana-2";
             _elapsed.Restart(); _clock.Start();
             Report(OperationTiming.Display(_stage, _elapsed.Elapsed, _timingKey), false);
+        }
+
+        private void OpenSheet()
+        {
+            if (_request != null || _closed) return;
+            var dialog = new Microsoft.Win32.OpenFileDialog { Filter = "Готовый лист ИИ|*.png", Multiselect = false };
+            if (dialog.ShowDialog(this) != true) return;
+            try
+            {
+                Generation = PatternFillerExtraction.Extract(AiPrintTab.Bitmap(dialog.FileName), Plan, CancellationToken.None);
+                _review.IsEnabled = true;
+                Report("Лист открыт локально · выделено " + Generation.Count + " из 4.", false);
+                Review();
+            }
+            catch (Exception error) { Report(error.GetBaseException().Message, true); }
+        }
+
+        private void Review()
+        {
+            if (_request != null || Generation == null || _closed) return;
+            var review = new PatternFillerReviewWindow(_reference, Generation) { Owner = this };
+            if (review.ShowDialog() == true) { Result = review.Selected; DialogResult = true; }
         }
 
         private void CancelOrClose()

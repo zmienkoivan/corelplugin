@@ -19,7 +19,7 @@ internal static class Program
     {
         try
         {
-            Plans(); Pipeline();
+            Plans(); Pipeline(); Extraction();
             Console.WriteLine("Pattern filler analysis checks passed: " + _checks + ". Synthetic images and stub worker only; no network or Corel.");
             return 0;
         }
@@ -37,7 +37,7 @@ internal static class Program
         Check(parsed.Elements.All(prompt.Contains) && prompt.Contains(parsed.Theme) && prompt.Contains(parsed.Style),
             "Generation prompt omits the reviewed theme, style or elements.");
         Check(prompt.Contains("Top left: Капля") && prompt.Contains("Bottom right: Звезда-искра") &&
-            prompt.Contains("2x2") && prompt.Contains("#FF00FF"), "Sprite layout/matte contract changed.");
+            prompt.Contains("2x2") && prompt.Contains("#FF00FF") && prompt.Contains("STYLE MASTER") && prompt.Contains("Never tile"), "Sprite layout/matte contract changed.");
         for (int i = 0; i < 3; i++)
         {
             var preset = PatternFillerBrief.Preset(i); preset.Validate();
@@ -75,7 +75,8 @@ internal static class Program
         Check(ReplicateWorkerClient.Input["prompt"].Equals(PatternFillerBrief.AnalysisPrompt), "Wrong analysis task.");
         Check(!File.Exists(AiPrintTab.Upload) && !File.Exists(ReplicateWorkerClient.Output), "Analysis left input/output files.");
 
-        var sprites = PatternFillerAi.Generate(image, "local-test", plan, CancellationToken.None);
+        var generated = PatternFillerAi.Generate(image, "local-test", plan, CancellationToken.None);
+        var sprites = generated.Cells.Where(value => value != null).ToArray();
         Check(ReplicateWorkerClient.Calls == 2 && ReplicateWorkerClient.Model == SublimationModels.Nano2 &&
             sprites.Length == 4 && sprites.All(sprite => sprite.IsFrozen), "Generation did not produce four frozen sprites.");
         Check(ReplicateWorkerClient.Input.ContainsKey("image_input") &&
@@ -131,6 +132,40 @@ internal static class Program
             throw new Exception("Cancellation was swallowed.");
         }
         finally { ReplicateWorkerClient.Failure = null; }
+    }
+
+
+    private static void Extraction()
+    {
+        const int width = 320, height = 320;
+        var pixels = new byte[width * height * 4];
+        for (int i = 0; i < pixels.Length; i += 4) { pixels[i] = pixels[i + 2] = pixels[i + 3] = 255; }
+        void Fill(int left, int top, int w, int h, byte b = 0, byte g = 0, byte r = 0)
+        {
+            for (int y = top; y < top + h; y++) for (int x = left; x < left + w; x++)
+            { int i = (y * width + x) * 4; pixels[i] = b; pixels[i + 1] = g; pixels[i + 2] = r; }
+        }
+        Fill(30, 35, 45, 60); Fill(100, 45, 12, 20); // One disconnected ornament.
+        Fill(30, 159, 90, 1); // Antialiasing strip from the next cell.
+        Fill(0, 50, 3, 3, 189, 31, 231); // Colored matte noise on the cell boundary.
+        Fill(200, 35, 50, 70, 80, 180, 230);
+        Fill(220, 0, 3, 2, 247, 21, 250);
+        Fill(0, 190, 20, 40); Fill(35, 190, 40, 40); Fill(105, 190, 40, 40); // Tiled cell.
+        Fill(300, 200, 20, 40); // A genuinely cropped motif, no whole copy.
+        var image = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, width * 4);
+        image.Freeze();
+        var plan = PatternFillerBrief.Parse(Json);
+        var result = PatternFillerExtraction.Extract(image, plan, CancellationToken.None);
+        Check(result.Count == 3 && result.Cells[3] == null, "Missing/cropped cell was hidden or fabricated.");
+        Check(result.Cells[0].PixelWidth > 80 && !result.Representative[0],
+            "Disconnected ornament or one-pixel strip was mistaken for a repeated pattern.");
+        Check(result.Cells[1] != null, "Small colored matte residue discarded a whole figure.");
+        Check(result.Representative[2] && result.Cells[2].PixelWidth < 60 && result.Cells[2].PixelHeight < 60,
+            "A repeating cell was returned as several copies or lost entirely.");
+        Check(result.Names.SequenceEqual(plan.Elements) && ReferenceEquals(result.Sheet, image),
+            "Cell identities or the full original sheet were lost.");
+        var after = new byte[pixels.Length]; image.CopyPixels(after, width * 4, 0);
+        Check(after.SequenceEqual(pixels), "Extraction mutated the original paid sheet.");
     }
 
     private static void Reject(Action action)

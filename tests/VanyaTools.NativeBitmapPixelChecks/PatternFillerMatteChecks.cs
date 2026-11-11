@@ -17,7 +17,7 @@ internal static class PatternFillerMatteChecks
                 double r = Math.Sqrt((x - 48.3) * (x - 48.3) + (y - 49.7) * (y - 49.7));
                 double edge = Math.Min(36.2 - r, r - 20.6);
                 double alpha = Math.Max(0, Math.Min(1, edge + .5));
-                bool gold = r > 26 && r < 30;
+                bool gold = r > 22.8 && r < 34.0;
                 int[] color = gold ? new[] { 80, 185, 230 } : new[] { 0, 0, 0 };
                 double purpleR = Math.Sqrt((x - 158.2) * (x - 158.2) + (y - 49.4) * (y - 49.4));
                 if (purpleR < 31.5)
@@ -34,6 +34,11 @@ internal static class PatternFillerMatteChecks
                 expected[i + 3] = (byte)Math.Round(alpha * 255);
                 pixels[i + 3] = 255;
             }
+        for (int y = 5; y < 8; y++) for (int x = 2; x < 5; x++)
+        {
+            int i = (y * width + x) * 4;
+            pixels[i] = 189; pixels[i + 1] = 31; pixels[i + 2] = 231; pixels[i + 3] = 255;
+        }
         var before = (byte[])pixels.Clone();
         PatternFillerMatte.Remove(pixels, width, height, CancellationToken.None);
         for (int y = 0; y < height; y++)
@@ -53,6 +58,7 @@ internal static class PatternFillerMatteChecks
                 else inner++;
             }
         Require(outer > 40 && inner > 30 && purple > 40, "Missing outer, inner or genuine purple edge samples.");
+        Require(pixels[(5 * width + 2) * 4 + 3] == 0, "Colored matte noise survived at the sheet edge.");
         Require(pixels[3] == 0 && pixels[(50 * width + 48) * 4 + 3] == 0,
             "Sheet background or ring hole remained opaque.");
         var once = (byte[])pixels.Clone();

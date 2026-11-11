@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -68,7 +68,7 @@ namespace VanyaTools.Native
         }
 
         // Called only after the user confirms sending the reference in PatternFillerWindow.
-        internal static BitmapSource[] Generate(BitmapSource reference, string token, PatternFillerPlan plan, CancellationToken cancellation)
+        internal static PatternFillerResult Generate(BitmapSource reference, string token, PatternFillerPlan plan, CancellationToken cancellation)
         {
             string prompt = PatternFillerBrief.GenerationPrompt(plan);
             string path = Path.Combine(Path.GetTempPath(), "Vanya-Pattern-Fillers-" + Guid.NewGuid().ToString("N") + ".png");
@@ -84,7 +84,7 @@ namespace VanyaTools.Native
                     ["resolution"] = "2K"
                 }, path, cancellation: cancellation);
                 cancellation.ThrowIfCancellationRequested();
-                return Split(AiPrintTab.Bitmap(path), cancellation);
+                return PatternFillerExtraction.Extract(AiPrintTab.Bitmap(path), plan, cancellation);
             }
             finally { Cleanup(path, input); }
         }
@@ -99,42 +99,11 @@ namespace VanyaTools.Native
 
         internal static BitmapSource[] Split(BitmapSource sheet, CancellationToken cancellation)
         {
-            int width = sheet.PixelWidth, height = sheet.PixelHeight;
-            if (width < 32 || height < 32 || (long)width * height > 16000000)
-                throw new InvalidDataException("ИИ вернул лист неподходящего размера.");
-            var bitmap = new FormatConvertedBitmap(sheet, PixelFormats.Bgra32, null, 0);
-            var pixels = new byte[checked(width * height * 4)];
-            bitmap.CopyPixels(pixels, width * 4, 0);
-            PatternFillerMatte.Remove(pixels, width, height, cancellation);
-            var result = new List<BitmapSource>(Count);
-            for (int index = 0; index < Count; index++)
-            {
-                int x0 = width * (index % 2) / 2, y0 = height * (index / 2) / 2;
-                int x1 = width * (index % 2 + 1) / 2, y1 = height * (index / 2 + 1) / 2;
-                int left = x1, right = x0 - 1, top = y1, bottom = y0 - 1;
-                for (int y = y0; y < y1; y++)
-                {
-                    cancellation.ThrowIfCancellationRequested();
-                    for (int x = x0; x < x1; x++)
-                        if (pixels[(y * width + x) * 4 + 3] > 0)
-                        {
-                            left = Math.Min(left, x); right = Math.Max(right, x);
-                            top = Math.Min(top, y); bottom = Math.Max(bottom, y);
-                        }
-                }
-                int w = right - left + 1, h = bottom - top + 1;
-                // Reject a motif that reaches the cell border rather than slicing it into two sprites.
-                if (w < 8 || h < 8 || left <= x0 || right >= x1 - 1 || top <= y0 || bottom >= y1 - 1) continue;
-                int stride = w * 4;
-                var sprite = new byte[stride * h];
-                for (int y = 0; y < h; y++)
-                    Buffer.BlockCopy(pixels, ((top + y) * width + left) * 4, sprite, y * stride, stride);
-                var image = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, sprite, stride);
-                image.Freeze();
-                result.Add(image);
-            }
-            if (result.Count == 0) throw new InvalidDataException("На листе ИИ не нашлось отдельных фигур на однотонном фоне.");
-            return result.ToArray();
+            var result = PatternFillerExtraction.Extract(sheet, null, cancellation);
+            var images = new List<BitmapSource>();
+            foreach (var image in result.Cells) if (image != null) images.Add(image);
+            if (images.Count == 0) throw new InvalidDataException("На листе ИИ не нашлось целых отдельных фигур.");
+            return images.ToArray();
         }
 
         private static void TryDelete(string path)
