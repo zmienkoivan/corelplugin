@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="System.Web.Extensions" />
+    <Compile Include="../../native/VanyaTools.Native/PatternViewport.cs" Link="PatternViewport.cs" />
     <Compile Include="../../native/VanyaTools.Native/PatternFillerBrief.cs" Link="PatternFillerBrief.cs" />
     <Compile Include="../../native/VanyaTools.Native/PatternFillerAi.cs" Link="PatternFillerAi.cs" />
     <Compile Include="../../native/VanyaTools.Native/PatternFillerMatte.cs" Link="PatternFillerMatte.cs" />

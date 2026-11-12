@@ -19,7 +19,7 @@ internal static class Program
     {
         try
         {
-            Plans(); Pipeline(); Extraction();
+            Plans(); Pipeline(); Extraction(); Counts(); Viewport();
             Console.WriteLine("Pattern filler analysis checks passed: " + _checks + ". Synthetic images and stub worker only; no network or Corel.");
             return 0;
         }
@@ -36,8 +36,8 @@ internal static class Program
         string prompt = PatternFillerBrief.GenerationPrompt(parsed);
         Check(parsed.Elements.All(prompt.Contains) && prompt.Contains(parsed.Theme) && prompt.Contains(parsed.Style),
             "Generation prompt omits the reviewed theme, style or elements.");
-        Check(prompt.Contains("Top left: Капля") && prompt.Contains("Bottom right: Звезда-искра") &&
-            prompt.Contains("2x2") && prompt.Contains("#FF00FF") && prompt.Contains("STYLE MASTER") && prompt.Contains("Never tile"), "Sprite layout/matte contract changed.");
+        Check(prompt.Contains("Row 1, column 1: Капля") && prompt.Contains("Row 2, column 2: Звезда-искра") &&
+            prompt.Contains("2 columns and 2 rows") && prompt.Contains("#FF00FF") && prompt.Contains("STYLE MASTER") && prompt.Contains("Never tile"), "Sprite layout/matte contract changed.");
         for (int i = 0; i < 3; i++)
         {
             var preset = PatternFillerBrief.Preset(i); preset.Validate();
@@ -72,7 +72,7 @@ internal static class Program
             "Analysis started generation or used the wrong model.");
         Check(ReplicateWorkerClient.Input.ContainsKey("image") && !ReplicateWorkerClient.Input.ContainsKey("image_input") &&
             (int)ReplicateWorkerClient.Input["max_tokens"] == 1400, "Analysis request is not the vision-model contract.");
-        Check(ReplicateWorkerClient.Input["prompt"].Equals(PatternFillerBrief.AnalysisPrompt), "Wrong analysis task.");
+        Check(ReplicateWorkerClient.Input["prompt"].Equals(PatternFillerBrief.AnalysisTask(4, false)), "Wrong analysis task.");
         Check(!File.Exists(AiPrintTab.Upload) && !File.Exists(ReplicateWorkerClient.Output), "Analysis left input/output files.");
 
         var generated = PatternFillerAi.Generate(image, "local-test", plan, CancellationToken.None);
@@ -166,6 +166,69 @@ internal static class Program
             "Cell identities or the full original sheet were lost.");
         var after = new byte[pixels.Length]; image.CopyPixels(after, width * 4, 0);
         Check(after.SequenceEqual(pixels), "Extraction mutated the original paid sheet.");
+    }
+
+    private static void Counts()
+    {
+        for (int count = 4; count <= 10; count++)
+        {
+            var plan = new PatternFillerPlan { Theme = "Эталон", Style = "Гравюра",
+                Elements = Enumerable.Range(1, count).Select(i => "Рисунок " + i).ToArray(), SmallFillers = count % 2 == 0 };
+            plan.Validate();
+            string json = new JavaScriptSerializer().Serialize(new { theme = plan.Theme, style = plan.Style, elements = plan.Elements });
+            Check(PatternFillerBrief.Parse(json, count, plan.SmallFillers).Elements.SequenceEqual(plan.Elements),
+                "Variable motif count was not parsed.");
+            Check(plan.Copy().SmallFillers == plan.SmallFillers, "Plan copy lost the motif mode.");
+            Reject(() => PatternFillerBrief.Parse(json, count == 10 ? 4 : count + 1));
+            int columns = PatternFillerBrief.Columns(count), rows = (count + columns - 1) / columns;
+            const int cell = 80;
+            int width = columns * cell, height = rows * cell;
+            var pixels = new byte[width * height * 4];
+            for (int i = 0; i < pixels.Length; i += 4) pixels[i] = pixels[i + 2] = pixels[i + 3] = 255;
+            for (int i = 0; i < count; i++)
+                for (int y = i / columns * cell + 20; y < i / columns * cell + 60; y++)
+                    for (int x = i % columns * cell + 20; x < i % columns * cell + 60; x++)
+                    { int at = (y * width + x) * 4; pixels[at] = pixels[at + 2] = 0; }
+            var sheet = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, width * 4); sheet.Freeze();
+            var extracted = PatternFillerExtraction.Extract(sheet, plan, CancellationToken.None);
+            Check(extracted.Count == count && extracted.Cells.Length == count && extracted.Cells.All(image => image.IsFrozen),
+                "Lost or fabricated cells in a non-square sheet.");
+            Check(extracted.Names.SequenceEqual(plan.Elements) && extracted.SmallFillers == plan.SmallFillers,
+                "Grid extraction lost identity or full/filler mode.");
+            Check(PatternFillerBrief.GenerationPrompt(plan).Contains("exactly " + count) &&
+                plan.Elements.All(PatternFillerBrief.GenerationPrompt(plan).Contains),
+                "Variable-count prompt omitted a subject.");
+            Check(PatternFillerBrief.Resolution(count) == (count > 4 ? "4K" : "2K"),
+                "Insufficient resolution for a larger sheet.");
+            var input = PatternFillerBrief.AnalysisInput(PatternFillerBrief.AnalysisModel, "local", count, false);
+            Check(input["prompt"].ToString().Contains("exactly " + count) &&
+                input["prompt"].ToString().Contains("SINGLE main print"), "Analysis does not use the hero/count contract.");
+        }
+        Reject(() => new PatternFillerPlan { Elements = Enumerable.Range(0, 11).Select(i => i.ToString()).ToArray() }.Validate());
+    }
+
+    private static void Viewport()
+    {
+        var view = new PatternViewport();
+        var bounds = new System.Windows.Rect(-10, -20, 200, 100);
+        view.Update(bounds, new System.Windows.Size(840, 640));
+        Check(Math.Abs(view.Percent - 100) < .001 && view.Center == new System.Windows.Point(90, 30), "Initial fit failed.");
+        var cursor = new System.Windows.Point(123, 217);
+        var anchor = view.World(cursor);
+        view.ZoomAt(3, cursor);
+        Check((view.World(cursor) - anchor).Length < 1e-9, "Zoom lost the point under the cursor.");
+        double scale = view.Scale;
+        var center = view.Center;
+        view.Update(new System.Windows.Rect(-40, -30, 230, 150), new System.Windows.Size(900, 700));
+        Check(view.Scale == scale && view.Center == center, "Recalculation or resize reset the inspected area.");
+        view.Pan(new System.Windows.Vector(75, -30));
+        Check((view.Center - new System.Windows.Point(center.X - 75 / scale, center.Y + 30 / scale)).Length < 1e-9,
+            "Pan moves by the wrong physical distance.");
+        view.ZoomAt(1e20, cursor);
+        Check(!Double.IsInfinity(view.Scale) && view.Scale > 0, "Unbounded zoom.");
+        view.Fit();
+        Check(Math.Abs(view.Percent - 100) < .001 && view.Center == new System.Windows.Point(75, 45),
+            "Fit did not restore the latest outline.");
     }
 
     private static void Reject(Action action)

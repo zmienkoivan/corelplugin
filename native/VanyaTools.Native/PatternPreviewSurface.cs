@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -12,6 +14,14 @@ namespace VanyaTools.Native
         private PatternDraft _draft;
         private Point _origin;
         private double _scale;
+        private readonly PatternViewport _viewport = new PatternViewport();
+        private bool _panning;
+        private Point _panPoint;
+        private readonly Dictionary<int, System.Windows.Media.Imaging.BitmapSource> _details =
+            new Dictionary<int, System.Windows.Media.Imaging.BitmapSource>();
+        private readonly Dictionary<int, int> _detailAttempts = new Dictionary<int, int>();
+        internal event Action ViewChanged;
+        internal double ZoomPercent => _viewport.Percent;
         private bool _showCells, _showRepeatBorders;
         private enum DragMode { None, Move, Scale, Rotate }
         private DragMode _drag;
@@ -25,8 +35,9 @@ namespace VanyaTools.Native
         internal PatternPreviewSurface(PatternEditorSession session, PatternFrame initialFrame)
         {
             _session = session; _frame = initialFrame;
-            ClipToBounds = true;
-            ToolTip = "Потяните за угол для масштаба, за кружок для поворота или за рисунок для перемещения.";
+            ClipToBounds = true; Focusable = true;
+            RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.HighQuality);
+            ToolTip = "Колесо — масштаб; средняя/правая кнопка или пробел + перетаскивание — перемещение. У главного принта: углы — размер, кружок — поворот.";
         }
 
         internal void Update(PatternFrame frame, PatternDraft draft, double heroAngle)
@@ -34,6 +45,7 @@ namespace VanyaTools.Native
             _frame = frame; _draft = draft; _heroAngle = heroAngle;
             if (draft?.Hero == null) Cursor = Cursors.Arrow;
             InvalidateVisual();
+            ViewChanged?.Invoke();
         }
 
         internal void ShowGuides(bool cells, bool repeat)
@@ -50,11 +62,12 @@ namespace VanyaTools.Native
             var outline = _draft?.BottleCutView ?? _frame.Geometry;
             Rect bounds = outline.Bounds;
             double markSpace = _draft?.CenterMarks == null ? 0 : 8;
-            _scale = Math.Min((RenderSize.Width - 40) / bounds.Width, (RenderSize.Height - 40) / (bounds.Height + markSpace));
+            if (markSpace > 0) bounds.Inflate(0, markSpace);
+            _viewport.Update(bounds, RenderSize);
+            _scale = _viewport.Scale; _origin = _viewport.Origin;
             if (_scale <= 0) return;
-            _origin = new Point((RenderSize.Width - bounds.Width * _scale) / 2 - bounds.X * _scale,
-                (RenderSize.Height - bounds.Height * _scale) / 2 - bounds.Y * _scale);
             drawing.PushTransform(new MatrixTransform(_scale, 0, 0, _scale, _origin.X, _origin.Y));
+            var visible = new Rect(_viewport.World(new Point(0, 0)), _viewport.World(new Point(RenderSize.Width, RenderSize.Height)));
             double hairline = 1 / _scale;
             drawing.DrawGeometry(Brushes.White, new Pen(Brushes.SlateGray, hairline), outline);
             if (_draft != null)
@@ -64,6 +77,7 @@ namespace VanyaTools.Native
                 foreach (var item in _draft.Items)
                 {
                     var motif = _draft.Motifs[item.Motif];
+                    if (!DrawArea(motif, item).IntersectsWith(visible)) continue;
                     DrawMotif(drawing, motif, item, Brushes.SteelBlue);
                     if (_draft.Options.Texture) DrawGuide(drawing, PatternSilhouette.At(motif, item), lightOutline);
                 }
@@ -96,6 +110,106 @@ namespace VanyaTools.Native
             }
             drawing.Pop();
             if (_draft?.Hero != null) DrawHeroHandles(drawing);
+        }
+
+        internal void Zoom(double factor)
+        {
+            _viewport.ZoomAt(factor, new Point(RenderSize.Width / 2, RenderSize.Height / 2));
+            Changed();
+        }
+
+        internal void Fit() { _viewport.Fit(); Changed(); }
+
+        private void Changed()
+        {
+            _scale = _viewport.Scale; _origin = _viewport.Origin;
+            InvalidateVisual(); ViewChanged?.Invoke();
+        }
+
+        protected override void OnRenderSizeChanged(SizeChangedInfo info)
+        {
+            base.OnRenderSizeChanged(info);
+            InvalidateVisual(); ViewChanged?.Invoke();
+        }
+
+        protected override void OnMouseWheel(MouseWheelEventArgs e)
+        {
+            if (_drag != DragMode.None || _panning) return;
+            if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0) _viewport.Pan(new Vector(e.Delta, 0));
+            else _viewport.ZoomAt(Math.Pow(1.2, e.Delta / 120d), e.GetPosition(this));
+            Changed(); e.Handled = true;
+        }
+
+        protected override void OnMouseDown(MouseButtonEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (e.ChangedButton == MouseButton.Middle || e.ChangedButton == MouseButton.Right) StartPan(e);
+        }
+
+        private void StartPan(MouseButtonEventArgs e)
+        {
+            if (_drag != DragMode.None || _scale <= 0 || !CaptureMouse()) return;
+            Focus(); _panning = true; _panPoint = e.GetPosition(this); Cursor = Cursors.Hand; e.Handled = true;
+        }
+
+        protected override void OnMouseUp(MouseButtonEventArgs e)
+        {
+            base.OnMouseUp(e);
+            if (!_panning) return;
+            ReleaseMouseCapture(); e.Handled = true;
+        }
+
+        private Rect DrawArea(PatternAsset asset, PatternPlacement item)
+        {
+            var fit = PatternTransform.Fit(asset.Size, item);
+            var size = PatternTransform.RotatedSize(fit.Width, fit.Height, item.Angle);
+            var center = ToView(item.Center);
+            return new Rect(center.X - size.X / 2, center.Y - size.Y / 2, size.X, size.Y);
+        }
+
+        // Higher-resolution source previews are requested only for visible assets,
+        // after navigation settles. Rendering itself never calls Corel.
+        internal bool RefineVisible(Func<PatternAsset, int, System.Windows.Media.Imaging.BitmapSource> capture)
+        {
+            if (_draft == null || _scale <= 0 || _panning || _drag != DragMode.None) return false;
+            var visible = new Rect(_viewport.World(new Point(0, 0)),
+                _viewport.World(new Point(RenderSize.Width, RenderSize.Height)));
+            var requests = new Dictionary<int, Tuple<PatternAsset, int>>();
+            double dpi = VisualTreeHelper.GetDpi(this).DpiScaleX;
+            void Request(PatternAsset asset, PatternPlacement item)
+            {
+                var area = DrawArea(asset, item);
+                if (!area.IntersectsWith(visible)) return;
+                var fit = PatternTransform.Fit(asset.Size, item);
+                int side = Math.Min(2048, (int)Math.Ceiling(Math.Max(fit.Width, fit.Height) * _scale * dpi / 256) * 256);
+                if (!requests.TryGetValue(asset.Id, out var prior) || side > prior.Item2)
+                    requests[asset.Id] = Tuple.Create(asset, side);
+            }
+            foreach (var item in _draft.Items) Request(_draft.Motifs[item.Motif], item);
+            if (_draft.Hero != null) Request(_session.Hero, _draft.Hero);
+            foreach (var request in requests.Values.OrderByDescending(value => value.Item2))
+            {
+                var asset = request.Item1; int side = request.Item2;
+                if (asset.Shape == null || side <= 640) continue;
+                var current = _details.TryGetValue(asset.Id, out var cached) ? cached : asset.Preview;
+                int available = current == null ? 0 : Math.Max(current.PixelWidth, current.PixelHeight);
+                if (side <= available * 1.25 || (_detailAttempts.TryGetValue(asset.Id, out int attempted) && side <= attempted)) continue;
+                const long budget = 16000000;
+                long needed = (long)side * side;
+                long used = _details.Where(pair => pair.Key != asset.Id).Sum(pair => (long)pair.Value.PixelWidth * pair.Value.PixelHeight);
+                foreach (int old in _details.Keys.Where(id => id != asset.Id && !requests.ContainsKey(id)).ToArray())
+                {
+                    if (used + needed <= budget) break;
+                    used -= (long)_details[old].PixelWidth * _details[old].PixelHeight;
+                    _details.Remove(old); _detailAttempts.Remove(old);
+                }
+                if (used + needed > budget) continue;
+                _detailAttempts[asset.Id] = side;
+                var image = capture(asset, side);
+                if (image != null) { _details[asset.Id] = image; InvalidateVisual(); }
+                return true;
+            }
+            return false;
         }
 
         private void DrawBottleSeam(DrawingContext drawing, double hairline)
@@ -172,7 +286,8 @@ namespace VanyaTools.Native
             var area = new Rect(center.X - width / 2, center.Y - height / 2, width, height);
             drawing.PushTransform(new RotateTransform(-item.Angle, center.X, center.Y));
             if (asset.Mirrored) drawing.PushTransform(new ScaleTransform(-1, 1, center.X, center.Y));
-            if (asset.Preview != null) drawing.DrawImage(asset.Preview, area);
+            var image = _details.TryGetValue(asset.Id, out var detail) ? detail : asset.Preview;
+            if (image != null) drawing.DrawImage(image, area);
             else drawing.DrawRectangle(fallback, null, area);
             if (asset.Mirrored) drawing.Pop();
             drawing.Pop();
@@ -194,6 +309,8 @@ namespace VanyaTools.Native
         protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
         {
             base.OnMouseLeftButtonDown(e);
+            Focus();
+            if (Keyboard.IsKeyDown(Key.Space)) { StartPan(e); return; }
             if (_draft?.Hero == null || _scale <= 0) return;
             Point point = e.GetPosition(this);
             var mode = HitHandle(point);
@@ -217,6 +334,11 @@ namespace VanyaTools.Native
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
+            if (_panning)
+            {
+                var next = e.GetPosition(this); _viewport.Pan(next - _panPoint); _panPoint = next;
+                Changed(); e.Handled = true; return;
+            }
             if (_draft?.Hero == null || _scale <= 0) return;
             var point = e.GetPosition(this);
             if (_drag != DragMode.None && e.LeftButton == MouseButtonState.Pressed) DragTo(point);
@@ -227,6 +349,7 @@ namespace VanyaTools.Native
         protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
         {
             base.OnMouseLeftButtonUp(e);
+            if (_panning) { ReleaseMouseCapture(); e.Handled = true; return; }
             if (_drag == DragMode.None) return;
             DragTo(e.GetPosition(this));
             ReleaseMouseCapture();
@@ -236,7 +359,7 @@ namespace VanyaTools.Native
         protected override void OnLostMouseCapture(MouseEventArgs e)
         {
             base.OnLostMouseCapture(e);
-            _drag = DragMode.None;
+            _drag = DragMode.None; _panning = false; Cursor = Cursors.Arrow;
         }
 
         private void DragTo(Point point)

@@ -11,15 +11,16 @@ namespace VanyaTools.Native
     internal sealed class PatternFillerReviewWindow : Window
     {
         private readonly PatternFillerResult _result;
-        private readonly CheckBox[] _use = new CheckBox[4];
+        private readonly CheckBox[] _use;
         private readonly Button _add;
 
-        internal BitmapSource[] Selected => Enumerable.Range(0, 4)
+        internal BitmapSource[] Selected => Enumerable.Range(0, _result.Cells.Length)
             .Where(i => _result.Cells[i] != null && _use[i].IsChecked == true).Select(i => _result.Cells[i]).ToArray();
 
         internal PatternFillerReviewWindow(BitmapSource reference, PatternFillerResult result)
         {
             _result = result;
+            _use = new CheckBox[result.Cells.Length];
             Title = "Проверка ИИ-фигур · Vanya Tools";
             Width = Math.Min(1000, SystemParameters.WorkArea.Width - 28);
             Height = Math.Min(760, SystemParameters.WorkArea.Height - 28);
@@ -34,9 +35,9 @@ namespace VanyaTools.Native
             DockPanel.SetDock(_add, Dock.Right); footer.Children.Add(_add);
             footer.Children.Add(Button("Сохранить лист…", (_, __) => SaveSheet()));
 
-            var note = new TextBlock { Text = "Выделено фигур: " + result.Count + " из 4. Проверьте стиль и отметьте подходящие.",
+            var note = new TextBlock { Text = "Выделено фигур: " + result.Count + " из " + result.Cells.Length + ". Проверьте стиль и отметьте подходящие.",
                 TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) };
-            if (result.Count < 4) DockerTheme.UseTheme(note, TextBlock.ForegroundProperty, DockerTheme.ErrorTextBrush);
+            if (result.Count < result.Cells.Length) DockerTheme.UseTheme(note, TextBlock.ForegroundProperty, DockerTheme.ErrorTextBrush);
             DockPanel.SetDock(note, Dock.Top); root.Children.Add(note);
             var referencePanel = new StackPanel { Width = 170, Margin = new Thickness(0, 0, 12, 0) };
             DockPanel.SetDock(referencePanel, Dock.Left); root.Children.Add(referencePanel);
@@ -44,10 +45,10 @@ namespace VanyaTools.Native
             referencePanel.Children.Add(new Image { Source = reference, Stretch = Stretch.Uniform, MaxHeight = 420 });
 
             var tabs = new TabControl(); root.Children.Add(tabs);
-            var cards = new UniformGrid { Rows = 2, Columns = 2 };
+            var cards = new UniformGrid { Columns = PatternFillerBrief.Columns(result.Cells.Length) };
             tabs.Items.Add(new TabItem { Header = "Фигуры", Content = cards });
             tabs.Items.Add(new TabItem { Header = "Лист ИИ", Content = new Image { Source = result.Sheet, Stretch = Stretch.Uniform } });
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < result.Cells.Length; i++)
             {
                 var card = new DockPanel { Margin = new Thickness(8) };
                 _use[i] = new CheckBox { IsChecked = result.Cells[i] != null, IsEnabled = result.Cells[i] != null,

@@ -10,9 +10,10 @@ namespace VanyaTools.Native
     internal sealed class PatternFillerResult
     {
         internal BitmapSource Sheet;
-        internal BitmapSource[] Cells = new BitmapSource[4];
-        internal bool[] Representative = new bool[4];
-        internal string[] Names = new string[4];
+        internal BitmapSource[] Cells;
+        internal bool[] Representative;
+        internal bool SmallFillers;
+        internal string[] Names;
         internal int Count => Cells.Count(image => image != null);
     }
 
@@ -27,19 +28,22 @@ namespace VanyaTools.Native
         internal static PatternFillerResult Extract(BitmapSource sheet, PatternFillerPlan plan, CancellationToken cancellation)
         {
             int width = sheet.PixelWidth, height = sheet.PixelHeight;
-            if (width < 32 || height < 32 || (long)width * height > 16000000)
+            if (width < 32 || height < 32 || (long)width * height > 20000000)
                 throw new System.IO.InvalidDataException("ИИ вернул лист неподходящего размера.");
             var converted = new FormatConvertedBitmap(sheet, PixelFormats.Bgra32, null, 0);
             var pixels = new byte[checked(width * height * 4)];
             converted.CopyPixels(pixels, width * 4, 0);
             PatternFillerMatte.Remove(pixels, width, height, cancellation);
-            var result = new PatternFillerResult { Sheet = sheet };
-            for (int index = 0; index < 4; index++)
+            int count = plan?.Elements.Length ?? 4;
+            int columns = PatternFillerBrief.Columns(count), rows = (count + columns - 1) / columns;
+            var result = new PatternFillerResult { Sheet = sheet, Cells = new BitmapSource[count],
+                Representative = new bool[count], Names = new string[count], SmallFillers = plan?.SmallFillers ?? true };
+            for (int index = 0; index < count; index++)
             {
                 cancellation.ThrowIfCancellationRequested();
                 result.Names[index] = String.IsNullOrWhiteSpace(plan?.Elements[index]) ? "Фигура " + (index + 1) : plan.Elements[index];
-                int x0 = width * (index % 2) / 2, y0 = height * (index / 2) / 2;
-                int w = width * (index % 2 + 1) / 2 - x0, h = height * (index / 2 + 1) / 2 - y0;
+                int x0 = width * (index % columns) / columns, y0 = height * (index / columns) / rows;
+                int w = width * (index % columns + 1) / columns - x0, h = height * (index / columns + 1) / rows - y0;
                 var components = Components(pixels, width, x0, y0, w, h, cancellation);
                 int minimum = Math.Max(8, w * h / 200000);
                 var complete = components.Where(c => c.Area >= minimum && !c.Cut(w, h)).ToArray();

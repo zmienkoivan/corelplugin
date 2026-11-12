@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -20,6 +20,7 @@ namespace VanyaTools.Native
         private PatternFillerResult _fillerGeneration;
         private string _fillerAnalysisModel = PatternFillerBrief.AnalysisModel;
         private BitmapSource[] _readyFillers;
+        private bool _readySmallFillers;
         private object _fillerDocument;
         private readonly TextBlock _motifs, _hero, _message;
         private readonly ListBox _motifList;
@@ -34,11 +35,31 @@ namespace VanyaTools.Native
         {
             _status = status; _token = token;
             var panel = DockerLayout.ToolGroup("Паттерн по контуру",
-                "Добавьте фоновые фигуры из выделения. При необходимости отдельно выберите главный элемент или группу. " +
+                "Добавьте фоновые фигуры из выделения. Для генерации по стилю сначала запомните главный принт или группу. " +
                 "Для паттерна по детали выделите замкнутый контур. Развёртка бутылки строится по размерам. " +
                 "«Галька» и «Крокодиловая кожа» распределяют ваши фигуры по ячейкам.");
             panel.Margin = new Thickness(8);
             Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            _forgetHero = Button("×", (_, __) =>
+            {
+                _service.ForgetHero();
+                _hero.Text = "Главный принт — источник стиля ИИ";
+                _forgetHero.Visibility = Visibility.Collapsed;
+            });
+            _forgetHero.ToolTip = "Сбросить главный элемент";
+            _forgetHero.MinWidth = 30;
+            _forgetHero.Visibility = Visibility.Collapsed;
+            panel.Children.Add(DockerLayout.Trailing(Button("Запомнить главный элемент", (_, __) => Run(() =>
+            {
+                _service.RememberHero();
+                _settings.UseHero = _bottleSettings.UseHero = true;
+                _settings.HeroSize = _bottleSettings.HeroSize = 0;
+                _hero.Text = "Главный элемент выбран";
+                _forgetHero.Visibility = Visibility.Visible;
+                Report("Теперь можно создать набор по стилю принта или выделить контур детали.", false);
+            })), _forgetHero));
+            _hero = Note("Главный принт — источник стиля ИИ");
+            panel.Children.Add(_hero);
             panel.Children.Add(Button("Добавить выделение в набор", (_, __) => Run(() =>
             {
                 int count = _service.AddMotifs();
@@ -59,34 +80,14 @@ namespace VanyaTools.Native
             panel.Children.Add(_removeMotifs);
             _motifList.SelectionChanged += (_, __) => _removeMotifs.IsEnabled = _motifList.SelectedItems.Count > 0;
             _fillerSet = new ComboBox { MinHeight = 27, SelectedIndex = 0, Margin = new Thickness(1, 4, 1, 0),
-                ItemsSource = new[] { "По набору · анализ ИИ", "Звезда, шарик, квадрат, ромб", "Кольцо, треугольник, шестигранник, капсула", "Искра, капля, полумесяц, точки" },
-                ToolTip = "Подбор по теме и стилю набора или готовые формы. Комплект можно изменить в окне перед генерацией." };
+                ItemsSource = new[] { "По главному принту · анализ ИИ", "Звезда, шарик, квадрат, ромб", "Кольцо, треугольник, шестигранник, капсула", "Искра, капля, полумесяц, точки" },
+                ToolTip = "Подбор по теме и стилю главного принта или готовые формы. Комплект можно изменить в окне перед генерацией." };
             panel.Children.Add(_fillerSet);
-            _generateFillers = Button("ИИ · мини-заполнители…", (_, __) => GenerateFillers());
-            _generateFillers.ToolTip = "Предложить комплект по смыслу и стилю набора, проверить и создать до четырёх элементов через Nano Banana 2.";
+            _generateFillers = Button("ИИ · набор рисунков…", (_, __) => GenerateFillers());
+            _generateFillers.ToolTip = "Создать 4–10 рисунков по главному принту через Nano Banana 2. Каждый запрос требует подтверждения.";
             panel.Children.Add(_generateFillers);
             RefreshMotifs();
 
-            _forgetHero = Button("×", (_, __) =>
-            {
-                _service.ForgetHero();
-                _hero.Text = "По желанию, отдельно от фонового узора";
-                _forgetHero.Visibility = Visibility.Collapsed;
-            });
-            _forgetHero.ToolTip = "Сбросить главный элемент";
-            _forgetHero.MinWidth = 30;
-            _forgetHero.Visibility = Visibility.Collapsed;
-            panel.Children.Add(DockerLayout.Trailing(Button("Запомнить главный элемент", (_, __) => Run(() =>
-            {
-                _service.RememberHero();
-                _settings.UseHero = _bottleSettings.UseHero = true;
-                _settings.HeroSize = _bottleSettings.HeroSize = 0;
-                _hero.Text = "Главный элемент выбран";
-                _forgetHero.Visibility = Visibility.Visible;
-                Report("Теперь выделите контур детали.", false);
-            })), _forgetHero));
-            _hero = Note("По желанию, отдельно от фонового узора");
-            panel.Children.Add(_hero);
             panel.Children.Add(DockerTheme.Primary(Button("Настроить паттерн…", (_, __) => Run(() => Edit(false)))));
             panel.Children.Add(Button("Паттерн для бутылки…", (_, __) => Run(() => Edit(true))));
             _message = Note("");
@@ -151,11 +152,12 @@ namespace VanyaTools.Native
                     }
                     if (accepted != true) return;
                     _readyFillers = window.Result;
+                    _readySmallFillers = window.Generation.SmallFillers;
                 }
-                int count = _service.AddFillers(_fillerDocument, _readyFillers);
+                int count = _service.AddFillers(_fillerDocument, _readyFillers, _readySmallFillers);
                 _readyFillers = null; _fillerDocument = null;
                 RefreshMotifs();
-                Report("Мини-заполнители добавлены · " + count, false);
+                Report("Рисунки добавлены · " + count, false);
             }
             catch (Exception error)
             {
@@ -165,7 +167,7 @@ namespace VanyaTools.Native
             finally
             {
                 if (_readyFillers == null) _fillerDocument = null;
-                _generateFillers.Content = _readyFillers == null ? "ИИ · мини-заполнители…" : "Добавить готовые мини-фигуры";
+                _generateFillers.Content = _readyFillers == null ? "ИИ · набор рисунков…" : "Добавить готовые рисунки";
             }
         }
 

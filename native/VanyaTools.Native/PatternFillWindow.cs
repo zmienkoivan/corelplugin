@@ -35,6 +35,7 @@ namespace VanyaTools.Native
         private readonly CheckBox _bottleWhole, _bottleTaper, _bottleCenterMarks;
         private readonly Button _apply;
         private readonly TextBlock _message;
+        private readonly DispatcherTimer _detailRefresh = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(220) };
         private readonly DispatcherTimer _refresh = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(70) };
         private PatternFrame _frame;
         private double _frameAllowance = Double.NaN;
@@ -90,7 +91,36 @@ namespace VanyaTools.Native
             var scroll = new ScrollViewer { Content = settings, Width = 282, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             DockPanel.SetDock(scroll, Dock.Left); root.Children.Add(scroll);
             _preview = new PatternPreviewSurface(session, _frame);
-            var frame = new Border { Child = _preview, BorderThickness = new Thickness(1), ClipToBounds = true };
+            var previewPanel = new DockPanel();
+            var navigation = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
+            navigation.Children.Add(Button("−", (_, __) => _preview.Zoom(1 / 1.2)));
+            navigation.Children.Add(Button("+", (_, __) => _preview.Zoom(1.2)));
+            var zoom = new TextBlock { MinWidth = 55, Text = "100%", TextAlignment = TextAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center };
+            navigation.Children.Add(zoom);
+            navigation.Children.Add(Button("Вписать", (_, __) => _preview.Fit()));
+            navigation.ToolTip = "Колесо — зум; средняя/правая кнопка или пробел + перетаскивание — перемещение. Shift + колесо — по горизонтали.";
+            DockPanel.SetDock(navigation, Dock.Top); previewPanel.Children.Add(navigation);
+            previewPanel.Children.Add(_preview);
+            _preview.ViewChanged += () =>
+            {
+                zoom.Text = Math.Round(_preview.ZoomPercent) + "%";
+                _detailRefresh.Stop(); _detailRefresh.Start();
+            };
+            _detailRefresh.Tick += (_, __) =>
+            {
+                _detailRefresh.Stop();
+                if (_closing.IsCancellationRequested) return;
+                if (_rendering) { _detailRefresh.Start(); return; }
+                try
+                {
+                    if (_preview.RefineVisible((asset, side) => PatternFillService.RefinePreview(_session, asset, side)))
+                        _detailRefresh.Start();
+                }
+                catch (Exception error) { Log.Error("Pattern detail preview failed; keeping the overview.", error); }
+                zoom.Text = Math.Round(_preview.ZoomPercent) + "%";
+            };
+            var frame = new Border { Child = previewPanel, BorderThickness = new Thickness(1), ClipToBounds = true };
             DockerTheme.UseTheme(frame, Border.BorderBrushProperty, DockerTheme.BorderBrush);
             DockerTheme.UseTheme(frame, Border.BackgroundProperty, DockerTheme.SurfaceBackground);
             root.Children.Add(frame);
@@ -196,7 +226,7 @@ namespace VanyaTools.Native
             Closed += (_, __) =>
             {
                 _ready = false;
-                _refresh.Stop();
+                _refresh.Stop(); _detailRefresh.Stop();
                 _closing.Cancel();
                 if (!_rendering) _closing.Dispose();
             };

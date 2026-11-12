@@ -15,7 +15,7 @@ namespace VanyaTools.Native
         internal readonly object Shape;
         internal readonly int Id;
         public string Label { get; }
-        internal bool IncludeMirror;
+        internal bool IncludeMirror, IsFiller;
         internal BitmapSource Filler;
         public BitmapSource Preview => Filler;
 
@@ -109,20 +109,17 @@ namespace VanyaTools.Native
             dynamic app = CorelApp.Get();
             object doc = app.ActiveDocument;
             document = doc;
-            if (!SameObject(doc, _motifDocument) || !_motifs.Any(source => source.Filler == null))
-                throw new InvalidOperationException("Добавьте фоновые рисунки из активного документа.");
-            if (_motifs.Count + PatternFillerAi.Count > MaximumMotifs)
-                throw new InvalidOperationException("Освободите четыре места в наборе рисунков.");
+            if (_hero == null || !SameObject(doc, _heroDocument))
+                throw new InvalidOperationException("Выделите главный принт и нажмите «Запомнить главный элемент» в активном документе.");
             return InMillimeters(doc, () =>
             {
                 dynamic selection = app.CreateShapeRange(), current = app.ActiveSelectionRange;
                 if (current != null) foreach (dynamic shape in current) selection.Add(shape);
                 try
                 {
-                    var images = _motifs.Where(source => source.Filler == null)
-                        .Select(source => CaptureAsset(source, (object)app, doc).Preview).Where(image => image != null).ToArray();
-                    if (images.Length == 0) throw new InvalidOperationException("Не удалось снять превью рисунков.");
-                    return PatternFillerAi.Reference(images);
+                    var image = CaptureAsset(_hero, (object)app, doc, 2048).Preview;
+                    if (image == null) throw new InvalidOperationException("Не удалось снять превью главного принта.");
+                    return PatternFillerAi.Reference(new[] { image });
                 }
                 finally
                 {
@@ -132,19 +129,23 @@ namespace VanyaTools.Native
             });
         }
 
-        internal int AddFillers(object document, BitmapSource[] fillers)
+        internal int AddFillers(object document, BitmapSource[] fillers, bool smallFillers = true)
         {
             dynamic app = CorelApp.Get();
-            if (!SameObject(document, (object)app.ActiveDocument) || !SameObject(document, _motifDocument))
-                throw new InvalidOperationException("Вернитесь в исходный документ и его набор рисунков, чтобы добавить готовые мини-фигуры.");
-            if (!_motifs.Any(source => source.Filler == null))
-                throw new InvalidOperationException("Добавьте хотя бы один основной рисунок в набор.");
-            if (_motifs.Count + fillers.Length > MaximumMotifs)
-                throw new InvalidOperationException("Освободите места в наборе для готовых мини-фигур.");
+            if (!SameObject(document, (object)app.ActiveDocument))
+                throw new InvalidOperationException("Вернитесь в исходный документ, чтобы добавить готовые рисунки.");
+            if (fillers == null || fillers.Length == 0 || fillers.Any(image => image == null))
+                throw new InvalidOperationException("Выберите готовые рисунки для добавления.");
+            bool sameDocument = SameObject(document, _motifDocument);
+            if ((sameDocument ? _motifs.Count : 0) + fillers.Length > MaximumMotifs)
+                throw new InvalidOperationException("Освободите места в наборе для готовых рисунков.");
+            if (!sameDocument) _motifs.Clear();
+            _motifDocument = document;
             foreach (var filler in fillers)
             {
                 int id = --_fillerId;
-                _motifs.Add(new PatternSource(null, id, "ИИ · мини-фигура " + (-id)) { Filler = filler });
+                _motifs.Add(new PatternSource(null, id, (smallFillers ? "ИИ · мини-фигура " : "ИИ · рисунок ") + (-id))
+                    { Filler = filler, IsFiller = smallFillers });
             }
             return fillers.Length;
         }
@@ -245,10 +246,10 @@ namespace VanyaTools.Native
             });
         }
 
-        private static PatternAsset CaptureAsset(PatternSource captured, object application, object document)
+        private static PatternAsset CaptureAsset(PatternSource captured, object application, object document, int maximumSide = 640)
         {
             if (captured.Filler != null)
-                return new PatternAsset { Id = captured.Id, Label = captured.Label, Preview = captured.Filler, IsFiller = true,
+                return new PatternAsset { Id = captured.Id, Label = captured.Label, Preview = captured.Filler, IsFiller = captured.IsFiller,
                     Size = new PatternPoint(captured.Filler.PixelWidth * 25.4 / 96, captured.Filler.PixelHeight * 25.4 / 96) };
             VerifyAsset(captured.Shape, captured.Id);
             dynamic shape = captured.Shape;
@@ -263,12 +264,31 @@ namespace VanyaTools.Native
             try
             {
                 shape.CreateSelection();
-                SportArtworkPreview.CaptureSelection(application, document, temporary);
-                if (File.Exists(path)) asset.Preview = SportArtworkPreview.Load(path);
+                SportArtworkPreview.CaptureSelection(application, document, temporary, maximumSide);
+                if (File.Exists(path)) asset.Preview = maximumSide > 640 ? AiPrintTab.Bitmap(path) : SportArtworkPreview.Load(path);
             }
             catch (Exception error) { Log.Error("Could not read pattern motif preview.", error); }
             finally { TryRestore(() => File.Delete(path), "pattern thumbnail cleanup"); }
             return asset;
+        }
+
+        internal static BitmapSource RefinePreview(PatternEditorSession session, PatternAsset asset, int maximumSide)
+        {
+            dynamic app = session.Application;
+            if (!SameObject(session.Document, (object)app.ActiveDocument)) return null;
+            return InMillimeters(session.Document, () =>
+            {
+                dynamic selection = app.CreateShapeRange(), current = app.ActiveSelectionRange;
+                if (current != null) foreach (dynamic shape in current) selection.Add(shape);
+                try { return CaptureAsset(new PatternSource(asset.Shape, asset.Id, asset.Label),
+                    session.Application, session.Document, maximumSide).Preview; }
+                catch (Exception error) { Log.Error("Could not refine pattern preview.", error); return null; }
+                finally
+                {
+                    if (Convert.ToInt32(selection.Count) == 0) ((dynamic)session.Document).ClearSelection();
+                    else selection.CreateSelection();
+                }
+            });
         }
 
         // The bitmap is frozen during capture. Geometry preparation needs no Corel calls.
@@ -315,7 +335,7 @@ namespace VanyaTools.Native
                     throw new InvalidOperationException("Выделение изменилось. Снова откройте окно паттерна.");
             }
             foreach (var motif in draft.Motifs)
-                if (!motif.IsFiller) VerifyAsset(motif.Shape, motif.Id);
+                if (motif.Shape != null) VerifyAsset(motif.Shape, motif.Id);
             if (draft.Hero != null) VerifyAsset(session.Hero.Shape, session.Hero.Id);
 
             int unit = Convert.ToInt32(doc.Unit);
@@ -373,7 +393,7 @@ namespace VanyaTools.Native
 
                 void AddMotif(PatternAsset asset, PatternPlacement item)
                 {
-                    object source = asset.IsFiller ? FillerSource(asset) : asset.Shape;
+                    object source = asset.Shape == null ? FillerSource(asset) : asset.Shape;
                     dynamic shape = ((dynamic)source).CopyToLayer(layer);
                     created.Add((object)shape);
                     PlaceMotif((object)shape, asset, item, draft.Frame.Left, draft.Frame.Bottom);
@@ -385,7 +405,7 @@ namespace VanyaTools.Native
                     if (fillerSources.TryGetValue(asset.Id, out object source)) return source;
                     if (fillerLayer == null)
                     {
-                        fillerLayer = doc.ActivePage.CreateLayer("Vanya · временные мини-фигуры");
+                        fillerLayer = doc.ActivePage.CreateLayer("Vanya · временные ИИ-рисунки");
                         fillerLayer.Printable = false;
                     }
                     string path = Path.Combine(Path.GetTempPath(), "Vanya-Pattern-Mini-" + Guid.NewGuid().ToString("N") + ".png");

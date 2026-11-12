@@ -16,8 +16,9 @@ namespace VanyaTools.Native
         // Only captured CDRs have a sidecar; never write next to a user's source file.
         internal static string Sidecar(string artwork) => artwork + ".preview.png";
 
-        internal static void CaptureSelection(object application, object document, string artwork)
+        internal static void CaptureSelection(object application, object document, string artwork, int maximumSide = MaximumSide)
         {
+            maximumSide = Math.Max(64, Math.Min(3072, maximumSide));
             string path = Sidecar(artwork);
             try
             {
@@ -27,8 +28,8 @@ namespace VanyaTools.Native
                 if (width <= 0 || height <= 0 || Double.IsNaN(side) || Double.IsInfinity(side))
                     throw new InvalidOperationException("Не удалось определить пропорции миниатюры.");
                 object options = app.CreateStructExportOptions();
-                Set(options, "SizeX", Math.Max(1, (int)Math.Round(MaximumSide * width / side)));
-                Set(options, "SizeY", Math.Max(1, (int)Math.Round(MaximumSide * height / side)));
+                Set(options, "SizeX", Math.Max(1, (int)Math.Round(maximumSide * width / side)));
+                Set(options, "SizeY", Math.Max(1, (int)Math.Round(maximumSide * height / side)));
                 Set(options, "ResolutionX", 96);
                 Set(options, "ResolutionY", 96);
                 Set(options, "ImageType", CorelConstants.CdrRgbColorImage);
