@@ -1,0 +1,21 @@
+.photo-markup-image { position:relative; width:100%; height:100%; min-width:0; min-height:0; }
+.photo-markup-image>img { display:block; width:100%; height:100%; object-fit:contain; user-select:none; pointer-events:none; }
+.photo-markup-ink { position:absolute; pointer-events:none; overflow:hidden; }
+.photo-markup-ink.drawing { pointer-events:auto; touch-action:none; cursor:crosshair; }
+.orders-page.orders-workspace .photo-markup-editor { width:calc(100vw - 24px); max-width:none; height:calc(100dvh - 24px); max-height:none; padding:0; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); }
+.photo-markup-editor::backdrop { background:#09180fcc; }
+.photo-markup-panel { display:flex; flex-direction:column; height:100%; min-height:0; }
+.photo-markup-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding:8px; border-bottom:1px solid var(--line); background:var(--surface); }
+.photo-markup-tools,.photo-markup-colors { display:flex; gap:3px; align-items:center; }
+.orders-page.orders-workspace .photo-markup-toolbar .button { min-height:44px; height:44px; padding:7px 10px; }
+.orders-page.orders-workspace .photo-markup-toolbar .button-primary { width:auto; margin:0; flex-shrink:0; }
+.orders-page.orders-workspace .photo-markup-toolbar .button.active { background:var(--accent-soft); border-color:var(--accent); }
+.photo-markup-color { display:grid; place-items:center; width:42px; height:44px; border:2px solid transparent; border-radius:6px; background:transparent; }
+.photo-markup-color i { width:25px; height:25px; border:1px solid #b4b4b4; border-radius:50%; }
+.photo-markup-color.active { border-color:var(--accent); background:var(--accent-soft); }
+.photo-markup-spacer { flex:1; }
+.photo-markup-stage { flex:1; min-height:0; overflow:hidden; padding:8px; background:var(--canvas); }
+.photo-markup-error,.photo-markup-loading { margin:0; padding:7px 12px; font-size:14px; }
+.photo-markup-error { color:var(--danger); background:var(--danger-soft); }
+.photo-markup-error button { margin-left:12px; border:0; background:transparent; text-decoration:underline; }
+@media(max-width:600px) { .photo-markup-toolbar { gap:3px; }.photo-markup-color { width:36px; }.photo-markup-spacer { display:none; }.orders-page.orders-workspace .photo-markup-toolbar .button-primary { margin-left:auto; }.photo-markup-stage { padding:2px; } }

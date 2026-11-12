@@ -1,0 +1,12 @@
+.orders-page.orders-workspace .canvas-empty-upload { z-index:6; }
+.orders-page.orders-workspace[data-info-position="top-right"] .canvas-empty-upload { top:auto; bottom:68px; }
+.mobile-note-qr-dialog { box-sizing:border-box; width:min(390px,calc(100vw - 24px)); max-height:calc(100dvh - 24px); overflow:auto; padding:18px; border:1px solid var(--line); border-radius:14px; color:var(--ink); background:var(--surface,#fff); box-shadow:0 20px 80px #0005; }
+.mobile-note-qr-dialog::backdrop { background:#0008; }
+.mobile-note-qr-dialog header,.mobile-note-qr-dialog footer { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.mobile-note-qr-dialog h2 { margin:3px 0 0; font-size:22px; }
+.mobile-note-qr-dialog small,.mobile-note-qr-meta { color:var(--muted); font-size:13px; }
+.mobile-note-qr-dialog p { margin:12px 0; }
+.mobile-note-qr-image { display:block; width:min(100%,290px); aspect-ratio:1; margin:12px auto 0; background:white; image-rendering:pixelated; }
+.mobile-note-qr-meta { text-align:center; }
+.mobile-note-qr-dialog .button { min-height:44px; }
+.mobile-note-qr-dialog a { color:var(--accent); padding:10px 0; }
