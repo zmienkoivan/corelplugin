@@ -12,10 +12,15 @@ namespace VanyaTools.Native
     {
         internal static BitmapSource Reference(IReadOnlyList<BitmapSource> images)
         {
+            if (images == null || images.Count == 0 || images.Count > 64)
+                throw new ArgumentException("Для коллажа нужен набор из 1–64 рисунков.", nameof(images));
+            foreach (var image in images)
+                if (image == null) throw new ArgumentException("Не удалось прочитать один из рисунков набора.", nameof(images));
             int columns = (int)Math.Ceiling(Math.Sqrt(images.Count));
             int rows = (images.Count + columns - 1) / columns;
-            int tile = images.Count == 1 ? 2048 : Math.Min(480, 1920 / columns);
+            int tile = images.Count == 1 ? 2048 : Math.Min(768, 1920 / columns);
             var visual = new DrawingVisual();
+            RenderOptions.SetBitmapScalingMode(visual, BitmapScalingMode.HighQuality);
             using (var drawing = visual.RenderOpen())
             {
                 drawing.DrawRectangle(Brushes.LightGray, null, new Rect(0, 0, columns * tile, rows * tile));
@@ -47,7 +52,7 @@ namespace VanyaTools.Native
         internal static PatternFillerPlan Analyze(BitmapSource reference, string token, CancellationToken cancellation) =>
             Analyze(reference, token, PatternFillerBrief.AnalysisModel, cancellation);
 
-        internal static PatternFillerPlan Analyze(BitmapSource reference, string token, string model, CancellationToken cancellation, int count = 4, bool smallFillers = false)
+        internal static PatternFillerPlan Analyze(BitmapSource reference, string token, string model, CancellationToken cancellation, int count = 4, bool smallFillers = false, PatternReferenceKind source = PatternReferenceKind.MainPrint)
         {
             PatternFillerBrief.FindAnalysisModel(model);
             cancellation.ThrowIfCancellationRequested();
@@ -55,12 +60,12 @@ namespace VanyaTools.Native
             string input = AiPrintTab.DataUri(reference, 2048, 2000000);
             try
             {
-                ReplicateWorkerClient.Run(model, token, PatternFillerBrief.AnalysisInput(model, input, count, smallFillers),
+                ReplicateWorkerClient.Run(model, token, PatternFillerBrief.AnalysisInput(model, input, count, smallFillers, source),
                     path, cancellation: cancellation);
                 cancellation.ThrowIfCancellationRequested();
                 if (new FileInfo(path).Length > 48000)
                     throw new InvalidDataException("Анализатор вернул слишком длинное описание.");
-                return PatternFillerBrief.Parse(File.ReadAllText(path), count, smallFillers);
+                return PatternFillerBrief.Parse(File.ReadAllText(path), count, smallFillers, source);
             }
             finally { Cleanup(path, input); }
         }

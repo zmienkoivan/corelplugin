@@ -19,7 +19,7 @@ internal static class Program
     {
         try
         {
-            Plans(); Pipeline(); Extraction(); Counts(); Viewport();
+            Plans(); Pipeline(); Extraction(); Counts(); Viewport(); ReferenceSources();
             Console.WriteLine("Pattern filler analysis checks passed: " + _checks + ". Synthetic images and stub worker only; no network or Corel.");
             return 0;
         }
@@ -229,6 +229,71 @@ internal static class Program
         view.Fit();
         Check(Math.Abs(view.Percent - 100) < .001 && view.Center == new System.Windows.Point(75, 45),
             "Fit did not restore the latest outline.");
+    }
+
+    private static void ReferenceSources()
+    {
+        foreach (var model in new[] { PatternFillerBrief.AnalysisModel, PatternFillerBrief.GptMiniModel })
+        {
+            var image = BitmapSource.Create(24, 16, 96, 96, PixelFormats.Bgra32, null, new byte[24 * 16 * 4], 24 * 4);
+            image.Freeze();
+            int before = ReplicateWorkerClient.Calls;
+            var plan = PatternFillerAi.Analyze(image, "local-test", model, CancellationToken.None, 4, false, PatternReferenceKind.MotifSet);
+            Check(plan.Source == PatternReferenceKind.MotifSet && plan.Copy().Source == plan.Source,
+                "Set analysis lost its source or cached-copy identity.");
+            Check(ReplicateWorkerClient.Calls == before + 1 &&
+                ReplicateWorkerClient.Input["prompt"].ToString().Contains("COLLAGE") &&
+                !ReplicateWorkerClient.Input["prompt"].ToString().Contains("SINGLE main print"),
+                "Set analysis incorrectly treated the collage as one main logo.");
+            var result = PatternFillerAi.Generate(image, "local-test", plan, CancellationToken.None);
+            Check(ReplicateWorkerClient.Calls == before + 2 && result.Count == 4 &&
+                ReplicateWorkerClient.Input["prompt"].ToString().Contains("COLLAGE OF PATTERN MOTIFS") &&
+                ReplicateWorkerClient.Input["prompt"].ToString().Contains("ALL tiles"),
+                "Generation ignored the collage source or repeated its request.");
+            Check(!File.Exists(AiPrintTab.Upload) && !File.Exists(ReplicateWorkerClient.Output),
+                "Set analysis/generation left temporary files.");
+        }
+        foreach (int count in new[] { 1, 2, 3, 4, 6, 10, 64 })
+        {
+            var images = new List<BitmapSource>();
+            for (int n = 0; n < count; n++)
+            {
+                var pixels = new byte[40 * 20 * 4];
+                for (int i = 0; i < pixels.Length; i += 4)
+                { pixels[i] = (byte)(n + 10); pixels[i + 1] = (byte)(n + 80); pixels[i + 2] = 180; pixels[i + 3] = 255; }
+                var image = BitmapSource.Create(40, 20, 96, 96, PixelFormats.Bgra32, null, pixels, 40 * 4);
+                image.Freeze(); images.Add(image);
+            }
+            var collage = PatternFillerAi.Reference(images);
+            Check(collage.IsFrozen && collage.PixelWidth <= 2048 && collage.PixelHeight <= 2048,
+                "Collage is not bounded/frozen for transfer.");
+            var raw = new byte[collage.PixelWidth * collage.PixelHeight * 4];
+            collage.CopyPixels(raw, collage.PixelWidth * 4, 0);
+            int columns = (int)Math.Ceiling(Math.Sqrt(count)), tile = collage.PixelWidth / columns;
+            for (int n = 0; n < count; n++)
+            {
+                int x = n % columns * tile + tile / 2, y = n / columns * tile + tile / 2;
+                int at = (y * collage.PixelWidth + x) * 4;
+                Check(raw[at] == n + 10 && raw[at + 1] == n + 80 && raw[at + 2] == 180 && raw[at + 3] == 255,
+                    "Collage lost, reordered or duplicated a motif.");
+                int margin = ((n / columns * tile + tile / 6) * collage.PixelWidth + x) * 4;
+                Check(raw[margin] == 211 && raw[margin + 1] == 211 && raw[margin + 2] == 211,
+                    "Collage distorted a wide motif or lost its neutral backing.");
+            }
+            if (count == 3)
+            {
+                int at = ((tile + tile / 2) * collage.PixelWidth + tile + tile / 2) * 4;
+                Check(raw[at] == 211 && raw[at + 1] == 211 && raw[at + 2] == 211, "Unused collage tile contains a fake motif.");
+            }
+        }
+        foreach (var invalid in new IReadOnlyList<BitmapSource>[] { null, Array.Empty<BitmapSource>(), new BitmapSource[1], new BitmapSource[65] })
+        {
+            bool rejected = false;
+            try { PatternFillerAi.Reference(invalid); } catch (ArgumentException) { rejected = true; }
+            Check(rejected, "Invalid or partial collage accepted.");
+        }
+        var invalidSource = PatternFillerBrief.Parse(Json); invalidSource.Source = (PatternReferenceKind)99;
+        Reject(() => invalidSource.Validate());
     }
 
     private static void Reject(Action action)

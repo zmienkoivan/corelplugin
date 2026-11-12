@@ -14,7 +14,7 @@ namespace VanyaTools.Native
         private readonly Action<string, bool> _status;
         private readonly Func<string> _token;
         private readonly Button _generateFillers;
-        private readonly ComboBox _fillerSet;
+        private readonly ComboBox _fillerSet, _fillerSource;
         private PatternFillerPlan _fillerPlan;
         private string _fillerPlanKey;
         private PatternFillerResult _fillerGeneration;
@@ -35,7 +35,7 @@ namespace VanyaTools.Native
         {
             _status = status; _token = token;
             var panel = DockerLayout.ToolGroup("Паттерн по контуру",
-                "Добавьте фоновые фигуры из выделения. Для генерации по стилю сначала запомните главный принт или группу. " +
+                "Добавьте фоновые фигуры из выделения. Для генерации ИИ выберите источник: набор рисунков или главный принт. " +
                 "Для паттерна по детали выделите замкнутый контур. Развёртка бутылки строится по размерам. " +
                 "«Галька» и «Крокодиловая кожа» распределяют ваши фигуры по ячейкам.");
             panel.Margin = new Thickness(8);
@@ -43,7 +43,8 @@ namespace VanyaTools.Native
             _forgetHero = Button("×", (_, __) =>
             {
                 _service.ForgetHero();
-                _hero.Text = "Главный принт — источник стиля ИИ";
+                _hero.Text = "Главный принт не выбран";
+                _fillerSource.SelectedIndex = 0;
                 _forgetHero.Visibility = Visibility.Collapsed;
             });
             _forgetHero.ToolTip = "Сбросить главный элемент";
@@ -55,10 +56,11 @@ namespace VanyaTools.Native
                 _settings.UseHero = _bottleSettings.UseHero = true;
                 _settings.HeroSize = _bottleSettings.HeroSize = 0;
                 _hero.Text = "Главный элемент выбран";
+                _fillerSource.SelectedIndex = 1;
                 _forgetHero.Visibility = Visibility.Visible;
                 Report("Теперь можно создать набор по стилю принта или выделить контур детали.", false);
             })), _forgetHero));
-            _hero = Note("Главный принт — источник стиля ИИ");
+            _hero = Note("Главный принт не выбран");
             panel.Children.Add(_hero);
             panel.Children.Add(Button("Добавить выделение в набор", (_, __) => Run(() =>
             {
@@ -79,12 +81,16 @@ namespace VanyaTools.Native
             });
             panel.Children.Add(_removeMotifs);
             _motifList.SelectionChanged += (_, __) => _removeMotifs.IsEnabled = _motifList.SelectedItems.Count > 0;
+            _fillerSource = new ComboBox { MinHeight = 27, SelectedIndex = 0, Margin = new Thickness(1, 4, 1, 0),
+                ItemsSource = new[] { "Источник ИИ: набор рисунков", "Источник ИИ: главный принт" },
+                ToolTip = "Набор собирается в один коллаж. Главный принт берётся отдельно. Превью будет показано перед подтверждением отправки." };
+            panel.Children.Add(_fillerSource);
             _fillerSet = new ComboBox { MinHeight = 27, SelectedIndex = 0, Margin = new Thickness(1, 4, 1, 0),
-                ItemsSource = new[] { "По главному принту · анализ ИИ", "Звезда, шарик, квадрат, ромб", "Кольцо, треугольник, шестигранник, капсула", "Искра, капля, полумесяц, точки" },
-                ToolTip = "Подбор по теме и стилю главного принта или готовые формы. Комплект можно изменить в окне перед генерацией." };
+                ItemsSource = new[] { "Подобрать сюжеты · анализ ИИ", "Звезда, шарик, квадрат, ромб", "Кольцо, треугольник, шестигранник, капсула", "Искра, капля, полумесяц, точки" },
+                ToolTip = "Подбор по теме и стилю выбранного источника или готовые формы. Комплект можно изменить в окне перед генерацией." };
             panel.Children.Add(_fillerSet);
             _generateFillers = Button("ИИ · набор рисунков…", (_, __) => GenerateFillers());
-            _generateFillers.ToolTip = "Создать 4–10 рисунков по главному принту через Nano Banana 2. Каждый запрос требует подтверждения.";
+            _generateFillers.ToolTip = "Создать 4–10 рисунков по набору или главному принту через Nano Banana 2. Каждый запрос требует подтверждения.";
             panel.Children.Add(_generateFillers);
             RefreshMotifs();
 
@@ -134,10 +140,12 @@ namespace VanyaTools.Native
                     string token = _token();
                     if (String.IsNullOrEmpty(token) || token.Length < 8)
                         throw new InvalidOperationException("Введите ключ Replicate в настройках.");
-                    var reference = _service.FillerReference(out _fillerDocument);
-                    string key = PatternFillerAi.ReferenceKey(reference) + ":" + _fillerSet.SelectedIndex;
+                    var source = _fillerSource.SelectedIndex == 0 ? PatternReferenceKind.MotifSet : PatternReferenceKind.MainPrint;
+                    var reference = _service.FillerReference(source, out _fillerDocument);
+                    string key = source + ":" + PatternFillerAi.ReferenceKey(reference) + ":" + _fillerSet.SelectedIndex;
                     var initial = _fillerPlan != null && key == _fillerPlanKey
                         ? _fillerPlan.Copy() : PatternFillerBrief.Preset(_fillerSet.SelectedIndex - 1);
+                    initial.Source = source;
                     var window = new PatternFillerWindow(reference, token, initial, _fillerAnalysisModel,
                         key == _fillerPlanKey ? _fillerGeneration : null);
                     var owner = PresentationSource.FromVisual(this) as HwndSource;

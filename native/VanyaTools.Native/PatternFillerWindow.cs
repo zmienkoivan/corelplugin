@@ -15,6 +15,7 @@ namespace VanyaTools.Native
     {
         private readonly BitmapSource _reference;
         private readonly string _token;
+        private readonly PatternReferenceKind _referenceSource;
         private readonly ComboBox _analysisModel;
         private readonly TextBox _theme, _style;
         private TextBox[] _elements;
@@ -35,7 +36,7 @@ namespace VanyaTools.Native
         internal string AnalysisModel => (_analysisModel.SelectedItem as PatternFillerBrief.AnalysisChoice)?.Id ?? PatternFillerBrief.AnalysisModel;
         internal PatternFillerPlan Plan => new PatternFillerPlan
         {
-            Theme = _theme.Text.Trim(), Style = _style.Text.Trim(),
+            Theme = _theme.Text.Trim(), Style = _style.Text.Trim(), Source = _referenceSource,
             Elements = Array.ConvertAll(_elements, input => input.Text.Trim()), SmallFillers = _small.IsChecked == true
         };
 
@@ -43,7 +44,8 @@ namespace VanyaTools.Native
         {
             _reference = reference; _token = token; Generation = generation;
             initial = initial ?? new PatternFillerPlan();
-            Title = "Рисунки по главному принту · Vanya Tools";
+            _referenceSource = initial.Source;
+            Title = "ИИ · рисунки паттерна · Vanya Tools";
             Width = Math.Min(880, SystemParameters.WorkArea.Width - 28);
             Height = Math.Min(740, SystemParameters.WorkArea.Height - 28);
             MinWidth = 570; MinHeight = 430;
@@ -73,7 +75,7 @@ namespace VanyaTools.Native
 
             var preview = new StackPanel { Width = 190, Margin = new Thickness(14, 0, 0, 0) };
             DockPanel.SetDock(preview, Dock.Right); root.Children.Add(preview);
-            preview.Children.Add(new TextBlock { Text = "Главный принт · стиль", FontWeight = FontWeights.SemiBold,
+            preview.Children.Add(new TextBlock { Text = PatternFillerBrief.ReferenceLabel(_referenceSource), TextWrapping = TextWrapping.Wrap, FontWeight = FontWeights.SemiBold,
                 Margin = new Thickness(0, 0, 0, 8) });
             var image = new Image { Source = reference, Stretch = Stretch.Uniform, MaxHeight = 240,
                 ToolTip = "Это уменьшенное превью будет отправлено только после подтверждения каждого запроса." };
@@ -116,7 +118,7 @@ namespace VanyaTools.Native
 
 
             Report(String.IsNullOrWhiteSpace(initial.Elements[0])
-                ? "Подберите 4–10 рисунков по главному принту или укажите их вручную."
+                ? "Подберите 4–10 рисунков по показанному источнику или укажите их вручную."
                 : "Комплект можно редактировать. Анализ не запускается автоматически.", false);
             _clock.Tick += (_, __) => _message.Text = OperationTiming.Display(_stage, _elapsed.Elapsed, _timingKey);
             PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) { e.Handled = true; CancelOrClose(); } };
@@ -164,9 +166,9 @@ namespace VanyaTools.Native
                 if (!analysis) plan.Validate();
                 string model = AnalysisModel;
                 string question = analysis
-                    ? "Отправить показанное превью главного принта в " + PatternFillerBrief.FindAnalysisModel(model).Name + " через Replicate для подбора " + plan.Elements.Length + " рисунков по теме и стилю? Это отдельный платный запрос."
-                    : "Отправить показанное превью главного принта и комплект из " + plan.Elements.Length + " рисунков в Nano Banana 2 через Replicate? Один платный запрос, лист " + PatternFillerBrief.Resolution(plan.Elements.Length) + ". Для 5–10 рисунков используется 4K: запрос может стоить дороже и выполняться дольше.";
-                if (MessageBox.Show(this, question, analysis ? "Анализ главного принта" : "Генерация рисунков",
+                    ? "Отправить показанное превью («" + PatternFillerBrief.ReferenceLabel(_referenceSource) + "») в " + PatternFillerBrief.FindAnalysisModel(model).Name + " через Replicate для подбора " + plan.Elements.Length + " рисунков по теме и стилю? Это отдельный платный запрос."
+                    : "Отправить показанное превью («" + PatternFillerBrief.ReferenceLabel(_referenceSource) + "») и комплект из " + plan.Elements.Length + " рисунков в Nano Banana 2 через Replicate? Один платный запрос, лист " + PatternFillerBrief.Resolution(plan.Elements.Length) + ". Для 5–10 рисунков используется 4K: запрос может стоить дороже и выполняться дольше.";
+                if (MessageBox.Show(this, question, analysis ? "Анализ источника стиля" : "Генерация рисунков",
                     MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
 
                 using (var request = new CancellationTokenSource())
@@ -175,7 +177,7 @@ namespace VanyaTools.Native
                     SetBusy(true, analysis);
                     if (analysis)
                     {
-                        var proposed = await Task.Run(() => PatternFillerAi.Analyze(_reference, _token, model, request.Token, plan.Elements.Length, plan.SmallFillers), request.Token);
+                        var proposed = await Task.Run(() => PatternFillerAi.Analyze(_reference, _token, model, request.Token, plan.Elements.Length, plan.SmallFillers, plan.Source), request.Token);
                         if (_closed) return;
                         _theme.Text = proposed.Theme; _style.Text = proposed.Style;
                         for (int i = 0; i < _elements.Length; i++) _elements[i].Text = proposed.Elements[i];
@@ -223,7 +225,7 @@ namespace VanyaTools.Native
             _cancel.Content = busy ? "Отменить" : "Закрыть";
             _cancel.IsEnabled = true;
             if (!busy) return;
-            _stage = analysis ? "Анализирую главный принт…" : "Создаю рисунки…";
+            _stage = analysis ? "Анализирую источник стиля…" : "Создаю рисунки…";
             _timingKey = analysis ? "pattern:analysis:" + AnalysisModel : "pattern:illustrations:google/nano-banana-2:" + PatternFillerBrief.Resolution(_elements.Length);
             _elapsed.Restart(); _clock.Start();
             Report(OperationTiming.Display(_stage, _elapsed.Elapsed, _timingKey), false);

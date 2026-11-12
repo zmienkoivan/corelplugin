@@ -104,12 +104,17 @@ namespace VanyaTools.Native
             return added.Length;
         }
 
-        internal BitmapSource FillerReference(out object document)
+        internal BitmapSource FillerReference(PatternReferenceKind source, out object document)
         {
             dynamic app = CorelApp.Get();
             object doc = app.ActiveDocument;
             document = doc;
-            if (_hero == null || !SameObject(doc, _heroDocument))
+            PatternFillerBrief.ReferenceLabel(source);
+            if (doc == null) throw new InvalidOperationException("Откройте документ CorelDRAW.");
+            bool fromSet = source == PatternReferenceKind.MotifSet;
+            if (fromSet && (!SameObject(doc, _motifDocument) || _motifs.Count == 0))
+                throw new InvalidOperationException("Добавьте рисунки активного документа в набор кнопкой «Добавить выделение в набор».");
+            if (!fromSet && (_hero == null || !SameObject(doc, _heroDocument)))
                 throw new InvalidOperationException("Выделите главный принт и нажмите «Запомнить главный элемент» в активном документе.");
             return InMillimeters(doc, () =>
             {
@@ -117,9 +122,14 @@ namespace VanyaTools.Native
                 if (current != null) foreach (dynamic shape in current) selection.Add(shape);
                 try
                 {
-                    var image = CaptureAsset(_hero, (object)app, doc, 2048).Preview;
-                    if (image == null) throw new InvalidOperationException("Не удалось снять превью главного принта.");
-                    return PatternFillerAi.Reference(new[] { image });
+                    var sources = fromSet ? _motifs.ToArray() : new[] { _hero };
+                    var images = sources.Select(item =>
+                    {
+                        var image = CaptureAsset(item, (object)app, doc, fromSet ? 768 : 2048).Preview;
+                        if (image == null) throw new InvalidOperationException("Не удалось снять превью: " + item.Label);
+                        return image;
+                    }).ToArray();
+                    return PatternFillerAi.Reference(images);
                 }
                 finally
                 {
