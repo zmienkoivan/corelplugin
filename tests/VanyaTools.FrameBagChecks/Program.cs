@@ -137,6 +137,7 @@ internal static class Program
 
             DetailChecks();
             DivisionChecks();
+            ModuleZipperChecks();
             WindowChecks.Run();
             InsertChecks.Run(plan);
             var invalid = new FrameBagSetup { Diagonal = 20 }; Reject(() => FrameBagGeometry.Build(invalid));
@@ -149,6 +150,61 @@ internal static class Program
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
     }
+    private static void ModuleZipperChecks()
+    {
+        var serializer = new System.Web.Script.Serialization.JavaScriptSerializer();
+        foreach (bool triangle in new[] { false, true })
+        foreach (bool curved in new[] { false, true })
+        {
+            var initial = new FrameBagSetup { TriangleFrame = triangle, DivideBags = true, LeftZipper = BagZipper.Slot };
+            if (curved) initial.DivisionLine = new[] { new[] { -50d, 100 }, new[] { 180d, 95 }, new[] { 320d, 120 }, new[] { 700d, 105 } };
+            var original = FrameBagGeometry.Build(initial);
+            Check(original.Setup.UpperZippers != null && original.Setup.LowerZippers != null, "Old modular project has no migrated module zippers.");
+            Check(original.Sections.All(s => s.Parts.Sum(p => p.Cutouts.Length) == 1), "Default lower zipper did not become a real cutting opening.");
+            foreach (BagZipper upper in Enum.GetValues(typeof(BagZipper)))
+            foreach (BagZipper lower in Enum.GetValues(typeof(BagZipper)))
+            {
+                var setup = original.Setup.Copy();
+                setup.UpperZippers.Left = upper; setup.UpperZippers.Right = BagZipper.None;
+                setup.LowerZippers.Left = BagZipper.None; setup.LowerZippers.Right = lower;
+                setup.UpperZippers.Width = 6; setup.LowerZippers.Width = 4;
+                setup.UpperZippers.FlapDepth = 12; setup.LowerZippers.FlapDepth = 10;
+                setup.UpperZippers.FlapExtra = setup.LowerZippers.FlapExtra = 4;
+                var plan = FrameBagGeometry.Build(setup);
+                Check(plan.Sections[0].Setup.LeftZipper == upper && plan.Sections[0].Setup.RightZipper == BagZipper.None &&
+                    plan.Sections[1].Setup.RightZipper == lower && plan.Sections[1].Setup.LeftZipper == BagZipper.None,
+                    "Changing one module overwrote the other module's zipper mode.");
+                Near(plan.Sections[0].Setup.ZipperWidth, 6); Near(plan.Sections[1].Setup.ZipperWidth, 4);
+                int holes = (upper == BagZipper.Slot || upper == BagZipper.Flap ? 1 : 0) + (lower == BagZipper.Slot || lower == BagZipper.Flap ? 1 : 0);
+                Check(plan.Parts.Sum(p => p.Cutouts.Length) == holes, "Independent zipper slots missing from combined cutting kit.");
+                foreach (var section in plan.Sections) { WallMatches(section); NotchMatches(section); }
+                Dxf(plan); InsertChecks.Run(plan);
+                string json = serializer.Serialize(plan.Setup);
+                var restored = FrameBagGeometry.Build(serializer.Deserialize<FrameBagSetup>(json));
+                Check(serializer.Serialize(restored.Setup) == json, "Module zipper modes/anchors/widths changed after JSON reload.");
+                var copy = plan.Setup.Copy(); copy.LowerZippers.RightStart[0] += 3;
+                Check(copy.LowerZippers.RightStart[0] != plan.Setup.LowerZippers.RightStart[0], "Module zipper anchors share mutable project state.");
+            }
+            var taller = original.Setup.Copy(); taller.Height += 30;
+            var resized = FrameBagGeometry.Build(taller);
+            Near(Distance(FrameBagClosures.Anchor(original.Sections[1], 0, 0), FrameBagClosures.Anchor(resized.Sections[1], 0, 0)), 0);
+            var invalid = original.Setup.Copy(); invalid.LowerZippers.LeftStart[1] = -10;
+            Reject(() => FrameBagGeometry.Build(invalid));
+            var editable = FrameBagGeometry.Build(invalid, false);
+            Check(editable.Sections.Length == 2 && FrameBagClosures.Anchor(editable.Sections[1], 0, 0).Y == -10,
+                "Invalid lower zipper disappears instead of staying editable.");
+        }
+        var narrow = new[] { new BagPoint(0,0),new BagPoint(4,0),new BagPoint(4,100),new BagPoint(0,100) };
+        var vertical = FrameBagZipperSet.Place(new FrameBagSetup(), narrow);
+        Check(vertical.Left == BagZipper.Slot && Math.Abs(vertical.LeftStart[0]-vertical.LeftEnd[0]) < 1e-8 &&
+            vertical.LeftEnd[1]-vertical.LeftStart[1] > 50, "Narrow bag cannot receive a vertical automatic zipper.");
+        var concave = new[] { new BagPoint(0,0),new BagPoint(40,0),new BagPoint(40,40),new BagPoint(60,40),
+            new BagPoint(60,0),new BagPoint(100,0),new BagPoint(100,100),new BagPoint(0,100) };
+        var bridge = FrameBagClosures.Capsule(new BagPoint(20,20),new BagPoint(80,20),8);
+        Check(bridge.All(p => FrameBagClosures.Inside(concave,p)) && !FrameBagClosures.ContainsPath(concave,bridge),
+            "Zipper contour bridges outside a concave bag between otherwise valid endpoints.");
+    }
+
     private static void DivisionChecks()
     {
         var serializer = new System.Web.Script.Serialization.JavaScriptSerializer();
@@ -182,7 +238,7 @@ internal static class Program
             Near(plan.Sections.Sum(section => section.VolumeLitres), plain.VolumeLitres, .00001);
             Check(plan.Parts.Length == plan.Sections.Sum(section => section.Parts.Length), "Combined kit lost independent pieces.");
             Check(plan.Sections.All(section => section.Parts.Count(part => part.Edge >= 0) == section.Breaks.Length), "A bag has no closing wall along the division.");
-            Check(plan.Sections[0].Setup.LeftZipper == BagZipper.Slot && plan.Sections[1].Setup.LeftZipper == BagZipper.None, "Zipper belongs to the wrong bag.");
+            Check(plan.Sections[0].Setup.LeftZipper == BagZipper.Slot && plan.Sections[1].Setup.LeftZipper == BagZipper.Slot, "Each independent bag needs its own default zipper.");
             foreach (var section in plan.Sections) { WallMatches(section); NotchMatches(section); Dxf(section); InsertChecks.Run(section); }
             Dxf(plan); InsertChecks.Run(plan);
             var restored = serializer.Deserialize<FrameBagSetup>(serializer.Serialize(plan.Setup));

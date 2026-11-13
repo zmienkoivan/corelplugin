@@ -21,8 +21,10 @@ namespace VanyaTools.Native
         private readonly TextBlock _message, _summary;
         private readonly TextBox _name;
         private readonly ComboBox _leftZipper, _rightZipper, _frameShape, _attachment;
-        private readonly System.Windows.Controls.Primitives.ToggleButton _leftView, _rightView;
-        private int _editSide;
+        private readonly System.Windows.Controls.Primitives.ToggleButton _leftView, _rightView, _upperView, _lowerView;
+        private readonly StackPanel _moduleViews;
+        private readonly TextBlock _editingClosure;
+        private int _editSide, _editBag;
         private readonly CheckBox _notches, _fullLength, _divideBags;
         private int _cornerCount;
         private FrameBagSetup _anchors;
@@ -114,7 +116,7 @@ namespace VanyaTools.Native
             fields.Children.Add(division);
             _divideBags = new CheckBox { Content = "Две сумки · верх и низ", IsChecked = initial.DivideBags, Margin = new Thickness(0, 0, 0, 5) };
             division.Children.Add(_divideBags);
-            _divideBags.Checked += (_, __) => Queue(); _divideBags.Unchecked += (_, __) => Queue();
+            _divideBags.Checked += (_, __) => ToggleDivision(true); _divideBags.Unchecked += (_, __) => ToggleDivision(false);
             var divisionActions = new Grid(); divisionActions.ColumnDefinitions.Add(new ColumnDefinition()); divisionActions.ColumnDefinitions.Add(new ColumnDefinition());
             divisionActions.Children.Add(Button("Сбросить линию", (_, __) => { _anchors.DivisionLine = null; Queue(); }));
             var deletePoint = Button("Удалить точку", (_, __) => _side.DeleteDivisionPoint());
@@ -123,23 +125,31 @@ namespace VanyaTools.Native
             _side.DivisionChanged += points => { _anchors.DivisionLine = points.Select(p => new[] { p.X, p.Y }).ToArray(); Queue(); };
             division.Children.Add(divisionActions);
             var closure = DockerLayout.ToolGroup("4 · Молнии и клапаны",
-                "Для каждой стороны выберите конструкцию. М1 и М2 перетаскиваются на виде сбоку: они задают начало и конец молнии. " +
+                "У двух сумок выберите «Верхняя / Нижняя» над предпросмотром. Их настройки независимы. Для каждой стороны выберите конструкцию. М1 и М2 перетаскиваются на виде сбоку: они задают начало и конец молнии. " +
                 "У «Двух деталей» линия проходит через якоря до границ боковины; ширина открытия оставляет место молнии между деталями. " +
                 "У «Прорези» и «Клапана» якоря — концы прорези. Их положение фиксировано в миллиметрах от рамы, изменение высоты сумки их не сдвигает. Клапан — отдельная накладная деталь с припусками.");
             fields.Children.Add(closure);
+            _editingClosure = new TextBlock { FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 5) };
+            closure.Children.Add(_editingClosure);
+            var initialClosure = initial.DivideBags ? initial.UpperZippers : null;
             string[] modes = { "Без молнии", "Прорезь", "Две детали", "Прорезь + клапан" };
-            _leftZipper = new ComboBox { ItemsSource = modes, SelectedIndex = (int)initial.LeftZipper, MinHeight = 27 };
-            _rightZipper = new ComboBox { ItemsSource = modes, SelectedIndex = (int)initial.RightZipper, MinHeight = 27 };
+            _leftZipper = new ComboBox { ItemsSource = modes, SelectedIndex = (int)(initialClosure?.Left ?? initial.LeftZipper), MinHeight = 27 };
+            _rightZipper = new ComboBox { ItemsSource = modes, SelectedIndex = (int)(initialClosure?.Right ?? initial.RightZipper), MinHeight = 27 };
             closure.Children.Add(DockerLayout.FieldRow("Левая боковина", _leftZipper, 155));
             closure.Children.Add(DockerLayout.FieldRow("Правая боковина", _rightZipper, 155));
-            _leftZipper.SelectionChanged += (_, __) => { SelectSide(0); Queue(); };
-            _rightZipper.SelectionChanged += (_, __) => { SelectSide(1); Queue(); };
-            Add(closure, "ZipperWidth", "Ширина открытия", 1, 40, initial.ZipperWidth);
-            Add(closure, "FlapDepth", "Ширина клапана", 5, 100, initial.FlapDepth);
-            Add(closure, "FlapExtra", "Выступ по торцам", 0, 50, initial.FlapExtra);
+            _leftZipper.SelectionChanged += (_, __) => { if (!_sync) SelectSide(0); Queue(); };
+            _rightZipper.SelectionChanged += (_, __) => { if (!_sync) SelectSide(1); Queue(); };
+            Add(closure, "ZipperWidth", "Ширина открытия", 1, 40, initialClosure?.Width ?? initial.ZipperWidth);
+            Add(closure, "FlapDepth", "Ширина клапана", 5, 100, initialClosure?.FlapDepth ?? initial.FlapDepth);
+            Add(closure, "FlapExtra", "Выступ по торцам", 0, 50, initialClosure?.FlapExtra ?? initial.FlapExtra);
             closure.Children.Add(Button("Выровнять молнию", (_, __) =>
             {
-                if (_editSide == 0) _anchors.LeftZipEndYmm = _anchors.LeftZipStartYmm;
+                if (_divideBags.IsChecked == true && CurrentModuleZippers != null)
+                {
+                    var set = CurrentModuleZippers;
+                    if (_editSide == 0) set.LeftEnd[1] = set.LeftStart[1]; else set.RightEnd[1] = set.RightStart[1];
+                }
+                else if (_editSide == 0) _anchors.LeftZipEndYmm = _anchors.LeftZipStartYmm;
                 else _anchors.RightZipEndYmm = _anchors.RightZipStartYmm;
                 Queue();
             }));
@@ -180,7 +190,11 @@ namespace VanyaTools.Native
                 FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 10, 0) });
             _leftView = SideButton("Левая", 0); _rightView = SideButton("Правая", 1);
             sideHeader.Children.Add(_leftView); sideHeader.Children.Add(_rightView);
-            DockPanel.SetDock(sideHeader, Dock.Top); sideView.Children.Add(sideHeader); sideView.Children.Add(_side);
+            var headers = new StackPanel(); headers.Children.Add(sideHeader);
+            _moduleViews = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(6, 0, 6, 4) };
+            _upperView = ModuleButton("Верхняя сумка", 0); _lowerView = ModuleButton("Нижняя сумка", 1);
+            _moduleViews.Children.Add(_upperView); _moduleViews.Children.Add(_lowerView); headers.Children.Add(_moduleViews);
+            DockPanel.SetDock(headers, Dock.Top); sideView.Children.Add(headers); sideView.Children.Add(_side);
             var sideBorder = new Border { Child = sideView, Margin = new Thickness(2), BorderThickness = new Thickness(1) };
             DockerTheme.UseTheme(sideBorder, Border.BorderBrushProperty, DockerTheme.BorderBrush);
             views.Children.Add(sideBorder);
@@ -209,6 +223,65 @@ namespace VanyaTools.Native
             if (_rightView != null) _rightView.IsChecked = _editSide == 1;
         }
 
+        private FrameBagZipperSet CurrentModuleZippers => _editBag == 0 ? _anchors.UpperZippers : _anchors.LowerZippers;
+        private System.Windows.Controls.Primitives.ToggleButton ModuleButton(string title, int bag)
+        {
+            var button = new System.Windows.Controls.Primitives.ToggleButton { Content = title, MinHeight = 28,
+                Padding = new Thickness(10, 3, 10, 3), Margin = new Thickness(1) };
+            button.Click += (_, __) => SelectBag(bag);
+            return button;
+        }
+        private FrameBagZipperSet ReadZipperControls(FrameBagZipperSet original)
+        {
+            var set = original.Copy(); set.Left = (BagZipper)_leftZipper.SelectedIndex; set.Right = (BagZipper)_rightZipper.SelectedIndex;
+            set.Width = ClosureValue("ZipperWidth", set.Left != BagZipper.None || set.Right != BagZipper.None, set.Width);
+            bool flap = set.Left == BagZipper.Flap || set.Right == BagZipper.Flap;
+            set.FlapDepth = ClosureValue("FlapDepth", flap, set.FlapDepth); set.FlapExtra = ClosureValue("FlapExtra", flap, set.FlapExtra);
+            return set;
+        }
+        private void SaveModuleControls()
+        {
+            if (CurrentModuleZippers == null) return;
+            var set = ReadZipperControls(CurrentModuleZippers);
+            if (_editBag == 0) _anchors.UpperZippers = set; else _anchors.LowerZippers = set;
+        }
+        private void SelectBag(int bag)
+        {
+            if (_sync) return;
+            try { if (_ready && _divideBags.IsChecked == true) SaveModuleControls(); }
+            catch (ArgumentException error) { _upperView.IsChecked = _editBag == 0; _lowerView.IsChecked = _editBag == 1; Message(error.Message, true); return; }
+            _editBag = bag == 1 ? 1 : 0; _side.EditBag(_editBag);
+            _sync = true;
+            try { PopulateZipperControls(); } finally { _sync = false; }
+            Queue();
+        }
+        private void ToggleDivision(bool enabled)
+        {
+            if (!_ready || _sync) return;
+            try
+            {
+                if (enabled) ReadZipperControls(FrameBagZipperSet.Capture(_anchors)).ApplyTo(_anchors);
+                else SaveModuleControls();
+                _editBag = 0; _side.EditBag(0);
+                _sync = true;
+                try { PopulateZipperControls(); } finally { _sync = false; }
+                Queue();
+            }
+            catch (ArgumentException error) { Message(error.Message, true); }
+        }
+        private void PopulateZipperControls()
+        {
+            bool divided = _divideBags.IsChecked == true;
+            var set = divided ? CurrentModuleZippers ?? FrameBagZipperSet.Capture(_anchors) : FrameBagZipperSet.Capture(_anchors);
+            _leftZipper.SelectedIndex = (int)set.Left; _rightZipper.SelectedIndex = (int)set.Right;
+            _fields["ZipperWidth"].Set(set.Width, true); _fields["FlapDepth"].Set(set.FlapDepth, true); _fields["FlapExtra"].Set(set.FlapExtra, true);
+            bool flap = set.Left == BagZipper.Flap || set.Right == BagZipper.Flap;
+            _fields["FlapDepth"].View.Visibility = _fields["FlapExtra"].View.Visibility = flap ? Visibility.Visible : Visibility.Collapsed;
+            _moduleViews.Visibility = divided ? Visibility.Visible : Visibility.Collapsed;
+            _upperView.IsChecked = _editBag == 0; _lowerView.IsChecked = _editBag == 1;
+            _editingClosure.Text = divided ? (_editBag == 0 ? "Молнии верхней сумки" : "Молнии нижней сумки") : "Молнии сумки";
+        }
+
         private void AllCornersChanged()
         {
             if (_sync) return;
@@ -222,17 +295,21 @@ namespace VanyaTools.Native
         }
         private void Add(Panel parent, string key, string title, double min, double max, double value, Action changed = null)
         { var field = new NumberField(title, min, max, value, changed ?? Queue); _fields.Add(key, field); parent.Children.Add(field.View); }
-        private FrameBagSetup Read() => new FrameBagSetup { Name = _name.Text.Trim(), TriangleFrame = _frameShape.SelectedIndex == 0,
+        private FrameBagSetup Read()
+        {
+            var result = new FrameBagSetup { Name = _name.Text.Trim(), TriangleFrame = _frameShape.SelectedIndex == 0,
             DivideBags = _divideBags.IsChecked == true, DivisionLine = _anchors.DivisionLine,
+            UpperZippers = _anchors.UpperZippers?.Copy(), LowerZippers = _anchors.LowerZippers?.Copy(),
             BagLength = _fullLength.IsChecked == true ? 0 : _fields["BagLength"].Read(), AttachToFront = _attachment.SelectedIndex == 1,
             Top = _fields["Top"].Read(), Seat = _fields["Seat"].Read(), Down = _fields["Down"].Read(),
             Head = _frameShape.SelectedIndex == 0 ? _last.Head : _fields["Head"].Read(),
             Diagonal = _frameShape.SelectedIndex == 0 ? _last.Diagonal : _fields["Diagonal"].Read(), Height = _fields["Height"].Read(),
             SplitHeights = true, FrontHeight = _fields["FrontHeight"].Read(),
-            LeftZipper = (BagZipper)_leftZipper.SelectedIndex, RightZipper = (BagZipper)_rightZipper.SelectedIndex,
-            ZipperWidth = ClosureValue("ZipperWidth", _leftZipper.SelectedIndex != 0 || _rightZipper.SelectedIndex != 0, _last.ZipperWidth),
-            FlapDepth = ClosureValue("FlapDepth", _leftZipper.SelectedIndex == 3 || _rightZipper.SelectedIndex == 3, _last.FlapDepth),
-            FlapExtra = ClosureValue("FlapExtra", _leftZipper.SelectedIndex == 3 || _rightZipper.SelectedIndex == 3, _last.FlapExtra),
+            LeftZipper = _divideBags.IsChecked == true ? _anchors.LeftZipper : (BagZipper)_leftZipper.SelectedIndex,
+            RightZipper = _divideBags.IsChecked == true ? _anchors.RightZipper : (BagZipper)_rightZipper.SelectedIndex,
+            ZipperWidth = _divideBags.IsChecked == true ? _anchors.ZipperWidth : ClosureValue("ZipperWidth", _leftZipper.SelectedIndex != 0 || _rightZipper.SelectedIndex != 0, _last.ZipperWidth),
+            FlapDepth = _divideBags.IsChecked == true ? _anchors.FlapDepth : ClosureValue("FlapDepth", _leftZipper.SelectedIndex == 3 || _rightZipper.SelectedIndex == 3, _last.FlapDepth),
+            FlapExtra = _divideBags.IsChecked == true ? _anchors.FlapExtra : ClosureValue("FlapExtra", _leftZipper.SelectedIndex == 3 || _rightZipper.SelectedIndex == 3, _last.FlapExtra),
             LeftZipAX = _anchors.LeftZipAX, LeftZipAY = _anchors.LeftZipAY, LeftZipBX = _anchors.LeftZipBX, LeftZipBY = _anchors.LeftZipBY,
             RightZipAX = _anchors.RightZipAX, RightZipAY = _anchors.RightZipAY, RightZipBX = _anchors.RightZipBX, RightZipBY = _anchors.RightZipBY,
             FixedZipperAnchors = _anchors.FixedZipperAnchors,
@@ -243,6 +320,13 @@ namespace VanyaTools.Native
             TopDepth = _fields["TopDepth"].Read(), BottomDepth = _fields["BottomDepth"].Read(),
             Clearance = _fields["Clearance"].Read(), Allowance = _fields["Allowance"].Read(), CornerRadius = _fields["CornerRadius"].Read(),
             Notches = _notches.IsChecked == true, NotchDepth = ClosureValue("NotchDepth", _notches.IsChecked == true, _last.NotchDepth) };
+            if (result.DivideBags && CurrentModuleZippers != null)
+            {
+                var set = ReadZipperControls(CurrentModuleZippers);
+                if (_editBag == 0) result.UpperZippers = set; else result.LowerZippers = set;
+            }
+            return result;
+        }
 
         private void UpdateFrameControls()
         {
@@ -256,6 +340,8 @@ namespace VanyaTools.Native
 
         private void SetAnchor(int side, int index, double x, double y)
         {
+            if (_divideBags.IsChecked == true && CurrentModuleZippers != null)
+            { CurrentModuleZippers.Move(side, index, x, y); Queue(); return; }
             _anchors.FixedZipperAnchors = true;
             if (side == 0) { if (index == 0) { _anchors.LeftZipStartXmm = x; _anchors.LeftZipStartYmm = y; } else { _anchors.LeftZipEndXmm = x; _anchors.LeftZipEndYmm = y; } }
             else { if (index == 0) { _anchors.RightZipStartXmm = x; _anchors.RightZipStartYmm = y; } else { _anchors.RightZipEndXmm = x; _anchors.RightZipEndYmm = y; } }
@@ -304,8 +390,7 @@ namespace VanyaTools.Native
                 catch (ArgumentException error) { preview = FrameBagGeometry.Build(setup, false); _plan = null; closureError = error.Message; }
                 _last = preview.Setup.Copy(); _anchors = preview.Setup.Copy();
                 _side.Update(preview); _front.Update(preview); _pieces.Update(_plan);
-                _fields["FlapDepth"].View.Visibility = _fields["FlapExtra"].View.Visibility =
-                    setup.LeftZipper == BagZipper.Flap || setup.RightZipper == BagZipper.Flap ? Visibility.Visible : Visibility.Collapsed;
+                PopulateZipperControls();
                 _summary.Text = _plan == null ? "Исправьте разделение или молнию перед созданием комплекта." :
                     "Комплект: " + _plan.Parts.Length + " деталей · " + (_plan.Sections.Length == 2
                         ? "верх ≈ " + _plan.Sections[0].VolumeLitres.ToString("0.00", CultureInfo.CurrentCulture) + " л · низ ≈ " + _plan.Sections[1].VolumeLitres.ToString("0.00", CultureInfo.CurrentCulture) + " л\n"
@@ -374,10 +459,11 @@ namespace VanyaTools.Native
                     pair.Value.Set(value, true);
                 }
                 _frameShape.SelectedIndex = setup.TriangleFrame ? 0 : 1;
-                _anchors = setup.Copy(); _leftZipper.SelectedIndex = (int)setup.LeftZipper; _rightZipper.SelectedIndex = (int)setup.RightZipper;
+                _anchors = setup.Copy(); _editBag = 0; _side.EditBag(0);
+                _leftZipper.SelectedIndex = (int)setup.LeftZipper; _rightZipper.SelectedIndex = (int)setup.RightZipper;
                 _divideBags.IsChecked = setup.DivideBags;
                 _notches.IsChecked = setup.Notches; _fullLength.IsChecked = setup.BagLength == 0; _attachment.SelectedIndex = setup.AttachToFront ? 1 : 0;
-                _name.Text=setup.Name ?? "Велосумка";
+                _name.Text=setup.Name ?? "Велосумка"; PopulateZipperControls();
             }
             finally { _sync=false; }
             Rebuild();

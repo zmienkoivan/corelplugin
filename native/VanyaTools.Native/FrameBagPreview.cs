@@ -16,7 +16,7 @@ namespace VanyaTools.Native
         private FrameBagPlan _plan;
         private bool _pan;
         private Point _last;
-        private int _editSide, _anchor = -1, _divisionAnchor = -1, _divisionSelected = -1;
+        private int _editSide, _editBag, _anchor = -1, _divisionAnchor = -1, _divisionSelected = -1;
         private BagPoint[] _divisionWorking;
         internal event Action<int, int, double, double> AnchorChanged;
         internal event Action<BagPoint[]> DivisionChanged;
@@ -31,6 +31,15 @@ namespace VanyaTools.Native
                 _viewport.Pan(new Vector((_viewport.Center.X - center) * _viewport.Scale, 0));
             _editSide = side; InvalidateVisual();
         }
+        internal void EditBag(int bag)
+        {
+            bag = bag == 1 ? 1 : 0;
+            if (bag == _editBag) return;
+            if (IsMouseCaptured) ReleaseMouseCapture();
+            _editBag = bag; InvalidateVisual();
+        }
+        internal FrameBagPlan ZipperPlan => _plan?.Sections.Length == 2 ? _plan.Sections[_editBag] : _plan;
+
         internal FrameBagPreview(FrameBagView view)
         { _view = view; ClipToBounds = true; Focusable = true; ToolTip = "Колесо — масштаб. Средняя/правая кнопка или пробел + перетаскивание — перемещение."; }
         internal void Update(FrameBagPlan plan)
@@ -83,7 +92,9 @@ namespace VanyaTools.Native
                     Polygon(dc, plan.Sections[0].Bag, new SolidColorBrush(Color.FromArgb(50, 50, 175, 100)), seam);
                     Polygon(dc, plan.Sections[1].Bag, new SolidColorBrush(Color.FromArgb(65, 60, 130, 230)), seam);
                 }
-                DrawZipper(dc, plan, hair);
+                if (plan.Sections.Length == 2)
+                    for (int n = 0; n < plan.Sections.Length; n++) DrawZipper(dc, plan.Sections[n], hair, n == _editBag);
+                else DrawZipper(dc, plan, hair, true);
                 DrawDivision(dc, plan, hair);
                 for (int n = 0; n < plan.Frame.Length; n++)
                 {
@@ -192,7 +203,7 @@ namespace VanyaTools.Native
             return _divisionSelected;
         }
 
-        private void DrawZipper(DrawingContext dc, FrameBagPlan plan, double hair)
+        private void DrawZipper(DrawingContext dc, FrameBagPlan plan, double hair, bool selected)
         {
             var mode = FrameBagClosures.Mode(plan.Setup, _editSide);
             if (mode == BagZipper.None) return;
@@ -200,7 +211,7 @@ namespace VanyaTools.Native
             var flatA = FrameBagClosures.Flat(plan, a); var flatB = FrameBagClosures.Flat(plan, b);
             var direction = BagPoint.Sub(b, a);
             bool valid = FrameBagClosures.Inside(plan.SideSeam, flatA) && FrameBagClosures.Inside(plan.SideSeam, flatB);
-            var pen = new Pen(valid ? Brushes.DarkSlateBlue : Brushes.Red, 1.5 * hair);
+            var pen = new Pen(valid ? (selected ? Brushes.DarkSlateBlue : Brushes.SlateGray) : Brushes.Red, 1.5 * hair);
             if (direction.Length > plan.Setup.ZipperWidth + 5)
             {
                 if (mode == BagZipper.Split)
@@ -219,13 +230,13 @@ namespace VanyaTools.Native
                 else
                 {
                     var slot = FrameBagClosures.Capsule(flatA,flatB,plan.Setup.ZipperWidth);
-                    valid = slot.All(p=>FrameBagClosures.Inside(plan.SideSeam,p));
+                    valid = FrameBagClosures.ContainsPath(plan.SideSeam, slot);
                     Polygon(dc,slot.Select(p=>FrameBagClosures.Project(plan,p)).ToArray(),Brushes.White,
-                        new Pen(valid?Brushes.DarkSlateBlue:Brushes.Red,hair));
+                        new Pen(valid?pen.Brush:Brushes.Red,hair));
                     if(mode==BagZipper.Flap)
                     {
                         var cover=FrameBagClosures.FlapCover(plan,flatA,flatB);
-                        bool fits=cover.All(p=>FrameBagClosures.Inside(plan.SideSeam,p));
+                        bool fits=FrameBagClosures.ContainsPath(plan.SideSeam, cover);
                         Polygon(dc,cover.Select(p=>FrameBagClosures.Project(plan,p)).ToArray(),
                             new SolidColorBrush(Color.FromArgb(70,235,175,35)),new Pen(fits?Brushes.DarkGoldenrod:Brushes.Red,hair){DashStyle=DashStyles.Dash});
                     }
@@ -233,6 +244,7 @@ namespace VanyaTools.Native
             }
             dc.DrawLine(new Pen(pen.Brush,hair){DashStyle=DashStyles.Dash},Point(a),Point(b));
             Text(dc,N(BagPoint.Sub(flatB,flatA).Length)+" мм",(a.X+b.X)/2,(a.Y+b.Y)/2-18*hair,11*hair,pen.Brush);
+            if (!selected) return;
             foreach(var pair in new[]{Tuple.Create(a,"М1"),Tuple.Create(b,"М2")})
             {
                 dc.DrawEllipse(Brushes.White,pen,Point(pair.Item1),5*hair,5*hair);
@@ -288,12 +300,12 @@ namespace VanyaTools.Native
                 }
             }
             if (_view == FrameBagView.Side && _plan != null && e.ChangedButton == MouseButton.Left && !Keyboard.IsKeyDown(Key.Space) &&
-                FrameBagClosures.Mode(_plan.Setup, _editSide) != BagZipper.None)
+                FrameBagClosures.Mode(ZipperPlan.Setup, _editSide) != BagZipper.None)
             {
                 var point = World(e.GetPosition(this));
                 for (int n=0;n<2;n++)
                 {
-                    var at=FrameBagClosures.Anchor(_plan,_editSide,n);
+                    var at=FrameBagClosures.Anchor(ZipperPlan,_editSide,n);
                     if ((new Point(at.X,at.Y)-point).Length*_viewport.Scale>12)continue;
                     if(!CaptureMouse())return;
                     Focus();_anchor=n;Cursor=Cursors.Hand;e.Handled=true;return;

@@ -3,6 +3,7 @@
   <ItemGroup><Reference Include="System.Web.Extensions" /><Reference Include="Microsoft.CSharp" /><Compile Include="../../native/VanyaTools.Native/FrameBagWindow.cs" Link="FrameBagWindow.cs" />
     <Compile Include="../../native/VanyaTools.Native/FrameBagPreview.cs" Link="FrameBagPreview.cs" />
     <Compile Include="../../native/VanyaTools.Native/PatternViewport.cs" Link="PatternViewport.cs" />
+    <Compile Include="../../native/VanyaTools.Native/FrameBagZipperSet.cs" Link="FrameBagZipperSet.cs" />
     <Compile Include="../../native/VanyaTools.Native/FrameBagDivision.cs" Link="FrameBagDivision.cs" />
     <Compile Include="../../native/VanyaTools.Native/FrameBagClosures.cs" Link="FrameBagClosures.cs" />
     <Compile Include="../../native/VanyaTools.Native/FrameBagNotches.cs" Link="FrameBagNotches.cs" />

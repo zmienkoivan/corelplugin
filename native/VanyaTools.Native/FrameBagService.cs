@@ -63,11 +63,13 @@ namespace VanyaTools.Native
                 string frameText = s.TriangleFrame
                     ? "Треугольник A–B–C, мм: " + N(s.Top) + " / " + N(s.Down) + " / " + N(s.Seat)
                     : "Внутренний проём A–B–C–D, мм: " + N(s.Top) + " / " + N(s.Head) + " / " + N(s.Down) + " / " + N(s.Seat) + "; A–C: " + N(s.Diagonal);
+                string ZipperText(FrameBagSetup closure) => "Л: " + FrameBagClosures.Name(closure.LeftZipper) + " / П: " + FrameBagClosures.Name(closure.RightZipper);
+                string zipperText = plan.Sections.Length == 2 ? "верх [" + ZipperText(plan.Sections[0].Setup) + "]; низ [" + ZipperText(plan.Sections[1].Setup) + "]" : ZipperText(s);
                 string summary = frameText + (s.BagLength > 0 ? "; длина по верху " + N(s.BagLength) + "; привязка " + (s.AttachToFront ? "спереди" : "сзади") : "; вся длина рамы") +
                     (s.DivideBags ? "; две самостоятельные сумки" : "") + "\nСумка: высота " + N(s.Height) + "; глубина " + N(s.TopDepth) + " → " + N(s.BottomDepth) +
                     "; высота спереди " + N(s.SplitHeights ? s.FrontHeight : s.Height) + "; зазор " + N(s.Clearance) + "; припуск " + N(s.Allowance) + "; R " +
                     (s.CornerRadii == null ? N(s.CornerRadius) : String.Join(" / ", Array.ConvertAll(s.CornerRadii, N))) +
-                    "; молнии " + FrameBagClosures.Name(s.LeftZipper) + " / " + FrameBagClosures.Name(s.RightZipper) +
+                    "; молнии " + zipperText +
                     ". Красный — резка. Синий — непечатаемые швы и подписи." +
                     (s.Notches && s.Allowance >= .4 ? " Две надсечки — начало стенки, одна — конец; глубина до " + N(s.NotchDepth) + " мм, не больше половины припуска." : "");
                 Label(guides, summary, left + 15, top - plan.KitHeight - 5, false);

@@ -129,6 +129,54 @@ internal static class WindowChecks
             Call(window, "LoadSetup", restored);
             Require(window.Plan != null && serializer.Serialize(window.Plan.Setup) == saved,
                 "Loading the project did not restore every saved parameter, decimal radius and division node.");
+            var upperBefore = window.Plan.Setup.UpperZippers.Copy();
+            var lowerBefore = window.Plan.Setup.LowerZippers.Copy();
+            Call(window, "SelectBag", 1);
+            Require(Field<ToggleButton>(window, "_lowerView").IsChecked == true && Field<ToggleButton>(window, "_upperView").IsChecked == false &&
+                side.ZipperPlan == window.Plan.Sections[1], "Lower module switch edits the wrong zipper plan.");
+            Field<ComboBox>(window, "_leftZipper").SelectedIndex = (int)BagZipper.Flap;
+            Set(window, "ZipperWidth", 3.5); Set(window, "FlapDepth", 8); Set(window, "FlapExtra", 3);
+            Call(window, "SelectBag", 0); Rebuild(window); // switching before the queued refresh must retain edits
+            Require(window.Plan != null && window.Plan.Setup.LowerZippers.Left == BagZipper.Flap && window.Plan.Setup.LowerZippers.Width == 3.5 &&
+                window.Plan.Setup.LowerZippers.FlapDepth == 8 && window.Plan.Setup.LowerZippers.FlapExtra == 3,
+                "Pending lower settings were lost when switching back to the upper bag.");
+            Require(serializer.Serialize(window.Plan.Setup.UpperZippers) == serializer.Serialize(upperBefore), "Lower controls overwrote upper zipper settings.");
+            Field<ComboBox>(window, "_leftZipper").SelectedIndex = (int)BagZipper.None;
+            Field<ComboBox>(window, "_rightZipper").SelectedIndex = (int)BagZipper.Slot;
+            Set(window, "ZipperWidth", 5.25); Rebuild(window);
+            Require(window.Plan != null && window.Plan.Sections[0].Setup.LeftZipper == BagZipper.None && window.Plan.Sections[0].Setup.RightZipper == BagZipper.Slot &&
+                window.Plan.Sections[1].Setup.ZipperWidth == 3.5, "Upper controls changed the lower zipper width or side.");
+            Call(window, "SelectBag", 1);
+            Field<ComboBox>(window, "_rightZipper").SelectedIndex = (int)BagZipper.Slot; Rebuild(window);
+            Require(window.Plan != null && Field<int>(side,"_editSide") == 1, "Lower right zipper did not become active.");
+            var upperSaved = serializer.Serialize(window.Plan.Setup.UpperZippers);
+            var leftSaved = (double[])window.Plan.Setup.LowerZippers.LeftStart.Clone();
+            var rightSaved = (double[])window.Plan.Setup.LowerZippers.RightStart.Clone();
+            Call(window,"SetAnchor",1,0,rightSaved[0]+1,rightSaved[1]+1); Rebuild(window);
+            Require(window.Plan != null && window.Plan.Setup.LowerZippers.RightStart[0] == rightSaved[0]+1 &&
+                window.Plan.Setup.LowerZippers.LeftStart.SequenceEqual(leftSaved) && serializer.Serialize(window.Plan.Setup.UpperZippers) == upperSaved,
+                "Dragging the lower-right anchor changed another zipper.");
+            Call(window,"SetAnchor",1,0,rightSaved[0],-10d); Rebuild(window);
+            Require(window.Plan == null && side.ZipperPlan != null && side.ZipperPlan.Setup.RightZipStartYmm == -10 &&
+                !Field<Button>(window,"_apply").IsEnabled, "Invalid lower zipper cannot be corrected in preview or remains exportable.");
+            Call(window,"SetAnchor",1,0,rightSaved[0],rightSaved[1]); Rebuild(window);
+            Require(window.Plan != null, "Correcting the lower anchor did not restore the cutting kit.");
+            saved = serializer.Serialize(window.Plan.Setup);
+            Call(window,"LoadSetup",serializer.Deserialize<FrameBagSetup>(saved));
+            Require(window.Plan != null && serializer.Serialize(window.Plan.Setup) == saved,
+                "Project reload loses independent module modes, flap values or coordinates.");
+            Call(window,"SelectBag",1);
+            Field<ComboBox>(window,"_leftZipper").SelectedIndex=0; Field<ComboBox>(window,"_rightZipper").SelectedIndex=0; Rebuild(window);
+            Require(window.Plan != null && window.Plan.Setup.LowerZippers.Left == BagZipper.None && window.Plan.Setup.LowerZippers.Right == BagZipper.None,
+                "Explicitly disabled lower zippers were re-added automatically.");
+            Field<CheckBox>(window,"_divideBags").IsChecked=false; Rebuild(window);
+            Field<CheckBox>(window,"_divideBags").IsChecked=true; Rebuild(window);
+            Require(window.Plan != null && window.Plan.Setup.LowerZippers.Left == BagZipper.None && window.Plan.Setup.LowerZippers.Right == BagZipper.None,
+                "Toggling modules discarded their saved zipper choices.");
+            var oldProject = project.Setup.Copy(); oldProject.UpperZippers = oldProject.LowerZippers = null;
+            Call(window,"LoadSetup",oldProject);
+            Require(window.Plan != null && window.Plan.Setup.UpperZippers != null && window.Plan.Setup.LowerZippers != null &&
+                window.Plan.Sections.All(section => section.Parts.Sum(part => part.Cutouts.Length) > 0), "Older modular project did not acquire its missing lower zipper.");
             Require(window.Title.Contains("GAVRILABAGS"), "Constructor title does not match its branded tab.");
             Console.WriteLine("Frame bag window: side switches, mirrored mouse/zoom, fixed zippers, front/rear heights, corner radii and notch controls passed.");
         }

@@ -25,7 +25,7 @@ namespace VanyaTools.Native
                 throw new ArgumentException("Линия разделения: от 2 до " + MaximumPoints + " точек с координатами в мм.");
             return line.Select(p => new BagPoint(p[0], p[1])).ToArray();
         }
-        internal static void Apply(FrameBagPlan plan)
+        internal static void Apply(FrameBagPlan plan, bool closures = true)
         {
             var divided = Split(plan.Bag, ReadLine(plan.Setup));
             plan.DivisionPath = divided.Path;
@@ -42,22 +42,18 @@ namespace VanyaTools.Native
                 setup.TopDepth = plan.Setup.TopDepth + slope * (top - originalTop);
                 setup.BottomDepth = plan.Setup.TopDepth + slope * (bottom - originalTop);
                 setup.Height = setup.FrontHeight = bottom - top;
-                // Zippers keep their frame coordinates and belong to exactly one
-                // bag. Slot/flap intersection is validated by the child builder.
-                for (int side = 0; side < 2; side++)
+                var zippers = n == 0 ? plan.Setup.UpperZippers : plan.Setup.LowerZippers;
+                if (zippers == null)
                 {
-                    var mode = FrameBagClosures.Mode(plan.Setup, side);
-                    if (mode == BagZipper.None) continue;
-                    bool first = FrameBagClosures.Inside(bag, FrameBagClosures.Anchor(plan, side, 0));
-                    bool second = FrameBagClosures.Inside(bag, FrameBagClosures.Anchor(plan, side, 1));
-                    if (first != second) throw new ArgumentException("Линия разделения пересекает молнию. Переместите линию или якоря молнии.");
-                    if (!first) { if (side == 0) setup.LeftZipper = BagZipper.None; else setup.RightZipper = BagZipper.None; }
+                    zippers = FrameBagZipperSet.Initialize(plan, setup, bag);
+                    if (n == 0) plan.Setup.UpperZippers = zippers.Copy(); else plan.Setup.LowerZippers = zippers.Copy();
                 }
+                zippers.ApplyTo(setup);
                 var important = plan.Breaks.Select(i => plan.Bag[i]).Concat(new[] { divided.Path[0], divided.Path[divided.Path.Length - 1] }).ToArray();
                 var breaks = Enumerable.Range(0, bag.Length).Where(i => important.Any(p => BagPoint.Sub(bag[i], p).Length < .00001)).ToArray();
                 if (breaks.Length < 2) throw new ArgumentException("Линия разделения не образует замкнутую сумку.");
                 FrameBagPlan section;
-                try { section = FrameBagGeometry.FromOutline(setup, plan.Frame, bag, breaks, plan.AvailableHeight, plan.MaximumRadius, true); }
+                try { section = FrameBagGeometry.FromOutline(setup, plan.Frame, bag, breaks, plan.AvailableHeight, plan.MaximumRadius, closures); }
                 catch (ArgumentException error) { throw new ArgumentException((n == 0 ? "Верхняя" : "Нижняя") + " сумка: " + error.Message, error); }
                 section.Setup.Name = (n == 0 ? "Верхняя" : "Нижняя") + " сумка";
                 foreach (var part in section.Parts) part.Name = section.Setup.Name + " · " + part.Name;

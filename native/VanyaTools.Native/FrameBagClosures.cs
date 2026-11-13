@@ -89,7 +89,7 @@ namespace VanyaTools.Native
                 else
                 {
                     var slot = Capsule(a, b, s.ZipperWidth);
-                    if (slot.Any(p => !Inside(plan.SideSeam, p)))
+                    if (!ContainsPath(plan.SideSeam, slot))
                         throw new ArgumentException(name + ": прорезь пересекает линию шва. Сдвиньте якоря внутрь.");
                     var part = SidePart("Боковина " + name.ToLowerInvariant(), plan.SideSeam, side, s.Allowance);
                     part.Cutouts = new[] { Transform(slot, side) };
@@ -98,7 +98,7 @@ namespace VanyaTools.Native
                     {
                         var cover = FlapCover(plan, a, b);
                         var attachA = cover[0]; var attachB = cover[1];
-                        if (cover.Any(p => !Inside(plan.SideSeam, p)))
+                        if (!ContainsPath(plan.SideSeam, cover))
                             throw new ArgumentException(name + ": клапан выходит за боковину. Сдвиньте якоря или уменьшите клапан.");
                         part.Marks = part.Marks.Concat(new[] { Transform(new[] { attachA, attachB }, side) }).ToArray();
                         var flap = new[] { new BagPoint(0, 0), new BagPoint(length + s.FlapExtra * 2, 0),
@@ -148,6 +148,31 @@ namespace VanyaTools.Native
             { double at = angle - Math.PI / 2 + Math.PI * n / steps; points.Add(new BagPoint(c2.X + radius * Math.Cos(at), c2.Y + radius * Math.Sin(at))); }
             return points.ToArray();
         }
+        // Check whole edges, not just vertices: a straight zipper can bridge
+        // an indentation in a module with a bent division boundary.
+        internal static bool ContainsPath(BagPoint[] polygon, BagPoint[] path)
+        {
+            if (path.Any(p => !Inside(polygon, p))) return false;
+            for (int i = 0; i < path.Length; i++)
+            {
+                var a = path[i]; var v = BagPoint.Sub(path[(i + 1) % path.Length], a);
+                var stops = new List<double> { 0, 1 };
+                for (int j = 0; j < polygon.Length; j++)
+                {
+                    var b = polygon[j]; var w = BagPoint.Sub(polygon[(j + 1) % polygon.Length], b);
+                    double cross = BagPoint.Cross(v, w);
+                    if (Math.Abs(cross) < 1e-10) continue;
+                    var d = BagPoint.Sub(b, a);
+                    double t = BagPoint.Cross(d, w) / cross, u = BagPoint.Cross(d, v) / cross;
+                    if (t > 0 && t < 1 && u >= 0 && u <= 1) stops.Add(t);
+                }
+                stops.Sort();
+                for (int n = 1; n < stops.Count; n++)
+                    if (!Inside(polygon, BagPoint.Add(a, BagPoint.Mul(v, (stops[n] + stops[n - 1]) / 2)))) return false;
+            }
+            return true;
+        }
+
         internal static bool Inside(BagPoint[] polygon, BagPoint p)
         {
             bool inside = false;

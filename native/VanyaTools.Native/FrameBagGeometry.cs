@@ -28,6 +28,8 @@ namespace VanyaTools.Native
         public double Down { get; set; } = 594.1;
         public double Head { get; set; } = 104.4;
         public double Diagonal { get; set; } = 588.6;
+        public FrameBagZipperSet UpperZippers { get; set; }
+        public FrameBagZipperSet LowerZippers { get; set; }
         public bool DivideBags { get; set; }
         public double[][] DivisionLine { get; set; }
         public double BagLength { get; set; }
@@ -70,6 +72,7 @@ namespace VanyaTools.Native
         {
             var copy = (FrameBagSetup)MemberwiseClone();
             copy.CornerRadii = CornerRadii == null ? null : (double[])CornerRadii.Clone();
+            copy.UpperZippers = UpperZippers?.Copy(); copy.LowerZippers = LowerZippers?.Copy();
             copy.DivisionLine = DivisionLine == null ? null : DivisionLine.Select(p => p == null ? null : (double[])p.Clone()).ToArray();
             return copy;
         }
@@ -200,10 +203,14 @@ namespace VanyaTools.Native
             result.Parts[0].Side = 0; result.Parts[1].Side = 1;
             FrameBagClosures.FixAnchors(result);
             if (setup.DivideBags) FrameBagDivision.EnsureLine(result);
-            if (closures && setup.DivideBags) FrameBagDivision.Apply(result);
-            else
+            if (setup.DivideBags)
             {
-                if (closures) FrameBagClosures.Apply(result);
+                try { FrameBagDivision.Apply(result, closures); }
+                catch (ArgumentException) when (!closures) { }
+            }
+            if (result.Sections.Length == 0)
+            {
+                if (closures && !setup.DivideBags) FrameBagClosures.Apply(result);
                 FrameBagNotches.Apply(result);
                 foreach (var part in result.Parts.Where(p => p.Side >= 0))
                     part.CornerPoints = breaks.Select(n => new BagPoint(part.Side == 0 ? side[n].X : -side[n].X, side[n].Y)).ToArray();
