@@ -1,0 +1,59 @@
+.orders-page.orders-workspace .order-notes-button { gap:7px; }
+.orders-page.orders-workspace .order-notes-button[data-open-notes=true] { color:#805500; background:#fff0bd; border-color:#e0aa25; }
+.orders-page.orders-workspace .open-notes-mark { flex:none; padding:2px 4px; border-radius:4px; background:#ffe7a1; color:#5b4100; font-size:12px; white-space:nowrap; }
+.orders-page.orders-workspace .order-list-item[data-open-notes=true] { animation:note-attention 2.5s ease-in-out infinite; }
+.orders-page.orders-workspace .order-detail[data-open-notes=true] :is(.gallery-stage,.gallery-empty) { animation:note-attention 2.5s ease-in-out infinite; }
+@keyframes note-attention { 0%,100% { outline:2px solid #e8b629; outline-offset:-2px; } 50% { outline:2px solid transparent; outline-offset:-2px; } }
+.order-notes-dialog { width:min(720px,calc(100vw - 36px)); max-height:calc(100dvh - 40px); padding:0; border:1px solid var(--line); border-radius:14px; color:var(--ink); background:var(--surface,#fff); box-shadow:0 20px 80px #0005; }
+.order-notes-dialog[open] { display:flex; flex-direction:column; }
+.order-notes-dialog::backdrop { background:#0008; }
+.notes-header { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:20px 24px 12px; }
+.notes-header small { font-size:12px; color:var(--muted); letter-spacing:.08em; }
+.notes-header h2 { margin:3px 0 0; font-size:26px; }
+.notes-header h2 span { font-size:13px; font-weight:500; color:var(--muted); margin-left:8px; }
+.orders-page.orders-workspace .notes-header .button { width:auto; height:40px; min-height:40px; padding:0 12px; font-size:14px; }
+.notes-header-actions { display:flex; gap:8px; align-items:center; }
+.orders-page.orders-workspace .notes-header .notes-close { width:40px; padding:0; }
+.notes-employee { display:flex; align-items:center; gap:12px; padding:0 24px 14px; font-size:14px; color:var(--muted); }
+.notes-employee input { min-height:38px; max-width:270px; padding:6px 10px; font-size:16px; border:1px solid var(--line); border-radius:6px; background:var(--overlay); color:var(--ink); }
+.notes-content { overflow:auto; padding:0 24px 24px; min-height:0; overscroll-behavior:contain; }
+.note-compose { padding:12px; border:1px solid var(--line); border-radius:10px; background:var(--overlay); }
+.note-compose textarea { display:block; width:100%; resize:vertical; min-height:86px; max-height:240px; padding:4px; border:0; border-radius:3px; background:transparent; color:var(--ink); font:inherit; font-size:17px; line-height:1.5; }
+.note-compose-actions { display:flex; align-items:center; gap:10px; padding-top:10px; }
+.note-compose-actions .button,.note-resolution .button { display:inline-flex; align-items:center; justify-content:center; gap:7px; font-size:14px; min-height:40px; padding:6px 12px; }
+.note-compose-actions small { flex:1; font-size:12px; color:var(--muted); }
+.orders-page.orders-workspace .note-compose-actions > button { width:auto; flex:0 0 auto; margin:0; }
+.orders-page.orders-workspace .order-notes-dialog form { display:block; margin:0; }
+.orders-page.orders-workspace .order-notes-dialog svg { flex:none; width:20px; height:20px; }
+.orders-page.orders-workspace .order-notes-dialog .note-body > p:not(.note-telegram-status) { color:var(--ink); margin:12px 0; }
+.note-compose textarea::placeholder { color:var(--muted); opacity:.8; }
+.note-upload { position:relative; cursor:pointer; overflow:hidden; margin:0; }
+.note-upload input { position:absolute; inset:0; opacity:0; cursor:pointer; }
+.note-attachments,.note-photos { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+.note-attachments > div { position:relative; }
+.note-attachments img { width:100px; height:80px; object-fit:contain; background:#fff; border-radius:5px; }
+.note-attachments .button { position:absolute; right:0; top:0; width:25px; height:25px; min-height:25px; padding:0; }
+.note-entry { margin-top:12px; border:1px solid var(--line); border-radius:9px; overflow:hidden; }
+.note-summary { display:flex; align-items:flex-start; gap:10px; padding:13px; width:100%; color:var(--ink); background:var(--overlay); border:0; text-align:left; cursor:pointer; }
+.note-summary > span:nth-child(2) { min-width:0; flex:1; }
+.note-summary strong { font-size:16px; }
+.note-summary time { font-size:12px; color:var(--muted); margin-left:12px; }
+.note-excerpt { display:block; margin-top:5px; font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.note-summary > small { flex:none; font-size:12px; padding-top:2px; }
+.note-state-mark { color:#bd840d; }
+.note-entry[data-state=resolved] .note-state-mark { color:var(--accent); }
+.note-body { padding:0 14px 14px; }
+.note-body > p { font-size:17px; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; margin:14px 0; }
+.note-photos img { width:140px; height:120px; object-fit:contain; background:#fff; border:1px solid var(--line); border-radius:6px; }
+.note-body .note-telegram-status { font-size:12px; line-height:1.5; color:var(--muted); }
+.note-body .note-telegram-status[data-state=uncertain] { color:var(--danger); }
+.note-resolution { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin-top:12px; }
+.note-resolution small { color:var(--muted); font-size:12px; }
+.note-history { margin-top:14px; font-size:13px; }
+.note-history summary { cursor:pointer; padding:5px 0; color:var(--muted); }
+.note-history ol { list-style:none; padding:0; margin:6px 0 0; }
+.note-history li { display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-top:1px solid var(--line); }
+.note-history time { flex:none; color:var(--muted); font-size:12px; }
+.notes-error { margin:0 24px 12px; padding:10px; border-radius:6px; color:var(--danger); background:var(--danger-soft); font-size:14px; }
+.notes-empty { color:var(--muted); font-size:14px; line-height:1.6; margin:20px 0 0; }
+@media(max-width:599px) { .notes-header { padding:14px; } .notes-employee { padding:0 14px 12px; } .notes-content { padding:0 14px 14px; } .note-summary time { display:block; margin:3px 0 0; } .note-history li { flex-direction:column; gap:3px; } }

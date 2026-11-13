@@ -1,0 +1,7 @@
+Desk bell recording by kleinhirn2000
+https://freesound.org/people/kleinhirn2000/sounds/96521/
+License: Creative Commons Zero (CC0 1.0)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Converted to mono 22050 Hz, trimmed silence, filtered rumble, levelled, one strike with natural decay and peak normalized.
+Original source SHA-256: 08fcb236456a61037c01f6f576f7a75961bd285f7c9fd6a8be9904d2d418dc14

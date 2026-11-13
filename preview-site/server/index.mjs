@@ -9,6 +9,14 @@ import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import { watermarkOutline } from './watermark-outline.mjs';
 import { createOrders } from './orders.mjs';
+import { orderLabel } from './labels.mjs';
+import { orderMiniLabel } from './mini-labels.mjs';
+import { customerLabel } from './customer-labels.mjs';
+import { createRemoteOrders } from './remote-orders.mjs';
+import { createLocalPrinting } from './local-printing.mjs';
+import { createNetworkPrinting, serveNetworkPrinting } from './network-printing.mjs';
+import { createMobileNotes, mobileNoteMaxBytes } from './mobile-notes.mjs';
+import { labelPhotoIndex } from './label-photo-index.mjs';
 
 sharp.concurrency(1);
 sharp.cache({ memory: 64, files: 20, items: 100 });
@@ -21,7 +29,10 @@ const host = process.env.PREVIEW_HOST || '127.0.0.1';
 const port = Number(process.env.PREVIEW_PORT || 4173);
 const publicUrl = process.env.PREVIEW_PUBLIC_URL || `http://${host}:${port}`;
 if (!/^https?:\/\/[^/]+$/.test(publicUrl)) throw new Error('PREVIEW_PUBLIC_URL must be an origin without a trailing slash.');
-if (!['127.0.0.1', '::1', 'localhost'].includes(new URL(publicUrl).hostname) && !publicUrl.startsWith('https://'))
+const publicHostname = new URL(publicUrl).hostname;
+const privateLan = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(publicHostname);
+const localHttp = privateLan && process.env.PREVIEW_ALLOW_HTTP_LAN === '1';
+if (!['127.0.0.1', '::1', 'localhost'].includes(publicHostname) && !publicUrl.startsWith('https://') && !localHttp)
   throw new Error('Public deployments require an HTTPS PREVIEW_PUBLIC_URL.');
 const maxUploadBytes = 350 * 1024 * 1024;
 const maxPixels = 70_000_000;
@@ -65,9 +76,38 @@ function openToken(sealed) {
   return Buffer.concat([decipher.update(Buffer.from(sealed.data, 'hex')), decipher.final()]).toString('utf8');
 }
 const validAdmin = req => safeEqual(req.headers['x-admin-key'], adminKey);
-const orders = createOrders({ dataRoot, token: process.env.ORDER_BOT_TOKEN,
+const remoteOrders = createRemoteOrders(process.env.PREVIEW_ORDER_SERVER, process.env.PREVIEW_ORDER_SERVER_KEY);
+const orders = remoteOrders ? null : createOrders({ dataRoot, token: process.env.ORDER_BOT_TOKEN,
   channel: process.env.ORDER_BOT_CHANNEL,
-  allowedUsers: process.env.ORDER_BOT_ALLOWED_USER_IDS });
+  notesTelegram: process.env.ORDER_NOTES_TELEGRAM === '1',
+  allowedUsers: process.env.ORDER_BOT_ALLOWED_USER_IDS, importLegacy: process.env.ORDER_IMPORT_LEGACY === '1' });
+const mobileNotes = orders && createMobileNotes({ orders, publicUrl, secret: tokenKey });
+async function labelFor(id, format = 'full', variant = 'detailed', heightMm = 120, selectedPhoto = 0) {
+  const photoIndex = labelPhotoIndex(selectedPhoto);
+  if (remoteOrders) {
+    const response = await remoteOrders.read(`/api/orders/${id}/label?format=${format}&variant=${variant}&height=${heightMm}&photo=${photoIndex}`);
+    if (!response.ok) throw new Error('Не удалось получить этикетку с рабочего сервера.');
+    return response.json();
+  }
+  const card = orders.get(id);
+  if (!card) throw new Error('Заказ не найден.');
+  if (format === 'mini') return orderMiniLabel(card);
+  if (variant === 'customer') {
+    if (photoIndex >= (card.photoCount || 1)) throw new Error('Выбранное фото больше не доступно. Откройте другой кадр и повторите печать.');
+    const photo = card.photoCount ? await orders.readPhoto(id, photoIndex) : null;
+    if (card.photoCount && !photo) throw new Error('Не удалось загрузить выбранное фото для этикетки. Повторите печать.');
+    return { ...await customerLabel(card, publicUrl, { heightMm, photo }), photoIndex };
+  }
+  return orderLabel(card, publicUrl, { heightMm });
+}
+const printing = await createLocalPrinting({ dataRoot,
+  enabled: process.platform === 'win32' && ['127.0.0.1', 'localhost', '::1'].includes(host) && ['127.0.0.1', 'localhost', '::1'].includes(publicHostname),
+  labelFor: (id, format, variant, photoIndex) => labelFor(id, format, variant, 120, photoIndex) });
+const networkPrinting = orders ? createNetworkPrinting({ dataRoot, masterKey: adminKey, labelFor: async (id, format, profile, variant, photoIndex) => {
+  const card = orders.get(id);
+  if (!card) throw new Error('Заказ не найден.');
+  return { ...await labelFor(id, format, variant, profile?.labelHeightMm || 110, photoIndex), orderNumber: card.number };
+} }) : null;
 const cleanText = (value, limit) => String(value || '').trim().slice(0, limit);
 
 function optionsFromHeader(req) {
@@ -239,7 +279,8 @@ async function cleanupExpired() {
 }
 
 async function serveStatic(req, res, pathname) {
-  const relative = pathname === '/' || /^\/p\/[A-Za-z0-9_-]{22,36}$/.test(pathname)
+  const relative = pathname === '/mobile-note' || pathname === '/mobile-note/' ? 'mobile-note/index.html'
+    : pathname === '/' || pathname === '/orders' || /^\/o\/[A-Za-z0-9_-]{22}$/.test(pathname) || /^\/p\/[A-Za-z0-9_-]{22,36}$/.test(pathname)
     ? 'index.html' : pathname.replace(/^\//, '');
   const file = path.resolve(distRoot, relative);
   if (!file.startsWith(distRoot + path.sep)) { json(res, 404, { error: 'Файл не найден.' }); return; }
@@ -252,24 +293,195 @@ async function serveStatic(req, res, pathname) {
     '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.woff': 'font/woff' }[path.extname(file)] || 'application/octet-stream';
   res.writeHead(200, { 'Content-Type': type, 'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
-    'Cache-Control': path.extname(file) === '.html' ? 'no-store' : 'public, max-age=31536000, immutable',
+    'Cache-Control': path.extname(file) === '.html' || relative.startsWith('mobile-note/') ? 'no-store' : 'public, max-age=31536000, immutable',
     'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'" });
   fs.createReadStream(file).pipe(res);
+}
+
+async function readSmallJson(req, maximum = 4096) {
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maximum) throw new Error('Запрос слишком велик.');
+    chunks.push(chunk);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
 const server = http.createServer(async (req, res) => {
   try {
     const requestUrl = new URL(req.url, 'http://localhost');
     const pathname = requestUrl.pathname;
+    if (['GET', 'HEAD'].includes(req.method) && ['/orders', '/orders/'].includes(pathname) &&
+        (pathname.endsWith('/') || requestUrl.searchParams.has('v') || requestUrl.searchParams.has('version'))) {
+      requestUrl.searchParams.delete('v');
+      requestUrl.searchParams.delete('version');
+      res.writeHead(308, { Location: '/orders' + requestUrl.search, 'Cache-Control': 'no-store' });
+      res.end(); return;
+    }
     if (req.method === 'GET' && pathname === '/api/health') {
       json(res, 200, { ok: true }); return;
     }
-    if (pathname === '/api/orders' || /^\/api\/orders\/\d+(?:\/state)?$/.test(pathname) ||
-        /^\/api\/orders\/by-number\/\d{5}$/.test(pathname)) {
+    if (pathname === '/api/mobile-note') {
+      if (!mobileNotes) { json(res, 404, { error: 'Откройте ссылку с рабочего сайта.' }); return; }
+      const token = req.headers['x-mobile-note-token'];
+      try {
+        if (req.method === 'GET') json(res, 200, mobileNotes.inspect(token));
+        else if (req.method === 'POST') json(res, 201, await mobileNotes.submit(token, async () => {
+          if (Number(req.headers['content-length']) > mobileNoteMaxBytes)
+            throw Object.assign(new Error('Фото слишком большие. Попробуйте отправить меньше фотографий.'), { status: 413 });
+          if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || ''))
+            throw Object.assign(new Error('Неверный формат отправки.'), { status: 415 });
+          try { return await readSmallJson(req, mobileNoteMaxBytes); }
+          catch { throw Object.assign(new Error('Не удалось прочитать отправку. Проверьте фото и повторите.'), { status: 400 }); }
+        }));
+        else json(res, 405, { error: 'Метод недоступен.' });
+      } catch (error) {
+        if (!res.destroyed) json(res, error.status || 500, { error: error.status ? error.message : 'Не удалось сохранить заметку. Повторите отправку.' });
+      }
+      return;
+    }
+    if (pathname.startsWith('/api/print/v1/')) {
+      if (!networkPrinting) { json(res, 503, { error: 'Используйте адрес общего сервера печати.' }); return; }
+      await serveNetworkPrinting(req, res, { broker: networkPrinting, isAdmin: validAdmin, readBody: readSmallJson, json });
+      return;
+    }
+    if (pathname.startsWith('/api/network-printing/')) {
+      if (remoteOrders) {
+        if (!validAdmin(req)) { json(res, 403, { error: 'Неверный ключ сервера.' }); return; }
+        const reply = await remoteOrders.network(pathname, req.method, req.method === 'GET' ? undefined : await readSmallJson(req));
+        json(res, reply.status, await reply.json());
+      } else await serveNetworkPrinting(req, res, { broker: networkPrinting, isAdmin: validAdmin, readBody: readSmallJson, json });
+      return;
+    }
+    if (pathname.startsWith('/api/printing/')) {
       if (!validAdmin(req)) { json(res, 403, { error: 'Неверный ключ публикации.' }); return; }
+      if (!printing) { json(res, req.method === 'GET' ? 200 : 503, { available: false, printerName: '', printers: [], error: 'Прямая печать доступна через локальный сервер на Windows.' }); return; }
+      try {
+        if (pathname === '/api/printing/settings' && req.method === 'GET')
+          json(res, 200, await printing.settings(requestUrl.searchParams.get('refresh') === '1'));
+        else if (pathname === '/api/printing/settings' && req.method === 'PUT')
+          json(res, 200, await printing.configure(await readSmallJson(req)));
+        else if (pathname === '/api/printing/jobs' && req.method === 'POST')
+          json(res, 202, await printing.submit(await readSmallJson(req)));
+        else if (/^\/api\/printing\/jobs\/[0-9a-f-]{36}$/i.test(pathname) && req.method === 'GET') {
+          const job = await printing.get(pathname.split('/')[4]);
+          json(res, job ? 200 : 404, job || { error: 'Задание печати не найдено.' });
+        } else json(res, 404, { error: 'Маршрут печати не найден.' });
+      } catch (error) { json(res, 400, { error: error.message }); }
+      return;
+    }
+    if (pathname === '/api/orders' || pathname.startsWith('/api/orders/')) {
+      if (!validAdmin(req)) { json(res, 403, { error: 'Неверный ключ публикации.' }); return; }
+      if (pathname === '/api/orders/connection' && req.method === 'GET') {
+        try { json(res, 200, remoteOrders ? await remoteOrders.connectionInfo() : { mode: 'local', server: publicUrl,
+          intakeEnabled: true, stateEnabled: true, deadlineEnabled: true, urgencyEnabled: true, customerEnabled: true, pauseEnabled: true, customerTextileEnabled: true, blanksReadyEnabled: true, deletionEnabled: true, notesEnabled: true, photoMarkupEnabled: true }); }
+        catch { json(res, 502, { error: 'Не удалось проверить подключение к рабочему серверу.' }); }
+        return;
+      }
+      if (remoteOrders) {
+        const stateRequest = req.method === 'PATCH' && /^\/api\/orders\/\d+\/state$/.test(pathname);
+        const writeRequest = (req.method === 'POST' && (pathname === '/api/orders/intake' || /^\/api\/orders\/\d+\/assign$/.test(pathname))) ||
+          (req.method === 'PUT' && /^\/api\/orders\/\d+\/photos\/\d+\/markup$/.test(pathname)) ||
+          (req.method === 'POST' && /^\/api\/orders\/\d+\/notes(?:\/\d+\/(?:activity|state))?$/.test(pathname)) ||
+          (req.method === 'PATCH' && /^\/api\/orders\/\d+\/(?:deadline|urgency|customer|customer-textile|pause|blanks-ready)$/.test(pathname)) ||
+          (req.method === 'DELETE' && /^\/api\/orders\/\d+$/.test(pathname));
+        if (req.method !== 'GET' && !stateRequest && !writeRequest) {
+          json(res, 405, { error: 'Подключение к рабочему серверу доступно для просмотра заказов.' }); return;
+        }
+        try {
+          let payload;
+          if (stateRequest || writeRequest) {
+            try { payload = await readSmallJson(req, pathname.endsWith('/markup') ? 1_000_000 : pathname.includes('/notes') ? 25_000_000 : 4096); }
+            catch { json(res, 400, { error: 'Неверные параметры запроса.' }); return; }
+          }
+          const reply = stateRequest ? await remoteOrders.setState(Number(pathname.split('/')[3]), payload)
+            : writeRequest ? await remoteOrders.write(pathname, req.method, payload)
+            : await remoteOrders.read(pathname + requestUrl.search);
+          const body = Buffer.from(await reply.arrayBuffer());
+          res.writeHead(reply.status, { 'Content-Type': reply.headers.get('content-type') || 'application/json',
+            'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+          res.end(body);
+        } catch {
+          json(res, 502, { error: 'Не удалось связаться с рабочим сервером заказов. Проверьте подключение.' });
+        }
+        return;
+      }
       if (!orders) { json(res, 503, { error: 'Бот не настроен на сервере.' }); return; }
       try {
-        if (pathname === '/api/orders' && req.method === 'GET')
+        const markupRoute=/^\/api\/orders\/(\d+)\/photos\/(\d+)\/markup$/.exec(pathname);
+        if(markupRoute){
+          const [,id,index]=markupRoute;
+          if(req.method==='GET')json(res,200,orders.photoMarkup.read(Number(id),Number(index),requestUrl.searchParams.get('version')));
+          else if(req.method==='PUT')json(res,200,await orders.photoMarkup.save(Number(id),Number(index),await readSmallJson(req,1_000_000)));
+          else json(res,405,{error:'Метод недоступен.'});
+          return;
+        }
+        const noteRoute = /^\/api\/orders\/(\d+)\/notes(?:\/(\d+)\/(activity|state|photos\/\d+))?$/.exec(pathname);
+        if (noteRoute) {
+          const [, parentId, noteId, action] = noteRoute;
+          // This query also works through existing Windows stations that proxy the notes route.
+          if (!noteId && req.method === 'GET' && requestUrl.searchParams.get('mobileUpload') === '1')
+            json(res, 200, await mobileNotes.issue(Number(parentId)));
+          else if (!noteId && req.method === 'GET') json(res, 200, orders.notes.list(Number(parentId)));
+          else if (!noteId && req.method === 'POST') json(res, 201, await orders.createNote(Number(parentId), await readSmallJson(req, 25_000_000)));
+          else if (req.method === 'POST' && ['activity', 'state'].includes(action)) {
+            const body = await readSmallJson(req);
+            json(res, 200, action === 'state' ? orders.notes.transition(Number(parentId), Number(noteId), body) : orders.notes.activity(Number(parentId), Number(noteId), body));
+          } else if (req.method === 'GET' && action?.startsWith('photos/')) {
+            const image = orders.notes.photo(Number(parentId), Number(noteId), Number(action.split('/')[1]));
+            if (!image) json(res, 404, { error: 'Фото заметки не найдено.' });
+            else { res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(Buffer.from(image)); }
+          } else json(res, 405, { error: 'Метод заметки не поддерживается.' });
+        } else if (pathname === '/api/orders/intake' && req.method === 'POST') {
+          const body = await readSmallJson(req);
+          json(res, 201, orders.reserve(body.clientKey, body));
+        } else if (pathname === '/api/orders/unassigned' && req.method === 'GET')
+          json(res, 200, orders.unassigned());
+        else if (pathname === '/api/orders/imports' && req.method === 'GET')
+          json(res, 200, orders.importStatus());
+        else if (/^\/api\/orders\/by-label\/[A-Za-z0-9_-]{22}$/.test(pathname) && req.method === 'GET') {
+          const value = orders.getByLabel(pathname.split('/')[4]);
+          json(res, value ? 200 : 404, value || { error: 'Заказ не найден.' });
+        } else if (/^\/api\/orders\/\d+\/assign$/.test(pathname) && req.method === 'POST') {
+          const body = await readSmallJson(req);
+          json(res, 200, await orders.assign(Number(pathname.split('/')[3]), body.clientKey));
+        } else if (/^\/api\/orders\/\d+\/customer$/.test(pathname) && req.method === 'PATCH') {
+          const body = await readSmallJson(req);
+          json(res, 200, await orders.setCustomer(Number(pathname.split('/')[3]), body.customer, Number(body.revision)));
+        } else if (/^\/api\/orders\/\d+\/customer-textile$/.test(pathname) && req.method === 'PATCH') {
+          const body = await readSmallJson(req);
+          json(res, 200, await orders.setCustomerTextile(Number(pathname.split('/')[3]), body.isCustomerTextile, Number(body.revision)));
+        } else if (/^\/api\/orders\/\d+\/deadline$/.test(pathname) && req.method === 'PATCH') {
+          const body = await readSmallJson(req);
+          json(res, 200, await orders.setDeadline(Number(pathname.split('/')[3]), body.dueDate, Number(body.revision)));
+        } else if (/^\/api\/orders\/\d+\/urgency$/.test(pathname) && req.method === 'PATCH') {
+          const body = await readSmallJson(req);
+          json(res, 200, await orders.setUrgency(Number(pathname.split('/')[3]), body.isUrgent, Number(body.revision)));
+        } else if (/^\/api\/orders\/\d+\/pause$/.test(pathname) && req.method === 'PATCH') {
+          const body = await readSmallJson(req);
+          json(res, 200, await orders.setPause(Number(pathname.split('/')[3]), body.stage, body.paused, Number(body.revision)));
+        } else if (/^\/api\/orders\/\d+\/blanks-ready$/.test(pathname) && req.method === 'PATCH') {
+          const body = await readSmallJson(req);
+          json(res, 200, await orders.setBlanksReady(Number(pathname.split('/')[3]), body.blanksReady, Number(body.revision)));
+        } else if (/^\/api\/orders\/\d+\/label$/.test(pathname) && req.method === 'GET') {
+          const value = orders.get(Number(pathname.split('/')[3]));
+          if (!value) json(res, 404, { error: 'Заказ не найден.' });
+          else {
+            const variant = requestUrl.searchParams.get('variant') || 'detailed';
+            if (!['detailed', 'customer'].includes(variant)) throw new Error('Неверный вариант этикетки.');
+            json(res, 200, await labelFor(value.id, requestUrl.searchParams.get('format') === 'mini' ? 'mini' : 'full', variant,
+              requestUrl.searchParams.has('full') || requestUrl.searchParams.get('height') === '120' ? 120 : 110,
+              requestUrl.searchParams.has('photo') ? Number(requestUrl.searchParams.get('photo')) : 0));
+          }
+        } else if (/^\/api\/orders\/\d+\/photos\/\d+$/.test(pathname) && req.method === 'GET') {
+          const parts = pathname.split('/');
+          const photo = await orders.readPhoto(Number(parts[3]), Number(parts[5]), requestUrl.searchParams.get('thumbnail') === '1');
+          if (!photo) json(res, 404, { error: 'Фото не найдено.' });
+          else { res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff' }); res.end(photo); }
+        } else if (pathname === '/api/orders' && req.method === 'GET')
           json(res, 200, orders.list());
         else if (pathname === '/api/orders' && req.method === 'POST')
           json(res, 201, await orders.create(req));
@@ -278,15 +490,13 @@ const server = http.createServer(async (req, res) => {
           if (year && !/^\d{4}$/.test(year)) throw new Error('Неверный год заказа.');
           const value = orders.getByNumber(pathname.split('/')[4], year);
           json(res, value ? 200 : 404, value || { error: 'Заказ не найден.' });
-        } else {
+        } else if (/^\/api\/orders\/\d+(?:\/state)?$/.test(pathname)) {
           const id = Number(pathname.split('/')[3]);
-          if (pathname.endsWith('/state') && req.method === 'PATCH') {
-            let body = '';
-            for await (const chunk of req) {
-              body += chunk.toString('utf8');
-              if (body.length > 4096) throw new Error('Запрос слишком велик.');
-            }
-            const value = JSON.parse(body);
+          if (req.method === 'DELETE' && !pathname.endsWith('/state')) {
+            const body = await readSmallJson(req);
+            json(res, 200, await orders.archive(id, body.revision, body.confirmed));
+          } else if (pathname.endsWith('/state') && req.method === 'PATCH') {
+            const value = await readSmallJson(req);
             json(res, 200, await orders.setState(id, value.state, Number(value.revision)));
           } else if (req.method === 'GET') {
             const value = orders.get(id);
@@ -294,10 +504,10 @@ const server = http.createServer(async (req, res) => {
           } else if (req.method === 'PUT' && !pathname.endsWith('/state'))
             json(res, 200, await orders.update(id, req));
           else json(res, 405, { error: 'Метод не поддерживается.' });
-        }
+        } else json(res, 404, { error: 'Маршрут заказа не найден.' });
       } catch (error) {
         console.error('Order request failed:', error.message);
-        json(res, /изменена|уже/.test(error.message) ? 409 : 400, { error: error.message });
+        json(res, error.status || (/изменена|уже/.test(error.message) ? 409 : 400), { error: error.message });
       }
       return;
     }

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import OpenSeadragon from 'openseadragon';
 import './styles.css';
+import Orders from './Orders.jsx';
 
 const apiError = async response => {
   try { return (await response.json()).error || `HTTP ${response.status}`; }
@@ -235,8 +236,10 @@ function PreviewViewer({ id }) {
 function VisitorHome() {
   return <div className="viewer-page"><header className="viewer-header"><Logo /></header>
     <div className="viewer-wait"><div><h1>Просмотр превью</h1>
-      <p>Откройте ссылку на опубликованный макет.</p></div></div></div>;
+      <p>Откройте ссылку на опубликованный макет.</p><a className="button" href="/orders">Приём заказов</a></div></div></div>;
 }
 
 const match = location.pathname.match(/^\/p\/([A-Za-z0-9_-]{22}|[0-9a-f-]{36})$/);
-createRoot(document.getElementById('root')).render(match ? <PreviewViewer id={match[1]} /> : <VisitorHome />);
+const orderMatch = location.pathname.match(/^\/o\/([A-Za-z0-9_-]{22})$/);
+createRoot(document.getElementById('root')).render(match ? <PreviewViewer id={match[1]} />
+  : location.pathname === '/orders' || orderMatch ? <Orders labelToken={orderMatch?.[1]} /> : <VisitorHome />);

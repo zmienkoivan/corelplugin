@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <title>Заметка к заказу · Ель Мерч</title>
+  <link rel="stylesheet" href="/mobile-note/form.css">
+  <script type="module" src="/mobile-note/form.js"></script>
+</head>
+<body>
+  <main>
+    <header><span class="brand" aria-hidden="true">Е</span><div><p class="order" id="order">Ель Мерч</p><h1>Заметка к заказу</h1></div></header>
+    <p id="status" role="status">Проверяем ссылку…</p>
+    <p id="error" role="alert" hidden></p>
+    <form id="note" hidden>
+      <div class="pickers">
+        <button id="take" type="button">Сделать фото</button>
+        <button id="choose" type="button">Выбрать фото</button>
+      </div>
+      <input id="camera" type="file" accept="image/*" capture="environment" hidden>
+      <input id="gallery" type="file" accept="image/*" multiple hidden>
+      <p class="hint" id="count">Можно добавить до 10 фотографий.</p>
+      <ul id="photos" aria-label="Выбранные фото"></ul>
+      <label for="comment">Комментарий <span class="hint">необязательно с фото</span></label>
+      <textarea id="comment" rows="3" maxlength="2500" placeholder="Что нужно уточнить или показать?"></textarea>
+      <button class="primary" id="send" type="submit" disabled>Отправить в заметки</button>
+    </form>
+    <noscript>Включите JavaScript, чтобы добавить заметку.</noscript>
+  </main>
+</body>
+</html>
