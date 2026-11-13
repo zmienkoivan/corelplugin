@@ -25,6 +25,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.NestingChecks/VanyaTools.NestingChecks.csproj --configuration Release
 
+      - name: Check interactive laser bend preview
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.LaserBendChecks/VanyaTools.LaserBendChecks.csproj --configuration Release
+
       - name: Check frame bag cutting patterns
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.FrameBagChecks/VanyaTools.FrameBagChecks.csproj --configuration Release
