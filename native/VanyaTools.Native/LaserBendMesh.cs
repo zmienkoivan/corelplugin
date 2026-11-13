@@ -33,7 +33,15 @@ namespace VanyaTools.Native
             {
                 var a=loop[i];var b=loop[(i+1)%loop.Length];
                 var mid=new Point((a.X+b.X)/2,(a.Y+b.Y)/2);var v=b-a;v.Normalize();
-                bool insideLeft=LaserBendGeometry.Contains(panel.Loops,mid+new Vector(-v.Y,v.X)*.001);
+                bool insideLeft=false, boundary=false;
+                for(double step=.001;step>=.00000001;step/=10)
+                {
+                    var normal2=new Vector(-v.Y,v.X)*step;
+                    bool left=LaserBendGeometry.Contains(panel.Loops,mid+normal2),right=LaserBendGeometry.Contains(panel.Loops,mid-normal2);
+                    if(left==right)continue;
+                    insideLeft=left;boundary=true;break;
+                }
+                if(!boundary)continue;
                 var at=LaserBendModel.Point3(a,thickness/2);var ab=LaserBendModel.Point3(a,-thickness/2);
                 var bt=LaserBendModel.Point3(b,thickness/2);var bb=LaserBendModel.Point3(b,-thickness/2);
                 if(insideLeft){Triangle(at,bb,ab);Triangle(at,bt,bb);}else{Triangle(at,ab,bb);Triangle(at,bb,bt);}

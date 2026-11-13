@@ -91,12 +91,13 @@ namespace VanyaTools.Native
             var regions=Components(outline);
             if(regions.Length!=1)throw new ArgumentException("Выберите одну цельную деталь. Отверстия внутри её контура допускаются.");
             if(Loops(outline).Sum(p=>p.Length)>12000)throw new ArgumentException("Контур слишком подробный для 3D. Упростите его узлы.");
+            var outlineLoops=Loops(outline);
             for(int i=0;i<lines.Length;i++)for(int j=i+1;j<lines.Length;j++)
             {
                 var a=lines[i];var b=lines[j];
                 if(Intersection(a.A,a.B,b.A,b.B,out double t,out double u) && t>.0001 && t<.9999 && u>.0001 && u<.9999 &&
-                    outline.FillContains(a.A+(a.B-a.A)*t))
-                    throw new ArgumentException("Линии сгиба пересекаются внутри детали. Перекрёстные сгибы пока не поддерживаются.");
+                    Contains(outlineLoops,a.A+(a.B-a.A)*t))
+                    throw new ArgumentException("Сгибы «"+a.Name+"» и «"+b.Name+"» пересекаются внутри детали. Перекрёстные сгибы пока не поддерживаются.");
             }
             var cells=regions.ToList();
             foreach(var line in lines)
@@ -137,35 +138,36 @@ namespace VanyaTools.Native
             }
             return model;
         }
-        // Split on the finite chord only. Other material crossing the same infinite
-        // axis stays joined: two separate flaps can share a horizontal coordinate.
+        // Discover connectivity with a narrow finite slit, then restore the
+        // removed material exactly to each side of the ideal hinge. Infinite
+        // half-plane cuts cannot distinguish a notch endpoint from a bridge.
         private static Geometry[] SplitCell(Geometry cell,BendLine line)
         {
-            var positive=Clip(cell,line,1);var negative=Clip(cell,line,-1);
-            if(positive.GetArea()<.001 || negative.GetArea()<.001)return new[]{cell};
-            var plus=Components(positive);var minus=Components(negative);var pieces=plus.Concat(minus).ToArray();
-            var roots=Enumerable.Range(0,pieces.Length).ToArray();double length=(line.B-line.A).Length;bool touches=false;
-            int Root(int n){while(roots[n]!=n)n=roots[n];return n;}
-            for(int i=0;i<plus.Length;i++)for(int j=plus.Length;j<pieces.Length;j++)
+            var axis=line.B-line.A;double length=axis.Length;axis/=length;
+            const double halfWidth=.02, endpointTolerance=.05;
+            var normal=new Vector(-axis.Y,axis.X);
+            var start=line.A-axis*endpointTolerance;var end=line.B+axis*endpointTolerance;
+            var band=Path(new[]{start-normal*halfWidth,end-normal*halfWidth,end+normal*halfWidth,start+normal*halfWidth});
+            var separated=Geometry.Combine(cell,band,GeometryCombineMode.Exclude,null,.0001,ToleranceType.Absolute);
+            var parts=Components(separated);
+            if(parts.Length<=1)return new[]{cell};
+            if(parts.Length!=2)return parts;
+            var probe=Path(new[]{line.A-normal*.06,line.B-normal*.06,line.B+normal*.06,line.A+normal*.06});
+            var recovery=Path(new[]{start-axis*.004-normal*(halfWidth+.004),end+axis*.004-normal*(halfWidth+.004),end+axis*.004+normal*(halfWidth+.004),start-axis*.004+normal*(halfWidth+.004)});
+            var cut=Geometry.Combine(cell,recovery,GeometryCombineMode.Intersect,null,.0001,ToleranceType.Absolute);
+            var contact=parts.Select(part=> {
+                var near=Geometry.Combine(part,probe,GeometryCombineMode.Intersect,null,.0001,ToleranceType.Absolute);
+                return Clip(near,line,1).GetArea()-Clip(near,line,-1).GetArea();
+            }).ToArray();
+            if(contact[0]*contact[1]>=0)return new[]{cell};
+            var result=new Geometry[2];
+            for(int i=0;i<2;i++)
             {
-                var a=Intervals(pieces[i],line);var b=Intervals(pieces[j],line);
-                foreach(var x in a)foreach(var y in b)
-                {
-                    double start=Math.Max(x.Item1,y.Item1),end=Math.Min(x.Item2,y.Item2);
-                    if(end-start<.001)continue;
-                    if(Math.Min(end,length)-Math.Max(start,0)>.05)touches=true;
-                    if(Math.Min(end,0)-start>.05 || end-Math.Max(start,length)>.05)roots[Root(i)]=Root(j);
-                }
+                var recovered=Clip(cut,line,Math.Sign(contact[i]));
+                result[i]=Geometry.Combine(parts[i],recovered,GeometryCombineMode.Union,null,.0001,ToleranceType.Absolute);
+                result[i].Freeze();
             }
-            if(!touches)return new[]{cell};
-            var result=new List<Geometry>();
-            foreach(var group in Enumerable.Range(0,pieces.Length).GroupBy(Root))
-            {
-                Geometry joined=pieces[group.First()];
-                foreach(int index in group.Skip(1))joined=Geometry.Combine(joined,pieces[index],GeometryCombineMode.Union,null,Tolerance,ToleranceType.Absolute);
-                joined.Freeze();result.Add(joined);
-            }
-            return result.ToArray();
+            return result;
         }
         private static int Side(BendPanel panel,BendLine line)
         {
@@ -178,7 +180,7 @@ namespace VanyaTools.Native
             var u=line.B-line.A;u.Normalize();var n=new Vector(-u.Y,u.X)*side;
             double size=Math.Sqrt(shape.Bounds.Width*shape.Bounds.Width+shape.Bounds.Height*shape.Bounds.Height)*8+100;
             var half=Path(new[]{line.A-u*size,line.A+u*size,line.A+u*size+n*size,line.A-u*size+n*size});
-            var result=Geometry.Combine(shape,half,GeometryCombineMode.Intersect,null,Tolerance,ToleranceType.Absolute);
+            var result=Geometry.Combine(shape,half,GeometryCombineMode.Intersect,null,.0001,ToleranceType.Absolute);
             result.Freeze();return result;
         }
         private static List<Tuple<double,double>> Intervals(Geometry region,BendLine line)
@@ -188,7 +190,7 @@ namespace VanyaTools.Native
             foreach(var loop in loops)for(int i=0;i<loop.Length;i++)
             {
                 var a=loop[i]-line.A;var b=loop[(i+1)%loop.Length]-line.A;
-                if(Math.Abs(Cross(u,a))>.05 || Math.Abs(Cross(u,b))>.05)continue;
+                if(Math.Abs(Cross(u,a))>.002 || Math.Abs(Cross(u,b))>.002)continue;
                 double t=Vector.Multiply(a,u),s=Vector.Multiply(b,u);
                 if(Math.Abs(t-s)>.01)result.Add(Tuple.Create(Math.Min(t,s),Math.Max(t,s)));
             }
@@ -248,12 +250,12 @@ namespace VanyaTools.Native
         private static Geometry[] Components(Geometry geometry)
         {
             var loops=Loops(geometry);var paths=loops.Select(Path).ToArray();
-            var depth=loops.Select((loop,i)=>Enumerable.Range(0,loops.Length).Count(j=>i!=j && paths[j].FillContains(loop[0]))).ToArray();
+            var depth=loops.Select((loop,i)=>Enumerable.Range(0,loops.Length).Count(j=>i!=j && Contains(new[]{loops[j]},loop[0]))).ToArray();
             var components=new List<Geometry>();
             for(int i=0;i<loops.Length;i++)if(depth[i]%2==0)
             {
                 var combined=new GeometryGroup{FillRule=FillRule.EvenOdd};combined.Children.Add(paths[i]);
-                for(int j=0;j<loops.Length;j++)if(depth[j]==depth[i]+1 && paths[i].FillContains(loops[j][0]))combined.Children.Add(paths[j]);
+                for(int j=0;j<loops.Length;j++)if(depth[j]==depth[i]+1 && Contains(new[]{loops[i]},loops[j][0]))combined.Children.Add(paths[j]);
                 combined.Freeze();components.Add(combined);
             }
             return components.ToArray();

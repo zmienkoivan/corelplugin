@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
   <PropertyGroup><TargetFramework>net48</TargetFramework><OutputType>Exe</OutputType><UseWPF>true</UseWPF><LangVersion>latest</LangVersion></PropertyGroup>
   <ItemGroup>
+    <Reference Include="System.Web.Extensions" />
     <Compile Include="../../native/VanyaTools.Native/LaserBend*.cs" Exclude="../../native/VanyaTools.Native/LaserBendTab.cs" Link="%(Filename)%(Extension)" />
     <Compile Include="../../native/VanyaTools.Native/PatternViewport.cs" Link="PatternViewport.cs" />
   </ItemGroup>

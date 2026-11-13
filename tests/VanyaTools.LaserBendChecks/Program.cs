@@ -17,6 +17,7 @@ internal static class Program
     {
         try
         {
+            if(args.Length>=2 && args[0]=="--fixture")return Fixture(args[1]);
             var shape=new GeometryGroup{FillRule=FillRule.EvenOdd};
             shape.Children.Add(new RectangleGeometry(new Rect(20,30,120,80)));
             shape.Children.Add(new RectangleGeometry(new Rect(35,42,12,8)));
@@ -62,6 +63,15 @@ internal static class Program
             var twins=LaserBendGeometry.Create(tabs,new[]{Fold(0,20,25,20),Fold(45,20,70,20)});
             Check(twins.Panels.Length==3,"Collinear flaps failed.");twins.Lines[0].Angle=70;twins.Lines[1].Angle=-20;Hinges(twins);Meshes(twins);
             Check(!twins.MovingPanels(0).Overlaps(twins.MovingPanels(1)),"Default side merged independent flaps.");
+            // Extended finite creases intersect just outside the left boundary.
+            // This must not be confused with either an interior crossing or the
+            // intersection of their imaginary continuations.
+            var notched=LaserBendGeometry.Path(new[]{new Point(0,30),new Point(20,0),new Point(40,10),new Point(60,0),new Point(100,30),new Point(100,80),new Point(0,80)});
+            var outside=LaserBendGeometry.Create(notched,new[]{Fold(-3,40,103,40),Fold(20,0,-.2,40)});
+            Check(outside.Panels.Length==3,"Exterior intersections must not block a blank.");Meshes(outside);outside.Lines[0].Angle=60;outside.Lines[1].Angle=90;Hinges(outside);
+            var notch=LaserBendGeometry.Path(new[]{new Point(0,25),new Point(25,25),new Point(25,0),new Point(60,0),new Point(60,25),new Point(100,25),new Point(100,85),new Point(0,85)});
+            var finite=LaserBendGeometry.Create(notch,new[]{Fold(25,25,60,25),Fold(-2,55,102,55)});
+            Check(finite.Panels.Length==3,"A finite crease at a reentrant corner failed.");Meshes(finite);Hinges(finite);
             var longFolds=Enumerable.Range(1,15).Select(i=>Fold(0,i*10,100,i*10)).ToArray();
             var many=LaserBendGeometry.Create(new RectangleGeometry(new Rect(0,0,100,160)),longFolds);
             Check(many.Panels.Length==16,"Parallel panel chain failed.");
@@ -75,6 +85,26 @@ internal static class Program
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }
+    private static int Fixture(string path)
+    {
+        var rows=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<SourceShape[]>(File.ReadAllText(path));
+        var source=new GeometryGroup{FillRule=FillRule.EvenOdd};var folds=new List<BendLine>();
+        foreach(var row in rows)foreach(var item in row.Paths)
+        {
+            if(!item.Closed){folds.Add(new BendLine{Name="Объект "+row.ID,A=P(item.Segments[0].A),B=P(item.Segments.Last().B)});continue;}
+            var shape=new StreamGeometry();using(var context=shape.Open())
+            {
+                context.BeginFigure(P(item.Segments[0].A),true,true);
+                foreach(var segment in item.Segments)
+                {if(segment.Type==0)context.LineTo(P(segment.B),true,false);else context.BezierTo(P(segment.C1),P(segment.C2),P(segment.B),true,false);}
+            }
+            shape.Freeze();source.Children.Add(shape);
+        }
+        var watch=Stopwatch.StartNew();var model=LaserBendGeometry.Create(source,folds);Console.WriteLine("Fixture geometry: "+model.Lines.Length+" folds / "+model.Panels.Length+" panels");Near(model.Panels.Sum(p=>p.Area),model.Outline.GetArea(),.2);Meshes(model);
+        for(int i=0;i<model.Lines.Length;i++){model.Lines[i].Angle=70;Hinges(model);Rigid(model);}
+        Console.WriteLine("Fixture passed: "+model.Lines.Length+" folds, "+model.Panels.Length+" panels, "+watch.ElapsedMilliseconds+" ms, "+_checks+" assertions");return 0;
+    }
+    private static Point P(double[] p)=>new Point(p[0],p[1]);
     internal static LaserBendModel Demo()
     {
         var body=LaserBendGeometry.Path(new[]{new Point(0,25),new Point(30,25),new Point(30,0),new Point(140,0),new Point(140,25),new Point(180,25),new Point(180,100),new Point(140,100),new Point(140,140),new Point(30,140),new Point(30,100),new Point(0,100)});
@@ -161,9 +191,15 @@ internal static class Program
                 if(Math.Abs(mesh.Normals[a].Z)<.01)
                 {
                     var mid=new Point3D((p.X+q.X+r.X)/3,(p.Y+q.Y+r.Y)/3,(p.Z+q.Z+r.Z)/3);
-                    var outward=mid+mesh.Normals[a]*.005;var inward=mid-mesh.Normals[a]*.005;
-                    Check(!LaserBendGeometry.Contains(panel.Loops,new Point(outward.X,-outward.Y)),"Wall normal points into material.");
-                    Check(LaserBendGeometry.Contains(panel.Loops,new Point(inward.X,-inward.Y)),"Wall has no material inside.");
+                    bool valid=false;
+                    for(double step=.005;step>=.00000001;step/=10)
+                    {
+                        var outward=mid+mesh.Normals[a]*step;var inward=mid-mesh.Normals[a]*step;
+                        if(!LaserBendGeometry.Contains(panel.Loops,new Point(outward.X,-outward.Y)) &&
+                            LaserBendGeometry.Contains(panel.Loops,new Point(inward.X,-inward.Y))){valid=true;break;}
+                    }
+                    Check(valid,"Wall normal does not separate material from air: "+mid);
+
                 }
             }
             Near(area,panel.Area,Math.Max(.12,panel.Area*.0001));
@@ -210,3 +246,7 @@ public sealed class FakeSegment
     public double StartingControlPointX{get;set;}public double StartingControlPointY{get;set;}public double EndingControlPointX{get;set;}public double EndingControlPointY{get;set;}
     public FakeNode StartNode{get;}public FakeNode EndNode{get;}
 }
+
+public sealed class SourceShape { public string ID;public SourcePath[] Paths; }
+public sealed class SourcePath { public bool Closed;public SourceSegment[] Segments; }
+public sealed class SourceSegment { public int Type;public double[] A,B,C1,C2; }
