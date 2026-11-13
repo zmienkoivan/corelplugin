@@ -51,8 +51,8 @@ function CanvasActions({ actions, secondaryActions, cornerActions }) {
   </>;
 }
 
-function ZoomPhoto({ order, index, serverKey, count, previous, next, onFullscreen, overlay, thumbnails, actions, secondaryActions, cornerActions, markup, onMarkup, uploadAction }) {
-  const [camera, setCamera] = useState({ scale: 1, x: 0, y: 0 });
+function ZoomPhoto({ order, index, serverKey, count, previous, next, onFullscreen, overlay, thumbnails, actions, secondaryActions, cornerActions, markup, onMarkup, uploadAction, initialScale = 1 }) {
+  const [camera, setCamera] = useState(() => ({ scale: initialScale, x: 0, y: 0 }));
   const stage = useRef(null);
   const pointers = useRef(new Map());
   useEffect(() => {
@@ -77,8 +77,8 @@ function ZoomPhoto({ order, index, serverKey, count, previous, next, onFullscree
     update();
     return () => observer.disconnect();
   }, [overlay]);
-  const reset = () => setCamera({ scale: 1, x: 0, y: 0 });
-  useEffect(() => { reset(); pointers.current.clear(); }, [order.id, index]);
+  const reset = () => setCamera({ scale: initialScale, x: 0, y: 0 });
+  useEffect(() => { reset(); pointers.current.clear(); }, [order.id, index, initialScale]);
   function zoom(factor, clientX, clientY) {
     const box = stage.current.getBoundingClientRect();
     const ax = clientX === undefined ? 0 : clientX - box.left - box.width / 2;
@@ -120,7 +120,7 @@ function ZoomPhoto({ order, index, serverKey, count, previous, next, onFullscree
   }
   return <div className="zoom-photo">
     <div ref={stage} className={`gallery-stage${overlay?' has-order-info':''}`} tabIndex={0} aria-label="Фото с масштабированием"
-      onDoubleClick={() => camera.scale > 1 ? reset() : zoom(2)}
+      onDoubleClick={() => camera.scale > initialScale ? reset() : zoom(2)}
       onKeyDown={event => { if (['+', '=', '-', '0'].includes(event.key)) {
         event.preventDefault(); event.key === '0' ? reset() : zoom(event.key === '-' ? 0.8 : 1.25);
       } }}
@@ -156,7 +156,7 @@ function ZoomPhoto({ order, index, serverKey, count, previous, next, onFullscree
   </div>;
 }
 
-export default function OrderPhotos({ order, serverKey, actions, overlay, summary, secondaryActions, cornerActions, uploadAction, markupEnabled = false, employee = '', onSelectedPhoto }) {
+export default function OrderPhotos({ order, serverKey, actions, overlay, summary, secondaryActions, cornerActions, uploadAction, markupEnabled = false, employee = '', onSelectedPhoto, initialScale = 1 }) {
   const count = photoCount(order);
   const [selected, setSelected] = useState(0);
   const selectionListener = useRef(onSelectedPhoto); selectionListener.current = onSelectedPhoto;
@@ -177,7 +177,7 @@ export default function OrderPhotos({ order, serverKey, actions, overlay, summar
       {uploadAction && <div className="canvas-controls canvas-empty-upload">{uploadAction}</div>}<ImageIcon size={52} /><strong>Фотографии заказа</strong>
       <p>{order.photoIds?.length ? 'Снимки этой старой карточки доступны в Telegram.' : 'Фотографии появятся после заполнения карточки.'}</p></div> : <>
     <ZoomPhoto order={order} index={selected} serverKey={serverKey} count={count} previous={() => setSelected(value => value - 1)} next={() => setSelected(value => value + 1)} onFullscreen={() => setFullscreen(true)} overlay={overlay} actions={actions} secondaryActions={secondaryActions} cornerActions={cornerActions}
-      markup={markupEnabled?markup:undefined} onMarkup={markupEnabled?()=>setEditing(true):undefined} uploadAction={fullscreen ? null : uploadAction}
+      markup={markupEnabled?markup:undefined} onMarkup={markupEnabled?()=>setEditing(true):undefined} uploadAction={fullscreen ? null : uploadAction} initialScale={initialScale}
       thumbnails={count > 1 && <div className="order-photos" onPointerDown={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>{Array.from({ length: count }, (_, index) =>
       <button key={index} className={`order-photo-thumb ${selected === index ? 'selected' : ''}`} onClick={() => setSelected(index)}
         aria-label={`Открыть фото ${index + 1} заказа №${order.number}`} aria-pressed={selected === index}>
@@ -189,7 +189,7 @@ export default function OrderPhotos({ order, serverKey, actions, overlay, summar
       <div className="order-photo-viewer"><div className="orders-row"><strong>Заказ №{order.number} · Фото {selected + 1} из {count}</strong>
         <button className="button" onClick={() => setFullscreen(false)}>Закрыть</button></div>
         {fullscreen && <ZoomPhoto order={order} index={selected} serverKey={serverKey} count={count} previous={() => setSelected(value => value - 1)} next={() => setSelected(value => value + 1)}
-          markup={markupEnabled?markup:undefined} onMarkup={markupEnabled?()=>setEditing(true):undefined} uploadAction={uploadAction}/>}
+          markup={markupEnabled?markup:undefined} onMarkup={markupEnabled?()=>setEditing(true):undefined} uploadAction={uploadAction} initialScale={initialScale}/>}
       </div>
     </dialog>
     {editing&&<PhotoMarkupEditor key={`${order.id}:${selected}:${markup.version}`} identity={`${order.id}:${selected}:${markup.version}`}

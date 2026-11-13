@@ -22,6 +22,7 @@ const date = value => new Date(value).toLocaleString('ru-RU', { timeZone: 'Asia/
 const directPrintRequired = document.querySelector('meta[name="vanya-direct-print"]')?.content === 'required';
 const infoPositions = [['top-left', 'Сверху слева'], ['top-right', 'Сверху справа'],
   ['bottom-left', 'Снизу слева'], ['bottom-right', 'Снизу справа']];
+const previewScales = [50, 60, 70, 75, 80, 85, 90, 95, 100];
 const shortTechnologyNames = { 'Шелкография': 'Шелк', 'Сублимация': 'Субл', 'Вышивка': 'Выш' };
 const technologyRanks = { 'ДТФ': 0, 'Шелкография': 1, 'Сублимация': 2, 'Вышивка': 3, 'ПУФ': 4, 'УФ ДТФ': 5, 'ТЕРМ': 6 };
 const printStateText = { queued: 'В очереди', claimed: 'Получено рабочим местом', submitted: 'Передано в очередь Windows', failed: 'Не отправлено', uncertain: 'Результат неизвестен · проверьте бумагу' };
@@ -118,6 +119,15 @@ export default function Orders({ labelToken }) {
     if (!infoPositions.some(([position]) => position === value)) return;
     setInfoPosition(value);
     try { localStorage.setItem('vanya-workspace-info-position', value); } catch { /* Apply the preference for this session if storage is blocked. */ }
+  }
+  const [previewScale, setPreviewScale] = useState(() => {
+    try { const value = Number(localStorage.getItem('vanya-workspace-preview-scale')); return previewScales.includes(value) ? value : 85; }
+    catch { return 85; }
+  });
+  function changePreviewScale(value) {
+    const next = Number(value); if (!previewScales.includes(next)) return;
+    setPreviewScale(next);
+    try { localStorage.setItem('vanya-workspace-preview-scale', String(next)); } catch { /* Apply it for this session. */ }
   }
   function changeIntakeVisibility(value) {
     setShowIntake(value);
@@ -687,6 +697,10 @@ export default function Orders({ labelToken }) {
       <label className="display-settings">Блок информации на холсте<select aria-label="Положение блока информации на холсте" value={infoPosition} onChange={event => changeInfoPosition(event.target.value)}>
         {infoPositions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select></label>
+      <label className="display-settings">Начальный масштаб превью<select aria-label="Начальный масштаб превью" value={previewScale} onChange={event => changePreviewScale(event.target.value)}>
+        {previewScales.map(value => <option key={value} value={value}>{value}%{value === 100 ? ' · вписать полностью' : ''}</option>)}
+      </select></label>
+      <p className="settings-sync">От размера, вписанного в холст. Применяется при открытии фото и нажатии «Вписать».</p>
       <label className="display-settings">Формат этикетки<select aria-label="Формат этикетки" value={labelFormat} onChange={event => changeLabelFormat(event.target.value)}>
         <option value="full">Производство · 80×120 мм</option><option value="customer">Для клиента · 80×120 мм</option><option value="mini">Маленькая · 45×22,5 мм</option>
       </select></label>
@@ -906,6 +920,7 @@ export default function Orders({ labelToken }) {
         <button className="button mobile-list-back" onClick={() => setMobileOrderOpen(false)}>← Список заказов</button>
         {!order ? <div className="workspace-empty"><ImageIcon size={56} /><h2>Выберите заказ</h2><p>Карточка, фотографии и печать появятся здесь.</p></div> : <>
           <OrderPhotos key={order.id} order={order} serverKey={key} markupEnabled={connection?.photoMarkupEnabled} employee={employee}
+            initialScale={previewScale / 100}
             onSelectedPhoto={setSelectedLabelPhoto}
             uploadAction={connection?.notesEnabled && <button type="button" className="button canvas-icon" aria-label="Фото с телефона" title="Фото с телефона · QR-код" onClick={() => setMobileNoteOrder(order)}><QrCodeIcon size={24} aria-hidden="true" /></button>}
             overlay={<>
