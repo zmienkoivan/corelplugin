@@ -13,6 +13,7 @@ import { createOrderNotes } from './order-notes.mjs';
 import { createPhotoMarkup } from './photo-markup.mjs';
 import { createTelegramPhotoMarkup } from './telegram-photo-markup.mjs';
 import { listOrders } from './order-list.mjs';
+import { renderRichOrderCard, richOrderCallbacks } from './telegram-order-card.mjs';
 
 const now = () => new Date().toISOString();
 const text = (value, max) => String(value ?? '').trim().slice(0, max);
@@ -110,6 +111,10 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
         { method: 'POST', ...requestBody, signal: AbortSignal.timeout(timeoutMs) });
       const body = await response.json();
       if (response.ok && body.ok) {
+        if (fields.rich_message?.blocks?.some(block => block.type === 'anchor' && block.name === 'vanya-order-v2-customer')) {
+          const id = /^order:(\d+):/.exec(richOrderCallbacks({ rich_message: fields.rich_message })[0] || '')?.[1];
+          if (id) db.prepare('INSERT OR REPLACE INTO bot_state(name,value) VALUES(?,?)').run(`rich-card-v2:${id}`, now());
+        }
         if (method !== 'editMessageReplyMarkup' && /^(send|edit)Message|^send(Photo|MediaGroup|RichMessage)$/.test(method)) {
           for (const message of Array.isArray(body.result) ? body.result : [body.result]) telegramEdits.recordBotMessage(message);
         }
@@ -137,7 +142,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
     if(telegramEnabled&&!telegramMissing(row)&&markupTelegram.needsSync(row))workflowSync.enqueue(row,'markup');
   }});
   const markupTelegram=createTelegramPhotoMarkup({db,markup:photoMarkup,photos:orderPhotos,api,richContent,richPhotoFiles,
-    composePhoto,buttons:row=>buttons(row),singleCaption:row=>singleCaption(row),photoCaption:row=>photoCaption(row)});
+    composePhoto,buttons:row=>row.publication_mode === 'rich' ? { inline_keyboard: [] } : buttons(row),singleCaption:row=>singleCaption(row),photoCaption:row=>photoCaption(row)});
   const notes = createOrderNotes({ db, getOrder: get, api, channel, enabled: telegramNotesEnabled,
     onLinked: thread => {
       const rows = db.prepare(`SELECT id FROM orders WHERE deleted_at IS NULL AND chat_id=? AND
@@ -252,6 +257,8 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
       callback_data: `order:${row.id}:${row.revision}:${row.is_customer_textile ? 'own-textile' : 'customer-textile'}` }], [{ text: '🔄 Обновить карточку', callback_data: `order:${row.id}:${row.revision}:sync` }],
       ...(telegramNotesEnabled ? [[{ text: '💬 Комментарии', ...(commentsUrl ? { url: commentsUrl } : { callback_data: `order:${row.id}:${row.revision}:comments` }) }]] : [])] };
   };
+  const externalButtons = row => row.publication_mode === 'rich' && db.prepare('SELECT 1 FROM bot_state WHERE name=?').get(`rich-card-v2:${row.id}`)
+    ? { inline_keyboard: [] } : buttons(row);
   const numberLine = row => `Заказ №${row.order_number || row.id}`;
   const completedTime = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Asia/Yekaterinburg',
     day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -264,15 +271,8 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
   const statusText = row => JSON.parse(row.photo_ids).length
     ? `${row.customer}\n\n${statusLine(row)}\n${numberLine(row)}` : singleCaption(row);
 
-  function richContent(row, media) {
-    if (!media.length) throw new Error('Для карточки не найдены фотографии Telegram.');
-    const photos = media.map(value => ({ type: 'photo', photo: { type: 'photo', media: value } }));
-    return { blocks: [
-      photos.length === 1 ? photos[0] : { type: 'collage', blocks: photos },
-      { type: 'paragraph', text: row.caption },
-      { type: 'heading', size: 5, text: statusLine(row) },
-      { type: 'paragraph', text: numberLine(row) }
-    ] };
+  function richContent(row, media, archived = false) {
+    return renderRichOrderCard(row, media, { keyboard: buttons(row), status: statusLine(row), number: numberLine(row), archived });
   }
 
   function richPhotoFiles(message) {
@@ -344,7 +344,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
     if (row.publication_mode === 'rich')
       return await api('editMessageText', { chat_id: row.chat_id, message_id: row.status_message_id,
         rich_message: richContent(row, markupTelegram.media(row)),
-        reply_markup: buttons(row) });
+        reply_markup: { inline_keyboard: [] } });
     else if (row.publication_mode === 'single')
       return await api('editMessageCaption', { chat_id: row.chat_id, message_id: row.status_message_id,
         caption: singleCaption(row), reply_markup: buttons(row) });
@@ -510,7 +510,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
     try {
       const message = await api('sendRichMessage', { chat_id: channel,
         rich_message: richContent(assignedRow, photos.map((_, i) => `attach://photo${i}`)),
-        reply_markup: buttons(assignedRow), disable_notification: true }, photos);
+        reply_markup: { inline_keyboard: [] }, disable_notification: true }, photos);
       const chatId = String(message.chat.id);
       const messageId = message.message_id;
       const fileIds = richPhotoFiles(message);
@@ -586,7 +586,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
         : markupTelegram.media(row);
       const edited = await api('editMessageText', { chat_id: row.chat_id,
         message_id: row.status_message_id, rich_message: richContent(next, media),
-        reply_markup: buttons(next) }, photos);
+        reply_markup: { inline_keyboard: [] } }, photos);
       if (photos.length) {
         const files = richPhotoFiles(edited);
         if (files.length !== photos.length)
@@ -803,7 +803,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
     try {
       const message = fileIds.length
         ? await api('sendRichMessage', { chat_id: channel, rich_message: richContent(row, fileIds),
-          reply_markup: buttons(row), disable_notification: true })
+          reply_markup: { inline_keyboard: [] }, disable_notification: true })
         : await api('sendMessage', { chat_id: channel, text: singleCaption(row),
           reply_markup: buttons(row), disable_notification: true });
       const savedFiles = richPhotoFiles(message);
@@ -860,16 +860,18 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
       }
       if (Number(match[2]) !== row.revision) throw new Error('Карточка уже изменена. Обновите сообщение и повторите нажатие.');
       const hasContent = query.message?.rich_message || typeof query.message?.caption === 'string' || typeof query.message?.text === 'string';
+      let synchronized = false;
       if (hasContent) {
         // Callback carries the current post even when Telegram omitted its edit update.
-        await telegramEdits.process({ update_id: update.update_id, edited_channel_post: { ...query.message,
-          edit_date: query.message.edit_date ?? Math.floor(Date.now() / 1000) } }, { skipUnchanged: match[3] !== 'sync' });
+        synchronized = await telegramEdits.process({ update_id: update.update_id, edited_channel_post: { ...query.message,
+          edit_date: query.message.edit_date ?? Math.floor(Date.now() / 1000) } }, { skipUnchanged: true });
         const latest = get(row.id);
         if (!latest) throw new Error('Карточка не найдена.');
         const error = publicOrder(latest).telegramEditError;
         if (error) throw new Error(error);
       } else if (match[3] === 'sync') throw new Error('Telegram не передал содержимое карточки. Откройте сообщение и повторите нажатие.');
       if (match[3] === 'sync') {
+        if (!synchronized) await locked(row.id, () => syncAllControls(get(row.id)));
         answer = 'Карточка обновлена на сайте';
       } else {
         const latest = get(row.id);
@@ -911,7 +913,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
           // Upgrade only the keyboard; text and photos may be awaiting an employee edit.
           try {
             const message = await api('editMessageReplyMarkup', { chat_id: row.chat_id,
-              message_id: row.status_message_id, reply_markup: buttons(row) });
+              message_id: row.status_message_id, reply_markup: externalButtons(row) });
             db.prepare('INSERT OR REPLACE INTO bot_state(name,value) VALUES(?,?)').run(marker, now());
             return message;
           } catch (error) { if (!/message is not modified/i.test(error.message)) throw error; }
@@ -946,13 +948,12 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
     } catch (error) { console.error('Order bot polling:', error.message); }
     finally { polling = false; }
   }
-  const deletions = createTelegramDeletions({ db, channel, api, locked, buttons });
+  const deletions = createTelegramDeletions({ db, channel, api, locked, buttons: externalButtons });
   async function markTelegramArchived(row, messageId) {
     const fields = { chat_id: row.chat_id, message_id: messageId, reply_markup: { inline_keyboard: [] } };
     try {
       if (row.publication_mode === 'rich' && messageId === row.status_message_id) {
-        const content = richContent(row, JSON.parse(row.rich_photo_files));
-        content.blocks.at(-2).text = '🗄️ Архив — заказ убран из работы';
+        const content = richContent(row, JSON.parse(row.rich_photo_files), true);
         await api('editMessageText', { ...fields, rich_message: content });
       } else if (JSON.parse(row.photo_ids).includes(messageId) || ['single', 'album-only'].includes(row.publication_mode)) {
         const first = messageId === JSON.parse(row.photo_ids)[0] || messageId === row.status_message_id;

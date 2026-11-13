@@ -1,13 +1,6 @@
 import { createHash } from 'node:crypto';
 import { parseLegacyOrder } from './legacy-orders.mjs';
-
-function plain(value, depth = 0) {
-  if (depth > 20) throw new Error('Слишком сложное форматирование Telegram.');
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value)) return value.map(part => plain(part, depth + 1)).join('');
-  if (value && typeof value === 'object') return plain(value.text ?? value.alternative_text ?? '', depth + 1);
-  return '';
-}
+import { richPlain as plain, readRichOrderCard, parseRichOrderEdit, richOrderCallbacks } from './telegram-order-card.mjs';
 
 export function telegramContent(message) {
   const texts = [], photos = [];
@@ -21,6 +14,7 @@ export function telegramContent(message) {
       } else if (['video', 'animation', 'audio', 'document', 'voice_note', 'live_photo'].includes(block.type)) {
         unsupported = true;
       } else if (block.text !== undefined) texts.push(plain(block.text));
+      if (Array.isArray(block.cells)) for (const row of block.cells) for (const cell of row) texts.push(plain(cell.text));
       if (block.caption?.text) texts.push(plain(block.caption.text));
       if (Array.isArray(block.blocks)) visit(block.blocks, depth + 1);
     }
@@ -32,7 +26,11 @@ export function telegramContent(message) {
     if (file) photos.push(file);
     unsupported = ['video', 'animation', 'audio', 'document', 'voice', 'sticker', 'live_photo'].some(key => message[key]);
   }
-  return { text: texts.filter(Boolean).join('\n\n').trim(), photos, unsupported,
+  const orderCard = readRichOrderCard(message);
+  // Forwarded structured cards must remain importable using the usual name/source/technology format.
+  const caption = orderCard && !orderCard.error ? `${orderCard.customer} ${orderCard.meta.replace(/\s*·\s*/gu, '\n')}\n${orderCard.description}`.trim() : null;
+  return { text: caption ?? texts.filter(Boolean).join('\n\n').trim(), photos, unsupported,
+    ...(orderCard ? { orderCard, protectedText: texts.filter(Boolean).join('\n\n').trim() } : {}),
     format: message.rich_message ? 'rich' : photos.length ? 'photo' : 'text' };
 }
 
@@ -104,11 +102,11 @@ export function createTelegramEdits({ db, locked, get, syncControls, normalizePh
         const caption = withoutFooter(content.text);
         const editsText = !separateAlbum || index === 0 || message.message_id === current.status_message_id && current.publication_mode === 'album';
         next = { ...current };
-        if (editsText && caption !== current.caption && !(current.publication_mode === 'album' && ids.length && caption === current.customer)) {
-          const details = parseLegacyOrder(caption);
-          if (!details) throw new Error('В исправленном тексте нужны имя, источник (ТГ/ВК/КП/ВА) и технология. Данные заказа сохранены.');
-          Object.assign(next, { caption: details.caption, customer: details.customer, source: details.source,
+        if (editsText && (content.orderCard || caption !== current.caption && !(current.publication_mode === 'album' && ids.length && caption === current.customer))) {
+          const details = content.orderCard ? parseRichOrderEdit(content.orderCard, current) : parseLegacyOrder(caption);
+          if (details) Object.assign(next, { caption: details.caption, customer: details.customer, source: details.source,
             technologies: JSON.stringify(details.technologies), description: details.description, items: details.items });
+          else if (!content.orderCard) throw new Error('В исправленном тексте нужны имя, источник (ТГ/ВК/КП/ВА) и технология. Данные заказа сохранены.');
         }
         // Deadline, urgency, completion and identity are controlled separately; editable footer never changes them.
         if (separateAlbum) {
@@ -138,14 +136,14 @@ export function createTelegramEdits({ db, locked, get, syncControls, normalizePh
             VALUES(?,?,?,?,?,'sync-pending',?,?,?)`).run(current.id, current.chat_id, message.message_id,
               eventKey, message.edit_date, JSON.stringify(current), JSON.stringify(content), new Date().toISOString());
           await synchronize(current.id, eventKey);
-          return;
+          return true;
         }
         const previous = db.prepare('SELECT edit_date FROM order_telegram_edits WHERE order_id=? AND message_id=? ORDER BY id DESC LIMIT 1')
           .get(current.id, message.message_id);
         if (previous && message.edit_date < previous.edit_date ||
             message.edit_date < Math.floor(Date.parse(current.updated_at) / 1000))
           throw new Error('Правка Telegram старше последнего изменения карточки. Откройте актуальную карточку и повторите правку.');
-        const callback = message.reply_markup?.inline_keyboard?.flat().map(button => button.callback_data)
+        const callback = richOrderCallbacks(message)
           .find(value => new RegExp(`^order:${current.id}:\\d+:`).test(value || ''));
         if (callback && Number(callback.split(':')[2]) !== current.revision)
           throw new Error('Карточка уже изменена на сайте или другим сотрудником. Повторите правку актуального сообщения.');
@@ -171,6 +169,7 @@ export function createTelegramEdits({ db, locked, get, syncControls, normalizePh
         return;
       }
       await synchronize(current.id, eventKey);
+      return true;
     });
   }
   const retryAt = new Map();

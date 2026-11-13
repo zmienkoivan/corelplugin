@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
 import { createOrders } from './orders.mjs';
+import { readRichOrderCard } from './telegram-order-card.mjs';
 
 async function fixture(t, { mode = 'rich', count = 2 } = {}) {
   const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'telegram-edit-'));
@@ -52,6 +53,61 @@ async function fixture(t, { mode = 'rich', count = 2 } = {}) {
   ] } });
   return { orders, db, calls, row: orders.get(row.id), edit, rich, directory };
 }
+
+const nativeRich = fields => {
+  const convert = blocks => blocks.map(block => block.type === 'photo'
+    ? { type: 'photo', photo: [{ file_id: block.photo.media }] }
+    : { ...block, ...(block.blocks ? { blocks: convert(block.blocks) } : {}) });
+  return { rich_message: { blocks: convert(JSON.parse(fields.rich_message).blocks) } };
+};
+test('embedded rich controls preserve pending manual photo/quantity edits and do not duplicate the post', async t => {
+  const { orders, row, calls } = await fixture(t);
+  const rendered = await orders.setUrgency(row.id, false, row.revision);
+  const message = nativeRich(calls.findLast(call => call.method === 'editMessageText').fields);
+  const blocks = message.rich_message.blocks;
+  blocks[0].blocks[0].photo = [{ file_id: 'replacement' }];
+  blocks.find(block => block.type === 'blockquote').blocks[0].text = '40 футболок заказчика.';
+  calls.length = 0;
+  await orders.processBotUpdates({ callback_query: { id: 'embedded-done', from: { id: 42 },
+    data: `order:${row.id}:${rendered.revision}:new`, message: { ...message, message_id: 500,
+      chat: { id: -1007, type: 'channel' }, edit_date: Math.floor(Date.now() / 1000) + 10 } } });
+  const next = orders.get(row.id);
+  assert.equal(next.items, 'Количество: 40 шт.'); assert.equal(next.description, '40 футболок заказчика.');
+  assert.equal(next.state, 'new'); assert.equal(next.photoCount, 2); assert.notDeepEqual(next.photoVersions, rendered.photoVersions);
+  assert.equal(next.number, row.number); assert.equal(next.id, row.id); assert.equal(next.telegramEditError, null);
+  assert.ok(!calls.some(call => /^(send|delete)/u.test(call.method)));
+  assert.deepEqual(JSON.parse(calls.findLast(call => call.method === 'editMessageText').fields.reply_markup), { inline_keyboard: [] });
+  await orders.refreshWorkflowButtons();
+  assert.deepEqual(JSON.parse(calls.findLast(call => call.method === 'editMessageReplyMarkup').fields.reply_markup), { inline_keyboard: [] });
+});
+test('sync on an unchanged rich bot echo refreshes the layout once, with no revision or text change', async t => {
+  const { orders, row, calls } = await fixture(t);
+  const current = await orders.setUrgency(row.id, false, row.revision);
+  const message = nativeRich(calls.findLast(call => call.method === 'editMessageText').fields);
+  calls.length = 0;
+  await orders.processBotUpdates({ callback_query: { id: 'embedded-sync', from: { id: 42 },
+    data: `order:${row.id}:${current.revision}:sync`, message: { ...message, message_id: 500,
+      chat: { id: -1007, type: 'channel' }, edit_date: Math.floor(Date.now() / 1000) } } });
+  assert.equal(orders.get(row.id).revision, current.revision); assert.equal(orders.get(row.id).caption, row.caption);
+  assert.equal(calls.filter(call => call.method === 'editMessageText').length, 1);
+  const fields = readRichOrderCard(message);
+  assert.equal(fields.customer, row.customer); assert.equal(fields.description, row.description);
+});
+test('manual rich edits reject stale embedded revisions and broken section anchors without losing photos', async t => {
+  const { orders, row, calls, edit } = await fixture(t);
+  const current = await orders.setUrgency(row.id, false, row.revision);
+  const message = nativeRich(calls.findLast(call => call.method === 'editMessageText').fields);
+  message.rich_message.blocks.find(block => block.type === 'blockquote').blocks[0].text = '40 футболок';
+  const buttons = message.rich_message.blocks.find(block => block.type === 'buttons').buttons;
+  buttons[0].callback_data = `order:${row.id}:${row.revision}:new`;
+  await orders.processBotUpdates(edit(message));
+  assert.equal(orders.get(row.id).revision, current.revision); assert.equal(orders.get(row.id).description, row.description);
+  assert.match(orders.get(row.id).telegramEditError, /уже изменена/);
+  message.rich_message.blocks = message.rich_message.blocks.filter(block => block.name !== 'vanya-order-v2-meta');
+  await orders.processBotUpdates(edit(message));
+  assert.equal(orders.get(row.id).revision, current.revision); assert.equal(orders.get(row.id).photoCount, row.photoCount);
+  assert.match(orders.get(row.id).telegramEditError, /структура карточки/);
+});
 
 test('native Telegram edit updates all photo slots and text in the same order; protected fields stay intact', async t => {
   const { orders, row, db, calls, edit, rich } = await fixture(t);

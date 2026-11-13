@@ -7,6 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
+import { readRichOrderCard } from './telegram-order-card.mjs';
 import { createOrders } from './orders.mjs';
 
 async function fixture(t, mode = 'album') {
@@ -73,7 +74,8 @@ test('Telegram deletion limit archives the rich post in place, preserves its med
   const edited = f.calls[1].fields, content = JSON.parse(edited.rich_message);
   assert.deepEqual(JSON.parse(edited.reply_markup), { inline_keyboard: [] });
   assert.deepEqual(content.blocks[0].blocks.map(block => block.photo.media), ['file1', 'file2']);
-  assert.equal(content.blocks[1].text, f.row.caption);
+  assert.equal(readRichOrderCard({ rich_message: content }).customer, f.row.customer);
+  assert.equal(content.blocks.some(block => block.type === 'buttons'), false);
   assert.match(content.blocks.at(-2).text, /Архив/);
   assert.equal(content.blocks.at(-1).text, `Заказ №${f.row.number}`);
 });

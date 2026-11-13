@@ -7,6 +7,12 @@ import { randomUUID } from 'node:crypto';
 import { createOrders } from './orders.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { orderDeadline } from '../src/order-deadlines.mjs';
+import { readRichOrderCard } from './telegram-order-card.mjs';
+const orderText = blocks => {
+  const fields = readRichOrderCard({ rich_message: { blocks } });
+  return `${fields.customer} ${fields.meta} ${fields.description}`.replace(/\s*·\s*|\s+/gu, ' ').trim();
+};
+const controls = fields => ({ inline_keyboard: JSON.parse(fields.rich_message).blocks.filter(block => block.type === 'buttons').map(block => block.buttons) });
 
 test('private forwarded album is imported end to end with staff access, channel publication, preserved sources and persistent deduplication', async t => {
   const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'private-forward-integration-'));
@@ -42,7 +48,7 @@ test('private forwarded album is imported end to end with staff access, channel 
   assert.equal(card.customer, 'Ксения'); assert.equal(card.photoCount, 2);
   assert.equal(card.chatId, '-1007'); assert.equal(card.statusMessageId, 800);
   assert.equal(card.dueDate, '2026-10-22'); assert.equal(card.sendState, 'sent');
-  const keyboard = JSON.parse(calls.find(call => call.method === 'sendRichMessage').fields.reply_markup);
+  const keyboard = controls(calls.find(call => call.method === 'sendRichMessage').fields);
   assert.equal(keyboard.inline_keyboard.flat().filter(button => button.callback_data).length, 8);
   assert.ok(keyboard.inline_keyboard.flat().some(button => button.callback_data === `order:${card.id}:${card.revision}:sync`));
   const response = calls.find(call => call.method === 'sendMessage');
@@ -123,7 +129,7 @@ test('Telegram priority callbacks verify staff, chat, message and revision', asy
     async *[Symbol.asyncIterator]() { yield Buffer.from(await req.arrayBuffer()); } });
   const published = JSON.parse(calls.find(call => call.method === 'sendRichMessage').fields.rich_message).blocks;
   assert.equal(published.at(-1).text, `Заказ №${saved.number}`);
-  assert.equal(published[1].text, 'Тест ТГ ДТФ 1шт');
+  assert.equal(orderText(published), 'Тест ТГ ДТФ 1шт');
   assert.equal(published.at(-2).text, '🌲 В работе');
   const callback = (user, revision, chat = -1007, action = 'urgent') => ({ callback_query: { id: 'query', from: { id: user },
     data: `order:${saved.id}:${revision}:${action}`, message: { chat: { id: chat }, message_id: 500 } } });
@@ -132,24 +138,24 @@ test('Telegram priority callbacks verify staff, chat, message and revision', asy
   await orders.processBotUpdates(callback(42, saved.revision)); assert.equal(orders.get(saved.id).isUrgent, true);
   const updated = JSON.parse(calls.findLast(call => call.method === 'editMessageText').fields.rich_message).blocks;
   assert.equal(updated.at(-1).text, `Заказ №${saved.number}`);
-  assert.equal(updated[1].text, 'Тест ТГ ДТФ 1шт');
+  assert.equal(orderText(updated), 'Тест ТГ ДТФ 1шт');
   assert.equal(updated.at(-2).text, '⚡ Срочно · 🌲 В работе');
-  const markup = JSON.parse(calls.findLast(call => call.method === 'editMessageText').fields.reply_markup);
-  assert.ok(markup.inline_keyboard[0].some(button => button.text === 'Снять срочность'));
+  const markup = controls(calls.findLast(call => call.method === 'editMessageText').fields);
+  assert.ok(markup.inline_keyboard[0].some(button => button.text === '⚡ Срочно ✓' && button.style === 'danger'));
   await orders.processBotUpdates(callback(42, saved.revision));
   assert.equal(orders.get(saved.id).revision, saved.revision + 1);
   await orders.processBotUpdates(callback(42, orders.get(saved.id).revision, -1007, 'done'));
   const done = orders.get(saved.id);
   assert.equal(done.state, 'done');
   const finished = JSON.parse(calls.findLast(call => call.method === 'editMessageText').fields.rich_message).blocks;
-  assert.equal(finished[1].text, 'Тест ТГ ДТФ 1шт');
+  assert.equal(orderText(finished), 'Тест ТГ ДТФ 1шт');
   assert.ok(done.completedAt);
   assert.ok(finished.at(-2).text.startsWith('⚡ Срочно · 🔥 Готов · '));
   const completedTime = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Asia/Yekaterinburg',
     day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(done.completedAt));
   assert.ok(finished.at(-2).text.endsWith(completedTime));
   assert.equal(finished.at(-1).text, `Заказ №${saved.number}`);
-  const doneMarkup = JSON.parse(calls.findLast(call => call.method === 'editMessageText').fields.reply_markup);
+  const doneMarkup = controls(calls.findLast(call => call.method === 'editMessageText').fields);
   assert.ok(doneMarkup.inline_keyboard[0].some(button => button.text === '🌲 Вернуть в работу'));
   const repeated = await orders.setState(saved.id, 'done', done.revision);
   assert.equal(repeated.completedAt, done.completedAt); assert.equal(repeated.revision, done.revision);
@@ -157,12 +163,12 @@ test('Telegram priority callbacks verify staff, chat, message and revision', asy
   assert.equal(reopened.completedAt, null);
   const resumed = JSON.parse(calls.findLast(call => call.method === 'editMessageText').fields.rich_message).blocks;
   assert.equal(resumed.at(-2).text, '⚡ Срочно · 🌲 В работе');
-  const workMarkup = JSON.parse(calls.findLast(call => call.method === 'editMessageText').fields.reply_markup);
+  const workMarkup = controls(calls.findLast(call => call.method === 'editMessageText').fields);
   assert.ok(workMarkup.inline_keyboard[0].some(button => button.text === '🔥 Готов'));
   const renamed = await orders.setCustomer(saved.id, 'Новый заказчик', reopened.revision);
   assert.equal(renamed.statusMessageId, saved.statusMessageId); assert.equal(renamed.photoCount, saved.photoCount);
   const renamedBlocks = JSON.parse(calls.findLast(call => call.method === 'editMessageText').fields.rich_message).blocks;
-  assert.equal(renamedBlocks[1].text, 'Новый заказчик ТГ ДТФ 1шт');
+  assert.equal(orderText(renamedBlocks), 'Новый заказчик ТГ ДТФ 1шт');
   assert.equal(renamedBlocks.at(-1).text, `Заказ №${saved.number}`);
   assert.equal(calls.filter(call => call.method === 'sendRichMessage').length, 1);
   await orders.processBotUpdates(callback(43, renamed.revision, -1007, 'blanks-pause'));
@@ -171,14 +177,14 @@ test('Telegram priority callbacks verify staff, chat, message and revision', asy
   let paused = orders.get(saved.id); assert.equal(paused.blanksPaused, true);
   await orders.processBotUpdates(callback(42, paused.revision, -1007, 'application-pause'));
   paused = orders.get(saved.id); assert.equal(paused.blanksPaused, true); assert.equal(paused.applicationPaused, true);
-  const pausedMarkup = JSON.parse(calls.findLast(call => call.method === 'editMessageText').fields.reply_markup);
+  const pausedMarkup = controls(calls.findLast(call => call.method === 'editMessageText').fields);
   assert.deepEqual(pausedMarkup.inline_keyboard[1].map(button => button.text), ['▶ Заготовки продолжить', '▶ Нанесение продолжить']);
   await orders.processBotUpdates(callback(42, paused.revision, -1007, 'blanks-resume'));
   paused = orders.get(saved.id); assert.equal(paused.blanksPaused, false); assert.equal(paused.applicationPaused, true);
   const pausedBlocks = JSON.parse(calls.findLast(call => call.method === 'editMessageText').fields.rich_message).blocks;
   assert.equal(pausedBlocks.at(-1).text, `Заказ №${saved.number}`);
   assert.ok(pausedBlocks.at(-2).text.includes('⏸ Нанесение пауза'));
-  assert.equal(pausedBlocks[1].text, 'Новый заказчик ТГ ДТФ 1шт');
+  assert.equal(orderText(pausedBlocks), 'Новый заказчик ТГ ДТФ 1шт');
   await orders.processBotUpdates(callback(43, paused.revision, -1007, 'blanks-ready'));
   assert.equal(orders.get(saved.id).blanksReady, false);
   await orders.processBotUpdates(callback(42, paused.revision, -1008, 'blanks-ready'));
@@ -188,7 +194,7 @@ test('Telegram priority callbacks verify staff, chat, message and revision', asy
   assert.equal(ready.blanksReady, true); assert.equal(ready.applicationPaused, true);
   const readyBlocks = JSON.parse(calls.findLast(call => call.method === 'editMessageText').fields.rich_message).blocks;
   assert.ok(readyBlocks.at(-2).text.includes('❤️ Заготовки готовы'));
-  assert.equal(readyBlocks[1].text, 'Новый заказчик ТГ ДТФ 1шт');
+  assert.equal(orderText(readyBlocks), 'Новый заказчик ТГ ДТФ 1шт');
   assert.equal(readyBlocks.at(-1).text, `Заказ №${saved.number}`);
   await orders.processBotUpdates(callback(42, paused.revision, -1007, 'blanks-unready'));
   assert.equal(orders.get(saved.id).blanksReady, true);
@@ -208,11 +214,11 @@ test('Telegram priority callbacks verify staff, chat, message and revision', asy
   assert.equal(delivery.isUrgent, beforeDelivery.isUrgent); assert.deepEqual(delivery.photoVersions, beforeDelivery.photoVersions);
   const deliveryEdit = calls.findLast(call => call.method === 'editMessageText');
   const deliveryBlocks = JSON.parse(deliveryEdit.fields.rich_message).blocks;
-  assert.equal(deliveryBlocks[1].text, beforeDelivery.caption);
+  assert.equal(orderText(deliveryBlocks), beforeDelivery.caption.replace(/\s+/gu, ' '));
   assert.ok(deliveryBlocks.at(-2).text.includes('🚚 ДОСТАВКА'));
   assert.equal(deliveryBlocks.at(-1).text, `Заказ №${saved.number}`);
-  assert.ok(JSON.parse(deliveryEdit.fields.reply_markup).inline_keyboard.flat().some(button =>
-    button.text === '🚚 ДОСТАВКА ✓' && button.callback_data.endsWith(':no-delivery')));
+  assert.ok(controls(deliveryEdit.fields).inline_keyboard.flat().some(button =>
+    button.text === '📦 Доставка ✓' && button.callback_data.endsWith(':no-delivery')));
   await orders.processBotUpdates(callback(42, beforeDelivery.revision, -1007, 'no-delivery'));
   assert.equal(orders.get(saved.id).isDelivery, true);
   await orders.processBotUpdates(callback(42, delivery.revision, -1007, 'no-delivery'));
