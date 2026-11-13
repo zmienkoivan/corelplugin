@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -92,6 +92,44 @@ internal static class WindowChecks
             Require(window.Plan != null && window.Plan.Frame.Length == 3, "Triangle window reads hidden head/diagonal values.");
             Require(Field<StackPanel>(Number(window, "Radius4"), "View").Visibility == Visibility.Collapsed,
                 "Window displays a nonexistent fifth bag corner.");
+            Field<CheckBox>(window, "_divideBags").IsChecked = true; Rebuild(window);
+            Require(window.Plan != null && window.Plan.Sections.Length == 2, "Division checkbox did not produce two complete bags.");
+            var divider = window.Plan.DivisionPath;
+            var at = BagPoint.Mul(BagPoint.Add(divider[0], divider[divider.Length - 1]), .5);
+            int added = side.AddDivisionPoint(at, 10); Rebuild(window);
+            Require(added == 1 && window.Plan != null && window.Plan.Setup.DivisionLine.Length == 3,
+                "Clicking the division line did not add an editable point.");
+            side.MoveDivisionPoint(1, new BagPoint(at.X, at.Y + 8)); Rebuild(window);
+            Require(window.Plan != null && Math.Abs(window.Plan.Setup.DivisionLine[1][1] - at.Y - 8) < 1e-8,
+                "Dragging the divider point ignored millimetres.");
+            Require(side.CanDeleteDivisionPoint, "Added division point cannot be removed.");
+            side.DeleteDivisionPoint(); Rebuild(window);
+            Require(window.Plan != null && window.Plan.Setup.DivisionLine.Length == 2, "Deleting a division point damaged the two bags.");
+            side.MoveDivisionPoint(0, new BagPoint(100, 100)); Rebuild(window);
+            Require(window.Plan == null && Field<FrameBagPlan>(side, "_plan") != null && !Field<Button>(window, "_apply").IsEnabled,
+                "Invalid divider remains exportable or disappears from editing.");
+            Field<FrameBagSetup>(window, "_anchors").DivisionLine = null; Rebuild(window);
+            Require(window.Plan != null && window.Plan.Sections.Length == 2, "Reset divider did not restore valid independent bags.");
+            Field<CheckBox>(window, "_divideBags").IsChecked = false;
+            Field<CheckBox>(window, "_fullLength").IsChecked = false;
+            Set(window, "BagLength", 200); Set(window, "Height", 60); Set(window, "FrontHeight", 60);
+            Field<ComboBox>(window, "_attachment").SelectedIndex = 1; Rebuild(window);
+            Require(window.Plan != null && window.Plan.Setup.BagLength == 200 && window.Plan.Setup.AttachToFront,
+                "Length and front attachment controls did not change the outline.");
+            Field<CheckBox>(window, "_fullLength").IsChecked = true; Rebuild(window);
+            Require(window.Plan != null && window.Plan.Setup.BagLength == 0, "Full frame length did not restore.");
+            var project = FrameBagGeometry.Build(new FrameBagSetup { Name = "Гаврила · модуль", BagLength = 300.5,
+                Height = 140.25, FrontHeight = 145.75, SplitHeights = true, TopDepth = 63.25, BottomDepth = 38.75,
+                Clearance = 4.75, Allowance = 9.25, CornerRadius = 12.75, CornerRadii = new[] { 7.25, 9.75, 11.25, 13.5 },
+                DivideBags = true, Notches = true, NotchDepth = 1.25, LeftZipper = BagZipper.Slot, RightZipper = BagZipper.Flap,
+                DivisionLine = new[] { new[] { -50d, 90 }, new[] { 150.125, 85.75 }, new[] { 250.25, 110.125 }, new[] { 700d, 100 } } });
+            var serializer = new System.Web.Script.Serialization.JavaScriptSerializer();
+            string saved = serializer.Serialize(project.Setup);
+            var restored = serializer.Deserialize<FrameBagSetup>(saved);
+            Call(window, "LoadSetup", restored);
+            Require(window.Plan != null && serializer.Serialize(window.Plan.Setup) == saved,
+                "Loading the project did not restore every saved parameter, decimal radius and division node.");
+            Require(window.Title.Contains("GAVRILABAGS"), "Constructor title does not match its branded tab.");
             Console.WriteLine("Frame bag window: side switches, mirrored mouse/zoom, fixed zippers, front/rear heights, corner radii and notch controls passed.");
         }
         finally { window.Close(); }

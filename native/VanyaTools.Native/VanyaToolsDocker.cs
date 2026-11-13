@@ -255,7 +255,7 @@ namespace VanyaTools.Native
                 Color.FromRgb(120, 92, 139), new TabControl { Items = {
                     new TabItem { Header = "Рулетка", Content = new CurveMeasureTab(SetStatus) },
                     new TabItem { Header = "Паттерн", Content = new PatternFillTab(SetStatus, () => aiTools.GetToken()) },
-                    new TabItem { Header = "Велосумка", Content = new FrameBagTab(SetStatus) },
+                    new TabItem { Header = "GAVRILABAGS", Content = new FrameBagTab(SetStatus) },
                     new TabItem { Header = "Шум ДТФ", Content = new DtfNoiseTab(ImportDtfResult, SetStatus) },
                     new TabItem { Header = "Шрифт", Content = new FontSearchTab(aiTools.FontToolsView, SetStatus) },
                     new TabItem { Header = "Восстановление принта", Content = aiTools }

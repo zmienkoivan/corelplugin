@@ -20,10 +20,10 @@ namespace VanyaTools.Native
         private readonly FrameBagPreview _pieces = new FrameBagPreview(FrameBagView.Pieces);
         private readonly TextBlock _message, _summary;
         private readonly TextBox _name;
-        private readonly ComboBox _leftZipper, _rightZipper, _frameShape;
+        private readonly ComboBox _leftZipper, _rightZipper, _frameShape, _attachment;
         private readonly System.Windows.Controls.Primitives.ToggleButton _leftView, _rightView;
         private int _editSide;
-        private readonly CheckBox _notches;
+        private readonly CheckBox _notches, _fullLength, _divideBags;
         private int _cornerCount;
         private FrameBagSetup _anchors;
         private readonly Button _apply, _dxf, _save;
@@ -37,7 +37,7 @@ namespace VanyaTools.Native
         internal FrameBagWindow(FrameBagSetup initial)
         {
             _last = initial.Copy(); _anchors = initial.Copy();
-            Title = "Выкройка велосумки · Vanya Tools";
+            Title = "GAVRILABAGS · конструктор выкройки";
             Width = Math.Min(1240, SystemParameters.WorkArea.Width - 28);
             Height = Math.Min(850, SystemParameters.WorkArea.Height - 28);
             MinWidth = 850; MinHeight = 550; WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -64,9 +64,9 @@ namespace VanyaTools.Native
             fields.Children.Add(DockerLayout.LabeledField("Название", _name));
             _name.TextChanged += (_, __) => Queue();
             var presets = new Grid(); presets.ColumnDefinitions.Add(new ColumnDefinition()); presets.ColumnDefinitions.Add(new ColumnDefinition());
-            _save = Button("Сохранить замеры…", (_, __) => Save());
+            _save = Button("Сохранить проект…", (_, __) => Save());
             presets.Children.Add(_save);
-            var load = Button("Загрузить…", (_, __) => Load()); Grid.SetColumn(load, 1); presets.Children.Add(load);
+            var load = Button("Открыть проект…", (_, __) => Load()); Grid.SetColumn(load, 1); presets.Children.Add(load);
             fields.Children.Add(presets);
             var frame = DockerLayout.ToolGroup("1 · Внутренний проём рамы",
                 "Треугольник: A — верх подседельной, B — передний угол, C — низ подседельной; нужны три стороны. " +
@@ -84,21 +84,45 @@ namespace VanyaTools.Native
             _frameShape.SelectionChanged += (_, __) => { UpdateFrameControls(); Queue(); };
             UpdateFrameControls();
             var bag = DockerLayout.ToolGroup("2 · Сумка",
-                "Высота откладывается вниз от верхней границы сумки до скругления углов. Можно задать независимые высоты спереди и сзади. " +
+                "Высота откладывается вниз от верхней границы сумки до скругления углов. Длина измеряется по верхней трубе; привязка оставляет сумку у подседельной или у стакана. Высоты спереди и сзади независимы. " +
                 "Глубина — толщина поперёк рамы. Нижняя глубина задаётся у самой низкой точки; при наклонном дне глубина вдоль него меняется. " +
                 "Зелёные буквы A–E отмечают углы сумки. Общий радиус меняет все углы, ниже каждый можно настроить отдельно. Длины стенок пересчитываются по шву.");
             fields.Children.Add(bag);
+            _fullLength = new CheckBox { Content = "Вся длина рамы", IsChecked = initial.BagLength <= 0, Margin = new Thickness(0, 0, 0, 5) };
+            bag.Children.Add(_fullLength);
+            Add(bag, "BagLength", "Длина по верхней трубе", 10, 1500, initial.BagLength > 0 ? initial.BagLength : Math.Max(10, initial.Top - initial.Clearance * 2));
+            _fields["BagLength"].View.Visibility = initial.BagLength > 0 ? Visibility.Visible : Visibility.Collapsed;
+            _attachment = new ComboBox { ItemsSource = new[] { "Сзади · у подседельной", "Спереди · у стакана" }, SelectedIndex = initial.AttachToFront ? 1 : 0, MinHeight = 28 };
+            bag.Children.Add(DockerLayout.LabeledField("Привязка сумки", _attachment));
+            _attachment.SelectionChanged += (_, __) => Queue();
+            _fullLength.Checked += (_, __) => { _fields["BagLength"].View.Visibility = Visibility.Collapsed; Queue(); };
+            _fullLength.Unchecked += (_, __) => { _fields["BagLength"].View.Visibility = Visibility.Visible; Queue(); };
             Add(bag, "Height", "Высота сзади", 10, 1500, initial.Height);
             Add(bag, "FrontHeight", "Высота спереди", 10, 1500, initial.SplitHeights ? initial.FrontHeight : initial.Height);
             Add(bag, "TopDepth", "Глубина сверху", 10, 300, initial.TopDepth);
             Add(bag, "BottomDepth", "Глубина снизу", 10, 300, initial.BottomDepth);
             Add(bag, "CornerRadius", "Радиус всех углов", 0, 200, initial.CornerRadius, AllCornersChanged);
             var corners = new StackPanel();
-            for (int n = 0; n < 5; n++)
+            for (int n = 0; n < FrameBagSetup.MaximumCorners; n++)
                 Add(corners, "Radius" + n, "Угол " + (char)('A' + n), 0, 200,
                     initial.CornerRadii != null && n < initial.CornerRadii.Length ? initial.CornerRadii[n] : initial.CornerRadius);
             bag.Children.Add(new Expander { Header = "Радиусы по углам · мм", Content = corners, IsExpanded = true });
-            var closure = DockerLayout.ToolGroup("3 · Молнии и клапаны",
+            var division = DockerLayout.ToolGroup("3 · Составная сумка",
+                "Две самостоятельные сумки: верхняя используется отдельно, нижняя пристёгивается. Линия создаёт отдельные закрывающие стенки у обеих частей. " +
+                "Перетаскивайте точки Р1/Р2; клик по линии добавляет точку. Промежуточную точку можно удалить кнопкой или Ctrl + клик. " +
+                "Концы линии оставляйте снаружи сумки слева и справа; средние точки — внутри. Линия не должна пересекать молнию.");
+            fields.Children.Add(division);
+            _divideBags = new CheckBox { Content = "Две сумки · верх и низ", IsChecked = initial.DivideBags, Margin = new Thickness(0, 0, 0, 5) };
+            division.Children.Add(_divideBags);
+            _divideBags.Checked += (_, __) => Queue(); _divideBags.Unchecked += (_, __) => Queue();
+            var divisionActions = new Grid(); divisionActions.ColumnDefinitions.Add(new ColumnDefinition()); divisionActions.ColumnDefinitions.Add(new ColumnDefinition());
+            divisionActions.Children.Add(Button("Сбросить линию", (_, __) => { _anchors.DivisionLine = null; Queue(); }));
+            var deletePoint = Button("Удалить точку", (_, __) => _side.DeleteDivisionPoint());
+            deletePoint.IsEnabled = false; Grid.SetColumn(deletePoint, 1); divisionActions.Children.Add(deletePoint);
+            _side.DivisionSelectionChanged += allowed => deletePoint.IsEnabled = allowed;
+            _side.DivisionChanged += points => { _anchors.DivisionLine = points.Select(p => new[] { p.X, p.Y }).ToArray(); Queue(); };
+            division.Children.Add(divisionActions);
+            var closure = DockerLayout.ToolGroup("4 · Молнии и клапаны",
                 "Для каждой стороны выберите конструкцию. М1 и М2 перетаскиваются на виде сбоку: они задают начало и конец молнии. " +
                 "У «Двух деталей» линия проходит через якоря до границ боковины; ширина открытия оставляет место молнии между деталями. " +
                 "У «Прорези» и «Клапана» якоря — концы прорези. Их положение фиксировано в миллиметрах от рамы, изменение высоты сумки их не сдвигает. Клапан — отдельная накладная деталь с припусками.");
@@ -120,7 +144,7 @@ namespace VanyaTools.Native
                 Queue();
             }));
             _side.AnchorChanged += SetAnchor;
-            var cutting = DockerLayout.ToolGroup("4 · Посадка и резка",
+            var cutting = DockerLayout.ToolGroup("5 · Посадка и резка",
                 "Зазор — от рамы до готовой сумки. Припуск добавляется наружу от линии шва. " +
                 "Выдаётся две зеркальные боковины и отдельные стенки между точками A–E. " +
                 "У скруглённого угла стенки соединяются на середине дуги. " +
@@ -191,7 +215,7 @@ namespace VanyaTools.Native
             try
             {
                 double radius = _fields["CornerRadius"].Read();
-                for (int n = 0; n < 5; n++) _fields["Radius" + n].Set(radius);
+                for (int n = 0; n < FrameBagSetup.MaximumCorners; n++) _fields["Radius" + n].Set(radius);
             }
             catch (ArgumentException) { }
             Queue();
@@ -199,6 +223,8 @@ namespace VanyaTools.Native
         private void Add(Panel parent, string key, string title, double min, double max, double value, Action changed = null)
         { var field = new NumberField(title, min, max, value, changed ?? Queue); _fields.Add(key, field); parent.Children.Add(field.View); }
         private FrameBagSetup Read() => new FrameBagSetup { Name = _name.Text.Trim(), TriangleFrame = _frameShape.SelectedIndex == 0,
+            DivideBags = _divideBags.IsChecked == true, DivisionLine = _anchors.DivisionLine,
+            BagLength = _fullLength.IsChecked == true ? 0 : _fields["BagLength"].Read(), AttachToFront = _attachment.SelectedIndex == 1,
             Top = _fields["Top"].Read(), Seat = _fields["Seat"].Read(), Down = _fields["Down"].Read(),
             Head = _frameShape.SelectedIndex == 0 ? _last.Head : _fields["Head"].Read(),
             Diagonal = _frameShape.SelectedIndex == 0 ? _last.Diagonal : _fields["Diagonal"].Read(), Height = _fields["Height"].Read(),
@@ -249,7 +275,10 @@ namespace VanyaTools.Native
                 _sync = true;
                 var setup = Read();
                 var frame = FrameBagGeometry.Frame(setup);
-                var inside = FrameBagGeometry.Offset(frame, setup.Clearance);
+                var fullOpening = FrameBagGeometry.Offset(frame, setup.Clearance);
+                _fields["BagLength"].Limit(fullOpening[1].X - fullOpening[0].X);
+                setup.BagLength = _fullLength.IsChecked == true ? 0 : _fields["BagLength"].Read();
+                var inside = FrameBagGeometry.Opening(setup, frame);
                 double top = inside.Min(p => p.Y), maxHeight = inside.Max(p => p.Y) - top;
                 if (maxHeight < 10) throw new ArgumentException("Проём слишком мал. Уменьшите зазор.");
                 _fields["Height"].Limit(maxHeight); _fields["FrontHeight"].Limit(maxHeight);
@@ -260,7 +289,7 @@ namespace VanyaTools.Native
                 _cornerCount = sharp.Length;
                 var radii = Enumerable.Range(0, _cornerCount).Select(n => _fields["Radius" + n].Read()).ToArray();
                 var fitted = FrameBagGeometry.FitRadii(sharp, radii);
-                for (int n = 0; n < 5; n++)
+                for (int n = 0; n < FrameBagSetup.MaximumCorners; n++)
                 {
                     _fields["Radius" + n].View.Visibility = n < _cornerCount ? Visibility.Visible : Visibility.Collapsed;
                     if (n < _cornerCount && fitted[n] < radii[n] - .00001)
@@ -277,8 +306,10 @@ namespace VanyaTools.Native
                 _side.Update(preview); _front.Update(preview); _pieces.Update(_plan);
                 _fields["FlapDepth"].View.Visibility = _fields["FlapExtra"].View.Visibility =
                     setup.LeftZipper == BagZipper.Flap || setup.RightZipper == BagZipper.Flap ? Visibility.Visible : Visibility.Collapsed;
-                _summary.Text = _plan == null ? "Исправьте молнию перед созданием комплекта." :
-                    "Комплект: " + _plan.Parts.Length + " деталей · объём ≈ " + _plan.VolumeLitres.ToString("0.00", CultureInfo.CurrentCulture) + " л\n" +
+                _summary.Text = _plan == null ? "Исправьте разделение или молнию перед созданием комплекта." :
+                    "Комплект: " + _plan.Parts.Length + " деталей · " + (_plan.Sections.Length == 2
+                        ? "верх ≈ " + _plan.Sections[0].VolumeLitres.ToString("0.00", CultureInfo.CurrentCulture) + " л · низ ≈ " + _plan.Sections[1].VolumeLitres.ToString("0.00", CultureInfo.CurrentCulture) + " л\n"
+                        : "объём ≈ " + _plan.VolumeLitres.ToString("0.00", CultureInfo.CurrentCulture) + " л\n") +
                     "Красный — резка; синий — швы. М1/М2 перетаскиваются мышью." +
                     (setup.Notches && setup.Allowance >= .4 ? " Надсечки: две — начало стенки, одна — конец." : "");
                 Message(closureError ?? "Размеры в миллиметрах. Объекты создаются только по кнопке.", closureError != null);
@@ -305,22 +336,30 @@ namespace VanyaTools.Native
         private void Save()
         {
             Rebuild(); if (_plan == null) return;
-            var dialog = new Microsoft.Win32.SaveFileDialog { Filter = "Замеры велосумки|*.framebag.json", DefaultExt = ".framebag.json",
+            var dialog = new Microsoft.Win32.SaveFileDialog { Filter = "Проект GAVRILABAGS|*.framebag.json", DefaultExt = ".framebag.json",
                 AddExtension = true, FileName = SafeName(_plan.Setup.Name) + ".framebag.json" };
             if(dialog.ShowDialog(this)!=true)return;
-            try { File.WriteAllText(dialog.FileName,new JavaScriptSerializer().Serialize(_plan.Setup),Encoding.UTF8);Message("Замеры сохранены.",false); }
+            try { File.WriteAllText(dialog.FileName,new JavaScriptSerializer().Serialize(_plan.Setup),Encoding.UTF8);Message("Проект сохранён со всеми параметрами и точками разделения.",false); }
             catch(Exception error){Message(error.Message,true);}
         }
         private void Load()
         {
-            var dialog=new Microsoft.Win32.OpenFileDialog {Filter="Замеры велосумки|*.framebag.json;*.json"};
+            var dialog=new Microsoft.Win32.OpenFileDialog {Filter="Проект GAVRILABAGS|*.framebag.json;*.json"};
             if(dialog.ShowDialog(this)!=true)return;
             try
             {
                 if(new FileInfo(dialog.FileName).Length>32768)throw new ArgumentException("Файл замеров слишком большой.");
                 var setup=new JavaScriptSerializer {MaxJsonLength=32768}.Deserialize<FrameBagSetup>(File.ReadAllText(dialog.FileName));
-                FrameBagGeometry.Build(setup);
-                _sync=true;
+                LoadSetup(setup);
+            }
+            catch(Exception error){_sync=false;Message(error.GetBaseException().Message,true);}
+        }
+        private void LoadSetup(FrameBagSetup setup)
+        {
+            FrameBagGeometry.Build(setup);
+            _sync=true;
+            try
+            {
                 foreach(var pair in _fields)
                 {
                     double value;
@@ -329,16 +368,19 @@ namespace VanyaTools.Native
                         int corner = Int32.Parse(pair.Key.Substring(6), CultureInfo.InvariantCulture);
                         value = setup.CornerRadii != null && corner < setup.CornerRadii.Length ? setup.CornerRadii[corner] : setup.CornerRadius;
                     }
-                    else value = pair.Key == "FrontHeight" && !setup.SplitHeights ? setup.Height :
+                    else value = pair.Key == "BagLength" && setup.BagLength == 0 ? Math.Max(10, setup.Top - setup.Clearance * 2) :
+                        pair.Key == "FrontHeight" && !setup.SplitHeights ? setup.Height :
                         Convert.ToDouble(typeof(FrameBagSetup).GetProperty(pair.Key).GetValue(setup,null));
                     pair.Value.Set(value, true);
                 }
                 _frameShape.SelectedIndex = setup.TriangleFrame ? 0 : 1;
                 _anchors = setup.Copy(); _leftZipper.SelectedIndex = (int)setup.LeftZipper; _rightZipper.SelectedIndex = (int)setup.RightZipper;
-                _notches.IsChecked = setup.Notches;
-                _name.Text=setup.Name ?? "Велосумка"; _sync=false;Rebuild();
+                _divideBags.IsChecked = setup.DivideBags;
+                _notches.IsChecked = setup.Notches; _fullLength.IsChecked = setup.BagLength == 0; _attachment.SelectedIndex = setup.AttachToFront ? 1 : 0;
+                _name.Text=setup.Name ?? "Велосумка";
             }
-            catch(Exception error){_sync=false;Message(error.GetBaseException().Message,true);}
+            finally { _sync=false; }
+            Rebuild();
         }
         private void Message(string text,bool error)
         { _message.Text=text;DockerTheme.UseTheme(_message,TextBlock.ForegroundProperty,error?DockerTheme.ErrorTextBrush:DockerTheme.MutedTextBrush); }
@@ -392,7 +434,7 @@ namespace VanyaTools.Native
             {
                 _sync=true;
                 if(resetLimit)_slider.Maximum=_baseMaximum;
-                _last=value;_input.Text=value.ToString("0.#",CultureInfo.CurrentCulture);_slider.Value=value;_sync=false;
+                _last=value;_input.Text=value.ToString("0.######",CultureInfo.CurrentCulture);_slider.Value=value;_sync=false;
             }
             internal void Limit(double maximum)
             {

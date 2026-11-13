@@ -16,8 +16,11 @@ namespace VanyaTools.Native
         private FrameBagPlan _plan;
         private bool _pan;
         private Point _last;
-        private int _editSide, _anchor = -1;
+        private int _editSide, _anchor = -1, _divisionAnchor = -1, _divisionSelected = -1;
+        private BagPoint[] _divisionWorking;
         internal event Action<int, int, double, double> AnchorChanged;
+        internal event Action<BagPoint[]> DivisionChanged;
+        internal event Action<bool> DivisionSelectionChanged;
         internal void EditSide(int side)
         {
             side = side == 1 ? 1 : 0;
@@ -30,7 +33,13 @@ namespace VanyaTools.Native
         }
         internal FrameBagPreview(FrameBagView view)
         { _view = view; ClipToBounds = true; Focusable = true; ToolTip = "Колесо — масштаб. Средняя/правая кнопка или пробел + перетаскивание — перемещение."; }
-        internal void Update(FrameBagPlan plan) { _plan = plan; InvalidateVisual(); }
+        internal void Update(FrameBagPlan plan)
+        {
+            _plan = plan;
+            if (!IsMouseCaptured) _divisionWorking = null;
+            if (_divisionSelected >= (plan?.Setup.DivisionLine?.Length ?? 0)) _divisionSelected = -1;
+            DivisionSelectionChanged?.Invoke(CanDeleteDivisionPoint); InvalidateVisual();
+        }
         internal void Fit() { _viewport.Fit(); InvalidateVisual(); }
         internal void Zoom(double factor) { _viewport.ZoomAt(factor, new Point(ActualWidth / 2, ActualHeight / 2)); InvalidateVisual(); }
 
@@ -45,6 +54,16 @@ namespace VanyaTools.Native
                 _view == FrameBagView.Side ? new Rect(minX - 30, -35, maxX - minX + 65, maxY + 65) :
                 new Rect(-Math.Max((maxX - minX) / 6, Math.Max(plan.Setup.TopDepth, plan.Setup.BottomDepth) / 2 + 35), -35,
                     Math.Max((maxX - minX) / 3, Math.Max(plan.Setup.TopDepth, plan.Setup.BottomDepth) + 70), maxY + 65);
+            if (_view == FrameBagView.Side && plan.Setup.DivideBags && plan.Setup.DivisionLine != null)
+            {
+                try
+                {
+                    var line = FrameBagDivision.ReadLine(plan.Setup);
+                    bounds.Union(new Rect(line.Min(p => p.X) - 20, line.Min(p => p.Y) - 25,
+                        line.Max(p => p.X) - line.Min(p => p.X) + 40, line.Max(p => p.Y) - line.Min(p => p.Y) + 50));
+                }
+                catch (ArgumentException) { }
+            }
             _viewport.Update(bounds, RenderSize);
             double scale = _viewport.Scale;
             if (scale <= 0) return;
@@ -59,7 +78,13 @@ namespace VanyaTools.Native
                 var diagonal = new Pen(Brushes.MediumPurple, hair) { DashStyle = DashStyles.Dash };
                 if (!plan.Setup.TriangleFrame) dc.DrawLine(diagonal, Point(plan.Frame[0]), Point(plan.Frame[2]));
                 Polygon(dc, plan.Bag, fill, seam);
+                if (plan.Sections.Length == 2)
+                {
+                    Polygon(dc, plan.Sections[0].Bag, new SolidColorBrush(Color.FromArgb(50, 50, 175, 100)), seam);
+                    Polygon(dc, plan.Sections[1].Bag, new SolidColorBrush(Color.FromArgb(65, 60, 130, 230)), seam);
+                }
                 DrawZipper(dc, plan, hair);
+                DrawDivision(dc, plan, hair);
                 for (int n = 0; n < plan.Frame.Length; n++)
                 {
                     var at = plan.Frame[n]; dc.DrawEllipse(Brushes.White, new Pen(Brushes.SlateGray, hair), Point(at), hair * 3, hair * 3);
@@ -85,6 +110,13 @@ namespace VanyaTools.Native
                 Polygon(dc, new[] { new BagPoint(-a, 0), new BagPoint(a, 0), new BagPoint(b, h), new BagPoint(-b, h) }, fill, seam);
                 var axis = new Pen(Brushes.LightSlateGray, hair) { DashStyle = DashStyles.Dash };
                 dc.DrawLine(axis, new Point(0, -10), new Point(0, h + 10));
+                if (plan.Sections.Length == 2 && plan.DivisionPath.Length >= 2)
+                {
+                    var ends = new[] { plan.DivisionPath[0], plan.DivisionPath[plan.DivisionPath.Length - 1] };
+                    double y = ends.OrderByDescending(p => p.X).First().Y - plan.Bag.Min(p => p.Y);
+                    double half = a + (b - a) * y / h;
+                    dc.DrawLine(new Pen(Brushes.DarkOrange, 2 * hair) { DashStyle = DashStyles.Dash }, new Point(-half, y), new Point(half, y));
+                }
                 Text(dc, N(plan.Setup.TopDepth) + " мм", -a, -22 * hair, 12 * hair, Brushes.SeaGreen);
                 Text(dc, N(plan.Setup.BottomDepth) + " мм", -b, h + 7 * hair, 12 * hair, Brushes.SeaGreen);
                 Text(dc, N(h) + " мм", Math.Max(a, b) + 8 * hair, h / 2, 12 * hair, Brushes.SeaGreen);
@@ -103,6 +135,61 @@ namespace VanyaTools.Native
                 }
             }
             dc.Pop();
+        }
+
+        private void DrawDivision(DrawingContext dc, FrameBagPlan plan, double hair)
+        {
+            if (!plan.Setup.DivideBags || plan.Setup.DivisionLine == null) return;
+            BagPoint[] line;
+            try { line = _divisionWorking ?? FrameBagDivision.ReadLine(plan.Setup); } catch (ArgumentException) { return; }
+            var pen = new Pen(plan.Sections.Length == 2 ? Brushes.DarkOrange : Brushes.OrangeRed, 2 * hair) { DashStyle = DashStyles.Dash };
+            for (int n = 0; n + 1 < line.Length; n++) dc.DrawLine(pen, Point(line[n]), Point(line[n + 1]));
+            for (int n = 0; n < line.Length; n++)
+            {
+                dc.DrawEllipse(n == _divisionSelected ? Brushes.Gold : Brushes.White, pen, Point(line[n]), 5 * hair, 5 * hair);
+                Text(dc, "Р" + (n + 1), line[n].X + 7 * hair, line[n].Y + 5 * hair, 11 * hair, Brushes.DarkOrange);
+            }
+        }
+        internal bool CanDeleteDivisionPoint => _plan?.Setup.DivideBags == true && _divisionSelected > 0 &&
+            _divisionSelected < (_divisionWorking?.Length ?? _plan.Setup.DivisionLine?.Length ?? 0) - 1;
+        internal void DeleteDivisionPoint()
+        {
+            if (!CanDeleteDivisionPoint) return;
+            var line = _divisionWorking ?? FrameBagDivision.ReadLine(_plan.Setup);
+            var next = line.Where((_, index) => index != _divisionSelected).ToArray();
+            _divisionSelected = -1; _divisionWorking = null;
+            DivisionChanged?.Invoke(next); DivisionSelectionChanged?.Invoke(false); InvalidateVisual();
+        }
+        internal void MoveDivisionPoint(int index, BagPoint at)
+        {
+            if (_plan?.Setup.DivideBags != true) return;
+            var line = _divisionWorking ?? FrameBagDivision.ReadLine(_plan.Setup);
+            if (index < 0 || index >= line.Length) return;
+            line = (BagPoint[])line.Clone(); line[index] = at;
+            _divisionSelected = index; _divisionWorking = line;
+            DivisionChanged?.Invoke((BagPoint[])line.Clone()); DivisionSelectionChanged?.Invoke(CanDeleteDivisionPoint); InvalidateVisual();
+        }
+        internal int AddDivisionPoint(BagPoint at, double tolerance)
+        {
+            if (_plan?.Setup.DivideBags != true) return -1;
+            var line = _divisionWorking ?? FrameBagDivision.ReadLine(_plan.Setup);
+            if (line.Length >= FrameBagDivision.MaximumPoints) return -1;
+            int best = -1; double nearest = tolerance; BagPoint projected = at;
+            for (int n = 0; n + 1 < line.Length; n++)
+            {
+                var d = BagPoint.Sub(line[n + 1], line[n]); var r = BagPoint.Sub(at, line[n]);
+                if (d.Length < .000001) continue;
+                double t = Math.Max(0, Math.Min(1, (r.X * d.X + r.Y * d.Y) / (d.X * d.X + d.Y * d.Y)));
+                var point = BagPoint.Add(line[n], BagPoint.Mul(d, t));
+                double distance = BagPoint.Sub(point, at).Length;
+                if (distance > nearest || BagPoint.Sub(point, line[n]).Length < .2 || BagPoint.Sub(point, line[n + 1]).Length < .2) continue;
+                best = n; nearest = distance; projected = point;
+            }
+            if (best < 0 || !FrameBagClosures.Inside(_plan.Bag, projected)) return -1;
+            _divisionWorking = line.Take(best + 1).Concat(new[] { projected }).Concat(line.Skip(best + 1)).ToArray();
+            _divisionSelected = best + 1;
+            DivisionChanged?.Invoke((BagPoint[])_divisionWorking.Clone()); DivisionSelectionChanged?.Invoke(true); InvalidateVisual();
+            return _divisionSelected;
         }
 
         private void DrawZipper(DrawingContext dc, FrameBagPlan plan, double hair)
@@ -187,6 +274,19 @@ namespace VanyaTools.Native
         protected override void OnMouseDown(MouseButtonEventArgs e)
         {
             base.OnMouseDown(e);
+            if (_view == FrameBagView.Side && _plan?.Setup.DivideBags == true && e.ChangedButton == MouseButton.Left && !Keyboard.IsKeyDown(Key.Space))
+            {
+                var at = World(e.GetPosition(this)); var line = FrameBagDivision.ReadLine(_plan.Setup);
+                for (int n = 0; n < line.Length; n++)
+                {
+                    if (BagPoint.Sub(line[n], new BagPoint(at.X, at.Y)).Length * _viewport.Scale > 12) continue;
+                    _divisionSelected = n; DivisionSelectionChanged?.Invoke(CanDeleteDivisionPoint);
+                    if ((Keyboard.Modifiers & ModifierKeys.Control) != 0) { DeleteDivisionPoint(); e.Handled = true; return; }
+                    if (!CaptureMouse()) return;
+                    _divisionWorking = (BagPoint[])line.Clone(); _divisionAnchor = n; Focus(); Cursor = Cursors.Hand;
+                    InvalidateVisual(); e.Handled = true; return;
+                }
+            }
             if (_view == FrameBagView.Side && _plan != null && e.ChangedButton == MouseButton.Left && !Keyboard.IsKeyDown(Key.Space) &&
                 FrameBagClosures.Mode(_plan.Setup, _editSide) != BagZipper.None)
             {
@@ -199,6 +299,16 @@ namespace VanyaTools.Native
                     Focus();_anchor=n;Cursor=Cursors.Hand;e.Handled=true;return;
                 }
             }
+            if (_view == FrameBagView.Side && _plan?.Setup.DivideBags == true && e.ChangedButton == MouseButton.Left && !Keyboard.IsKeyDown(Key.Space))
+            {
+                var at = World(e.GetPosition(this));
+                int index = AddDivisionPoint(new BagPoint(at.X, at.Y), 8 / _viewport.Scale);
+                if (index >= 0)
+                {
+                    if (CaptureMouse()) { _divisionAnchor = index; Focus(); Cursor = Cursors.Hand; }
+                    e.Handled = true; return;
+                }
+            }
             if(e.ChangedButton!=MouseButton.Middle && e.ChangedButton!=MouseButton.Right && !Keyboard.IsKeyDown(Key.Space)) return;
             if(!CaptureMouse())return;
             Focus(); _pan=true; _last=e.GetPosition(this); Cursor=Cursors.Hand; e.Handled=true;
@@ -206,6 +316,11 @@ namespace VanyaTools.Native
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
+            if (_divisionAnchor >= 0 && _plan != null)
+            {
+                var at = World(e.GetPosition(this)); MoveDivisionPoint(_divisionAnchor, new BagPoint(at.X, at.Y));
+                e.Handled = true; return;
+            }
             if (_anchor>=0 && _plan!=null)
             {
                 var at=World(e.GetPosition(this));
@@ -215,7 +330,7 @@ namespace VanyaTools.Native
             if(!_pan)return;
             var next=e.GetPosition(this); _viewport.Pan(next-_last); _last=next; InvalidateVisual(); e.Handled=true;
         }
-        protected override void OnMouseUp(MouseButtonEventArgs e) { base.OnMouseUp(e); if(_pan || _anchor>=0){ReleaseMouseCapture();e.Handled=true;} }
-        protected override void OnLostMouseCapture(MouseEventArgs e) {base.OnLostMouseCapture(e);_pan=false;_anchor=-1;Cursor=Cursors.Arrow;}
+        protected override void OnMouseUp(MouseButtonEventArgs e) { base.OnMouseUp(e); if(_pan || _anchor>=0 || _divisionAnchor>=0){ReleaseMouseCapture();e.Handled=true;} }
+        protected override void OnLostMouseCapture(MouseEventArgs e) {base.OnLostMouseCapture(e);_pan=false;_anchor=-1;_divisionAnchor=-1;_divisionWorking=null;Cursor=Cursors.Arrow;}
     }
 }

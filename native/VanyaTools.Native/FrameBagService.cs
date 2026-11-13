@@ -32,6 +32,8 @@ namespace VanyaTools.Native
                 dynamic cuts = page.CreateLayer("Велосумка · резка"), guides = page.CreateLayer("Велосумка · подписи и швы");
                 guides.Printable = false;
                 dynamic selected = app.CreateShapeRange();
+                foreach (var section in plan.Sections)
+                    Label(guides, section.Setup.Name + " · " + N(section.VolumeLitres) + " л", left + 15, top - section.LayoutTop - 5, false);
                 foreach (var part in plan.Parts)
                 {
                     dynamic cut = Curve(part.Cut, cuts, left + part.Left, top - part.Top, part.Name + " · резка", true, part.Cutouts);
@@ -43,30 +45,26 @@ namespace VanyaTools.Native
                     if (part.Edge >= 0)
                     {
                         Label(guides, ((char)('A' + part.Edge)).ToString(), left + part.Left + 3, top - part.Top, false);
-                        Label(guides, ((char)('A' + (part.Edge + 1) % plan.Breaks.Length)).ToString(),
+                        Label(guides, ((char)('A' + (part.Edge + 1) % part.CornerCount)).ToString(),
                             left + part.Left + MaxX(part.Seam) - 3, top - part.Top, false);
                     }
                 }
                 // Corner letters match the start/end of each wall on both side panels.
-                var shape = plan.SideSeam;
                 foreach (var part in plan.Parts)
                 {
-                    if (part.Side < 0) continue;
-                    int side = part.Side;
-                    for (int n = 0; n < plan.Breaks.Length; n++)
+                    for (int n = 0; n < part.CornerPoints.Length; n++)
                     {
-                        var p = shape[plan.Breaks[n]];
-                        var match = new BagPoint(side == 0 ? p.X : -p.X, p.Y);
-                        if (!FrameBagClosures.Inside(part.Seam, match)) continue;
-                        Label(guides, ((char)('A' + n)).ToString(), left + part.Left + (side == 0 ? p.X : -p.X),
-                            top - part.Top - p.Y, false);
+                        var p = part.CornerPoints[n];
+                        if (!FrameBagClosures.Inside(part.Seam, p)) continue;
+                        Label(guides, ((char)('A' + n)).ToString(), left + part.Left + p.X, top - part.Top - p.Y, false);
                     }
                 }
                 var s = plan.Setup;
                 string frameText = s.TriangleFrame
                     ? "Треугольник A–B–C, мм: " + N(s.Top) + " / " + N(s.Down) + " / " + N(s.Seat)
                     : "Внутренний проём A–B–C–D, мм: " + N(s.Top) + " / " + N(s.Head) + " / " + N(s.Down) + " / " + N(s.Seat) + "; A–C: " + N(s.Diagonal);
-                string summary = frameText + "\nСумка: высота " + N(s.Height) + "; глубина " + N(s.TopDepth) + " → " + N(s.BottomDepth) +
+                string summary = frameText + (s.BagLength > 0 ? "; длина по верху " + N(s.BagLength) + "; привязка " + (s.AttachToFront ? "спереди" : "сзади") : "; вся длина рамы") +
+                    (s.DivideBags ? "; две самостоятельные сумки" : "") + "\nСумка: высота " + N(s.Height) + "; глубина " + N(s.TopDepth) + " → " + N(s.BottomDepth) +
                     "; высота спереди " + N(s.SplitHeights ? s.FrontHeight : s.Height) + "; зазор " + N(s.Clearance) + "; припуск " + N(s.Allowance) + "; R " +
                     (s.CornerRadii == null ? N(s.CornerRadius) : String.Join(" / ", Array.ConvertAll(s.CornerRadii, N))) +
                     "; молнии " + FrameBagClosures.Name(s.LeftZipper) + " / " + FrameBagClosures.Name(s.RightZipper) +

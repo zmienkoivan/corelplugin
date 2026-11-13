@@ -21,12 +21,17 @@ namespace VanyaTools.Native
 
     internal sealed class FrameBagSetup
     {
+        internal const int MaximumCorners = 6;
         public bool TriangleFrame { get; set; }
         public double Top { get; set; } = 550;
         public double Seat { get; set; } = 461;
         public double Down { get; set; } = 594.1;
         public double Head { get; set; } = 104.4;
         public double Diagonal { get; set; } = 588.6;
+        public bool DivideBags { get; set; }
+        public double[][] DivisionLine { get; set; }
+        public double BagLength { get; set; }
+        public bool AttachToFront { get; set; }
         public double Height { get; set; } = 180;
         public bool SplitHeights { get; set; }
         public double FrontHeight { get; set; } = 180;
@@ -65,6 +70,7 @@ namespace VanyaTools.Native
         {
             var copy = (FrameBagSetup)MemberwiseClone();
             copy.CornerRadii = CornerRadii == null ? null : (double[])CornerRadii.Clone();
+            copy.DivisionLine = DivisionLine == null ? null : DivisionLine.Select(p => p == null ? null : (double[])p.Clone()).ToArray();
             return copy;
         }
     }
@@ -73,11 +79,13 @@ namespace VanyaTools.Native
     {
         internal string Name;
         internal BagPoint[] Seam, Cut;
-        internal int Edge = -1, Side = -1;
+        internal int Edge = -1, Side = -1, CornerCount;
+        internal BagPoint[] CornerPoints = Array.Empty<BagPoint>();
         internal BagNotch[] Notches = Array.Empty<BagNotch>();
         internal BagPoint[][] Cutouts = Array.Empty<BagPoint[]>();
         internal BagPoint[][] Marks = Array.Empty<BagPoint[]>();
         internal double Left, Top, Width, Height;
+        internal FrameBagPart CopyLayout() => (FrameBagPart)MemberwiseClone();
     }
 
     internal sealed class FrameBagPlan
@@ -87,7 +95,9 @@ namespace VanyaTools.Native
         internal int[] Breaks;
         internal BagPoint[] SideSeam;
         internal FrameBagPart[] Parts;
-        internal double AvailableHeight, ActualHeight, MaximumRadius, VolumeLitres, KitWidth, KitHeight;
+        internal FrameBagPlan[] Sections = Array.Empty<FrameBagPlan>();
+        internal BagPoint[] DivisionPath = Array.Empty<BagPoint>();
+        internal double AvailableHeight, ActualHeight, MaximumRadius, VolumeLitres, KitWidth, KitHeight, LayoutTop;
     }
 
     // Dimensions are straight chords of the INSIDE opening. A = upper seat,
@@ -134,7 +144,7 @@ namespace VanyaTools.Native
             Range(setup.Height, 10, 2000, "Высота сумки");
             Range(setup.TopDepth, 10, 300, "Глубина сверху");
             Range(setup.BottomDepth, 10, 300, "Глубина снизу");
-            var inner = Offset(frame, setup.Clearance);
+            var inner = Opening(setup, frame);
             double top = inner.Min(p => p.Y), available = inner.Max(p => p.Y) - top;
             if (setup.SplitHeights) Range(setup.FrontHeight, 10, 2000, "Высота спереди");
             if (Math.Max(setup.Height, setup.SplitHeights ? setup.FrontHeight : setup.Height) > available + .001)
@@ -148,6 +158,13 @@ namespace VanyaTools.Native
             var bag = Round(sharp, radii, out int[] breaks);
             if (bag.Length < 3 || Math.Abs(Area(bag)) < 100 || bag.Any(p => !Finite(p.X + p.Y)))
                 throw new ArgumentException("Увеличьте высоту сумки или уменьшите зазор до рамы.");
+            return FromOutline(setup, frame, bag, breaks, available, maxRadius, closures);
+        }
+
+        internal static FrameBagPlan FromOutline(FrameBagSetup setup, BagPoint[] frame, BagPoint[] bag, int[] breaks,
+            double available, double maxRadius, bool closures)
+        {
+            double top = bag.Min(p => p.Y);
             double actualHeight = bag.Max(p => p.Y) - top;
             double slope = (setup.BottomDepth - setup.TopDepth) / actualHeight;
             // A tapered bag's side panels are inclined in 3D. Their unfolded
@@ -174,7 +191,7 @@ namespace VanyaTools.Native
                 } while (true);
                 lower.Reverse();
                 var part = Part("Стенка " + (char)('A' + n) + "–" + (char)('A' + (n + 1) % breaks.Length), upper.Concat(lower).ToArray(), setup.Allowance);
-                part.Edge = n; parts.Add(part);
+                part.Edge = n; part.CornerCount = breaks.Length; parts.Add(part);
             }
             double centroidY = CentroidY(bag);
             double averageDepth = setup.TopDepth + slope * (centroidY - top);
@@ -182,8 +199,15 @@ namespace VanyaTools.Native
                 SideSeam = side, Breaks = breaks, MaximumRadius = maxRadius, AvailableHeight = available, ActualHeight = actualHeight, VolumeLitres = Area(bag) * averageDepth / 1000000 };
             result.Parts[0].Side = 0; result.Parts[1].Side = 1;
             FrameBagClosures.FixAnchors(result);
-            if (closures) FrameBagClosures.Apply(result);
-            FrameBagNotches.Apply(result);
+            if (setup.DivideBags) FrameBagDivision.EnsureLine(result);
+            if (closures && setup.DivideBags) FrameBagDivision.Apply(result);
+            else
+            {
+                if (closures) FrameBagClosures.Apply(result);
+                FrameBagNotches.Apply(result);
+                foreach (var part in result.Parts.Where(p => p.Side >= 0))
+                    part.CornerPoints = breaks.Select(n => new BagPoint(part.Side == 0 ? side[n].X : -side[n].X, side[n].Y)).ToArray();
+            }
             Arrange(result);
             return result;
         }
@@ -197,6 +221,22 @@ namespace VanyaTools.Native
 
         private static void Arrange(FrameBagPlan plan)
         {
+            if (plan.Sections.Length != 0)
+            {
+                double offset = 0;
+                var pieces = new List<FrameBagPart>();
+                foreach (var section in plan.Sections)
+                {
+                    section.LayoutTop = offset;
+                    foreach (var source in section.Parts)
+                    {
+                        var part = source.CopyLayout(); part.Top += offset; pieces.Add(part);
+                    }
+                    offset += section.KitHeight + 30;
+                }
+                plan.Parts = pieces.ToArray(); plan.KitWidth = plan.Sections.Max(s => s.KitWidth); plan.KitHeight = offset - 30;
+                return;
+            }
             double x = 15, y = 25, row = 0, maxX = 0;
             const double width = 1200, gap = 25;
             foreach (var part in plan.Parts)
@@ -335,6 +375,20 @@ namespace VanyaTools.Native
             return result;
         }
 
+        internal static BagPoint[] Opening(FrameBagSetup setup, BagPoint[] frame)
+        {
+            var inner = Offset(frame, setup.Clearance);
+            Range(setup.BagLength, 0, 3000, "Длина сумки");
+            if (setup.BagLength == 0) return inner;
+            double available = inner[1].X - inner[0].X;
+            if (setup.BagLength < 10 || setup.BagLength > available + .001)
+                throw new ArgumentException("Длина сумки по верху: от 10 до " + available.ToString("0.0", System.Globalization.CultureInfo.CurrentCulture) + " мм.");
+            double x = setup.AttachToFront ? inner[1].X - setup.BagLength : inner[0].X + setup.BagLength;
+            var opening = ClipLine(inner, new BagPoint(x, -10000), new BagPoint(x, 10000), setup.AttachToFront);
+            if (opening.Length < 3 || Area(opening) < 100) throw new ArgumentException("Для такой длины не остаётся места в раме.");
+            return opening;
+        }
+
         internal static BagPoint[] Segment(BagPoint[] inner, double rearHeight, double frontHeight)
         {
             double top = inner.Min(p => p.Y);
@@ -408,7 +462,7 @@ namespace VanyaTools.Native
             BagPoint.Cross(BagPoint.Sub(b, a), BagPoint.Sub(p, a)) / BagPoint.Sub(b, a).Length;
         internal static double Perimeter(BagPoint[] polygon) => Enumerable.Range(0, polygon.Length)
             .Sum(n => BagPoint.Sub(polygon[(n + 1) % polygon.Length], polygon[n]).Length);
-        private static double CentroidY(BagPoint[] polygon) => Enumerable.Range(0, polygon.Length).Sum(n =>
+        internal static double CentroidY(BagPoint[] polygon) => Enumerable.Range(0, polygon.Length).Sum(n =>
             (polygon[n].Y + polygon[(n + 1) % polygon.Length].Y) * BagPoint.Cross(polygon[n], polygon[(n + 1) % polygon.Length])) / (6 * Area(polygon));
         private static bool Convex(BagPoint[] polygon) => polygon.Length >= 3 &&
             Enumerable.Range(0, polygon.Length).All(n => BagPoint.Cross(BagPoint.Sub(polygon[(n + 1) % polygon.Length], polygon[n]),

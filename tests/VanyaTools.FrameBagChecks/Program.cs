@@ -136,6 +136,7 @@ internal static class Program
             System.IO.File.WriteAllText(System.IO.Path.Combine(folder,"frame-bag-triangle.dxf"),FrameBagDxf.Create(triangleSample),System.Text.Encoding.ASCII);
 
             DetailChecks();
+            DivisionChecks();
             WindowChecks.Run();
             InsertChecks.Run(plan);
             var invalid = new FrameBagSetup { Diagonal = 20 }; Reject(() => FrameBagGeometry.Build(invalid));
@@ -148,6 +149,65 @@ internal static class Program
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
     }
+    private static void DivisionChecks()
+    {
+        var serializer = new System.Web.Script.Serialization.JavaScriptSerializer();
+        foreach (bool triangle in new[] { false, true })
+        foreach (bool front in new[] { false, true })
+        {
+            var source = new FrameBagSetup { TriangleFrame = triangle, BagLength = 200, AttachToFront = front,
+                Height = 60, FrontHeight = 65, SplitHeights = true, CornerRadius = 3 };
+            var shortBag = FrameBagGeometry.Build(source);
+            WallMatches(shortBag); NotchMatches(shortBag); Dxf(shortBag); InsertChecks.Run(shortBag);
+            var opening = FrameBagGeometry.Offset(shortBag.Frame, source.Clearance);
+            if (front) Check(shortBag.Bag.All(p => p.X >= opening[1].X - 200 - .000001), "Front-mounted bag did not shorten from the rear.");
+            else Check(shortBag.Bag.All(p => p.X <= opening[0].X + 200 + .000001), "Rear-mounted bag did not shorten from the front.");
+            var restored = serializer.Deserialize<FrameBagSetup>(serializer.Serialize(source));
+            Check(restored.BagLength == 200 && restored.AttachToFront == front, "Length or frame attachment lost in JSON.");
+        }
+        Reject(() => FrameBagGeometry.Build(new FrameBagSetup { BagLength = 2000 }));
+        Reject(() => FrameBagGeometry.Build(new FrameBagSetup { BagLength = Double.NaN }));
+        foreach (bool triangle in new[] { false, true })
+        foreach (double bottomDepth in new[] { 30d, 60, 90 })
+        foreach (bool curved in new[] { false, true })
+        {
+            var setup = new FrameBagSetup { TriangleFrame = triangle, DivideBags = true, Height = 180, TopDepth = 60, BottomDepth = bottomDepth,
+                LeftZipper = BagZipper.Slot, RightZipper = BagZipper.Split };
+            if (curved) setup.DivisionLine = new[] { new[] { -50d, 110 }, new[] { 140d, 95 }, new[] { 300d, 130 }, new[] { 700d, 115 } };
+            var plan = FrameBagGeometry.Build(setup);
+            var plainSetup = setup.Copy(); plainSetup.DivideBags = false;
+            var plain = FrameBagGeometry.Build(plainSetup);
+            Check(plan.Sections.Length == 2, "Expected two independent bags.");
+            Near(plan.Sections.Sum(section => FrameBagGeometry.Area(section.Bag)), FrameBagGeometry.Area(plain.Bag), .0001);
+            Near(plan.Sections.Sum(section => section.VolumeLitres), plain.VolumeLitres, .00001);
+            Check(plan.Parts.Length == plan.Sections.Sum(section => section.Parts.Length), "Combined kit lost independent pieces.");
+            Check(plan.Sections.All(section => section.Parts.Count(part => part.Edge >= 0) == section.Breaks.Length), "A bag has no closing wall along the division.");
+            Check(plan.Sections[0].Setup.LeftZipper == BagZipper.Slot && plan.Sections[1].Setup.LeftZipper == BagZipper.None, "Zipper belongs to the wrong bag.");
+            foreach (var section in plan.Sections) { WallMatches(section); NotchMatches(section); Dxf(section); InsertChecks.Run(section); }
+            Dxf(plan); InsertChecks.Run(plan);
+            var restored = serializer.Deserialize<FrameBagSetup>(serializer.Serialize(plan.Setup));
+            var rebuilt = FrameBagGeometry.Build(restored);
+            Near(rebuilt.VolumeLitres, plan.VolumeLitres); Check(restored.DivisionLine.Length == (curved ? 4 : 2), "Division nodes lost in JSON.");
+            var copy = restored.Copy(); copy.DivisionLine[0][0] += 5;
+            Check(copy.DivisionLine[0][0] != restored.DivisionLine[0][0], "Editing a divider mutated another project.");
+        }
+        var invalid = new FrameBagSetup { DivideBags = true, DivisionLine = new[] { new[] { -50d, 46.4 }, new[] { 700d, 46.4 } }, LeftZipper = BagZipper.Slot };
+        Reject(() => FrameBagGeometry.Build(invalid)); // line cuts through the zipper slot
+        Check(FrameBagGeometry.Build(invalid, false).Bag.Length > 3, "Invalid division blocks editing the body.");
+        invalid = new FrameBagSetup { DivideBags = true, DivisionLine = new[] { new[] { -50d, 100 }, new[] { 350d, 140 }, new[] { 100d, 140 }, new[] { 700d, 80 } } };
+        Reject(() => FrameBagGeometry.Build(invalid));
+        invalid.DivisionLine = new[] { new[] { 100d, 100 }, new[] { 400d, 100 } }; Reject(() => FrameBagGeometry.Build(invalid));
+        var cap = FrameBagGeometry.Build(new FrameBagSetup { DivideBags = true, CornerRadius = 30,
+            Top = 400, Seat = 300, Down = 400, Head = 300, Diagonal = 500, Height = 100,
+            DivisionLine = new[] { new[] { -50d, 13 }, new[] { 700d, 13 } } });
+        Check(cap.Sections.Length == 2 && cap.Sections[0].Breaks.Length == 2, "Rounded top cap lost its closing walls.");
+        foreach (var section in cap.Sections) { WallMatches(section); NotchMatches(section); }
+        var modularSample = FrameBagGeometry.Build(new FrameBagSetup { DivideBags = true, LeftZipper = BagZipper.Slot,
+            DivisionLine = new[] { new[] { -50d, 100 }, new[] { 180d, 95 }, new[] { 320d, 120 }, new[] { 700d, 105 } } });
+        System.IO.File.WriteAllText(System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "artifacts", "frame-bag-modular.dxf"),
+            FrameBagDxf.Create(modularSample), System.Text.Encoding.ASCII);
+    }
+
     private static void DetailChecks()
     {
         var setup = new FrameBagSetup { Top = 400, Seat = 300, Down = 400, Head = 300, Diagonal = 500,
