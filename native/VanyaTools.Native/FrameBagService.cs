@@ -42,12 +42,12 @@ namespace VanyaTools.Native
                     Label(guides, part.Name, centerX, top - part.Top - MinY(part.Cut) - 5);
                     if (part.Edge >= 0)
                     {
-                        Label(guides, (part.Edge + 1).ToString(), left + part.Left + 3, top - part.Top, false);
-                        Label(guides, ((part.Edge + 1) % plan.Breaks.Length + 1).ToString(),
+                        Label(guides, ((char)('A' + part.Edge)).ToString(), left + part.Left + 3, top - part.Top, false);
+                        Label(guides, ((char)('A' + (part.Edge + 1) % plan.Breaks.Length)).ToString(),
                             left + part.Left + MaxX(part.Seam) - 3, top - part.Top, false);
                     }
                 }
-                // The seam numbers on both side panels match the start/end of each wall.
+                // Corner letters match the start/end of each wall on both side panels.
                 var shape = plan.SideSeam;
                 foreach (var part in plan.Parts)
                 {
@@ -58,7 +58,7 @@ namespace VanyaTools.Native
                         var p = shape[plan.Breaks[n]];
                         var match = new BagPoint(side == 0 ? p.X : -p.X, p.Y);
                         if (!FrameBagClosures.Inside(part.Seam, match)) continue;
-                        Label(guides, (n + 1).ToString(), left + part.Left + (side == 0 ? p.X : -p.X),
+                        Label(guides, ((char)('A' + n)).ToString(), left + part.Left + (side == 0 ? p.X : -p.X),
                             top - part.Top - p.Y, false);
                     }
                 }
@@ -67,9 +67,11 @@ namespace VanyaTools.Native
                     ? "Треугольник A–B–C, мм: " + N(s.Top) + " / " + N(s.Down) + " / " + N(s.Seat)
                     : "Внутренний проём A–B–C–D, мм: " + N(s.Top) + " / " + N(s.Head) + " / " + N(s.Down) + " / " + N(s.Seat) + "; A–C: " + N(s.Diagonal);
                 string summary = frameText + "\nСумка: высота " + N(s.Height) + "; глубина " + N(s.TopDepth) + " → " + N(s.BottomDepth) +
-                    "; высота спереди " + N(s.SplitHeights ? s.FrontHeight : s.Height) + "; зазор " + N(s.Clearance) + "; припуск " + N(s.Allowance) + "; R " + N(s.CornerRadius) +
+                    "; высота спереди " + N(s.SplitHeights ? s.FrontHeight : s.Height) + "; зазор " + N(s.Clearance) + "; припуск " + N(s.Allowance) + "; R " +
+                    (s.CornerRadii == null ? N(s.CornerRadius) : String.Join(" / ", Array.ConvertAll(s.CornerRadii, N))) +
                     "; молнии " + FrameBagClosures.Name(s.LeftZipper) + " / " + FrameBagClosures.Name(s.RightZipper) +
-                    ". Красный — резка. Синий — непечатаемые швы и подписи.";
+                    ". Красный — резка. Синий — непечатаемые швы и подписи." +
+                    (s.Notches && s.Allowance >= .4 ? " Две надсечки — начало стенки, одна — конец; глубина до " + N(s.NotchDepth) + " мм, не больше половины припуска." : "");
                 Label(guides, summary, left + 15, top - plan.KitHeight - 5, false);
                 cuts.Activate(); selected.CreateSelection();
                 succeeded = true;

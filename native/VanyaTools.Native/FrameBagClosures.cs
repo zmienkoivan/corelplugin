@@ -12,10 +12,26 @@ namespace VanyaTools.Native
         internal static BagPoint Anchor(FrameBagPlan plan, int side, int index)
         {
             var s = plan.Setup;
+            if (s.FixedZipperAnchors) return side == 0
+                ? new BagPoint(index == 0 ? s.LeftZipStartXmm : s.LeftZipEndXmm, index == 0 ? s.LeftZipStartYmm : s.LeftZipEndYmm)
+                : new BagPoint(index == 0 ? s.RightZipStartXmm : s.RightZipEndXmm, index == 0 ? s.RightZipStartYmm : s.RightZipEndYmm);
             double x = side == 0 ? (index == 0 ? s.LeftZipAX : s.LeftZipBX) : (index == 0 ? s.RightZipAX : s.RightZipBX);
             double y = side == 0 ? (index == 0 ? s.LeftZipAY : s.LeftZipBY) : (index == 0 ? s.RightZipAY : s.RightZipBY);
             double left = plan.Bag.Min(p => p.X), top = plan.Bag.Min(p => p.Y);
             return new BagPoint(left + (plan.Bag.Max(p => p.X) - left) * x / 100, top + plan.ActualHeight * y / 100);
+        }
+
+        // Migrate legacy percentage presets once. Subsequent size/rounding
+        // changes preserve the physical zipper endpoints in frame millimetres.
+        internal static void FixAnchors(FrameBagPlan plan)
+        {
+            var s = plan.Setup;
+            if (s.FixedZipperAnchors) return;
+            var la = Anchor(plan, 0, 0); var lb = Anchor(plan, 0, 1);
+            var ra = Anchor(plan, 1, 0); var rb = Anchor(plan, 1, 1);
+            s.LeftZipStartXmm = la.X; s.LeftZipStartYmm = la.Y; s.LeftZipEndXmm = lb.X; s.LeftZipEndYmm = lb.Y;
+            s.RightZipStartXmm = ra.X; s.RightZipStartYmm = ra.Y; s.RightZipEndXmm = rb.X; s.RightZipEndYmm = rb.Y;
+            s.FixedZipperAnchors = true;
         }
 
         internal static BagPoint Flat(FrameBagPlan plan, BagPoint p)
@@ -46,6 +62,8 @@ namespace VanyaTools.Native
                 var mode = Mode(s, side);
                 if (mode == BagZipper.None) { sides.Add(plan.Parts[side]); continue; }
                 var a = Flat(plan, Anchor(plan, side, 0)); var b = Flat(plan, Anchor(plan, side, 1));
+                Range(a.X, -10000, 10000, "Якорь молнии X"); Range(a.Y, -10000, 10000, "Якорь молнии Y");
+                Range(b.X, -10000, 10000, "Якорь молнии X"); Range(b.Y, -10000, 10000, "Якорь молнии Y");
                 var direction = BagPoint.Sub(b, a);
                 double length = direction.Length;
                 if (length < s.ZipperWidth + 5) throw new ArgumentException(name + ": раздвиньте якоря молнии.");

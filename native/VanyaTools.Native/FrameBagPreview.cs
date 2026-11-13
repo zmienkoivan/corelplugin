@@ -18,7 +18,16 @@ namespace VanyaTools.Native
         private Point _last;
         private int _editSide, _anchor = -1;
         internal event Action<int, int, double, double> AnchorChanged;
-        internal void EditSide(int side) { _editSide = side; InvalidateVisual(); }
+        internal void EditSide(int side)
+        {
+            side = side == 1 ? 1 : 0;
+            if (side == _editSide) return;
+            if (IsMouseCaptured) ReleaseMouseCapture();
+            double center = MirrorX(_viewport.Center.X);
+            if (_viewport.Scale > 0 && _plan != null)
+                _viewport.Pan(new Vector((_viewport.Center.X - center) * _viewport.Scale, 0));
+            _editSide = side; InvalidateVisual();
+        }
         internal FrameBagPreview(FrameBagView view)
         { _view = view; ClipToBounds = true; Focusable = true; ToolTip = "Колесо — масштаб. Средняя/правая кнопка или пробел + перетаскивание — перемещение."; }
         internal void Update(FrameBagPlan plan) { _plan = plan; InvalidateVisual(); }
@@ -67,7 +76,7 @@ namespace VanyaTools.Native
                 for(int n=0;n<plan.Breaks.Length;n++)
                 {
                     var point=plan.Bag[plan.Breaks[n]];
-                    Text(dc,(n+1).ToString(),point.X+3*hair,point.Y+3*hair,10*hair,Brushes.SeaGreen);
+                    Text(dc,"Угол " + (char)('A'+n),point.X+3*hair,point.Y+3*hair,10*hair,Brushes.SeaGreen);
                 }
             }
             else if (_view == FrameBagView.Front)
@@ -144,9 +153,16 @@ namespace VanyaTools.Native
             }
         }
 
-        private static Point Point(BagPoint p) => new Point(p.X, p.Y);
+        private double MirrorX(double x) => _plan == null ? x : _plan.Frame.Min(p => p.X) + _plan.Frame.Max(p => p.X) - x;
+        private bool Mirrored => _view == FrameBagView.Side && _editSide == 1;
+        private Point Point(BagPoint p) => new Point(Mirrored ? MirrorX(p.X) : p.X, p.Y);
+        private Point World(Point screen)
+        {
+            var point = _viewport.World(screen);
+            return new Point(Mirrored ? MirrorX(point.X) : point.X, point.Y);
+        }
         private static string N(double n) => n.ToString("0.#", CultureInfo.CurrentCulture);
-        private static void Polygon(DrawingContext dc, BagPoint[] points, Brush fill, Pen pen)
+        private void Polygon(DrawingContext dc, BagPoint[] points, Brush fill, Pen pen)
         {
             var geometry = new StreamGeometry();
             using (var path = geometry.Open())
@@ -156,9 +172,12 @@ namespace VanyaTools.Native
             }
             dc.DrawGeometry(fill, pen, geometry);
         }
-        private void Text(DrawingContext dc, string text, double x, double y, double size, Brush color) =>
-            dc.DrawText(new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
-                new Typeface("Segoe UI"), size, color, VisualTreeHelper.GetDpi(this).PixelsPerDip), new Point(x, y));
+        private void Text(DrawingContext dc, string text, double x, double y, double size, Brush color)
+        {
+            var label = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+                new Typeface("Segoe UI"), size, color, VisualTreeHelper.GetDpi(this).PixelsPerDip);
+            dc.DrawText(label, new Point(Mirrored ? MirrorX(x) - label.Width : x, y));
+        }
         protected override void OnMouseWheel(MouseWheelEventArgs e)
         {
             if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0) _viewport.Pan(new Vector(e.Delta, 0));
@@ -171,7 +190,7 @@ namespace VanyaTools.Native
             if (_view == FrameBagView.Side && _plan != null && e.ChangedButton == MouseButton.Left && !Keyboard.IsKeyDown(Key.Space) &&
                 FrameBagClosures.Mode(_plan.Setup, _editSide) != BagZipper.None)
             {
-                var point = _viewport.World(e.GetPosition(this));
+                var point = World(e.GetPosition(this));
                 for (int n=0;n<2;n++)
                 {
                     var at=FrameBagClosures.Anchor(_plan,_editSide,n);
@@ -189,10 +208,8 @@ namespace VanyaTools.Native
             base.OnMouseMove(e);
             if (_anchor>=0 && _plan!=null)
             {
-                var at=_viewport.World(e.GetPosition(this));
-                double left=_plan.Bag.Min(p=>p.X),width=_plan.Bag.Max(p=>p.X)-left,top=_plan.Bag.Min(p=>p.Y);
-                AnchorChanged?.Invoke(_editSide,_anchor,Math.Max(0,Math.Min(100,(at.X-left)*100/width)),
-                    Math.Max(0,Math.Min(100,(at.Y-top)*100/_plan.ActualHeight)));
+                var at=World(e.GetPosition(this));
+                AnchorChanged?.Invoke(_editSide, _anchor, at.X, at.Y);
                 e.Handled=true;return;
             }
             if(!_pan)return;

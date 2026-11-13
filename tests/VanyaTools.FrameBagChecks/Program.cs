@@ -135,6 +135,8 @@ internal static class Program
             var triangleSample=FrameBagGeometry.Build(new FrameBagSetup {TriangleFrame=true,LeftZipper=BagZipper.Flap,RightZipper=BagZipper.Split});
             System.IO.File.WriteAllText(System.IO.Path.Combine(folder,"frame-bag-triangle.dxf"),FrameBagDxf.Create(triangleSample),System.Text.Encoding.ASCII);
 
+            DetailChecks();
+            WindowChecks.Run();
             InsertChecks.Run(plan);
             var invalid = new FrameBagSetup { Diagonal = 20 }; Reject(() => FrameBagGeometry.Build(invalid));
             invalid = new FrameBagSetup { Height = 2000 }; Reject(() => FrameBagGeometry.Build(invalid));
@@ -146,6 +148,130 @@ internal static class Program
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
     }
+    private static void DetailChecks()
+    {
+        var setup = new FrameBagSetup { Top = 400, Seat = 300, Down = 400, Head = 300, Diagonal = 500,
+            Clearance = 5, Height = 100, CornerRadius = 0, CornerRadii = new[] { 0d, 4, 12, 25 } };
+        var rounded = FrameBagGeometry.Build(setup);
+        Near(FrameBagGeometry.Area(rounded.Bag), 39000 - (1 - Math.PI / 4) * setup.CornerRadii.Sum(r => r * r), 1);
+        WallMatches(rounded); NotchMatches(rounded); Dxf(rounded); InsertChecks.Run(rounded);
+        var copy = setup.Copy(); copy.CornerRadii[0] = 80;
+        Check(setup.CornerRadii[0] == 0, "Editing a saved radius mutated another setup.");
+        copy.CornerRadii = new[] { 80d, 0, 0, 0 };
+        WallMatches(FrameBagGeometry.Build(copy)); // One large radius may exceed the shared-radius limit.
+        copy.CornerRadii = new[] { 100d, 100, 100, 100 };
+        Reject(() => FrameBagGeometry.Build(copy));
+        copy.CornerRadii[0] = Double.NaN; Reject(() => FrameBagGeometry.Build(copy));
+        var serializer = new System.Web.Script.Serialization.JavaScriptSerializer();
+        var restored = serializer.Deserialize<FrameBagSetup>(serializer.Serialize(setup));
+        Check(restored.CornerRadii.SequenceEqual(setup.CornerRadii), "Individual corner radii were lost in preset JSON.");
+
+        var zipper = FrameBagGeometry.Build(new FrameBagSetup { LeftZipper = BagZipper.Slot, RightZipper = BagZipper.Flap });
+        Check(zipper.Setup.FixedZipperAnchors, "Legacy percentage anchors were not migrated.");
+        var anchors = Enumerable.Range(0, 4).Select(i => FrameBagClosures.Anchor(zipper, i / 2, i % 2)).ToArray();
+        var taller = zipper.Setup.Copy(); taller.Height = 260; taller.FrontHeight = 220; taller.SplitHeights = true;
+        taller.CornerRadii = new[] { 5d, 20, 8, 12, 6 };
+        var resized = FrameBagGeometry.Build(taller);
+        for (int n = 0; n < 4; n++) Near(Distance(anchors[n], FrameBagClosures.Anchor(resized, n / 2, n % 2)), 0);
+        var reload = serializer.Deserialize<FrameBagSetup>(serializer.Serialize(resized.Setup));
+        var again = FrameBagGeometry.Build(reload);
+        for (int n = 0; n < 4; n++) Near(Distance(anchors[n], FrameBagClosures.Anchor(again, n / 2, n % 2)), 0);
+        var tooShort = resized.Setup.Copy(); tooShort.Height = tooShort.FrontHeight = 30;
+        tooShort.CornerRadii = new[] { 0d, 0, 0, 0, 0 }; tooShort.CornerRadius = 0;
+        Reject(() => FrameBagGeometry.Build(tooShort));
+        var editable = FrameBagGeometry.Build(tooShort, false);
+        Near(Distance(anchors[0], FrameBagClosures.Anchor(editable, 0, 0)), 0);
+        Check(!new FrameBagSetup().FixedZipperAnchors, "Migration altered source defaults in place.");
+
+        foreach (bool triangle in new[] { false, true })
+        foreach (BagZipper left in Enum.GetValues(typeof(BagZipper)))
+        foreach (BagZipper right in Enum.GetValues(typeof(BagZipper)))
+        {
+            var source = new FrameBagSetup { TriangleFrame = triangle, LeftZipper = left, RightZipper = right,
+                SplitHeights = true, Height = 140, FrontHeight = 230, CornerRadii = new[] { 0d, 12, 25, 6, 9 } };
+            var notched = FrameBagGeometry.Build(source); NotchMatches(notched); WallMatches(notched);
+            var plainSource = source.Copy(); plainSource.Notches = false;
+            var plain = FrameBagGeometry.Build(plainSource);
+            Check(plain.Parts.All(part => part.Notches.Length == 0), "Disabled notches changed cut outlines.");
+            for (int n = 0; n < plain.Parts.Length; n++)
+            {
+                Near(FrameBagGeometry.Area(plain.Parts[n].Seam), FrameBagGeometry.Area(notched.Parts[n].Seam));
+                if (notched.Parts[n].Notches.Length != 0)
+                    Check(FrameBagGeometry.Area(notched.Parts[n].Cut) < FrameBagGeometry.Area(plain.Parts[n].Cut), "A notch was not cut out of the allowance.");
+            }
+        }
+        foreach (double allowance in new[] { 0d, .3, .5, 1, 10 })
+        {
+            var small = FrameBagGeometry.Build(new FrameBagSetup { Allowance = allowance, NotchDepth = 5 });
+            if (allowance < .4) Check(small.Parts.All(part => part.Notches.Length == 0), "A zero/tiny allowance was notched.");
+            else NotchMatches(small);
+        }
+        Reject(() => FrameBagGeometry.Build(new FrameBagSetup { NotchDepth = -1 }));
+    }
+
+    private static void NotchMatches(FrameBagPlan plan)
+    {
+        foreach (var part in plan.Parts)
+        {
+            Check(FrameBagGeometry.Area(part.Cut) > 0, "Notched outline changed orientation.");
+            Check(part.Cut.All(p => !Double.IsNaN(p.X + p.Y)), "Non-finite notch.");
+            Check(!CrossesItself(part.Cut), "A V-notch created a self-intersecting cutting outline.");
+            foreach (var mark in part.Notches)
+            {
+                Check(part.Cut.Any(point => Distance(point, mark.Tip) < 1e-7), "Notch tip absent from cutting path.");
+                Check(!FrameBagClosures.Inside(part.Seam, mark.Tip), "Notch reaches the sewing line.");
+                Check(part.Seam.All(point => FrameBagClosures.Inside(part.Cut, point)), "A notch damaged the seam.");
+            }
+        }
+        for (int edge = 0; edge < plan.Breaks.Length; edge++)
+        {
+            var path = new System.Collections.Generic.List<BagPoint>();
+            int i = plan.Breaks[edge], last = plan.Breaks[(edge + 1) % plan.Breaks.Length];
+            while (true) { path.Add(plan.SideSeam[i]); if (i == last) break; i = (i + 1) % plan.SideSeam.Length; }
+            var wall = plan.Parts.Single(part => part.Edge == edge);
+            foreach (var side in plan.Parts.Where(part => part.Side >= 0))
+            foreach (var mark in side.Notches.Where(mark => mark.Edge == edge))
+            {
+                bool upper = side.Side == 0;
+                var matching = wall.Notches.Single(mark2 => mark2.Index == mark.Index && (upper ? mark2.SeamPoint.Y < 0 : mark2.SeamPoint.Y > 0));
+                var seamPoint = new BagPoint(side.Side == 0 ? mark.SeamPoint.X : -mark.SeamPoint.X, mark.SeamPoint.Y);
+                var wallPath = upper ? wall.Seam.Take(wall.Seam.Length / 2).ToArray() : wall.Seam.Skip(wall.Seam.Length / 2).Reverse().ToArray();
+                Near(Along(path.ToArray(), seamPoint), Along(wallPath, matching.SeamPoint), .001);
+            }
+            Check(wall.Notches.Length == plan.Parts.Where(part => part.Side >= 0).Sum(part => part.Notches.Count(mark => mark.Edge == edge)), "Unpaired side/wall notch.");
+            if (FrameBagGeometry.Perimeter(plan.SideSeam) > 100 && path.Zip(path.Skip(1), Distance).Sum() > 30)
+                Check(wall.Notches.Length >= 2, "A normal-sized wall has no orientation marks.");
+        }
+    }
+    private static double Along(BagPoint[] path, BagPoint point)
+    {
+        double length = 0;
+        for (int i = 0; i + 1 < path.Length; i++)
+        {
+            var d = BagPoint.Sub(path[i + 1], path[i]); var r = BagPoint.Sub(point, path[i]);
+            double t = (r.X * d.X + r.Y * d.Y) / (d.X * d.X + d.Y * d.Y);
+            if (t >= -.00001 && t <= 1.00001 && Distance(point, BagPoint.Add(path[i], BagPoint.Mul(d, t))) < .00001)
+                return length + t * d.Length;
+            length += d.Length;
+        }
+        throw new Exception("Matching notch is not on its developed seam.");
+    }
+    private static bool CrossesItself(BagPoint[] points)
+    {
+        for (int a = 0; a < points.Length; a++)
+        for (int b = a + 2; b < points.Length; b++)
+        {
+            if (a == 0 && b == points.Length - 1) continue;
+            var u = BagPoint.Sub(points[(a + 1) % points.Length], points[a]);
+            var v = BagPoint.Sub(points[(b + 1) % points.Length], points[b]);
+            var d = BagPoint.Sub(points[b], points[a]); double cross = BagPoint.Cross(u, v);
+            if (Math.Abs(cross) < 1e-10) continue;
+            double t = BagPoint.Cross(d, v) / cross, q = BagPoint.Cross(d, u) / cross;
+            if (t > .000001 && t < .999999 && q > .000001 && q < .999999) return true;
+        }
+        return false;
+    }
+
     private static void Dxf(FrameBagPlan plan)
     {
         string text = FrameBagDxf.Create(plan);

@@ -40,6 +40,15 @@ namespace VanyaTools.Native
         public double RightZipAY { get; set; } = 23;
         public double RightZipBX { get; set; } = 87;
         public double RightZipBY { get; set; } = 23;
+        public bool FixedZipperAnchors { get; set; }
+        public double LeftZipStartXmm { get; set; }
+        public double LeftZipStartYmm { get; set; }
+        public double LeftZipEndXmm { get; set; }
+        public double LeftZipEndYmm { get; set; }
+        public double RightZipStartXmm { get; set; }
+        public double RightZipStartYmm { get; set; }
+        public double RightZipEndXmm { get; set; }
+        public double RightZipEndYmm { get; set; }
         public double ZipperWidth { get; set; } = 8;
         public double FlapDepth { get; set; } = 20;
         public double FlapExtra { get; set; } = 10;
@@ -48,8 +57,16 @@ namespace VanyaTools.Native
         public double Clearance { get; set; } = 5;
         public double Allowance { get; set; } = 10;
         public double CornerRadius { get; set; } = 15;
+        public double[] CornerRadii { get; set; }
+        public bool Notches { get; set; } = true;
+        public double NotchDepth { get; set; } = 1.5;
         public string Name { get; set; } = "Велосумка";
-        internal FrameBagSetup Copy() => (FrameBagSetup)MemberwiseClone();
+        internal FrameBagSetup Copy()
+        {
+            var copy = (FrameBagSetup)MemberwiseClone();
+            copy.CornerRadii = CornerRadii == null ? null : (double[])CornerRadii.Clone();
+            return copy;
+        }
     }
 
     internal sealed class FrameBagPart
@@ -57,6 +74,7 @@ namespace VanyaTools.Native
         internal string Name;
         internal BagPoint[] Seam, Cut;
         internal int Edge = -1, Side = -1;
+        internal BagNotch[] Notches = Array.Empty<BagNotch>();
         internal BagPoint[][] Cutouts = Array.Empty<BagPoint[]>();
         internal BagPoint[][] Marks = Array.Empty<BagPoint[]>();
         internal double Left, Top, Width, Height;
@@ -125,9 +143,9 @@ namespace VanyaTools.Native
             var sharp = Segment(inner, setup.Height, setup.SplitHeights ? setup.FrontHeight : setup.Height);
             Range(setup.CornerRadius, 0, 200, "Радиус углов");
             double maxRadius = MaximumRadius(sharp);
-            if (setup.CornerRadius > maxRadius + .00001)
-                throw new ArgumentException("Углы не помещаются. Максимальный радиус: " + maxRadius.ToString("0.0", System.Globalization.CultureInfo.CurrentCulture) + " мм.");
-            var bag = Round(sharp, setup.CornerRadius, out int[] breaks);
+            var radii = Enumerable.Range(0, sharp.Length).Select(n => setup.CornerRadii != null && n < setup.CornerRadii.Length ? setup.CornerRadii[n] : setup.CornerRadius).ToArray();
+            for (int n = 0; n < radii.Length; n++) Range(radii[n], 0, 200, "Радиус угла " + (char)('A' + n));
+            var bag = Round(sharp, radii, out int[] breaks);
             if (bag.Length < 3 || Math.Abs(Area(bag)) < 100 || bag.Any(p => !Finite(p.X + p.Y)))
                 throw new ArgumentException("Увеличьте высоту сумки или уменьшите зазор до рамы.");
             double actualHeight = bag.Max(p => p.Y) - top;
@@ -155,7 +173,7 @@ namespace VanyaTools.Native
                     index = (index + 1) % bag.Length;
                 } while (true);
                 lower.Reverse();
-                var part = Part("Стенка " + (n + 1), upper.Concat(lower).ToArray(), setup.Allowance);
+                var part = Part("Стенка " + (char)('A' + n) + "–" + (char)('A' + (n + 1) % breaks.Length), upper.Concat(lower).ToArray(), setup.Allowance);
                 part.Edge = n; parts.Add(part);
             }
             double centroidY = CentroidY(bag);
@@ -163,7 +181,9 @@ namespace VanyaTools.Native
             var result = new FrameBagPlan { Setup = setup.Copy(), Frame = frame, Bag = bag, Parts = parts.ToArray(),
                 SideSeam = side, Breaks = breaks, MaximumRadius = maxRadius, AvailableHeight = available, ActualHeight = actualHeight, VolumeLitres = Area(bag) * averageDepth / 1000000 };
             result.Parts[0].Side = 0; result.Parts[1].Side = 1;
+            FrameBagClosures.FixAnchors(result);
             if (closures) FrameBagClosures.Apply(result);
+            FrameBagNotches.Apply(result);
             Arrange(result);
             return result;
         }
@@ -189,30 +209,57 @@ namespace VanyaTools.Native
             plan.KitWidth = maxX + 15; plan.KitHeight = y + row + 15;
         }
 
+        private static double[] CornerFactors(BagPoint[] polygon) => Enumerable.Range(0, polygon.Length).Select(n =>
+        {
+            var u = BagPoint.Sub(polygon[n], polygon[(n + polygon.Length - 1) % polygon.Length]);
+            var v = BagPoint.Sub(polygon[(n + 1) % polygon.Length], polygon[n]);
+            return Math.Tan(Math.Atan2(BagPoint.Cross(u, v), u.X * v.X + u.Y * v.Y) / 2);
+        }).ToArray();
+
         internal static double MaximumRadius(BagPoint[] polygon)
         {
             if (polygon.Length < 3) return 0;
-            var factors = new double[polygon.Length];
-            for (int n = 0; n < polygon.Length; n++)
-            {
-                var u = BagPoint.Sub(polygon[n], polygon[(n + polygon.Length - 1) % polygon.Length]);
-                var v = BagPoint.Sub(polygon[(n + 1) % polygon.Length], polygon[n]);
-                double turn = Math.Atan2(BagPoint.Cross(u, v), u.X * v.X + u.Y * v.Y);
-                factors[n] = Math.Tan(turn / 2);
-            }
+            var factors = CornerFactors(polygon);
             return Enumerable.Range(0, polygon.Length).Min(n =>
                 BagPoint.Sub(polygon[(n + 1) % polygon.Length], polygon[n]).Length /
                 (factors[n] + factors[(n + 1) % polygon.Length])) * .999;
         }
-
-        internal static BagPoint[] Round(BagPoint[] polygon, double radius, out int[] breaks)
+        internal static double RadiusLimit(BagPoint[] polygon, double[] radii, int corner)
         {
-            if (radius <= 0)
-            { breaks = Enumerable.Range(0, polygon.Length).ToArray(); return (BagPoint[])polygon.Clone(); }
+            var factors = CornerFactors(polygon);
+            int previous = (corner + polygon.Length - 1) % polygon.Length, next = (corner + 1) % polygon.Length;
+            return Math.Max(0, Math.Min(
+                (BagPoint.Sub(polygon[corner], polygon[previous]).Length * .999 - radii[previous] * factors[previous]) / factors[corner],
+                (BagPoint.Sub(polygon[next], polygon[corner]).Length * .999 - radii[next] * factors[next]) / factors[corner]));
+        }
+        internal static double[] FitRadii(BagPoint[] polygon, double[] radii)
+        {
+            var result = (double[])radii.Clone(); var factors = CornerFactors(polygon);
+            for (int n = 0; n < polygon.Length; n++)
+            {
+                int next = (n + 1) % polygon.Length;
+                double used = result[n] * factors[n] + result[next] * factors[next];
+                double available = BagPoint.Sub(polygon[next], polygon[n]).Length * .999;
+                if (used > available) { result[n] *= available / used; result[next] *= available / used; }
+            }
+            return result;
+        }
+        internal static BagPoint[] Round(BagPoint[] polygon, double radius, out int[] breaks) =>
+            Round(polygon, Enumerable.Repeat(radius, polygon.Length).ToArray(), out breaks);
+
+        internal static BagPoint[] Round(BagPoint[] polygon, double[] radii, out int[] breaks)
+        {
+            var factors = CornerFactors(polygon);
+            for (int n = 0; n < polygon.Length; n++)
+                if (radii[n] * factors[n] + radii[(n + 1) % polygon.Length] * factors[(n + 1) % polygon.Length] >
+                    BagPoint.Sub(polygon[(n + 1) % polygon.Length], polygon[n]).Length * .999 + .00001)
+                    throw new ArgumentException("Скругления углов " + (char)('A' + n) + " и " + (char)('A' + (n + 1) % polygon.Length) + " не помещаются на стороне. Уменьшите радиусы.");
             var points = new List<BagPoint>(); breaks = new int[polygon.Length];
             for (int n = 0; n < polygon.Length; n++)
             {
+                double radius = radii[n];
                 var vertex = polygon[n];
+                if (radius <= 0) { breaks[n] = points.Count; points.Add(vertex); continue; }
                 var u = BagPoint.Sub(vertex, polygon[(n + polygon.Length - 1) % polygon.Length]);
                 var v = BagPoint.Sub(polygon[(n + 1) % polygon.Length], vertex);
                 u = BagPoint.Mul(u, 1 / u.Length); v = BagPoint.Mul(v, 1 / v.Length);

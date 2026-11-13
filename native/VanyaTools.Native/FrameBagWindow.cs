@@ -20,8 +20,11 @@ namespace VanyaTools.Native
         private readonly FrameBagPreview _pieces = new FrameBagPreview(FrameBagView.Pieces);
         private readonly TextBlock _message, _summary;
         private readonly TextBox _name;
-        private readonly ComboBox _leftZipper, _rightZipper, _editSide, _frameShape;
-        private readonly CheckBox _splitHeights;
+        private readonly ComboBox _leftZipper, _rightZipper, _frameShape;
+        private readonly System.Windows.Controls.Primitives.ToggleButton _leftView, _rightView;
+        private int _editSide;
+        private readonly CheckBox _notches;
+        private int _cornerCount;
         private FrameBagSetup _anchors;
         private readonly Button _apply, _dxf, _save;
         private readonly DispatcherTimer _refresh = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(45) };
@@ -83,51 +86,56 @@ namespace VanyaTools.Native
             var bag = DockerLayout.ToolGroup("2 · Сумка",
                 "Высота откладывается вниз от верхней границы сумки до скругления углов. Можно задать независимые высоты спереди и сзади. " +
                 "Глубина — толщина поперёк рамы. Нижняя глубина задаётся у самой низкой точки; при наклонном дне глубина вдоль него меняется. " +
-                "Радиус скругляет углы; длины стенок пересчитываются по шву.");
+                "Зелёные буквы A–E отмечают углы сумки. Общий радиус меняет все углы, ниже каждый можно настроить отдельно. Длины стенок пересчитываются по шву.");
             fields.Children.Add(bag);
-            Add(bag, "Height", "Высота / сзади", 10, 1500, initial.Height);
-            _splitHeights = new CheckBox { Content = "Другая высота спереди", IsChecked = initial.SplitHeights, Margin = new Thickness(0, 0, 0, 5) };
-            bag.Children.Add(_splitHeights);
-            Add(bag, "FrontHeight", "Высота спереди", 10, 1500, initial.FrontHeight);
-            _fields["FrontHeight"].View.Visibility = initial.SplitHeights ? Visibility.Visible : Visibility.Collapsed;
-            _splitHeights.Checked += (_, __) => { _fields["FrontHeight"].View.Visibility = Visibility.Visible; Queue(); };
-            _splitHeights.Unchecked += (_, __) => { _fields["FrontHeight"].View.Visibility = Visibility.Collapsed; Queue(); };
+            Add(bag, "Height", "Высота сзади", 10, 1500, initial.Height);
+            Add(bag, "FrontHeight", "Высота спереди", 10, 1500, initial.SplitHeights ? initial.FrontHeight : initial.Height);
             Add(bag, "TopDepth", "Глубина сверху", 10, 300, initial.TopDepth);
             Add(bag, "BottomDepth", "Глубина снизу", 10, 300, initial.BottomDepth);
-            Add(bag, "CornerRadius", "Радиус углов", 0, 200, initial.CornerRadius);
+            Add(bag, "CornerRadius", "Радиус всех углов", 0, 200, initial.CornerRadius, AllCornersChanged);
+            var corners = new StackPanel();
+            for (int n = 0; n < 5; n++)
+                Add(corners, "Radius" + n, "Угол " + (char)('A' + n), 0, 200,
+                    initial.CornerRadii != null && n < initial.CornerRadii.Length ? initial.CornerRadii[n] : initial.CornerRadius);
+            bag.Children.Add(new Expander { Header = "Радиусы по углам · мм", Content = corners, IsExpanded = true });
             var closure = DockerLayout.ToolGroup("3 · Молнии и клапаны",
                 "Для каждой стороны выберите конструкцию. М1 и М2 перетаскиваются на виде сбоку: они задают начало и конец молнии. " +
                 "У «Двух деталей» линия проходит через якоря до границ боковины; ширина открытия оставляет место молнии между деталями. " +
-                "У «Прорези» и «Клапана» якоря — концы прорези. Клапан — отдельная накладная деталь с припусками.");
+                "У «Прорези» и «Клапана» якоря — концы прорези. Их положение фиксировано в миллиметрах от рамы, изменение высоты сумки их не сдвигает. Клапан — отдельная накладная деталь с припусками.");
             fields.Children.Add(closure);
             string[] modes = { "Без молнии", "Прорезь", "Две детали", "Прорезь + клапан" };
             _leftZipper = new ComboBox { ItemsSource = modes, SelectedIndex = (int)initial.LeftZipper, MinHeight = 27 };
             _rightZipper = new ComboBox { ItemsSource = modes, SelectedIndex = (int)initial.RightZipper, MinHeight = 27 };
             closure.Children.Add(DockerLayout.FieldRow("Левая боковина", _leftZipper, 155));
             closure.Children.Add(DockerLayout.FieldRow("Правая боковина", _rightZipper, 155));
-            _editSide = new ComboBox { ItemsSource = new[] { "Левую", "Правую" }, SelectedIndex = 0, MinHeight = 27 };
-            closure.Children.Add(DockerLayout.FieldRow("Показывать / править", _editSide, 155));
-            _editSide.SelectionChanged += (_, __) => _side.EditSide(_editSide.SelectedIndex);
-            _leftZipper.SelectionChanged += (_, __) => { _editSide.SelectedIndex = 0; Queue(); };
-            _rightZipper.SelectionChanged += (_, __) => { _editSide.SelectedIndex = 1; Queue(); };
+            _leftZipper.SelectionChanged += (_, __) => { SelectSide(0); Queue(); };
+            _rightZipper.SelectionChanged += (_, __) => { SelectSide(1); Queue(); };
             Add(closure, "ZipperWidth", "Ширина открытия", 1, 40, initial.ZipperWidth);
             Add(closure, "FlapDepth", "Ширина клапана", 5, 100, initial.FlapDepth);
             Add(closure, "FlapExtra", "Выступ по торцам", 0, 50, initial.FlapExtra);
             closure.Children.Add(Button("Выровнять молнию", (_, __) =>
             {
-                if (_editSide.SelectedIndex == 0) _anchors.LeftZipBY = _anchors.LeftZipAY;
-                else _anchors.RightZipBY = _anchors.RightZipAY;
+                if (_editSide == 0) _anchors.LeftZipEndYmm = _anchors.LeftZipStartYmm;
+                else _anchors.RightZipEndYmm = _anchors.RightZipStartYmm;
                 Queue();
             }));
             _side.AnchorChanged += SetAnchor;
             var cutting = DockerLayout.ToolGroup("4 · Посадка и резка",
                 "Зазор — от рамы до готовой сумки. Припуск добавляется наружу от линии шва. " +
-                "Выдаётся две зеркальные боковины и отдельные стенки между пронумерованными точками. " +
+                "Выдаётся две зеркальные боковины и отдельные стенки между точками A–E. " +
                 "У скруглённого угла стенки соединяются на середине дуги. " +
+                "Надсечки на припуске: две рядом с началом каждой стенки, одна перед концом. " +
+                "Такие же отметки стоят на обеих боковинах по длине шва. Глубина ограничена половиной припуска. " +
                 "DXF содержит только красные замкнутые линии резки, без подписей и швов. Крепёжные ремни в этой версии не раскраиваются.");
             fields.Children.Add(cutting);
             Add(cutting, "Clearance", "Зазор до рамы", 0, 100, initial.Clearance);
             Add(cutting, "Allowance", "Припуск на шов", 0, 50, initial.Allowance);
+            _notches = new CheckBox { Content = "Надсечки совмещения", IsChecked = initial.Notches, Margin = new Thickness(0, 2, 0, 5) };
+            cutting.Children.Add(_notches);
+            Add(cutting, "NotchDepth", "Глубина надсечки", .2, 5, initial.NotchDepth);
+            _fields["NotchDepth"].View.Visibility = initial.Notches ? Visibility.Visible : Visibility.Collapsed;
+            _notches.Checked += (_, __) => { _fields["NotchDepth"].View.Visibility = Visibility.Visible; Queue(); };
+            _notches.Unchecked += (_, __) => { _fields["NotchDepth"].View.Visibility = Visibility.Collapsed; Queue(); };
 
             var right = new DockPanel(); root.Children.Add(right);
             var toolbar = new StackPanel { Orientation = Orientation.Horizontal };
@@ -142,7 +150,17 @@ namespace VanyaTools.Native
             var views = new Grid();
             views.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3, GridUnitType.Star) });
             views.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.3, GridUnitType.Star) });
-            views.Children.Add(View("Вид сбоку", _side));
+            var sideView = new DockPanel();
+            var sideHeader = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(6, 3, 6, 3) };
+            sideHeader.Children.Add(new TextBlock { Text = "Вид сбоку", VerticalAlignment = VerticalAlignment.Center,
+                FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 10, 0) });
+            _leftView = SideButton("Левая", 0); _rightView = SideButton("Правая", 1);
+            sideHeader.Children.Add(_leftView); sideHeader.Children.Add(_rightView);
+            DockPanel.SetDock(sideHeader, Dock.Top); sideView.Children.Add(sideHeader); sideView.Children.Add(_side);
+            var sideBorder = new Border { Child = sideView, Margin = new Thickness(2), BorderThickness = new Thickness(1) };
+            DockerTheme.UseTheme(sideBorder, Border.BorderBrushProperty, DockerTheme.BorderBrush);
+            views.Children.Add(sideBorder);
+            SelectSide(0);
             var front = View("Вид спереди", _front); Grid.SetColumn(front, 1); views.Children.Add(front);
             tabs.Items.Add(new TabItem { Header = "Форма сумки", Content = views });
             tabs.Items.Add(new TabItem { Header = "Комплект деталей", Content = View("Красный — резка · синий — шов", _pieces) });
@@ -151,21 +169,54 @@ namespace VanyaTools.Native
             _ready = true; Rebuild();
         }
 
-        private void Add(Panel parent, string key, string title, double min, double max, double value)
-        { var field = new NumberField(title, min, max, value, Queue); _fields.Add(key, field); parent.Children.Add(field.View); }
+        private System.Windows.Controls.Primitives.ToggleButton SideButton(string title, int side)
+        {
+            var button = new System.Windows.Controls.Primitives.ToggleButton { Content = title, MinHeight = 29,
+                MinWidth = 70, Padding = new Thickness(9, 3, 9, 3), Margin = new Thickness(1),
+                ToolTip = title + " боковина · вид снаружи; якоря молнии изменяются только на этой стороне." };
+            button.Click += (_, __) => SelectSide(side);
+            return button;
+        }
+        private void SelectSide(int side)
+        {
+            _editSide = side == 1 ? 1 : 0;
+            _side.EditSide(_editSide);
+            if (_leftView != null) _leftView.IsChecked = _editSide == 0;
+            if (_rightView != null) _rightView.IsChecked = _editSide == 1;
+        }
+
+        private void AllCornersChanged()
+        {
+            if (_sync) return;
+            try
+            {
+                double radius = _fields["CornerRadius"].Read();
+                for (int n = 0; n < 5; n++) _fields["Radius" + n].Set(radius);
+            }
+            catch (ArgumentException) { }
+            Queue();
+        }
+        private void Add(Panel parent, string key, string title, double min, double max, double value, Action changed = null)
+        { var field = new NumberField(title, min, max, value, changed ?? Queue); _fields.Add(key, field); parent.Children.Add(field.View); }
         private FrameBagSetup Read() => new FrameBagSetup { Name = _name.Text.Trim(), TriangleFrame = _frameShape.SelectedIndex == 0,
             Top = _fields["Top"].Read(), Seat = _fields["Seat"].Read(), Down = _fields["Down"].Read(),
             Head = _frameShape.SelectedIndex == 0 ? _last.Head : _fields["Head"].Read(),
             Diagonal = _frameShape.SelectedIndex == 0 ? _last.Diagonal : _fields["Diagonal"].Read(), Height = _fields["Height"].Read(),
-            SplitHeights = _splitHeights.IsChecked == true, FrontHeight = _splitHeights.IsChecked == true ? _fields["FrontHeight"].Read() : _fields["Height"].Read(),
+            SplitHeights = true, FrontHeight = _fields["FrontHeight"].Read(),
             LeftZipper = (BagZipper)_leftZipper.SelectedIndex, RightZipper = (BagZipper)_rightZipper.SelectedIndex,
             ZipperWidth = ClosureValue("ZipperWidth", _leftZipper.SelectedIndex != 0 || _rightZipper.SelectedIndex != 0, _last.ZipperWidth),
             FlapDepth = ClosureValue("FlapDepth", _leftZipper.SelectedIndex == 3 || _rightZipper.SelectedIndex == 3, _last.FlapDepth),
             FlapExtra = ClosureValue("FlapExtra", _leftZipper.SelectedIndex == 3 || _rightZipper.SelectedIndex == 3, _last.FlapExtra),
             LeftZipAX = _anchors.LeftZipAX, LeftZipAY = _anchors.LeftZipAY, LeftZipBX = _anchors.LeftZipBX, LeftZipBY = _anchors.LeftZipBY,
             RightZipAX = _anchors.RightZipAX, RightZipAY = _anchors.RightZipAY, RightZipBX = _anchors.RightZipBX, RightZipBY = _anchors.RightZipBY,
+            FixedZipperAnchors = _anchors.FixedZipperAnchors,
+            LeftZipStartXmm = _anchors.LeftZipStartXmm, LeftZipStartYmm = _anchors.LeftZipStartYmm,
+            LeftZipEndXmm = _anchors.LeftZipEndXmm, LeftZipEndYmm = _anchors.LeftZipEndYmm,
+            RightZipStartXmm = _anchors.RightZipStartXmm, RightZipStartYmm = _anchors.RightZipStartYmm,
+            RightZipEndXmm = _anchors.RightZipEndXmm, RightZipEndYmm = _anchors.RightZipEndYmm,
             TopDepth = _fields["TopDepth"].Read(), BottomDepth = _fields["BottomDepth"].Read(),
-            Clearance = _fields["Clearance"].Read(), Allowance = _fields["Allowance"].Read(), CornerRadius = _fields["CornerRadius"].Read() };
+            Clearance = _fields["Clearance"].Read(), Allowance = _fields["Allowance"].Read(), CornerRadius = _fields["CornerRadius"].Read(),
+            Notches = _notches.IsChecked == true, NotchDepth = ClosureValue("NotchDepth", _notches.IsChecked == true, _last.NotchDepth) };
 
         private void UpdateFrameControls()
         {
@@ -179,8 +230,9 @@ namespace VanyaTools.Native
 
         private void SetAnchor(int side, int index, double x, double y)
         {
-            if (side == 0) { if (index == 0) { _anchors.LeftZipAX = x; _anchors.LeftZipAY = y; } else { _anchors.LeftZipBX = x; _anchors.LeftZipBY = y; } }
-            else { if (index == 0) { _anchors.RightZipAX = x; _anchors.RightZipAY = y; } else { _anchors.RightZipBX = x; _anchors.RightZipBY = y; } }
+            _anchors.FixedZipperAnchors = true;
+            if (side == 0) { if (index == 0) { _anchors.LeftZipStartXmm = x; _anchors.LeftZipStartYmm = y; } else { _anchors.LeftZipEndXmm = x; _anchors.LeftZipEndYmm = y; } }
+            else { if (index == 0) { _anchors.RightZipStartXmm = x; _anchors.RightZipStartYmm = y; } else { _anchors.RightZipEndXmm = x; _anchors.RightZipEndYmm = y; } }
             Queue();
         }
 
@@ -205,17 +257,30 @@ namespace VanyaTools.Native
                 var sharp = FrameBagGeometry.Segment(inside, setup.Height, setup.SplitHeights ? setup.FrontHeight : setup.Height);
                 _fields["CornerRadius"].Limit(Math.Min(200, FrameBagGeometry.MaximumRadius(sharp)));
                 setup.CornerRadius = _fields["CornerRadius"].Read();
+                _cornerCount = sharp.Length;
+                var radii = Enumerable.Range(0, _cornerCount).Select(n => _fields["Radius" + n].Read()).ToArray();
+                var fitted = FrameBagGeometry.FitRadii(sharp, radii);
+                for (int n = 0; n < 5; n++)
+                {
+                    _fields["Radius" + n].View.Visibility = n < _cornerCount ? Visibility.Visible : Visibility.Collapsed;
+                    if (n < _cornerCount && fitted[n] < radii[n] - .00001)
+                        _fields["Radius" + n].Set(Math.Floor(fitted[n] * 10) / 10);
+                }
+                radii = Enumerable.Range(0, _cornerCount).Select(n => _fields["Radius" + n].Read()).ToArray();
+                for (int n = 0; n < _cornerCount; n++) _fields["Radius" + n].Limit(Math.Min(200, FrameBagGeometry.RadiusLimit(sharp, radii, n)));
+                setup.CornerRadii = Enumerable.Range(0, _cornerCount).Select(n => _fields["Radius" + n].Read()).ToArray();
                 FrameBagPlan preview;
                 string closureError = null;
                 try { _plan = FrameBagGeometry.Build(setup); preview = _plan; }
                 catch (ArgumentException error) { preview = FrameBagGeometry.Build(setup, false); _plan = null; closureError = error.Message; }
-                _last = setup.Copy();
+                _last = preview.Setup.Copy(); _anchors = preview.Setup.Copy();
                 _side.Update(preview); _front.Update(preview); _pieces.Update(_plan);
                 _fields["FlapDepth"].View.Visibility = _fields["FlapExtra"].View.Visibility =
                     setup.LeftZipper == BagZipper.Flap || setup.RightZipper == BagZipper.Flap ? Visibility.Visible : Visibility.Collapsed;
                 _summary.Text = _plan == null ? "Исправьте молнию перед созданием комплекта." :
                     "Комплект: " + _plan.Parts.Length + " деталей · объём ≈ " + _plan.VolumeLitres.ToString("0.00", CultureInfo.CurrentCulture) + " л\n" +
-                    "Красный — резка; синий — швы и притачивание. М1/М2 перетаскиваются мышью.";
+                    "Красный — резка; синий — швы. М1/М2 перетаскиваются мышью." +
+                    (setup.Notches && setup.Allowance >= .4 ? " Надсечки: две — начало стенки, одна — конец." : "");
                 Message(closureError ?? "Размеры в миллиметрах. Объекты создаются только по кнопке.", closureError != null);
                 _apply.IsEnabled = _dxf.IsEnabled = _save.IsEnabled = _plan != null;
             }
@@ -257,10 +322,20 @@ namespace VanyaTools.Native
                 FrameBagGeometry.Build(setup);
                 _sync=true;
                 foreach(var pair in _fields)
-                    pair.Value.Set(Convert.ToDouble(typeof(FrameBagSetup).GetProperty(pair.Key).GetValue(setup,null)), true);
+                {
+                    double value;
+                    if (pair.Key.StartsWith("Radius", StringComparison.Ordinal))
+                    {
+                        int corner = Int32.Parse(pair.Key.Substring(6), CultureInfo.InvariantCulture);
+                        value = setup.CornerRadii != null && corner < setup.CornerRadii.Length ? setup.CornerRadii[corner] : setup.CornerRadius;
+                    }
+                    else value = pair.Key == "FrontHeight" && !setup.SplitHeights ? setup.Height :
+                        Convert.ToDouble(typeof(FrameBagSetup).GetProperty(pair.Key).GetValue(setup,null));
+                    pair.Value.Set(value, true);
+                }
                 _frameShape.SelectedIndex = setup.TriangleFrame ? 0 : 1;
                 _anchors = setup.Copy(); _leftZipper.SelectedIndex = (int)setup.LeftZipper; _rightZipper.SelectedIndex = (int)setup.RightZipper;
-                _splitHeights.IsChecked = setup.SplitHeights;
+                _notches.IsChecked = setup.Notches;
                 _name.Text=setup.Name ?? "Велосумка"; _sync=false;Rebuild();
             }
             catch(Exception error){_sync=false;Message(error.GetBaseException().Message,true);}
