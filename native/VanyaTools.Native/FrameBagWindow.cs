@@ -20,7 +20,7 @@ namespace VanyaTools.Native
         private readonly FrameBagPreview _pieces = new FrameBagPreview(FrameBagView.Pieces);
         private readonly TextBlock _message, _summary;
         private readonly TextBox _name;
-        private readonly ComboBox _leftZipper, _rightZipper, _editSide;
+        private readonly ComboBox _leftZipper, _rightZipper, _editSide, _frameShape;
         private readonly CheckBox _splitHeights;
         private FrameBagSetup _anchors;
         private readonly Button _apply, _dxf, _save;
@@ -66,14 +66,20 @@ namespace VanyaTools.Native
             var load = Button("Загрузить…", (_, __) => Load()); Grid.SetColumn(load, 1); presets.Children.Add(load);
             fields.Children.Add(presets);
             var frame = DockerLayout.ToolGroup("1 · Внутренний проём рамы",
-                "A — верх подседельной, B — верх стакана, C — низ стакана, D — низ подседельной. " +
-                "Замеры — прямые расстояния между точками внутри рамы. A–C — контрольная диагональ. Верхняя труба на схеме расположена горизонтально.");
+                "Треугольник: A — верх подседельной, B — передний угол, C — низ подседельной; нужны три стороны. " +
+                "Трапеция: A — верх подседельной, B/C — верх/низ стакана, D — низ подседельной; нужны четыре стороны и диагональ A–C. " +
+                "Допускается произвольный выпуклый четырёхугольник. Верхняя труба на схеме горизонтальна.");
             fields.Children.Add(frame);
+            _frameShape = new ComboBox { ItemsSource = new[] { "Треугольник · 3 замера", "Трапеция · 5 замеров" },
+                SelectedIndex = initial.TriangleFrame ? 0 : 1, MinHeight = 28, Margin = new Thickness(0, 0, 0, 6) };
+            frame.Children.Add(_frameShape);
             Add(frame, "Top", "A–B · верхняя труба", 10, 1500, initial.Top);
             Add(frame, "Seat", "D–A · подседельная", 10, 1500, initial.Seat);
             Add(frame, "Down", "C–D · нижняя труба", 10, 1800, initial.Down);
             Add(frame, "Head", "B–C · стакан", 1, 500, initial.Head);
             Add(frame, "Diagonal", "A–C · диагональ", 10, 1800, initial.Diagonal);
+            _frameShape.SelectionChanged += (_, __) => { UpdateFrameControls(); Queue(); };
+            UpdateFrameControls();
             var bag = DockerLayout.ToolGroup("2 · Сумка",
                 "Высота откладывается вниз от верхней границы сумки до скругления углов. Можно задать независимые высоты спереди и сзади. " +
                 "Глубина — толщина поперёк рамы. Нижняя глубина задаётся у самой низкой точки; при наклонном дне глубина вдоль него меняется. " +
@@ -147,9 +153,10 @@ namespace VanyaTools.Native
 
         private void Add(Panel parent, string key, string title, double min, double max, double value)
         { var field = new NumberField(title, min, max, value, Queue); _fields.Add(key, field); parent.Children.Add(field.View); }
-        private FrameBagSetup Read() => new FrameBagSetup { Name = _name.Text.Trim(),
+        private FrameBagSetup Read() => new FrameBagSetup { Name = _name.Text.Trim(), TriangleFrame = _frameShape.SelectedIndex == 0,
             Top = _fields["Top"].Read(), Seat = _fields["Seat"].Read(), Down = _fields["Down"].Read(),
-            Head = _fields["Head"].Read(), Diagonal = _fields["Diagonal"].Read(), Height = _fields["Height"].Read(),
+            Head = _frameShape.SelectedIndex == 0 ? _last.Head : _fields["Head"].Read(),
+            Diagonal = _frameShape.SelectedIndex == 0 ? _last.Diagonal : _fields["Diagonal"].Read(), Height = _fields["Height"].Read(),
             SplitHeights = _splitHeights.IsChecked == true, FrontHeight = _splitHeights.IsChecked == true ? _fields["FrontHeight"].Read() : _fields["Height"].Read(),
             LeftZipper = (BagZipper)_leftZipper.SelectedIndex, RightZipper = (BagZipper)_rightZipper.SelectedIndex,
             ZipperWidth = ClosureValue("ZipperWidth", _leftZipper.SelectedIndex != 0 || _rightZipper.SelectedIndex != 0, _last.ZipperWidth),
@@ -159,6 +166,14 @@ namespace VanyaTools.Native
             RightZipAX = _anchors.RightZipAX, RightZipAY = _anchors.RightZipAY, RightZipBX = _anchors.RightZipBX, RightZipBY = _anchors.RightZipBY,
             TopDepth = _fields["TopDepth"].Read(), BottomDepth = _fields["BottomDepth"].Read(),
             Clearance = _fields["Clearance"].Read(), Allowance = _fields["Allowance"].Read(), CornerRadius = _fields["CornerRadius"].Read() };
+
+        private void UpdateFrameControls()
+        {
+            bool triangle = _frameShape.SelectedIndex == 0;
+            _fields["Head"].View.Visibility = _fields["Diagonal"].View.Visibility = triangle ? Visibility.Collapsed : Visibility.Visible;
+            _fields["Seat"].Label(triangle ? "C–A · подседельная" : "D–A · подседельная");
+            _fields["Down"].Label(triangle ? "B–C · нижняя труба" : "C–D · нижняя труба");
+        }
 
         private double ClosureValue(string key, bool needed, double previous) => needed ? _fields[key].Read() : previous;
 
@@ -243,6 +258,7 @@ namespace VanyaTools.Native
                 _sync=true;
                 foreach(var pair in _fields)
                     pair.Value.Set(Convert.ToDouble(typeof(FrameBagSetup).GetProperty(pair.Key).GetValue(setup,null)), true);
+                _frameShape.SelectedIndex = setup.TriangleFrame ? 0 : 1;
                 _anchors = setup.Copy(); _leftZipper.SelectedIndex = (int)setup.LeftZipper; _rightZipper.SelectedIndex = (int)setup.RightZipper;
                 _splitHeights.IsChecked = setup.SplitHeights;
                 _name.Text=setup.Name ?? "Велосумка"; _sync=false;Rebuild();
@@ -266,7 +282,7 @@ namespace VanyaTools.Native
 
         private sealed class NumberField
         {
-            private readonly string _title;
+            private string _title;
             private readonly double _minimum,_baseMaximum;
             private readonly TextBox _input;
             private readonly Slider _slider;
@@ -290,6 +306,12 @@ namespace VanyaTools.Native
                 };
                 _slider.ValueChanged+=(_,__) =>
                 {if(_sync)return;Set(Math.Round(_slider.Value,1));changed();};
+            }
+            internal void Label(string title)
+            {
+                _title = title;
+                ((TextBlock)((Grid)View.Children[0]).Children[0]).Text = title;
+                System.Windows.Automation.AutomationProperties.SetName(_slider, title);
             }
             internal void Set(double value,bool resetLimit=false)
             {

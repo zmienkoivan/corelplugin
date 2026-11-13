@@ -63,8 +63,10 @@ namespace VanyaTools.Native
                     }
                 }
                 var s = plan.Setup;
-                string summary = "Внутренний проём A–B–C–D, мм: " + N(s.Top) + " / " + N(s.Head) + " / " + N(s.Down) + " / " + N(s.Seat) +
-                    "; A–C: " + N(s.Diagonal) + "\nСумка: высота " + N(s.Height) + "; глубина " + N(s.TopDepth) + " → " + N(s.BottomDepth) +
+                string frameText = s.TriangleFrame
+                    ? "Треугольник A–B–C, мм: " + N(s.Top) + " / " + N(s.Down) + " / " + N(s.Seat)
+                    : "Внутренний проём A–B–C–D, мм: " + N(s.Top) + " / " + N(s.Head) + " / " + N(s.Down) + " / " + N(s.Seat) + "; A–C: " + N(s.Diagonal);
+                string summary = frameText + "\nСумка: высота " + N(s.Height) + "; глубина " + N(s.TopDepth) + " → " + N(s.BottomDepth) +
                     "; высота спереди " + N(s.SplitHeights ? s.FrontHeight : s.Height) + "; зазор " + N(s.Clearance) + "; припуск " + N(s.Allowance) + "; R " + N(s.CornerRadius) +
                     "; молнии " + FrameBagClosures.Name(s.LeftZipper) + " / " + FrameBagClosures.Name(s.RightZipper) +
                     ". Красный — резка. Синий — непечатаемые швы и подписи.";

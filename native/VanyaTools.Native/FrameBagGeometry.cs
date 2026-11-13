@@ -21,6 +21,7 @@ namespace VanyaTools.Native
 
     internal sealed class FrameBagSetup
     {
+        public bool TriangleFrame { get; set; }
         public double Top { get; set; } = 550;
         public double Seat { get; set; } = 461;
         public double Down { get; set; } = 594.1;
@@ -72,13 +73,25 @@ namespace VanyaTools.Native
     }
 
     // Dimensions are straight chords of the INSIDE opening. A = upper seat,
-    // B = upper head, C = lower head, D = lower seat. Y points down from AB.
+    // B = upper head, C = lower head, D = lower seat. Triangles use A/B/C
+    // for upper seat/front/lower seat. Y points down from AB.
     internal static class FrameBagGeometry
     {
         internal static BagPoint[] Frame(FrameBagSetup setup)
         {
+            if (setup == null) throw new ArgumentNullException(nameof(setup));
             Positive(setup.Top, "Верхняя труба"); Positive(setup.Seat, "Подседельная");
-            Positive(setup.Down, "Нижняя труба"); Positive(setup.Head, "Стакан"); Positive(setup.Diagonal, "Диагональ");
+            Positive(setup.Down, "Нижняя труба");
+            if (setup.TriangleFrame)
+            {
+                Triangle(setup.Top, setup.Seat, setup.Down, "три стороны рамы");
+                double rearX = (setup.Top * setup.Top + setup.Seat * setup.Seat - setup.Down * setup.Down) / (2 * setup.Top);
+                double rearY = Math.Sqrt(Math.Max(0, setup.Seat * setup.Seat - rearX * rearX));
+                var triangle = new[] { new BagPoint(0, 0), new BagPoint(setup.Top, 0), new BagPoint(rearX, rearY) };
+                if (rearY < 1 || !Convex(triangle)) throw new ArgumentException("Треугольник рамы слишком плоский. Проверьте три стороны.");
+                return triangle;
+            }
+            Positive(setup.Head, "Стакан"); Positive(setup.Diagonal, "Диагональ");
             Triangle(setup.Top, setup.Head, setup.Diagonal, "верхняя труба / стакан / диагональ");
             Triangle(setup.Seat, setup.Down, setup.Diagonal, "подседельная / нижняя труба / диагональ");
             double x = (setup.Top * setup.Top + setup.Diagonal * setup.Diagonal - setup.Head * setup.Head) / (2 * setup.Top);

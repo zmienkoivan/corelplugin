@@ -106,6 +106,35 @@ internal static class Program
             System.IO.Directory.CreateDirectory(folder);
             System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "frame-bag.dxf"), FrameBagDxf.Create(sample), System.Text.Encoding.ASCII);
 
+            var triangleSetup = new FrameBagSetup { TriangleFrame = true, Top = 400, Seat = 300, Down = 500,
+                Head = Double.NaN, Diagonal = Double.PositiveInfinity, Height = 100, CornerRadius = 10 };
+            var triangle = FrameBagGeometry.Frame(triangleSetup);
+            Check(triangle.Length == 3, "Triangle mode retained a fake head edge.");
+            Near(Distance(triangle[0],triangle[1]),400);Near(Distance(triangle[1],triangle[2]),500);Near(Distance(triangle[2],triangle[0]),300);
+            var trianglePlan=FrameBagGeometry.Build(triangleSetup);
+            Check(trianglePlan.Breaks.Length==4 && trianglePlan.Parts.Length==6,"A partial triangle needs a clipped four-corner bag.");
+            WallMatches(trianglePlan);Dxf(trianglePlan);InsertChecks.Run(trianglePlan);
+            triangleSetup.Height=trianglePlan.AvailableHeight;triangleSetup.CornerRadius=5;
+            var fullTriangle=FrameBagGeometry.Build(triangleSetup);
+            Check(fullTriangle.Breaks.Length==3 && fullTriangle.Parts.Length==5,"Full triangular bag gained a zero-length fourth wall.");
+            WallMatches(fullTriangle);Dxf(fullTriangle);
+            foreach(BagZipper left in Enum.GetValues(typeof(BagZipper)))
+            foreach(BagZipper right in Enum.GetValues(typeof(BagZipper)))
+            {
+                var source = new FrameBagSetup { TriangleFrame=true, LeftZipper=left, RightZipper=right,
+                    SplitHeights=true,Height=140,FrontHeight=210 };
+                var tri=FrameBagGeometry.Build(source);WallMatches(tri);Dxf(tri);InsertChecks.Run(tri);
+                Check(tri.Frame.Length==3 && tri.Setup.TriangleFrame,"Triangle mode lost while applying closures.");
+                var copy=serializer.Deserialize<FrameBagSetup>(serializer.Serialize(source));
+                Check(copy.TriangleFrame && FrameBagGeometry.Build(copy).Frame.Length==3,"Saved measurements forgot the frame type.");
+            }
+            var oldPreset=serializer.Deserialize<FrameBagSetup>("{\"Top\":550,\"Seat\":461,\"Down\":594.1,\"Head\":104.4,\"Diagonal\":588.6}");
+            Check(!oldPreset.TriangleFrame && FrameBagGeometry.Frame(oldPreset).Length==4,"Old presets changed their frame type.");
+            var badTriangle = new FrameBagSetup {TriangleFrame=true,Top=100,Seat=100,Down=300};
+            Reject(()=>FrameBagGeometry.Build(badTriangle));
+            var triangleSample=FrameBagGeometry.Build(new FrameBagSetup {TriangleFrame=true,LeftZipper=BagZipper.Flap,RightZipper=BagZipper.Split});
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder,"frame-bag-triangle.dxf"),FrameBagDxf.Create(triangleSample),System.Text.Encoding.ASCII);
+
             InsertChecks.Run(plan);
             var invalid = new FrameBagSetup { Diagonal = 20 }; Reject(() => FrameBagGeometry.Build(invalid));
             invalid = new FrameBagSetup { Height = 2000 }; Reject(() => FrameBagGeometry.Build(invalid));

@@ -48,22 +48,22 @@ namespace VanyaTools.Native
             {
                 Polygon(dc, plan.Frame, null, new Pen(Brushes.SlateGray, hair * 4));
                 var diagonal = new Pen(Brushes.MediumPurple, hair) { DashStyle = DashStyles.Dash };
-                dc.DrawLine(diagonal, Point(plan.Frame[0]), Point(plan.Frame[2]));
+                if (!plan.Setup.TriangleFrame) dc.DrawLine(diagonal, Point(plan.Frame[0]), Point(plan.Frame[2]));
                 Polygon(dc, plan.Bag, fill, seam);
                 DrawZipper(dc, plan, hair);
-                for (int n = 0; n < 4; n++)
+                for (int n = 0; n < plan.Frame.Length; n++)
                 {
                     var at = plan.Frame[n]; dc.DrawEllipse(Brushes.White, new Pen(Brushes.SlateGray, hair), Point(at), hair * 3, hair * 3);
                     Text(dc, ((char)('A' + n)).ToString(), at.X + 6 * hair, at.Y - 19 * hair, 13 * hair, Brushes.DimGray);
                 }
-                string[] labels = { "Верхняя " + N(plan.Setup.Top), "Стакан " + N(plan.Setup.Head),
-                    "Нижняя " + N(plan.Setup.Down), "Подседельная " + N(plan.Setup.Seat) };
-                for (int n = 0; n < 4; n++)
+                string[] labels = plan.Setup.TriangleFrame ? new[] { "Верхняя " + N(plan.Setup.Top), "Нижняя " + N(plan.Setup.Down), "Подседельная " + N(plan.Setup.Seat) } :
+                    new[] { "Верхняя " + N(plan.Setup.Top), "Стакан " + N(plan.Setup.Head), "Нижняя " + N(plan.Setup.Down), "Подседельная " + N(plan.Setup.Seat) };
+                for (int n = 0; n < plan.Frame.Length; n++)
                 {
-                    var a = plan.Frame[n]; var b = plan.Frame[(n + 1) % 4];
+                    var a = plan.Frame[n]; var b = plan.Frame[(n + 1) % plan.Frame.Length];
                     Text(dc, labels[n], (a.X + b.X) / 2, (a.Y + b.Y) / 2 - 16 * hair, 11 * hair, Brushes.SlateGray);
                 }
-                Text(dc, "A–C: " + N(plan.Setup.Diagonal), plan.Frame[2].X / 2, plan.Frame[2].Y / 2, 11 * hair, Brushes.MediumPurple);
+                if (!plan.Setup.TriangleFrame) Text(dc, "A–C: " + N(plan.Setup.Diagonal), plan.Frame[2].X / 2, plan.Frame[2].Y / 2, 11 * hair, Brushes.MediumPurple);
                 for(int n=0;n<plan.Breaks.Length;n++)
                 {
                     var point=plan.Bag[plan.Breaks[n]];

@@ -5,6 +5,7 @@ using VanyaTools.Native;
 
 internal static class InsertChecks
 {
+    private static bool _announced;
     internal static void Run(FrameBagPlan plan)
     {
         var app = new FakeBagApp();
@@ -32,7 +33,8 @@ internal static class InsertChecks
         Require(threw && failed.ActiveDocument.Pages.Count==1 && failed.ActiveDocument.ActivePage==failed.ActiveDocument.Pages[0] &&
             failed.ActiveDocument.Unit==7 && !failed.Optimization && !failed.ActiveDocument.Dirty &&
             failed.ActiveDocument.Ends==1,"Failed insertion left a partial page or altered source state.");
-        Console.WriteLine("Native kit adapter: closed pieces, separate guides, new page, units and rollback passed.");
+        if (!_announced) Console.WriteLine("Native kit adapter: closed pieces, separate guides, new page, units and rollback passed.");
+        _announced = true;
     }
     private static void Require(bool ok,string text){if(!ok)throw new Exception(text);}
 }
