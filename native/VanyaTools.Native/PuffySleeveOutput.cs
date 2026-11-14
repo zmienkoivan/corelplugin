@@ -31,11 +31,16 @@ namespace VanyaTools.Native
             Quilting(p).Save(Path.Combine(folder, "02-quilting.svg"));
             PrintLayout(p).Save(Path.Combine(folder, "03-print-layout.svg"));
             Shaping(p).Save(Path.Combine(folder, "04-shaping.svg"));
+            if (options.Jigs != null)
+            {
+                if (p.QuiltPaths.Count > 0) SleeveJigOutput.Save(folder, SleeveJigPlan.Build(p, options.Jigs, true));
+                SleeveJigOutput.Save(folder, SleeveJigPlan.Build(p, options.Jigs, false));
+            }
             if (!String.IsNullOrWhiteSpace(front)) Print(p, front, mirror, folder, "front");
             if (!String.IsNullOrWhiteSpace(back)) Print(p, back, mirror, folder, "back");
             File.WriteAllText(Path.Combine(folder, "parameters.json"), new JavaScriptSerializer().Serialize(new
             {
-                schema = 1, product = "puffy-laptop-sleeve-with-gusset", options, mirror,
+                schema = 2, product = "puffy-laptop-sleeve-with-gusset", options, mirror,
                 frontArtwork = String.IsNullOrWhiteSpace(front) ? null : Path.GetFileName(front),
                 backArtwork = String.IsNullOrWhiteSpace(back) ? null : Path.GetFileName(back),
                 seamWidthMm = p.SeamWidth, seamHeightMm = p.SeamHeight,
@@ -289,7 +294,13 @@ namespace VanyaTools.Native
                 "\r\n01-patterns.svg — итоговые лекала 1:1; чёрный — крой, серый пунктир — шов, оранжевый — молния." +
                 "\r\n02-quilting.svg — две прямоугольные заготовки с запасом и компенсацией усадки " + N(o.ShrinkX) + "% × " + N(o.ShrinkY) + "%; синий — оси строчек. Серый контур формы — ориентир, до стёжки по нему не обрезать." +
                 "\r\n04-shaping.svg — отдельная схема формовочного шаблона ПОСЛЕ стёжки. Зелёный — ось фиксирующей строчки, серый пунктир — обрезка с припуском, синий — положение пены." +
-                "\r\nЭто схема строчек. Ширина пазов, перемычки, крепления и смещение иглы для пластикового шаблона здесь не заданы: они зависят от направляющей машины." +
+                "\r\n02 и 04 — схемы строчек для ткани, не контуры резки пластика." +
+                (o.Jigs == null ? " Пластиковые шаблоны в этот комплект не добавлены: задайте размеры направляющей и включите их экспорт." :
+                    "\r\n05-quilting-jig и 06-shaping-jig — шаблоны пластика. Каждый CUT-SVG содержит один лист с замкнутыми контурами резки. " +
+                    "ENGRAVE-SVG содержит только ориентиры. CDR создаётся в CorelDRAW с двумя страницами (верх/низ), печатается только CUT. " +
+                    "Измеренная направляющая: диаметр " + N(o.Jigs.GuideDiameter) + ", высота " + N(o.Jigs.GuideHeight) +
+                    " мм; зазор " + N(o.Jigs.Clearance) + "; пластик " + N(o.Jigs.PlasticThickness) + "; учтённая ширина реза " + N(o.Jigs.Kerf) +
+                    " мм. Компенсацию реза применять один раз. Параметры каждого шаблона записаны в отдельном settings.txt.") +
                 "\r\n03-print-layout.svg — шаблон размещения принта боковинок и нижней полосы периметра с вылетом " + N(p.Bleed) + " мм. Удалите служебные линии перед печатью." +
                 "\r\nГотовые принты боковинок: перед — " + (String.IsNullOrWhiteSpace(front) ? "не задан" : "print-front.svg и PNG 300 dpi") +
                 "; спинка — " + (String.IsNullOrWhiteSpace(back) ? "не задан" : "print-back.svg и PNG 300 dpi") + "." +

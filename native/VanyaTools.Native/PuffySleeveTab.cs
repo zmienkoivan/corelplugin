@@ -23,12 +23,16 @@ namespace VanyaTools.Native
         private readonly TextBox _step, _quiltInset, _shrinkX, _shrinkY, _bleed;
         private readonly TextBox _trimMargin, _fixingOffset;
         private readonly TextBox _commonWidth, _commonHeight;
+        private readonly TextBox _guideDiameter, _guideHeight, _plasticThickness, _jigClearance, _jigFrame, _jigBridge, _jigHole, _jigKerf;
         private readonly StackPanel _bodySize, _screenSize;
         private readonly Image _preview;
         private readonly TextBlock _summary, _artInfo, _frontLabel, _backLabel;
+        private readonly TextBlock _jigSummary;
         private readonly CheckBox _mirror, _same;
+        private readonly CheckBox _guideCentered, _includeJigs;
         private readonly StackPanel _backPanel;
         private readonly Button _create, _quilt, _shape, _save, _open;
+        private readonly Button _jigQuilt, _jigShape, _saveJigs;
         private string _front, _back, _folder;
         private BitmapSource _frontBitmap, _backBitmap;
         private bool _ready, _busy;
@@ -88,6 +92,30 @@ namespace VanyaTools.Native
             shrink.Children.Add(Note("Для общего шаблона стёжки нескольких размеров задайте одинаковую большую заготовку. Контур формы каждого чехла расположится по её центру."));
             shrink.Children.Add(Note("Например, 100 мм стали 97 мм — усадка 3%. Увеличиваются заготовка до стёжки и печать. Итоговое лекало и кольцо сохраняют размер."));
 
+            StackPanel jigs = Section(panel, "Пластиковые шаблоны · резка на лазере", true);
+            jigs.Children.Add(Note("Два листа на каждый шаблон. CUT — замкнутые контуры резки; ориентиры и подписи находятся на отдельных непечатаемых слоях."));
+            _guideDiameter = Number(jigs, "Наружный диаметр выступа, мм", "");
+            _guideHeight = Number(jigs, "Высота выступа над пластиной, мм", "");
+            _guideCentered = new CheckBox { Content = "Игла по центру выступа — проверено", FontSize = 11, Margin = new Thickness(0, 3, 0, 6) };
+            jigs.Children.Add(_guideCentered);
+            _plasticThickness = Number(jigs, "Толщина одного листа пластика, мм", "1");
+            _jigClearance = Number(jigs, "Рабочий зазор паза по диаметру, мм", "0,3");
+            _jigFrame = Number(jigs, "Рамка за краем заготовки, мм", "25");
+            _jigBridge = Number(jigs, "Цельная перемычка формы, мм", "15");
+            _jigHole = Number(jigs, "Отверстия совмещения, мм (0 = нет)", "3");
+            _jigKerf = Number(jigs, "Ширина лазерного реза, мм", "0");
+            jigs.Children.Add(Note("0 — компенсация в генераторе отключена. Если ширина реза задана здесь, повторно в ПО лазера её не применять. Зазор проверяется коротким пробным пазом."));
+            _includeJigs = new CheckBox { Content = "Добавлять пластик (CDR + SVG) в полный комплект", FontSize = 11,
+                Margin = new Thickness(0, 3, 0, 6) };
+            jigs.Children.Add(_includeJigs);
+            _jigSummary = Note(""); jigs.Children.Add(_jigSummary);
+            _jigQuilt = Button("Пластик для стёжки в CorelDRAW", (_, __) => OpenJig(true));
+            _jigShape = Button("Пластик для формы в CorelDRAW", (_, __) => OpenJig(false));
+            _saveJigs = Button("Сохранить шаблоны CDR + SVG", (_, __) => SaveJigs());
+            jigs.Children.Add(_jigQuilt); jigs.Children.Add(_jigShape); jigs.Children.Add(_saveJigs);
+            _guideCentered.Checked += (_, __) => Update(); _guideCentered.Unchecked += (_, __) => Update();
+            _includeJigs.Checked += (_, __) => Update(); _includeJigs.Unchecked += (_, __) => Update();
+
             StackPanel art = Section(panel, "Принты для сублимации");
             art.Children.Add(Note("Изображение заполняет заготовку с обрезкой по центру. Вывод боковинок: PNG 300 dpi + SVG точного размера. Полосы периметра оформляются в отдельном шаблоне."));
             Artwork(art, "Перед", true, out _frontLabel);
@@ -106,9 +134,9 @@ namespace VanyaTools.Native
 
             var actions = new UniformGrid { Columns = 2, Margin = new Thickness(0, 6, 0, 0) };
             _create = Button("Лекала в CorelDRAW", (_, __) => Open(0)); actions.Children.Add(_create);
-            _quilt = Button("Стёжка в CorelDRAW", (_, __) => Open(1)); actions.Children.Add(_quilt);
+            _quilt = Button("Линии стёжки (ткань)", (_, __) => Open(1)); actions.Children.Add(_quilt);
             panel.Children.Add(actions);
-            _shape = Button("Шаблон формы в CorelDRAW", (_, __) => Open(2)); panel.Children.Add(_shape);
+            _shape = Button("Контур формы (ткань)", (_, __) => Open(2)); panel.Children.Add(_shape);
             _save = DockerTheme.Primary(Button("Сохранить комплект файлов", async (_, __) => await Save()));
             panel.Children.Add(_save);
             _open = Button("Открыть папку комплекта", (_, __) =>
@@ -116,11 +144,11 @@ namespace VanyaTools.Native
             _open.IsEnabled = false; panel.Children.Add(_open);
             panel.Children.Add(Button("Устройство двух шаблонов и материалы", (_, __) => Safe(OpenGuide)));
             panel.Children.Add(Note("SVG — масштаб 1:1. Сначала проверьте посадку и усадку на пробном образце."));
-            panel.Children.Add(Note("Стёжка экспортируется как оси строчек. Пазы пластикового шаблона потребуют размеров направляющей машины."));
+            panel.Children.Add(Note("Для лазера используйте кнопки «Пластик»: каждый шаблон — новый CDR с двумя страницами и отдельными слоями CUT / ENGRAVE / INFO."));
             _ready = true; Update();
         }
 
-        private PuffySleeveOptions Options()
+        private PuffySleeveOptions Options(bool includeJigs = false)
         {
             bool diagonal = _mode.SelectedIndex == 1;
             string[] ratio = ((string)_aspect.SelectedItem).Split(':');
@@ -147,7 +175,8 @@ namespace VanyaTools.Native
                 Bleed = Read(_bleed, "Вылет печати"),
                 TrimMargin = Read(_trimMargin, "Запас заготовки"), FixingOffset = Read(_fixingOffset, "Строчка фиксации"),
                 CommonBlankWidth = Read(_commonWidth, "Общая ширина заготовки"),
-                CommonBlankHeight = Read(_commonHeight, "Общая высота заготовки")
+                CommonBlankHeight = Read(_commonHeight, "Общая высота заготовки"),
+                Jigs = includeJigs && _includeJigs.IsChecked == true ? JigOptions() : null
             };
         }
 
@@ -174,6 +203,7 @@ namespace VanyaTools.Native
                 _preview.Source = Preview(p);
                 _artInfo.Text = ArtworkInfo(_frontBitmap, p, "Перед") + "\n" + ArtworkInfo(BackBitmap(), p, "Спинка");
                 _create.IsEnabled = _quilt.IsEnabled = _shape.IsEnabled = _save.IsEnabled = !_busy;
+                UpdateJigs(p);
             }
             catch (Exception ex)
             {
@@ -182,7 +212,79 @@ namespace VanyaTools.Native
                 _summary.Text = ex.GetBaseException().Message;
                 _artInfo.Text = "";
                 _create.IsEnabled = _quilt.IsEnabled = _shape.IsEnabled = _save.IsEnabled = false;
+                _jigQuilt.IsEnabled = _jigShape.IsEnabled = _saveJigs.IsEnabled = false;
+                _jigSummary.Text = "Сначала исправьте размеры изделия.";
             }
+        }
+
+        private SleeveJigOptions JigOptions() => new SleeveJigOptions
+        {
+            GuideDiameter = Read(_guideDiameter, "Диаметр направляющего выступа"),
+            GuideHeight = Read(_guideHeight, "Высота направляющего выступа"),
+            CenteredGuideConfirmed = _guideCentered.IsChecked == true,
+            PlasticThickness = Read(_plasticThickness, "Толщина пластика"),
+            Clearance = Read(_jigClearance, "Зазор паза"), Frame = Read(_jigFrame, "Рамка"),
+            Bridge = Read(_jigBridge, "Перемычка"), RegistrationHole = Read(_jigHole, "Совмещение"),
+            Kerf = Read(_jigKerf, "Ширина лазерного реза")
+        };
+
+        private void UpdateJigs(PuffySleevePattern p)
+        {
+            try
+            {
+                SleeveJigOptions options = JigOptions();
+                SleeveJigPlan form = SleeveJigPlan.Build(p, options, false);
+                SleeveJigPlan quilt = p.QuiltPaths.Count == 0 ? null : SleeveJigPlan.Build(p, options, true);
+                _jigSummary.Text = "Готовый паз: " + F(form.SlotWidth) + " мм. Форма: " + Size(form.Width, form.Height) +
+                    (quilt == null ? "" : "; стёжка: " + Size(quilt.Width, quilt.Height)) + ". По 2 листа. Фиксация формы — 4 прохода.";
+                _jigShape.IsEnabled = _saveJigs.IsEnabled = !_busy;
+                _jigQuilt.IsEnabled = !_busy && quilt != null;
+            }
+            catch (Exception ex)
+            {
+                _jigSummary.Text = ex.GetBaseException().Message;
+                _jigQuilt.IsEnabled = _jigShape.IsEnabled = _saveJigs.IsEnabled = false;
+                if (_includeJigs.IsChecked == true) _save.IsEnabled = false;
+            }
+        }
+
+        private void OpenJig(bool quilting) => Safe(() =>
+        {
+            SleeveJigPlan p = SleeveJigPlan.Build(PuffySleevePattern.Build(Options()), JigOptions(), quilting);
+            SleeveJigOutput.CreateInCorel(p);
+            _status("Пластик · " + p.Title + ": создан CDR 1:1 с нижним и верхним листами. Для лазера печатается только слой CUT.", false);
+        });
+
+        private void SaveJigs() => Safe(() =>
+        {
+            PuffySleevePattern p = PuffySleevePattern.Build(Options());
+            SleeveJigOptions options = JigOptions();
+            SleeveJigPlan.Build(p, options, false);
+            if (p.QuiltPaths.Count > 0) SleeveJigPlan.Build(p, options, true);
+            string parent;
+            using (var dialog = new System.Windows.Forms.FolderBrowserDialog { Description = "Куда сохранить пластиковые шаблоны CDR + SVG?" })
+            {
+                if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+                parent = dialog.SelectedPath;
+            }
+            _folder = Path.Combine(parent, "Шаблоны-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 6));
+            Directory.CreateDirectory(_folder); _open.IsEnabled = true;
+            SaveJigDocuments(_folder, p, options);
+            _status("Пластиковые шаблоны сохранены: " + _folder + ". Каждый CDR — два листа; CUT-SVG готовы для импорта в ПО лазера.", false);
+        });
+
+        private static void SaveJigDocuments(string folder, PuffySleevePattern pattern, SleeveJigOptions options)
+        {
+            string marker = Path.Combine(folder, "CDR_НЕ_ЗАВЕРШЕНО.txt");
+            File.WriteAllText(marker, "Сохранение CDR не завершено. SVG могут быть готовы; повторите создание CDR в CorelDRAW.");
+            foreach (bool quilting in pattern.QuiltPaths.Count == 0 ? new[] { false } : new[] { true, false })
+            {
+                SleeveJigPlan p = SleeveJigPlan.Build(pattern, options, quilting);
+                SleeveJigOutput.Save(folder, p);
+                dynamic doc = SleeveJigOutput.CreateInCorel(p);
+                CorelDocumentSaver.SaveAs(doc, Path.Combine(folder, quilting ? "05-quilting-jig.cdr" : "06-shaping-jig.cdr"));
+            }
+            File.Delete(marker);
         }
 
         private DrawingImage Preview(PuffySleevePattern p)
@@ -235,8 +337,13 @@ namespace VanyaTools.Native
             if (_busy) return;
             try
             {
-                PuffySleeveOptions options = Options();
-                PuffySleevePattern.Build(options);
+                PuffySleeveOptions options = Options(true);
+                PuffySleevePattern p = PuffySleevePattern.Build(options);
+                if (options.Jigs != null)
+                {
+                    SleeveJigPlan.Build(p, options.Jigs, false);
+                    if (p.QuiltPaths.Count > 0) SleeveJigPlan.Build(p, options.Jigs, true);
+                }
                 string parent;
                 using (var dialog = new System.Windows.Forms.FolderBrowserDialog { Description = "Куда сохранить комплект лекал чехла?" })
                 {
@@ -256,6 +363,7 @@ namespace VanyaTools.Native
                 thread.SetApartmentState(ApartmentState.STA); thread.Start();
                 _folder = await completion.Task;
                 _open.IsEnabled = true;
+                if (options.Jigs != null) SaveJigDocuments(_folder, p, options.Jigs);
                 _status("Комплект сохранён: " + _folder + (String.IsNullOrEmpty(front) && String.IsNullOrEmpty(back)
                     ? ". Принты не заданы — сохранён шаблон размещения для сублимации." : ". Готовые принты боковинок — PNG 300 dpi и SVG."), false);
             }
@@ -329,10 +437,10 @@ namespace VanyaTools.Native
             foreach (string item in items) combo.Items.Add(item);
             combo.SelectedIndex = 0; combo.SelectionChanged += (_, __) => Update(); panel.Children.Add(combo); return combo;
         }
-        private static StackPanel Section(Panel panel, string title)
+        private static StackPanel Section(Panel panel, string title, bool expanded = false)
         {
             var contents = new StackPanel { Margin = new Thickness(4) };
-            panel.Children.Add(new Expander { Header = title, Content = contents, FontSize = 11, Margin = new Thickness(0, 3, 0, 5) });
+            panel.Children.Add(new Expander { Header = title, Content = contents, IsExpanded = expanded, FontSize = 11, Margin = new Thickness(0, 3, 0, 5) });
             return contents;
         }
         private static TextBlock Note(string text)

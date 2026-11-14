@@ -20,6 +20,7 @@ namespace VanyaTools.Native
         public double CommonBlankWidth, CommonBlankHeight;
         public SleeveQuilting Quilting = SleeveQuilting.Straight;
         public double QuiltStep = 45, QuiltInset = 10;
+        public SleeveJigOptions Jigs;
     }
 
     // All geometry is in millimetres, with the origin at the top left of the

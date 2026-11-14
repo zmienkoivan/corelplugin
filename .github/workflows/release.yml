@@ -161,6 +161,14 @@ jobs:
         shell: pwsh
         run: .\package-native.ps1
 
+      - name: Check puffy sleeve patterns and laser jigs
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File scripts/Test-PuffySleeve.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File scripts/Test-SleeveJigs.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Publish GitHub release
         shell: pwsh
         env:
