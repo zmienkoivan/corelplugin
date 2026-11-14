@@ -94,11 +94,14 @@ namespace VanyaTools.Native
 
             StackPanel jigs = Section(panel, "Пластиковые шаблоны · резка на лазере", true);
             jigs.Children.Add(Note("Два листа на каждый шаблон. CUT — замкнутые контуры резки; ориентиры и подписи находятся на отдельных непечатаемых слоях."));
-            _guideDiameter = Number(jigs, "Наружный диаметр выступа, мм", "");
-            _guideHeight = Number(jigs, "Высота выступа над пластиной, мм", "");
-            _guideCentered = new CheckBox { Content = "Игла по центру выступа — проверено", FontSize = 11, Margin = new Thickness(0, 3, 0, 6) };
+            jigs.Children.Add(Note("Начальный вариант: выступ Ø3 × ≈1 мм, игла по центру; акрил по 2 мм на лист. Размеры и зазор можно уточнить после пробы."));
+            var jigDefaults = new SleeveJigOptions();
+            _guideDiameter = Number(jigs, "Наружный диаметр выступа, мм", F(jigDefaults.GuideDiameter));
+            _guideHeight = Number(jigs, "Высота выступа над пластиной, мм", F(jigDefaults.GuideHeight));
+            _guideCentered = new CheckBox { Content = "Игла по центру выступа — проверено", IsChecked = jigDefaults.CenteredGuideConfirmed,
+                FontSize = 11, Margin = new Thickness(0, 3, 0, 6) };
             jigs.Children.Add(_guideCentered);
-            _plasticThickness = Number(jigs, "Толщина одного листа пластика, мм", "1");
+            _plasticThickness = Number(jigs, "Толщина одного листа пластика, мм", F(jigDefaults.PlasticThickness));
             _jigClearance = Number(jigs, "Рабочий зазор паза по диаметру, мм", "0,3");
             _jigFrame = Number(jigs, "Рамка за краем заготовки, мм", "25");
             _jigBridge = Number(jigs, "Цельная перемычка формы, мм", "15");

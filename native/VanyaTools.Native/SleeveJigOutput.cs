@@ -62,6 +62,8 @@ namespace VanyaTools.Native
             {
                 doc = app.CreateDocument();
                 doc.Unit = CorelConstants.CdrMillimeter;
+                doc.Rulers.HUnits = CorelConstants.CdrMillimeter;
+                doc.Rulers.VUnits = CorelConstants.CdrMillimeter;
                 app.Optimization = true;
                 doc.BeginCommandGroup("Vanya Tools · пластиковый шаблон " + p.Title); begun = true;
                 for (int sheet = 0; sheet < 2; sheet++)

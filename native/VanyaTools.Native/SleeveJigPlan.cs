@@ -9,9 +9,9 @@ namespace VanyaTools.Native
 {
     internal sealed class SleeveJigOptions
     {
-        public double GuideDiameter, GuideHeight;
-        public bool CenteredGuideConfirmed;
-        public double Clearance = 0.3, PlasticThickness = 1;
+        public double GuideDiameter = 3, GuideHeight = 1;
+        public bool CenteredGuideConfirmed = true;
+        public double Clearance = 0.3, PlasticThickness = 2;
         public double Frame = 25, Bridge = 15, RegistrationHole = 3, Kerf;
     }
 

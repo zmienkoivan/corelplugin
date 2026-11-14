@@ -38,6 +38,7 @@ function Options { [Activator]::CreateInstance($optionType, $true) }
 function JigOptions {
     $j = [Activator]::CreateInstance($jigOptionType, $true)
     $j.GuideDiameter = 4; $j.GuideHeight = 0.7; $j.CenteredGuideConfirmed = $true; $j.Kerf = 0.15
+    $j.PlasticThickness = 1
     $j
 }
 function Pattern($o) { $patternType.GetMethod('Build').Invoke($null, @($o)) }
@@ -128,6 +129,7 @@ $native = @($outputType.GetMethods() | Where-Object { $_.Name -eq 'CreateInCorel
 $app = [JigTestApp]::new()
 $doc = $native.Invoke($null, @($app, $form))
 Check ($doc.Pages.Count -eq 2 -and $doc.Unit -eq 3) 'Expected two millimetre pages'
+Check ($doc.Rulers.HUnits -eq 3 -and $doc.Rulers.VUnits -eq 3) 'Expected millimetre rulers in saved CDR'
 Check $doc.Ended 'Undo group left open'
 Check (-not $app.Optimization) 'Corel optimization was not restored'
 foreach ($page in $doc.Pages.Items) {
@@ -149,11 +151,18 @@ $tabType = $assembly.GetType('VanyaTools.Native.PuffySleeveTab')
 $tab = [Activator]::CreateInstance($tabType, [object[]]@([Action[string,bool]]{ param($m, $e) }))
 $flags = [Reflection.BindingFlags]'Instance, NonPublic'
 function Field($name) { $tabType.GetField($name, $flags).GetValue($tab) }
+Near ([double](Field '_guideDiameter').Text) 3
+Near ([double](Field '_guideHeight').Text) 1
+Near ([double](Field '_plasticThickness').Text) 2
+Check ((Field '_guideCentered').IsChecked -and (Field '_jigShape').IsEnabled) 'Confirmed machine preset did not enable jig export'
+$preset = [Activator]::CreateInstance($jigOptionType, $true)
+Near (Jig $p $preset $false).SlotWidth 3.3
+(Field '_guideDiameter').Text = ''
 Check (-not (Field '_jigShape').IsEnabled -and (Field '_save').IsEnabled) 'Unmeasured jig enabled or ordinary export blocked'
 (Field '_guideDiameter').Text = '4'; (Field '_guideHeight').Text = '0,7'; (Field '_guideCentered').IsChecked = $true
 Check ((Field '_jigShape').IsEnabled -and (Field '_jigQuilt').IsEnabled) 'Measured jig did not become available'
 (Field '_includeJigs').IsChecked = $true
-(Field '_guideHeight').Text = '2'
+(Field '_guideHeight').Text = '3'
 Check (-not (Field '_save').IsEnabled) 'Invalid jig included in complete export'
 (Field '_includeJigs').IsChecked = $false
 Check ((Field '_save').IsEnabled) 'Ordinary export failed to recover'

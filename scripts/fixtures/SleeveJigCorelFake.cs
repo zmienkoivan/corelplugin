@@ -12,6 +12,7 @@ public sealed class JigTestWindow { public int Refreshes; public void Refresh() 
 public sealed class JigTestDoc
 {
     public int Unit;
+    public JigTestRulers Rulers = new JigTestRulers();
     public bool Dirty = true, Closed, Ended, FailCurve;
     public JigTestPages Pages = new JigTestPages();
     public JigTestPage ActivePage { get { return Pages[Pages.Count]; } }
@@ -22,6 +23,7 @@ public sealed class JigTestDoc
     public JigTestCurve CreateCurve() { if (FailCurve) throw new Exception("Injected curve failure"); return new JigTestCurve(); }
     public void Close() { if (Dirty) throw new Exception("Would prompt to save"); Closed = true; }
 }
+public sealed class JigTestRulers { public int HUnits, VUnits; }
 public sealed class JigTestPages
 {
     public List<JigTestPage> Items = new List<JigTestPage>();
