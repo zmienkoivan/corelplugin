@@ -28,7 +28,7 @@ namespace VanyaTools.Native
         public static PuffySleeveOptions Phone() => new PuffySleeveOptions
         {
             Product = SleeveProduct.Phone, DeviceWidth = 75, DeviceHeight = 150,
-            DeviceThickness = 10, QuiltStep = 20, FourUp = true
+            DeviceThickness = 18, QuiltStep = 20, FourUp = true
         };
     }
 
