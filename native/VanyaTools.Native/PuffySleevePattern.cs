@@ -5,9 +5,12 @@ using System.Globalization;
 namespace VanyaTools.Native
 {
     internal enum SleeveQuilting { Straight, Arcs, Chevrons, None }
+    internal enum SleeveProduct { Laptop, Phone }
 
     internal sealed class PuffySleeveOptions
     {
+        public SleeveProduct Product;
+        public bool FourUp;
         public bool UseDiagonal;
         public double DeviceWidth = 325, DeviceHeight = 225, DeviceThickness = 18;
         public double DiagonalInches = 14, AspectWidth = 16, AspectHeight = 10, Bezel = 8;
@@ -21,6 +24,12 @@ namespace VanyaTools.Native
         public SleeveQuilting Quilting = SleeveQuilting.Straight;
         public double QuiltStep = 45, QuiltInset = 10;
         public SleeveJigOptions Jigs;
+
+        public static PuffySleeveOptions Phone() => new PuffySleeveOptions
+        {
+            Product = SleeveProduct.Phone, DeviceWidth = 75, DeviceHeight = 150,
+            DeviceThickness = 10, QuiltStep = 20, FourUp = true
+        };
     }
 
     // All geometry is in millimetres, with the origin at the top left of the
@@ -37,6 +46,14 @@ namespace VanyaTools.Native
         public double BlankMarginX, BlankMarginY;
         public string FoamPath, FixingPath;
         public SleeveQuilting Quilting;
+        public SleeveProduct Product;
+        public bool FourUp;
+        public int BatchSide => FourUp ? 2 : 1;
+        public int PanelCount => BatchSide * BatchSide;
+        public double BatchWidth => BlankWidth * BatchSide;
+        public double BatchHeight => BlankHeight * BatchSide;
+        public double BatchPrintWidth => BatchWidth + 2 * Bleed;
+        public double BatchPrintHeight => BatchHeight + 2 * Bleed;
         public string CutPath, SeamPath, ZipperPath;
         public readonly List<string> QuiltPaths = new List<string>();
         public double PrintWidth { get { return BlankWidth + 2 * Bleed; } }
@@ -57,9 +74,13 @@ namespace VanyaTools.Native
                 w = o.AspectWidth * factor + 2 * o.Bezel;
                 h = o.AspectHeight * factor + 2 * o.Bezel;
             }
-            Range(w, 100, 650, "Ширина корпуса");
-            Range(h, 80, 500, "Глубина корпуса");
-            Range(o.DeviceThickness, 1, 60, "Толщина ноутбука");
+            Range(w, 40, 650, "Ширина корпуса");
+            Range(h, 60, 500, "Вторая сторона корпуса");
+            Range(o.DeviceThickness, 1, 60, "Толщина устройства");
+            if (!Enum.IsDefined(typeof(SleeveProduct), o.Product))
+                throw new InvalidOperationException("Выберите вид изделия.");
+            if (o.Product == SleeveProduct.Phone && o.UseDiagonal)
+                throw new InvalidOperationException("Для телефона задайте размеры корпуса, включая защитный чехол.");
             Range(o.Ease, 0, 30, "Свобода с каждой стороны");
             Range(o.Loft, 0, 15, "Толщина сжатого стёганого слоя");
             Range(o.FoamThickness, 0, 15, "Толщина пены");
@@ -79,6 +100,7 @@ namespace VanyaTools.Native
             var p = new PuffySleevePattern
             {
                 DeviceWidth = w, DeviceHeight = h,
+                Product = o.Product, FourUp = o.FourUp,
                 SeamWidth = w + 2 * o.Ease,
                 SeamHeight = h + 2 * o.Ease,
                 Allowance = o.SeamAllowance, Radius = o.CornerRadius,
@@ -125,6 +147,8 @@ namespace VanyaTools.Native
             p.BottomBandLength = p.PerimeterLength - p.ZipperLength;
             p.FoamWidth = p.SeamWidth - 2 * o.FoamInset;
             p.FoamHeight = p.SeamHeight - 2 * o.FoamInset;
+            if (p.FoamWidth < 1 || p.FoamHeight < 1)
+                throw new InvalidOperationException("Отступ пены слишком велик для этой боковинки.");
             p.FoamPath = RoundedRect(p.Allowance + o.FoamInset, p.Allowance + o.FoamInset,
                 p.FoamWidth, p.FoamHeight, Math.Max(0, p.Radius - o.FoamInset));
             double a = p.Allowance, r = p.Radius, right = a + p.SeamWidth;

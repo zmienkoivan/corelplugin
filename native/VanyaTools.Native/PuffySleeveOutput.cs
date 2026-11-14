@@ -12,7 +12,7 @@ using System.Xml.Linq;
 
 namespace VanyaTools.Native
 {
-    internal static class PuffySleeveOutput
+    internal static partial class PuffySleeveOutput
     {
         private static readonly XNamespace Svg = "http://www.w3.org/2000/svg";
         private static readonly XNamespace Xlink = "http://www.w3.org/1999/xlink";
@@ -22,7 +22,7 @@ namespace VanyaTools.Native
         public static string Save(string parent, PuffySleeveOptions options, string front, string back, bool mirror)
         {
             PuffySleevePattern p = PuffySleevePattern.Build(options);
-            string folder = Path.Combine(parent, "Чехол-" + N(p.DeviceWidth) + "x" + N(p.DeviceHeight) +
+            string folder = Path.Combine(parent, (p.Product == SleeveProduct.Phone ? "Мини-сумочка-" : "Чехол-") + N(p.DeviceWidth) + "x" + N(p.DeviceHeight) +
                 "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N").Substring(0, 6));
             Directory.CreateDirectory(folder);
             // A failed export keeps its files for diagnosis, but is never reported as complete.
@@ -38,9 +38,12 @@ namespace VanyaTools.Native
             }
             if (!String.IsNullOrWhiteSpace(front)) Print(p, front, mirror, folder, "front");
             if (!String.IsNullOrWhiteSpace(back)) Print(p, back, mirror, folder, "back");
+            if (p.FourUp && (!String.IsNullOrWhiteSpace(front) || !String.IsNullOrWhiteSpace(back)))
+                PrintBatch(p, front, back, mirror, folder);
             File.WriteAllText(Path.Combine(folder, "parameters.json"), new JavaScriptSerializer().Serialize(new
             {
-                schema = 2, product = "puffy-laptop-sleeve-with-gusset", options, mirror,
+                schema = 3, product = p.Product == SleeveProduct.Phone ? "puffy-phone-pouch-with-gusset" : "puffy-laptop-sleeve-with-gusset", options, mirror,
+                panelsPerPass = p.PanelCount, batchWidthMm = p.BatchWidth, batchHeightMm = p.BatchHeight,
                 frontArtwork = String.IsNullOrWhiteSpace(front) ? null : Path.GetFileName(front),
                 backArtwork = String.IsNullOrWhiteSpace(back) ? null : Path.GetFileName(back),
                 seamWidthMm = p.SeamWidth, seamHeightMm = p.SeamHeight,
@@ -94,6 +97,7 @@ namespace VanyaTools.Native
 
         public static XDocument Quilting(PuffySleevePattern p)
         {
+            if (p.FourUp) return BatchQuilting(p);
             XDocument doc = Document(2 * p.BlankWidth + 3 * Margin,
                 p.BlankHeight + LabelHeight + 3 * Margin, "Заготовки до стёжки — 1:1");
             for (int i = 0; i < 2; i++)
@@ -117,6 +121,7 @@ namespace VanyaTools.Native
 
         public static XDocument Shaping(PuffySleevePattern p)
         {
+            if (p.FourUp) return BatchShaping(p);
             double w = p.BlankWidth / p.ScaleX, h = p.BlankHeight / p.ScaleY;
             XDocument doc = Document(2 * w + 3 * Margin, h + LabelHeight + 3 * Margin,
                 "Контур формы после стёжки — ось фиксирующей строчки 1:1");
@@ -140,6 +145,7 @@ namespace VanyaTools.Native
 
         public static XDocument PrintLayout(PuffySleevePattern p)
         {
+            if (p.FourUp) return BatchPrintLayout(p);
             double bottomWidth = p.BottomBandLength + 2 * p.Allowance + 2 * p.Bleed;
             double bandHeight = p.RingDepth + 2 * p.Allowance + 2 * p.Bleed;
             double width = Math.Max(2 * p.PrintWidth + 3 * Margin, bottomWidth + 2 * Margin);
@@ -274,25 +280,26 @@ namespace VanyaTools.Native
         private static string Instructions(PuffySleevePattern p, PuffySleeveOptions o, string front, string back, bool mirror)
         {
             return "ЭКСПЕРИМЕНТ · ЧЕХОЛ С КОЛЬЦОМ ПЕРИМЕТРА\r\n\r\n" +
-                "Корпус ноутбука: " + N(p.DeviceWidth) + " × " + N(p.DeviceHeight) + " × " + N(o.DeviceThickness) + " мм." +
+                (p.Product == SleeveProduct.Phone ? "Мини-сумочка для телефона. Размер корпуса с защитным чехлом: " : "Корпус ноутбука: ") + N(p.DeviceWidth) + " × " + N(p.DeviceHeight) + " × " + N(o.DeviceThickness) + " мм." +
                 (o.UseDiagonal ? " Оценка по экрану и рамке; перед раскроем замените её фактическими размерами корпуса." : "") +
                 "\r\nБоковинка по линии шва: " + N(p.SeamWidth) + " × " + N(p.SeamHeight) + " мм. Припуск: " + N(p.Allowance) + " мм." +
-                "\r\nГлубина кольца по шву: " + N(p.RingDepth) + " мм. Расчётная необходимая глубина: " + N(p.RequiredRingDepth) + " мм = толщина ноутбука + 2 × (пена + сжатый стёганый слой + микрофибра) + свобода по толщине." +
+                "\r\nГлубина кольца по шву: " + N(p.RingDepth) + " мм. Расчётная необходимая глубина: " + N(p.RequiredRingDepth) + " мм = толщина устройства + 2 × (пена + сжатый стёганый слой + микрофибра) + свобода по толщине." +
                 "\r\nМолния ГОЛАЯ, без тканевых планок. Полная ширина с обеими лентами: " + N(p.ZipperTapeWidth) + " мм; расстояние между сборочными строчками: " + N(p.RingDepth) + " мм. Припуск на каждой ленте " + N(p.Allowance) + " мм." +
                 "\r\nМолния по линии притачивания: " + N(p.ZipperLength) + " мм. Лента с припусками поперечных швов и запасами концов: " + N(p.ZipperTapeLength) + " мм." +
                 "\r\nСпуск молнии от верха: " + N(p.ZipperDrop) + " мм с каждой стороны (" + N(o.ZipperDropPercent) + "% высоты)." +
                 "\r\nПериметр по шву: " + N(p.PerimeterLength) + " мм = молния " + N(p.ZipperLength) + " + нижняя полоса " + N(p.BottomBandLength) + "." +
                 "\r\n\r\nСОСТАВ И ПОСЛЕДОВАТЕЛЬНОСТЬ" +
-                "\r\n1. По 02-quilting.svg подготовьте по две ПРЯМОУГОЛЬНЫЕ заготовки плащёвки, синтепона и стабилизатора (флизелин/аналог). Простегайте пакет в шаблоне стёжки. Запас за будущим припуском после усадки: " + N(p.BlankMarginX) + " мм по бокам, " + N(p.BlankMarginY) + " мм сверху/снизу." +
-                "\r\n2. Выкроите 2 детали пены по отдельному контуру, без припусков. Пена отступает от линии шва внутрь на " + N(p.FoamInset) + " мм и не входит в шов." +
-                "\r\n3. В отдельный шаблон формы 04-shaping.svg уложите простёганную заготовку, пену по внутреннему ориентиру и прямоугольную микрофибру с запасом (не меньше " + N(p.BlankWidth / p.ScaleX) + " × " + N(p.BlankHeight / p.ScaleY) + " мм). Без растяжения зажмите слои и обшейте зелёный контур фиксации: он на " + N(p.FixingOffset) + " мм снаружи сборочного шва, внутри припуска. После фиксации обрежьте ножницами по контуру кроя 01-patterns.svg, сохраняя припуск " + N(p.Allowance) + " мм от сборочного шва. Размер задаёт строчка по шаблону, а не ручная обрезка." +
-                "\r\n4. Нижняя полоса периметра: выкроите по одной детали из плащёвки, синтепона и микрофибры. Пены в кольце нет. Планок молнии нет." +
+                (p.FourUp ? "\r\nПартия: четыре боковинки (два переда и две спинки) на два изделия. Лекала 01-patterns.svg даны на одно изделие; повторите их дважды." : "") +
+                "\r\n1. По 02-quilting.svg подготовьте " + (p.FourUp ? "одну общую заготовку 2×2 размером " + N(p.BatchWidth) + " × " + N(p.BatchHeight) + " мм из каждого материала" : "по две ПРЯМОУГОЛЬНЫЕ заготовки") + " плащёвки, синтепона и стабилизатора (флизелин/аналог). Простегайте пакет в шаблоне стёжки. Запас за будущим припуском после усадки: " + N(p.BlankMarginX) + " мм по бокам, " + N(p.BlankMarginY) + " мм сверху/снизу каждой ячейки." +
+                "\r\n2. Выкроите " + (p.FourUp ? "4" : "2") + " детали пены по отдельному контуру, без припусков. Пена отступает от линии шва внутрь на " + N(p.FoamInset) + " мм и не входит в шов." +
+                "\r\n3. В отдельный шаблон формы 04-shaping.svg уложите простёганную заготовку, пену по внутреннему ориентиру и прямоугольную микрофибру с запасом (не меньше " + N(p.BatchWidth / p.ScaleX) + " × " + N(p.BatchHeight / p.ScaleY) + " мм). Без растяжения зажмите слои и обшейте зелёный контур фиксации: он на " + N(p.FixingOffset) + " мм снаружи сборочного шва, внутри припуска. " + (p.FourUp ? "Зафиксируйте все четыре формы (16 проходов через пазы), затем разделите общее полотно на четыре части по центральным линиям. " : "") + "После фиксации обрежьте ножницами по контуру кроя 01-patterns.svg, сохраняя припуск " + N(p.Allowance) + " мм от сборочного шва. Размер задаёт строчка по шаблону, а не ручная обрезка." +
+                "\r\n4. Нижняя полоса периметра: на каждое изделие выкроите по одной детали из плащёвки, синтепона и микрофибры. Пены в кольце нет. Планок молнии нет." +
                 "\r\n5. Соедините концы голой молнии с концами нижней полосы, замыкая кольцо. Припуски поперечных соединений добавлены к лекалу полосы и длине ленты молнии. Боковые ленты молнии притачиваются прямо к боковинкам." +
                 "\r\n6. Совместите середину молнии с верхней меткой боковинки, середину нижней полосы — с нижней. Концы молнии совпадают с оранжевыми метками. Соберите кольцо с боковинками на прямострочке, ведя сборочный шов по заданной линии либо с постоянным отступом внутрь от фиксирующей строчки, а не по неровному срезу ножниц. Закройте внутренние швы окантовкой." +
-                "\r\nРасчётный расход окантовки на два шва: " + N(2 * p.PerimeterLength + 100) + " мм, включая суммарный запас 100 мм. Ширина зависит от окантователя и толщины пакета." +
+                "\r\nРасчётный расход окантовки на два шва одного изделия: " + N(2 * p.PerimeterLength + 100) + " мм, включая суммарный запас 100 мм. Ширина зависит от окантователя и толщины пакета." +
                 "\r\n\r\nФАЙЛЫ" +
                 "\r\n01-patterns.svg — итоговые лекала 1:1; чёрный — крой, серый пунктир — шов, оранжевый — молния." +
-                "\r\n02-quilting.svg — две прямоугольные заготовки с запасом и компенсацией усадки " + N(o.ShrinkX) + "% × " + N(o.ShrinkY) + "%; синий — оси строчек. Серый контур формы — ориентир, до стёжки по нему не обрезать." +
+                "\r\n02-quilting.svg — " + (p.FourUp ? "общая заготовка на четыре боковинки" : "две прямоугольные заготовки") + " с запасом и компенсацией усадки " + N(o.ShrinkX) + "% × " + N(o.ShrinkY) + "%; синий — оси строчек. Серый контур формы — ориентир, до стёжки по нему не обрезать." +
                 "\r\n04-shaping.svg — отдельная схема формовочного шаблона ПОСЛЕ стёжки. Зелёный — ось фиксирующей строчки, серый пунктир — обрезка с припуском, синий — положение пены." +
                 "\r\n02 и 04 — схемы строчек для ткани, не контуры резки пластика." +
                 (o.Jigs == null ? " Пластиковые шаблоны в этот комплект не добавлены: задайте размеры направляющей и включите их экспорт." :
@@ -304,6 +311,7 @@ namespace VanyaTools.Native
                 "\r\n03-print-layout.svg — шаблон размещения принта боковинок и нижней полосы периметра с вылетом " + N(p.Bleed) + " мм. Удалите служебные линии перед печатью." +
                 "\r\nГотовые принты боковинок: перед — " + (String.IsNullOrWhiteSpace(front) ? "не задан" : "print-front.svg и PNG 300 dpi") +
                 "; спинка — " + (String.IsNullOrWhiteSpace(back) ? "не задан" : "print-back.svg и PNG 300 dpi") + "." +
+                (p.FourUp ? "\r\nПри выборе хотя бы одного принта также выводятся print-batch-4.svg и print-batch-4-300dpi.png — четыре ячейки на общем листе без технических линий. Невыбранный принт оставляет свои ячейки белыми." : "") +
                 "\r\nПринт заполняет весь прямоугольник до стёжки с вылетами, с обрезкой по центру. Разная усадка X/Y компенсируется предварительным растяжением изображения. " +
                 (mirror ? "Зеркало уже применено; повторно в драйвере не включайте." : "Зеркало не применено; задайте его в печати при необходимости.") +
                 "\r\nНижняя полоса периметра оформляется отдельно в 03-print-layout.svg. Автоматическая печать этой полосы не выполняется." +

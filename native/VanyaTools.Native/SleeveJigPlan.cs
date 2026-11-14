@@ -27,6 +27,7 @@ namespace VanyaTools.Native
     internal sealed class SleeveJigPlan
     {
         public bool Quilting;
+        public int PanelCount;
         public SleeveJigOptions Options;
         public double Width, Height, SlotWidth, DrawnSlotWidth;
         public double BlankWidth, BlankHeight;
@@ -36,7 +37,7 @@ namespace VanyaTools.Native
         public double Origin { get { return 5 + Options.Kerf / 2; } }
         public double PageWidth { get { return Width + 10 + Options.Kerf; } }
         public double PageHeight { get { return Height + 10 + Options.Kerf; } }
-        public string Title { get { return Quilting ? "Стёжка" : "Форма боковинки"; } }
+        public string Title { get { return (Quilting ? "Стёжка" : "Форма боковинки") + (PanelCount == 4 ? " · 2×2" : ""); } }
         private const double Tolerance = 0.005, MinimumWeb = 2;
 
         public static SleeveJigPlan Build(PuffySleevePattern pattern, SleeveJigOptions options, bool quilting)
@@ -63,25 +64,36 @@ namespace VanyaTools.Native
                 throw new InvalidOperationException("Радиус фиксации слишком мал для паза. Увеличьте радиус угла изделия.");
             var p = new SleeveJigPlan
             {
-                Quilting = quilting, Options = options, SlotWidth = slot, DrawnSlotWidth = slot - options.Kerf,
-                BlankWidth = quilting ? pattern.BlankWidth : pattern.BlankWidth / pattern.ScaleX,
-                BlankHeight = quilting ? pattern.BlankHeight : pattern.BlankHeight / pattern.ScaleY
+                Quilting = quilting, PanelCount = pattern.PanelCount, Options = options, SlotWidth = slot, DrawnSlotWidth = slot - options.Kerf,
+                BlankWidth = quilting ? pattern.BatchWidth : pattern.BatchWidth / pattern.ScaleX,
+                BlankHeight = quilting ? pattern.BatchHeight : pattern.BatchHeight / pattern.ScaleY
             };
             p.Width = p.BlankWidth + 2 * options.Frame;
             p.Height = p.BlankHeight + 2 * options.Frame;
             double f = options.Frame;
-            var transform = quilting
-                ? new MatrixTransform(pattern.ScaleX, 0, 0, pattern.ScaleY,
-                    f + pattern.BlankMarginX * pattern.ScaleX, f + pattern.BlankMarginY * pattern.ScaleY)
-                : new MatrixTransform(1, 0, 0, 1, f + pattern.BlankMarginX, f + pattern.BlankMarginY);
+            double cellW = p.BlankWidth / pattern.BatchSide, cellH = p.BlankHeight / pattern.BatchSide;
+            double sx = quilting ? pattern.ScaleX : 1, sy = quilting ? pattern.ScaleY : 1;
             var rawAxes = new List<string>();
             if (quilting) rawAxes.AddRange(pattern.QuiltPaths);
             else rawAxes.AddRange(FormAxes(pattern, options.Bridge + slot));
-            foreach (string data in rawAxes)
+            for (int row = 0; row < pattern.BatchSide; row++)
+            for (int col = 0; col < pattern.BatchSide; col++)
             {
-                Geometry geometry = Geometry.Parse(data).Clone();
-                geometry.Transform = transform;
-                p.Axes.Add(Flat(geometry));
+                var transform = new MatrixTransform(sx, 0, 0, sy,
+                    f + col * cellW + pattern.BlankMarginX * sx, f + row * cellH + pattern.BlankMarginY * sy);
+                foreach (string data in rawAxes)
+                {
+                    Geometry geometry = Geometry.Parse(data).Clone();
+                    geometry.Transform = transform;
+                    p.Axes.Add(Flat(geometry));
+                }
+                if (!quilting)
+                    foreach (var line in new[] { new { Name = "Пена", Data = pattern.FoamPath },
+                        new { Name = "Крой ткани с припуском", Data = pattern.CutPath } })
+                    {
+                        Geometry g = Geometry.Parse(line.Data).Clone(); g.Transform = transform;
+                        p.Engraving.Add(new SleeveJigLine { Name = line.Name + (pattern.FourUp ? " " + (row * 2 + col + 1) : ""), Geometry = Flat(g) });
+                    }
             }
             double k = options.Kerf / 2;
             p.Cuts.Add(new SleeveJigLine { Name = "Наружный контур",
@@ -108,14 +120,11 @@ namespace VanyaTools.Native
                 new RectangleGeometry(new Rect(f, f, p.BlankWidth, p.BlankHeight))) });
             p.Engraving.Add(new SleeveJigLine { Name = "Зона шарнира", Geometry = Flat(new RectangleGeometry(
                 new Rect(3, f, Math.Min(12, f - 5), p.BlankHeight))) });
-            if (!quilting)
+            if (pattern.FourUp)
             {
-                foreach (var line in new[] { new { Name = "Пена", Data = pattern.FoamPath },
-                    new { Name = "Крой ткани с припуском", Data = pattern.CutPath } })
-                {
-                    Geometry g = Geometry.Parse(line.Data).Clone(); g.Transform = transform;
-                    p.Engraving.Add(new SleeveJigLine { Name = line.Name, Geometry = Flat(g) });
-                }
+                p.Engraving.Add(new SleeveJigLine { Name = "Разделение ткани — не резать пластик", Geometry = Flat(Geometry.Parse(
+                    "M " + P(f + cellW, f) + " V " + N(f + p.BlankHeight) +
+                    " M " + P(f, f + cellH) + " H " + N(f + p.BlankWidth))) });
             }
             return p;
         }

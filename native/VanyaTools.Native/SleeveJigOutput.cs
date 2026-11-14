@@ -40,6 +40,7 @@ namespace VanyaTools.Native
             File.WriteAllText(Path.Combine(folder, prefix + "-settings.txt"),
                 p.Title + " · два листа по " + N(p.Options.PlasticThickness) + " мм\r\n" +
                 "Габарит готового листа: " + N(p.Width) + " × " + N(p.Height) + " мм.\r\n" +
+                "Боковинок в кассете: " + p.PanelCount + (p.PanelCount == 4 ? " (2×2, на два изделия). Разделительные линии — только ориентиры для ткани, не сквозная резка пластика." : ".") + "\r\n" +
                 "Направляющая: диаметр " + N(p.Options.GuideDiameter) + "; высота " + N(p.Options.GuideHeight) + " мм.\r\n" +
                 "Рабочий зазор: " + N(p.Options.Clearance) + " мм; ширина готового паза: " + N(p.SlotWidth) + " мм.\r\n" +
                 "Ширина лазерного реза, уже учтённая в геометрии: " + N(p.Options.Kerf) + " мм. Не компенсировать повторно в ПО лазера.\r\n" +

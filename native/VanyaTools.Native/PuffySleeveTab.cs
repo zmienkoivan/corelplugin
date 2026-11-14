@@ -16,7 +16,9 @@ namespace VanyaTools.Native
     internal sealed class PuffySleeveTab : UserControl
     {
         private readonly Action<string, bool> _status;
-        private readonly ComboBox _mode, _aspect, _quilting;
+        private readonly ComboBox _product, _mode, _aspect, _quilting;
+        private int _activeProduct;
+        private PuffySleeveOptions _laptopDraft = new PuffySleeveOptions(), _phoneDraft = PuffySleeveOptions.Phone();
         private readonly TextBox _width, _height, _thickness, _diagonal, _bezel;
         private readonly TextBox _ease, _loft, _foam, _foamInset, _lining, _depthEase;
         private readonly TextBox _allowance, _radius, _zipDrop, _zipWidth, _zipTail;
@@ -29,7 +31,7 @@ namespace VanyaTools.Native
         private readonly TextBlock _summary, _artInfo, _frontLabel, _backLabel;
         private readonly TextBlock _jigSummary;
         private readonly CheckBox _mirror, _same;
-        private readonly CheckBox _guideCentered, _includeJigs;
+        private readonly CheckBox _guideCentered, _includeJigs, _fourUp;
         private readonly StackPanel _backPanel;
         private readonly Button _create, _quilt, _shape, _save, _open;
         private readonly Button _jigQuilt, _jigShape, _saveJigs;
@@ -42,23 +44,24 @@ namespace VanyaTools.Native
             _status = status;
             var panel = new StackPanel { Margin = new Thickness(6) };
             Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-            panel.Children.Add(new TextBlock { Text = "Дутые аксессуары · чехол", FontSize = 14,
+            panel.Children.Add(new TextBlock { Text = "Дутые аксессуары · чехлы и мини-сумочки", FontSize = 14,
                 FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 5) });
             panel.Children.Add(Note("Прямоугольник → стёжка → шаблон формы → обрезка с припуском → сборка с кольцом."));
+            _product = Choice(panel, "Изделие", "Чехол для ноутбука", "Мини-сумочка для телефона");
             _preview = new Image { Height = 145, Stretch = Stretch.Uniform, Margin = new Thickness(0, 6, 0, 4) };
             panel.Children.Add(_preview);
             panel.Children.Add(Note("Оранжевый — молния · синий — стёжка · пунктир — пена"));
             _summary = Note(""); panel.Children.Add(_summary);
-            _mode = Choice(panel, "Размер ноутбука", "По корпусу, мм", "По диагонали экрана (оценка)");
+            _mode = Choice(panel, "Размер устройства", "По корпусу, мм", "По диагонали экрана (оценка)");
             _bodySize = new StackPanel(); panel.Children.Add(_bodySize);
             _width = Number(_bodySize, "Ширина корпуса, мм", "325");
-            _height = Number(_bodySize, "Глубина корпуса, мм", "225");
+            _height = Number(_bodySize, "Вторая сторона корпуса, мм", "225");
             _screenSize = new StackPanel(); panel.Children.Add(_screenSize);
             _diagonal = Number(_screenSize, "Диагональ экрана, дюймы", "14");
             _aspect = Choice(_screenSize, "Стороны экрана", "16:10", "16:9", "3:2", "4:3");
             _bezel = Number(_screenSize, "Рамка с каждой стороны, мм", "8");
             _screenSize.Children.Add(Note("Диагональ описывает экран. Размер корпуса с рамкой — приблизительный; для раскроя измерьте ноутбук."));
-            _thickness = Number(panel, "Толщина ноутбука, мм", "18");
+            _thickness = Number(panel, "Толщина устройства с чехлом, мм", "18");
             _ease = Number(panel, "Свобода по краям с каждой стороны, мм", "5");
 
             StackPanel layers = Section(panel, "Пакет боковинок и глубина кольца");
@@ -82,13 +85,18 @@ namespace VanyaTools.Native
             _quilting = Choice(panel, "Стёжка боковинок", "Прямые", "Плавные дуги", "Углы / шевроны", "Без стёжки");
             _step = Number(panel, "Шаг рядов стёжки, мм", "45");
             _quiltInset = Number(panel, "Отступ стёжки от края заготовки, мм", "10");
+            _fourUp = new CheckBox { Content = "Четыре боковинки на одной заготовке (2×2)", FontSize = 11,
+                Margin = new Thickness(0, 3, 0, 5) };
+            panel.Children.Add(_fourUp);
+            panel.Children.Add(Note("2×2 — два переда и две спинки, на два изделия. Простегайте общее полотно, зафиксируйте четыре формы, затем разделите ткань и обрежьте припуски. Начальный шаг мини-сумочки — 20 мм, его можно менять."));
+            _fourUp.Checked += (_, __) => Update(); _fourUp.Unchecked += (_, __) => Update();
             StackPanel shrink = Section(panel, "Усадка стёжки и вылет печати");
             _shrinkX = Number(shrink, "Усадка по ширине, %", "0");
             _shrinkY = Number(shrink, "Усадка по высоте, %", "0");
             _bleed = Number(shrink, "Вылет за заготовку, мм", "5");
             _trimMargin = Number(shrink, "Запас заготовки за припуском, мм", "15");
-            _commonWidth = Number(shrink, "Общая ширина до стёжки, мм (0 = авто)", "0");
-            _commonHeight = Number(shrink, "Общая высота до стёжки, мм (0 = авто)", "0");
+            _commonWidth = Number(shrink, "Ширина одной ячейки до стёжки, мм (0 = авто)", "0");
+            _commonHeight = Number(shrink, "Высота одной ячейки до стёжки, мм (0 = авто)", "0");
             shrink.Children.Add(Note("Для общего шаблона стёжки нескольких размеров задайте одинаковую большую заготовку. Контур формы каждого чехла расположится по её центру."));
             shrink.Children.Add(Note("Например, 100 мм стали 97 мм — усадка 3%. Увеличиваются заготовка до стёжки и печать. Итоговое лекало и кольцо сохраняют размер."));
 
@@ -148,24 +156,63 @@ namespace VanyaTools.Native
             panel.Children.Add(Button("Устройство двух шаблонов и материалы", (_, __) => Safe(OpenGuide)));
             panel.Children.Add(Note("SVG — масштаб 1:1. Сначала проверьте посадку и усадку на пробном образце."));
             panel.Children.Add(Note("Для лазера используйте кнопки «Пластик»: каждый шаблон — новый CDR с двумя страницами и отдельными слоями CUT / ENGRAVE / INFO."));
+            _product.SelectionChanged += (_, __) => ChangeProduct();
             _ready = true; Update();
+        }
+
+        private void ChangeProduct()
+        {
+            if (!_ready || _product.SelectedIndex == _activeProduct) return;
+            try
+            {
+                var draft = Options();
+                double Keep(TextBox field, double fallback) => Double.TryParse(field.Text.Trim().Replace(',', '.'),
+                    NumberStyles.Float, CultureInfo.InvariantCulture, out double value) && !Double.IsNaN(value) && !Double.IsInfinity(value) ? value : fallback;
+                // Preserve the other size mode and disabled quilting fields too.
+                draft.DeviceWidth = Keep(_width, draft.DeviceWidth); draft.DeviceHeight = Keep(_height, draft.DeviceHeight);
+                draft.DiagonalInches = Keep(_diagonal, draft.DiagonalInches); draft.Bezel = Keep(_bezel, draft.Bezel);
+                draft.QuiltStep = Keep(_step, draft.QuiltStep); draft.QuiltInset = Keep(_quiltInset, draft.QuiltInset);
+                if (_activeProduct == 0) _laptopDraft = draft; else _phoneDraft = draft;
+            }
+            catch { /* Keep the last valid preset if an unfinished field cannot be parsed. */ }
+            _ready = false;
+            try
+            {
+                _activeProduct = _product.SelectedIndex;
+                var o = _activeProduct == 0 ? _laptopDraft : _phoneDraft;
+                void Set(TextBox field, double value) => field.Text = value.ToString("0.######", CultureInfo.CurrentCulture);
+                _mode.SelectedIndex = o.UseDiagonal ? 1 : 0;
+                Set(_width, o.DeviceWidth); Set(_height, o.DeviceHeight); Set(_thickness, o.DeviceThickness);
+                Set(_diagonal, o.DiagonalInches); Set(_bezel, o.Bezel);
+                _aspect.SelectedItem = PuffySleevePattern.N(o.AspectWidth) + ":" + PuffySleevePattern.N(o.AspectHeight);
+                Set(_ease, o.Ease); Set(_loft, o.Loft); Set(_foam, o.FoamThickness); Set(_foamInset, o.FoamInset);
+                Set(_lining, o.LiningThickness); Set(_depthEase, o.DepthEase); Set(_allowance, o.SeamAllowance);
+                Set(_radius, o.CornerRadius); Set(_zipDrop, o.ZipperDropPercent); Set(_zipWidth, o.ZipperTapeWidth);
+                Set(_zipTail, o.ZipperTail); Set(_fixingOffset, o.FixingOffset); Set(_step, o.QuiltStep); Set(_quiltInset, o.QuiltInset);
+                Set(_shrinkX, o.ShrinkX); Set(_shrinkY, o.ShrinkY); Set(_bleed, o.Bleed); Set(_trimMargin, o.TrimMargin);
+                Set(_commonWidth, o.CommonBlankWidth); Set(_commonHeight, o.CommonBlankHeight);
+                _quilting.SelectedIndex = (int)o.Quilting; _fourUp.IsChecked = o.FourUp;
+            }
+            finally { _ready = true; Update(); }
         }
 
         private PuffySleeveOptions Options(bool includeJigs = false)
         {
-            bool diagonal = _mode.SelectedIndex == 1;
+            bool diagonal = _activeProduct == 0 && _mode.SelectedIndex == 1;
             string[] ratio = ((string)_aspect.SelectedItem).Split(':');
             bool quilt = _quilting.SelectedIndex != 3;
             return new PuffySleeveOptions
             {
+                Product = _activeProduct == 0 ? SleeveProduct.Laptop : SleeveProduct.Phone,
+                FourUp = _fourUp.IsChecked == true,
                 UseDiagonal = diagonal,
                 DeviceWidth = diagonal ? 325 : Read(_width, "Ширина корпуса"),
-                DeviceHeight = diagonal ? 225 : Read(_height, "Глубина корпуса"),
+                DeviceHeight = diagonal ? 225 : Read(_height, "Вторая сторона корпуса"),
                 DiagonalInches = diagonal ? Read(_diagonal, "Диагональ") : 14,
                 Bezel = diagonal ? Read(_bezel, "Рамка экрана") : 8,
                 AspectWidth = Double.Parse(ratio[0], CultureInfo.InvariantCulture),
                 AspectHeight = Double.Parse(ratio[1], CultureInfo.InvariantCulture),
-                DeviceThickness = Read(_thickness, "Толщина ноутбука"), Ease = Read(_ease, "Свобода по краям"),
+                DeviceThickness = Read(_thickness, "Толщина устройства"), Ease = Read(_ease, "Свобода по краям"),
                 Loft = Read(_loft, "Стёганый пакет"), FoamThickness = Read(_foam, "Пена"),
                 LiningThickness = Read(_lining, "Микрофибра"), DepthEase = Read(_depthEase, "Свобода по толщине"),
                 FoamInset = Read(_foamInset, "Отступ пены"), SeamAllowance = Read(_allowance, "Припуск"),
@@ -185,7 +232,8 @@ namespace VanyaTools.Native
 
         private void Update()
         {
-            if (!_ready) return;
+            if (!_ready || _product.SelectedIndex != _activeProduct) return;
+            _mode.IsEnabled = _activeProduct == 0;
             _bodySize.Visibility = _mode.SelectedIndex == 0 ? Visibility.Visible : Visibility.Collapsed;
             _screenSize.Visibility = _mode.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
             _backPanel.Visibility = _same.IsChecked == true ? Visibility.Collapsed : Visibility.Visible;
@@ -199,6 +247,7 @@ namespace VanyaTools.Native
                     " мм · молния по шву: " + F(p.ZipperLength) + " мм\nМолния с лентами: " + F(p.ZipperTapeWidth) +
                     " мм · заготовка до стёжки: " +
                     Size(p.BlankWidth, p.BlankHeight) + " · пена: " + Size(p.FoamWidth, p.FoamHeight);
+                if (p.FourUp) _summary.Text += "\nОбщее полотно 2×2: " + Size(p.BatchWidth, p.BatchHeight) + " · 4 боковинки = 2 изделия.";
                 if (_mode.SelectedIndex == 1) _summary.Text = "Корпус ≈ " + Size(p.DeviceWidth, p.DeviceHeight) + "\n" + _summary.Text;
                 if (p.RingDepth < p.RequiredRingDepth)
                     _summary.Text += "\nПо толщине пакета ориентир ≈ " + F(p.RequiredRingDepth) +
@@ -239,7 +288,7 @@ namespace VanyaTools.Native
                 SleeveJigPlan form = SleeveJigPlan.Build(p, options, false);
                 SleeveJigPlan quilt = p.QuiltPaths.Count == 0 ? null : SleeveJigPlan.Build(p, options, true);
                 _jigSummary.Text = "Готовый паз: " + F(form.SlotWidth) + " мм. Форма: " + Size(form.Width, form.Height) +
-                    (quilt == null ? "" : "; стёжка: " + Size(quilt.Width, quilt.Height)) + ". По 2 листа. Фиксация формы — 4 прохода.";
+                    (quilt == null ? "" : "; стёжка: " + Size(quilt.Width, quilt.Height)) + ". По 2 листа. Фиксация — " + (4 * p.PanelCount) + " проходов.";
                 _jigShape.IsEnabled = _saveJigs.IsEnabled = !_busy;
                 _jigQuilt.IsEnabled = !_busy && quilt != null;
             }
@@ -295,12 +344,16 @@ namespace VanyaTools.Native
             var visual = new DrawingVisual();
             using (DrawingContext dc = visual.RenderOpen())
             {
-                for (int i = 0; i < 2; i++)
+                for (int i = 0; i < (p.FourUp ? 4 : 2); i++)
                 {
-                    dc.PushTransform(new TranslateTransform(i * (p.CutWidth + 20), 0));
+                    double x = p.FourUp ? i % 2 * p.BlankWidth / p.ScaleX + p.BlankMarginX : i * (p.CutWidth + 20);
+                    double y = p.FourUp ? i / 2 * p.BlankHeight / p.ScaleY + p.BlankMarginY : 0;
+                    dc.PushTransform(new TranslateTransform(x, y));
+                    if (p.FourUp) dc.DrawRectangle(null, new Pen(Brushes.LightSlateGray, .7),
+                        new Rect(-p.BlankMarginX, -p.BlankMarginY, p.BlankWidth / p.ScaleX, p.BlankHeight / p.ScaleY));
                     Geometry cut = Geometry.Parse(p.CutPath);
                     dc.DrawGeometry(new SolidColorBrush(Color.FromRgb(222, 231, 236)), new Pen(Brushes.SlateGray, 1), cut);
-                    BitmapSource artwork = i == 0 ? _frontBitmap : BackBitmap();
+                    BitmapSource artwork = i % 2 == 0 ? _frontBitmap : BackBitmap();
                     if (artwork != null)
                     {
                         dc.PushClip(cut);
@@ -310,10 +363,10 @@ namespace VanyaTools.Native
                             -p.BlankMarginY - p.Bleed / p.ScaleY, p.PrintWidth / p.ScaleX, p.PrintHeight / p.ScaleY));
                         dc.Pop();
                     }
-                    dc.PushClip(cut);
+                    if (!p.FourUp) dc.PushClip(cut);
                     foreach (string path in p.QuiltPaths)
                         dc.DrawGeometry(null, new Pen(Brushes.SteelBlue, 1.3), Geometry.Parse(path));
-                    dc.Pop();
+                    if (!p.FourUp) dc.Pop();
                     dc.DrawGeometry(null, new Pen(Brushes.SlateGray, 0.9) { DashStyle = DashStyles.Dash }, Geometry.Parse(p.FoamPath));
                     dc.DrawGeometry(null, new Pen(Brushes.DimGray, 0.8) { DashStyle = DashStyles.Dash }, Geometry.Parse(p.SeamPath));
                     dc.DrawGeometry(null, new Pen(Brushes.Chocolate, 3), Geometry.Parse(p.ZipperPath));
