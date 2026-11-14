@@ -48,6 +48,7 @@ namespace VanyaTools.Native
         private readonly Image _sourcePreview, _resultPreview;
         private readonly TextBlock _progress;
         private readonly ProgressBar _progressBar;
+        private readonly Button _restorationButton;
         private readonly Button _removeButton, _removeWhiteButton, _upscaleButton,
             _alphaButton, _highlightButton, _smoothButton, _stairButton, _pipetteButton, _underlayColorButton,
             _editButton, _cancelButton, _retryButton;
@@ -141,7 +142,9 @@ namespace VanyaTools.Native
             }
             var correctionTools = DockerLayout.ToolGroup("Коррекция");
             _correctionButton = DockerTheme.Primary(Button("Коррекция и обводка…", async (_, __) => await OpenCorrection()));
-            _correctionButton.ToolTip = "Открыть выделение один раз и подбирать прозрачность, сглаживание и обводку с живым предпросмотром. Работает без интернета.";
+            _restorationButton = Button("Восстановить принт…", async (_, __) => await OpenCorrection(true));
+            _restorationButton.ToolTip = "Мастер в окне коррекции: восстановление Nano Banana 2, обрезка, фон, прозрачность и белое. Каждый запрос ИИ требует подтверждения.";
+            _correctionButton.ToolTip = "Локальная коррекция, обводка и проверки с живым предпросмотром. Справа можно открыть мастер восстановления принта.";
             if (!styleOnly) panel.Children.Add(correctionTools);
             _alphaButton = Button("Убрать полупрозрачность", async (_, __) => await RemoveSemiTransparent());
             _alphaThreshold = new TextBox { Text = "130", Width = 50, MinHeight = 27, FontSize = 11,
@@ -240,7 +243,8 @@ namespace VanyaTools.Native
             {
                 UpdateEdgeUnits(false);
                 panel.Children.Add(CreateCorrectionResolutionRow());
-                panel.Children.Add(_correctionButton);
+                var correctionEntry = new System.Windows.Controls.Primitives.UniformGrid { Columns=2 };
+                correctionEntry.Children.Add(_correctionButton);correctionEntry.Children.Add(_restorationButton);panel.Children.Add(correctionEntry);
             }
 
             var localPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 5) };
@@ -1706,7 +1710,7 @@ namespace VanyaTools.Native
             if (!busy) ReleaseNativeRasterInput();
             _busy = busy;
             if (_rasterInsertionMode != null) _rasterInsertionMode.IsEnabled = !busy;
-            _correctionButton.IsEnabled = !busy;
+            _correctionButton.IsEnabled = _restorationButton.IsEnabled = !busy;
             if (_normalizeBeforeCorrection != null) _normalizeBeforeCorrection.IsEnabled = !busy;
             _removeButton.IsEnabled = _removeWhiteButton.IsEnabled = _upscaleButton.IsEnabled = _alphaButton.IsEnabled =
                 _highlightButton.IsEnabled = _smoothButton.IsEnabled = _stairButton.IsEnabled = _pipetteButton.IsEnabled = _underlayColorButton.IsEnabled =

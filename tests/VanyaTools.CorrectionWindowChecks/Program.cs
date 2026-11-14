@@ -16,9 +16,10 @@ using VanyaTools.Native;
 namespace VanyaTools.Native
 {
     internal static class Log { internal static void Info(string value) { } internal static void Error(string text, Exception error) { Console.Error.WriteLine(text + " " + error.Message); } }
+    internal static class OperationTiming { internal static string Display(string stage,TimeSpan elapsed,string key)=>stage;internal static void Record(string key,TimeSpan elapsed){} }
     internal static class DockerTheme
     {
-        internal const string WindowBackground="window", ErrorTextBrush="error", TextBrush="text", MutedTextBrush="muted", BorderBrush="border";
+        internal const string WindowBackground="window", SurfaceBackground="surface", ErrorTextBrush="error", TextBrush="text", MutedTextBrush="muted", BorderBrush="border";
         internal static void Apply(Window window) { } internal static void UseTheme(DependencyObject target, DependencyProperty property, object key) { }
         internal static Button Primary(Button button) => button;
     }
@@ -28,7 +29,7 @@ namespace VanyaTools.Native
     internal static class ScreenColorPicker { internal static Task<Color?> PickAsync() => Task.FromResult<Color?>(null); }
     internal static class ThinElementReference { internal static void Insert(bool uv, ThinAuditOptions options) => throw new Exception("Live Corel forbidden"); }
 }
-internal static class Program
+internal static partial class Program
 {
     private static int _checks, _active, _maximum, _calls, _canceled, _normalizations;
     private static void Check(bool value, string message) { _checks++; if (!value) throw new Exception(message); }
@@ -159,6 +160,7 @@ internal static class Program
         byte[] originalFile=File.ReadAllBytes(path); DtfCorrectionWindow window=null;
         try
         {
+            RestorationChecks(root);
             window=new DtfCorrectionWindow(path,new DtfCorrectionOptions(),new DtfOutlineSettings(),Process,true,(_,__,___)=>throw new Exception("COM callback forbidden"));
             Check(Field<CheckBox>(window,"_thinEnabled").IsChecked==true,"Quick entry did not enable audit in shared window");
             var load=(Task)Call(window,"LoadAsync"); Until(()=>load.IsCompleted,"Source load stalled"); load.GetAwaiter().GetResult();

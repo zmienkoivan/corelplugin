@@ -62,7 +62,7 @@ namespace VanyaTools.Native
         internal string OutputPath { get; private set; }
 
         internal BackgroundRemovalWindow(string sourcePath, BackgroundRemovalOptions initial = null,
-            Func<Color, Color[]> backgroundColors = null)
+            Func<Color, Color[]> backgroundColors = null, string applyCaption = "Применить в Corel")
         {
             _sourcePath = sourcePath ?? throw new ArgumentNullException(nameof(sourcePath));
             _backgroundColors = backgroundColors;
@@ -169,7 +169,7 @@ namespace VanyaTools.Native
             Grid.SetRow(footer, 1); Grid.SetColumnSpan(footer, 2); root.Children.Add(footer);
             _cancel = Button("Закрыть", (_, __) => { if (_applying) _applyCancellation?.Cancel(); else Close(); });
             _cancel.MinWidth = 85; DockPanel.SetDock(_cancel, Dock.Right); footer.Children.Add(_cancel);
-            _apply = DockerTheme.Primary(Button("Применить в Corel", async (_, __) => await ApplyAsync()));
+            _apply = DockerTheme.Primary(Button(applyCaption, async (_, __) => await ApplyAsync()));
             _apply.IsEnabled = false; _apply.Margin = new Thickness(0, 0, 6, 0);
             DockPanel.SetDock(_apply, Dock.Right); footer.Children.Add(_apply);
             _message = Text("", 11); _message.VerticalAlignment = VerticalAlignment.Center;

@@ -19,10 +19,10 @@ namespace VanyaTools.Native
         internal Tuple<double, double> OffsetMm = Tuple.Create(0.0, 0.0);
     }
 
-    /// <summary>All processing is local. Only the caller captures and imports Corel artwork.</summary>
+    /// <summary>Local filters stay inside this window; optional AI requires explicit preview consent. Only the caller captures/imports Corel artwork.</summary>
     internal sealed partial class DtfCorrectionWindow : Window
     {
-        private readonly string _sourcePath;
+        private string _sourcePath;
         private readonly bool _normalizeOnLoad;
         private readonly RasterMaskEditor _maskEditor;
         private readonly string _workspace = Path.Combine(Path.GetTempPath(), "Vanya-Correction-" + Guid.NewGuid().ToString("N"));
@@ -53,7 +53,7 @@ namespace VanyaTools.Native
             DtfOutlineSettings presets,
             Func<string, string, DtfCorrectionOptions, CancellationToken, DtfCorrectionResult> processor,
             bool startThinAudit = false, Action<byte[], int, int> insertThinMask = null,
-            bool normalizeOnLoad = false)
+            bool normalizeOnLoad = false, PrintRestorationHost restoration = null, bool startRestoration = false)
         {
             _sourcePath = sourcePath ?? throw new ArgumentNullException(nameof(sourcePath));
             _normalizeOnLoad = normalizeOnLoad;
@@ -72,6 +72,7 @@ namespace VanyaTools.Native
             root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(268) });
             root.ColumnDefinitions.Add(new ColumnDefinition());
             Content = root;
+            DockerTheme.UseTheme(root, Panel.BackgroundProperty, DockerTheme.WindowBackground);
 
             var controls = new StackPanel { Margin = new Thickness(0, 0, 12, 0) }; _settingsPanel = controls;
             root.Children.Add(new ScrollViewer { Content = controls, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
@@ -213,7 +214,7 @@ namespace VanyaTools.Native
                 double x = 25.4 / _originalPixels.DpiX, y = 25.4 / _originalPixels.DpiY;
                 return new Rect(_previewScene.X * x, _previewScene.Y * y, _previewScene.Width * x, _previewScene.Height * y);
             }, () => _loaded && !_closed && !_applying && !_normalizing && !_insertingThinMask,
-                QueuePreview, "Просмотр", "Нокаут", "Халфтон", "Белое", "Полупрозрачность");
+                RestorationMaskChanged, "Просмотр", "Нокаут", "Халфтон", "Белое", "Полупрозрачность");
             ConfigurePreviewNavigation(_beforeScroll, _before);
             ConfigurePreviewNavigation(_afterScroll, _after);
             Grid.SetRow(pair, 1); previews.Children.Add(pair);
@@ -222,12 +223,12 @@ namespace VanyaTools.Native
             footer.ColumnDefinitions.Add(new ColumnDefinition());
             footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            Grid.SetRow(footer, 1); Grid.SetColumnSpan(footer, 2); root.Children.Add(footer);
+            Grid.SetRow(footer, 1); Grid.SetColumnSpan(footer, 3); root.Children.Add(footer);
             _message = Text("Загружаю выделение…", 11); footer.Children.Add(_message);
             _apply = DockerTheme.Primary(Button("Применить в Corel", async (_, __) => await ApplyAsync()));
             _apply.IsEnabled = false; _apply.MinWidth = 142; _apply.Margin = new Thickness(10, 0, 5, 0);
             Grid.SetColumn(_apply, 1); footer.Children.Add(_apply);
-            _cancel = Button("Закрыть", (_, __) => { if (_applying) _applyCancellation?.Cancel(); else Close(); });
+            _cancel = Button("Закрыть", (_, __) => CancelCorrectionOrClose());
             _cancel.MinWidth = 86; Grid.SetColumn(_cancel, 2); footer.Children.Add(_cancel);
 
             _threshold.TextChanged += (_, __) =>
@@ -258,8 +259,9 @@ namespace VanyaTools.Native
             {
                 _closed = true; _delay.Stop(); CancelDetail(true); _previewCancellation?.Cancel(); _applyCancellation?.Cancel();
                 _qualityCancellation?.Cancel(); _sourceCancellation?.Cancel(); _thinMaskCancellation?.Cancel(); Cleanup();
-                _normalizationCancellation?.Cancel();
+                _normalizationCancellation?.Cancel();_restorationCancellation?.Cancel();_restorationClock.Stop();
             };
+            CreateRestorationPanel(root, previewToolbar, restoration, startRestoration);
             SetControlsEnabled(false);
         }
 
@@ -355,6 +357,7 @@ namespace VanyaTools.Native
                 KnockoutMask = _maskEditor.Snapshot(0), HalftoneMask = _maskEditor.Snapshot(1),
                 WhiteMask = _maskEditor.Snapshot(2), AlphaMask = _maskEditor.Snapshot(3) };
             if (!ReadPrintPreparation(options)) return false;
+            ValidateRestorationAudit(options);
             long pixels = (long)_originalPixels.Width * _originalPixels.Height;
             options.StairsScale = pixels <= 2000000 ? 4 : pixels <= 3500000 ? 3 : pixels <= 8000000 ? 2 : 1;
             try
@@ -521,6 +524,7 @@ namespace VanyaTools.Native
                 await OnUiAsync(() =>
                 {
                     if (_closed) return;
+                    result.OffsetMm=Tuple.Create(result.OffsetMm.Item1+_restorationOffsetX,result.OffsetMm.Item2+_restorationOffsetY);
                     result.OutputPath = output; Result = result; Options = options; keepOutput = true; DialogResult = true;
                 });
             }
@@ -651,7 +655,7 @@ namespace VanyaTools.Native
         { var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image)); using (var stream = File.Create(path)) encoder.Save(stream); }
         private void Cleanup()
         {
-            if (_loadingSource || _rendering || _detailRendering || _applying || _insertingThinMask || _normalizing || _qualityActive > 0) return;
+            if (_loadingSource || _rendering || _detailRendering || _applying || _insertingThinMask || _normalizing || _restorationBusy || _qualityActive > 0) return;
             try { if (Directory.Exists(_workspace)) Directory.Delete(_workspace, true); } catch { }
         }
         private static void DeleteFile(string path)

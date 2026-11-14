@@ -87,7 +87,7 @@ namespace VanyaTools.Native
             public double OffsetY { get; set; }
         }
 
-        private async Task OpenCorrection()
+        private async Task OpenCorrection(bool restoration = false)
         {
             if (_busy) return;
             if (!String.IsNullOrEmpty(_readyOutput) && File.Exists(_readyOutput))
@@ -135,10 +135,10 @@ namespace VanyaTools.Native
                     RadiusMm = radius * factor, ExpansionMm = expansion * factor, Color = color };
                 var dialog = new DtfCorrectionWindow(source, initial, _outlineSettings, ProcessCorrection, false,
                     (mask, width, height) => ThinElementMask.Insert(thinSource, mask, width, height),
-                    normalizeOnLoad: normalizeOnLoad);
+                    normalizeOnLoad: normalizeOnLoad, restoration: PrintRestorationService.CreateHost(_token), startRestoration: restoration);
                 var owner = PresentationSource.FromVisual(this) as HwndSource;
                 if (owner != null) new WindowInteropHelper(dialog).Owner = owner.Handle;
-                _timer.Stop(); _elapsed.Stop(); _progress.Text = "Подбор коррекции в отдельном окне · без интернета.";
+                _timer.Stop(); _elapsed.Stop(); _progress.Text = "Подбор коррекции в отдельном окне. ИИ запускается только по подтверждению.";
                 if (dialog.ShowDialog() != true || dialog.Result == null)
                 { Report("Коррекция отменена. Исходник сохранён.", false); return; }
                 var result = dialog.Result;

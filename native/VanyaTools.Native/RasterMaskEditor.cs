@@ -102,6 +102,20 @@ namespace VanyaTools.Native
             return layer.Count == 0 ? null : new RasterProtectionMask(layer.ToArray());
         }
 
+        internal void ShowPreview() { _tabs.SelectedIndex=0;Refresh(); }
+
+        internal void MoveOrigin(double leftMm,double topMm)
+        {
+            EndStroke(false);
+            foreach(var layer in _layers)for(int i=0;i<layer.Count;i++)
+            {
+                var shape=layer[i];var points=new RasterMaskPoint[shape.Points.Length];
+                for(int j=0;j<points.Length;j++)points[j]=new RasterMaskPoint(shape.Points[j].X-leftMm,shape.Points[j].Y-topMm);
+                layer[i]=new RasterMaskShape(shape.Tool,points,shape.Radius);
+            }
+            Refresh();
+        }
+
         internal void Refresh()
         {
             _tools.Visibility = Active ? Visibility.Visible : Visibility.Collapsed;

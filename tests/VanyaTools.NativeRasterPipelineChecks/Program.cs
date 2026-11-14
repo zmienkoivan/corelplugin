@@ -77,6 +77,17 @@ internal static class Program
         EqualBuffer(source, Read(copy)); Check(pass.OutputPath == copy && pass.OffsetMm.Item1 == 0 && pass.OffsetMm.Item2 == 0, "No-op processing preserves placement");
         CheckWhitePreview(copy, 0);
 
+        string cropped=PathFor("restoration-crop-"+mode+".png");
+        var region=new System.Windows.Int32Rect(1,0,Math.Max(1,source.Width-2),source.Height);
+        Check(PrintRestorationNativeCrop.TryCrop(input,cropped,region,CancellationToken.None),"Native wizard crop was skipped");
+        var crop=Read(cropped);Check(crop.Mode==source.Mode && crop.DpiX==source.DpiX && crop.DpiY==source.DpiY,"Wizard crop changed native model or DPI");
+        for(int y=0;y<crop.Height;y++)for(int x=0;x<crop.Width;x++)
+        {
+            int old=y*source.Width+x+1,at=y*crop.Width+x;
+            Check(crop.Alpha[at]==source.Alpha[old],"Wizard crop changed alpha samples");
+            for(int channel=0;channel<source.Channels;channel++)Check(crop.Colors[at*source.Channels+channel]==source.Colors[old*source.Channels+channel],"Wizard crop changed native color samples");
+        }
+
         string whitened = PathFor("whitened-" + mode + ".png");
         NativeRasterCorrection.Process(input, whitened, new DtfCorrectionOptions { WhitenNearWhite = true }, CancellationToken.None);
         var white = Read(whitened);
