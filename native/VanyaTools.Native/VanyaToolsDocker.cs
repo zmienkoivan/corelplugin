@@ -256,6 +256,7 @@ namespace VanyaTools.Native
                     new TabItem { Header = "Рулетка", Content = new CurveMeasureTab(SetStatus) },
                     new TabItem { Header = "Паттерн", Content = new PatternFillTab(SetStatus, () => aiTools.GetToken()) },
                     new TabItem { Header = "GAVRILABAGS", Content = new FrameBagTab(SetStatus) },
+                    new TabItem { Header = "Дутый чехол", Content = new PuffySleeveTab(SetStatus) },
                     new TabItem { Header = "3D-гибка", Content = new LaserBendTab(SetStatus) },
                     new TabItem { Header = "Шум ДТФ", Content = new DtfNoiseTab(ImportDtfResult, SetStatus) },
                     new TabItem { Header = "Шрифт", Content = new FontSearchTab(aiTools.FontToolsView, SetStatus) },
