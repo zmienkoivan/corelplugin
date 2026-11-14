@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -27,12 +27,21 @@ namespace VanyaTools.Native
             (String.IsNullOrWhiteSpace(ExactText) ? "Copy only the text actually visible in the reference. " :
                 "User-supplied exact transcription (keep the reference glyphs, symbols and line breaks, do not add this as new text): "+ExactText.Trim()+". ") +
             (String.IsNullOrWhiteSpace(Notes) ? "" : "Additional user clarification, subordinate to faithful preservation: "+Notes.Trim());
-        internal Dictionary<string,object> Input()
+        internal Dictionary<string,object> Input(string sourcePath=null)
         {
             if(Resolution!="2K" && Resolution!="4K")throw new ArgumentException("Выберите 2K или 4K.");
-            if(!File.Exists(SourcePath))throw new FileNotFoundException("Не найден исходник восстановления.",SourcePath);
-            return new Dictionary<string,object>{{"prompt",Prompt},{"image_input",new[]{"replicate-file:"+SourcePath}},
+            sourcePath=sourcePath??SourcePath;
+            if(!File.Exists(sourcePath))throw new FileNotFoundException("Не найден исходник восстановления.",sourcePath);
+            return new Dictionary<string,object>{{"prompt",Prompt},{"image_input",new[]{"replicate-file:"+sourcePath}},
                 {"resolution",Resolution},{"aspect_ratio","match_input_image"},{"output_format","png"},{"google_search",false},{"image_search",false}};
+        }
+        // The worker consumes local upload files after success. The confirmed
+        // reference must remain available for comparison and free re-opening.
+        internal Dictionary<string,object> UploadInput(out string uploadPath)
+        {
+            uploadPath=Path.Combine(Path.GetDirectoryName(SourcePath),"upload-"+Guid.NewGuid().ToString("N")+".png");
+            File.Copy(SourcePath,uploadPath);
+            try{return Input(uploadPath);}catch{File.Delete(uploadPath);throw;}
         }
         internal static string Hex(Color c)=>"#"+c.R.ToString("X2")+c.G.ToString("X2")+c.B.ToString("X2");
     }

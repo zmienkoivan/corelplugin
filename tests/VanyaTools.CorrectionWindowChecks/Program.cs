@@ -16,7 +16,7 @@ using VanyaTools.Native;
 namespace VanyaTools.Native
 {
     internal static class Log { internal static void Info(string value) { } internal static void Error(string text, Exception error) { Console.Error.WriteLine(text + " " + error.Message); } }
-    internal static class OperationTiming { internal static string Display(string stage,TimeSpan elapsed,string key)=>stage;internal static void Record(string key,TimeSpan elapsed){} }
+    internal static class OperationTiming { internal static int Records;internal static string Display(string stage,TimeSpan elapsed,string key)=>stage+" · TIME="+elapsed.Ticks+" · AVG="+key;internal static void Record(string key,TimeSpan elapsed){Records++;} }
     internal static class DockerTheme
     {
         internal const string WindowBackground="window", SurfaceBackground="surface", ErrorTextBrush="error", TextBrush="text", MutedTextBrush="muted", BorderBrush="border";

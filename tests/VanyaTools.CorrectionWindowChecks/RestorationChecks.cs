@@ -38,15 +38,21 @@ internal static partial class Program
         var input=request.Input();Check((string)input["resolution"]=="4K" && (string)input["output_format"]=="png","Restoration uses wrong output format or quality");
         Check(request.Prompt.Contains("distress") && request.Prompt.Contains("symbols replacing letters") && request.Prompt.Contains("Do not invent") && !request.Prompt.Contains("BREATHE"),"Restoration prompt must preserve intentional design without hardcoded example text");
         Check(!((bool)input["google_search"]) && !((bool)input["image_search"]),"Restoration should not source replacement art from the web");
+        var uploadInput=request.UploadInput(out string uploadPath);
+        Check(((string[])uploadInput["image_input"])[0]=="replicate-file:"+uploadPath && uploadPath!=path,"Worker upload reused the persistent comparison reference");
+        Check(File.ReadAllBytes(uploadPath).SequenceEqual(original),"Uploaded image differs from the confirmed reference");
+        File.Delete(uploadPath); // Real worker consumes local uploads after success.
+        Check(File.Exists(path) && File.ReadAllBytes(path).SequenceEqual(original),"Consuming upload deleted the confirmed reference");
         bool confirm=false,review=false,cancelRun=false;int sent=0,consents=0,reviews=0;PrintRestorationRequest last=null;
         var host=new PrintRestorationHost {
-            Validate=()=>{},Confirm=(_,r)=>{consents++;last=r;return confirm;},Review=(_,source,output)=>{reviews++;return review;},
+            Validate=()=>{},Confirm=(_,r)=>{consents++;last=r;return confirm;},Review=(_,source,output)=>{reviews++;Check(File.Exists(source) && File.Exists(output),"Ready output cannot be reviewed because its reference disappeared");return review;},
             Generate=async(r,progress,cancel)=> {
                 sent++;last=r;
                 await Task.Delay(cancelRun?5000:20,cancel);
                 var pixels=Data(PrintRestorationImages.Load(r.SourcePath));var color=r.KeyColor??Colors.Black;
                 for(int p=0;p<pixels.Length;p+=4)if(pixels[p]==0 && pixels[p+1]==0 && pixels[p+2]==0){pixels[p]=color.B;pixels[p+1]=color.G;pixels[p+2]=color.R;}
                 using(var file=File.Create(r.OutputPath))FastRasterPng.Write(file,pixels,width,height,100,100);
+                File.Delete(r.SourcePath); // Simulate a ready 1.2.42 session whose reference was consumed.
                 return r.OutputPath;
             },
             RemoveBackground=(_,source,color)=> {
@@ -66,9 +72,15 @@ internal static partial class Program
             Check(Field<Border>(window,"_restorationPane").Visibility==Visibility.Collapsed,"Master could not be hidden");toggle.IsChecked=true;
             Check(Field<Border>(window,"_restorationPane").Visibility==Visibility.Visible,"Hidden master could not be reopened");
             RunRestorationStep(window,"RestoreAiAsync");Check(sent==0 && consents==1,"Declined consent still submitted AI request");
+            Check(Field<TextBlock>(window,"_restoreTimingStatus").Visibility==Visibility.Collapsed,"Declined consent started an AI timer");
             confirm=true;RunRestorationStep(window,"RestoreAiAsync");Check(sent==1 && consents==2 && reviews==1,"AI request must run once and require review");
             Check(!Field<bool>(window,"_restored") && Field<string>(window,"_sourcePath")==path,"Unaccepted AI must not replace working source");
+            var timing=Field<TextBlock>(window,"_restoreTimingStatus");
+            Check(timing.Visibility==Visibility.Visible && timing.Text.Contains("ИИ завершён") && timing.Text.Contains("AVG=restore:google/nano-banana-2:4K"),"AI status did not retain elapsed time and the matching model/quality average");
+            Check(File.Exists(Field<string>(window,"_restoreReference")),"Missing comparison reference was not recovered locally");
+            string finishedTiming=timing.Text;int finishedRecords=OperationTiming.Records;
             review=true;RunRestorationStep(window,"ReviewRestorationAsync");Check(sent==1 && Field<bool>(window,"_restored"),"Reviewing ready AI should be free and accept source");
+            Check(timing.Text==finishedTiming && OperationTiming.Records==finishedRecords,"Local acceptance replaced AI duration or added an AI timing sample");
             var editor=Field<RasterMaskEditor>(window,"_maskEditor");var layers=Field<System.Collections.Generic.List<RasterMaskShape>[]>(editor,"_layers");
             layers[0].Add(new RasterMaskShape(RasterMaskTool.Rectangle,new[]{new RasterMaskPoint(10,7),new RasterMaskPoint(11,8)},0));
             RunRestorationStep(window,"TrimRestorationAsync");
@@ -91,9 +103,11 @@ internal static partial class Program
             Field<CheckBox>(window,"_whiten").IsChecked=false;
             Until(()=>!Field<bool>(window,"_whiteChecked"),"Changing correction retained stale audit completion");
             cancelRun=true;int previousReviews=reviews;var task=(Task)Call(window,"RestoreAiAsync");Until(()=>Field<bool>(window,"_restorationBusy") && sent==2,"AI request never reached the cancellable worker");
+            Call(window,"UpdateRestorationProgress");Check(Field<ProgressBar>(window,"_restoreProgress").Visibility==Visibility.Visible && timing.Text.Contains("AVG=restore:google/nano-banana-2:4K"),"Live request lost the visible status bar");
             Call(window,"CancelCorrectionOrClose");Until(()=>task.IsCompleted,"AI cancellation stalled");task.GetAwaiter().GetResult();
             Check(!Field<bool>(window,"_closed") && !Field<bool>(window,"_restorationBusy") && Field<Button>(window,"_cancel").IsEnabled,"Cancel closed window or left controls blocked");
             Check(reviews==previousReviews,"Canceled new AI request unexpectedly reviewed an older result");
+            Check(timing.Text.Contains("ИИ отменён") && OperationTiming.Records==finishedRecords && Field<ProgressBar>(window,"_restoreProgress").Visibility==Visibility.Collapsed,"Canceled request was averaged as success or left status running");
             RunRestorationStep(window,"ResetRestorationAsync");Check(Math.Abs(Field<double>(window,"_restorationOffsetX"))<1e-8 && Field<string>(window,"_sourcePath")==path,"Reset did not restore original coordinates and source");
             Check(Math.Abs(layers[0][0].Points[0].X-10)<1e-8,"Reset did not restore mask coordinates");
             Check(File.ReadAllBytes(path).SequenceEqual(original),"Wizard modified captured source file");

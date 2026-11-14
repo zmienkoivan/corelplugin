@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -29,13 +29,14 @@ namespace VanyaTools.Native
         }
         private static string Generate(PrintRestorationRequest request,string token,Action<string> progress,CancellationToken cancel)
         {
-            var input=request.Input();string raw=Path.Combine(Path.GetDirectoryName(request.OutputPath),"model-output.png");
+            var input=request.UploadInput(out string uploadPath);string raw=Path.Combine(Path.GetDirectoryName(request.OutputPath),"model-output.png");
             try{ReplicateWorkerClient.Run(PrintRestorationRequest.Model,token,input,raw,progress,cancel);}
             catch
             {
                 if(File.Exists(raw) && new FileInfo(raw).Length>0)try{Finish();}catch(Exception error){Log.Error("Could not retain interrupted restoration output.",error);}
                 throw;
             }
+            finally {try{File.Delete(uploadPath);}catch(Exception error){Log.Error("Could not clean disposable restoration upload.",error);}}
             return Finish();
             string Finish()
             {

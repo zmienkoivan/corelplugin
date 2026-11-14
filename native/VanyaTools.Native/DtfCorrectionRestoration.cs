@@ -28,7 +28,9 @@ namespace VanyaTools.Native
         private ComboBox _restoreSize,_restoreBackground;
         private TextBox _restoreText,_restoreNotesInput;
         private Button _restoreReview,_restoreLast;
-        private TextBlock _restoreStatus;
+        private TextBlock _restoreStatus,_restoreTimingStatus;
+        private ProgressBar _restoreProgress;
+        private Button _restoreReset;
         private bool _restorationBusy,_restored,_restoreCropped,_restoreBackgroundDone;
         private bool _alphaChecked,_whiteChecked;
         private long _maskRevision;
@@ -48,8 +50,11 @@ namespace VanyaTools.Native
             var toggle=_restoreToggle=new ToggleButton{Content="Мастер восстановления",IsChecked=show,MinHeight=27,FontSize=11,Margin=new Thickness(0,5,0,0),HorizontalAlignment=HorizontalAlignment.Right};
             toolbar.Children.Add(toggle);
             _restorationFields=new StackPanel();
+            var paneContent=new DockPanel();var statusBar=new StackPanel{Margin=new Thickness(0,7,0,0)};
+            DockPanel.SetDock(statusBar,Dock.Bottom);paneContent.Children.Add(statusBar);
+            paneContent.Children.Add(new ScrollViewer{Content=_restorationFields,VerticalScrollBarVisibility=ScrollBarVisibility.Auto});
             _restorationPane=new Border{Width=238,Padding=new Thickness(10),Margin=new Thickness(10,0,0,0),CornerRadius=new CornerRadius(5),BorderThickness=new Thickness(1),
-                Child=new ScrollViewer{Content=_restorationFields,VerticalScrollBarVisibility=ScrollBarVisibility.Auto},Visibility=show?Visibility.Visible:Visibility.Collapsed};
+                Child=paneContent,Visibility=show?Visibility.Visible:Visibility.Collapsed};
             DockerTheme.UseTheme(_restorationPane,Border.BackgroundProperty,DockerTheme.SurfaceBackground);
             DockerTheme.UseTheme(_restorationPane,Border.BorderBrushProperty,DockerTheme.BorderBrush);
             Grid.SetColumn(_restorationPane,2);root.Children.Add(_restorationPane);
@@ -80,10 +85,21 @@ namespace VanyaTools.Native
             var fixAlpha=Button("Убрать полупрозрачность",(_,__)=>{_remove.IsChecked=true;_remove.BringIntoView();});alpha.Children.Add(fixAlpha);
             var white=RestorationStep(4,"5 · Белое","Проверка почти белых пикселей","Проверить",()=>AuditRestorationAsync(true));
             white.Children.Add(Button("Подбелить",(_,__)=>{_whiten.IsChecked=true;_whiten.BringIntoView();}));
-            _restoreStatus=Text("Начните с восстановления или используйте локальные шаги.",11);_restorationFields.Children.Add(_restoreStatus);
-            _restorationFields.Children.Add(Button("Вернуться к исходнику",async(_,__)=>await ResetRestorationAsync()));
-            _restorationClock.Tick+=(_,__)=>_restoreStatus.Text=OperationTiming.Display(_restorationStage,_restorationElapsed.Elapsed,_restorationTiming);
+            _restoreProgress=new ProgressBar{IsIndeterminate=true,Height=3,Margin=new Thickness(0,0,0,5),Visibility=Visibility.Collapsed};statusBar.Children.Add(_restoreProgress);
+            _restoreTimingStatus=Text("",11);_restoreTimingStatus.Visibility=Visibility.Collapsed;statusBar.Children.Add(_restoreTimingStatus);
+            _restoreStatus=Text("Начните с восстановления или используйте локальные шаги.",11);statusBar.Children.Add(_restoreStatus);
+            _restoreReset=Button("Вернуться к исходнику",async(_,__)=>await ResetRestorationAsync());statusBar.Children.Add(_restoreReset);
+            _restorationClock.Tick+=(_,__)=>UpdateRestorationProgress();
             UpdateRestorationState();
+        }
+        private void UpdateRestorationProgress()
+        {
+            if(!String.IsNullOrEmpty(_restorationTiming))
+            {
+                _restoreTimingStatus.Text=OperationTiming.Display(_restorationStage,_restorationElapsed.Elapsed,_restorationTiming);
+                _restoreTimingStatus.Visibility=Visibility.Visible;
+            }
+            else if(_restorationBusy)_restoreStatus.Text=OperationTiming.Display(_restorationStage,_restorationElapsed.Elapsed,null);
         }
         private StackPanel RestorationStep(int index,string title,string note,string action,Func<Task> run)
         {
@@ -99,17 +115,18 @@ namespace VanyaTools.Native
             _restorationBusy=true;_normalizing=true;_delay.Stop();_revision++;CancelDetail(true);
             _previewCancellation?.Cancel();_qualityCancellation?.Cancel();_qualityRevision++;_qualityChanging=true;_apply.IsEnabled=false;SetControlsEnabled(false);
             _restorationCancellation=new CancellationTokenSource();_restorationStage=stage;_restorationTiming=timing;_restorationElapsed.Restart();_restorationClock.Start();
-            _cancel.Content="Отменить";_restoreStatus.Text=stage;_restorationFields.IsEnabled=false;
+            _cancel.Content="Отменить";_restoreStatus.Text=timing==null?stage:"Nano Banana 2 · "+(_restoreSize.SelectedIndex==0?"4K":"2K");
+            _restorationFields.IsEnabled=false;_restoreReset.IsEnabled=false;_restoreProgress.Visibility=Visibility.Visible;UpdateRestorationProgress();
             foreach(var task in new[]{_previewTask,_detailTask,_qualityTask})if(task!=null)try{await task;}catch{}
             await Dispatcher.Yield(DispatcherPriority.Background);
             _restorationCancellation.Token.ThrowIfCancellationRequested();
         }
         private void EndRestoration()
         {
-            _restorationClock.Stop();_restorationElapsed.Stop();_restorationCancellation?.Dispose();_restorationCancellation=null;
+            _restorationClock.Stop();_restorationElapsed.Stop();if(_restorationTiming!=null)UpdateRestorationProgress();_restorationCancellation?.Dispose();_restorationCancellation=null;
             _restorationBusy=false;_normalizing=false;_qualityChanging=false;
             if(_closed){Cleanup();return;}
-            _restorationFields.IsEnabled=true;_cancel.IsEnabled=true;_cancel.Content="Закрыть";SetControlsEnabled(true);UpdateResolutionInfo();UpdateRestorationState();QueuePreview();
+            _restoreReset.IsEnabled=true;_restoreProgress.Visibility=Visibility.Collapsed;_restorationFields.IsEnabled=true;_cancel.IsEnabled=true;_cancel.Content="Закрыть";SetControlsEnabled(true);UpdateResolutionInfo();UpdateRestorationState();QueuePreview();
         }
         private string RestorationPath(string name)
         {
@@ -131,18 +148,21 @@ namespace VanyaTools.Native
                 request.OutputPath=Path.Combine(Path.GetDirectoryName(request.SourcePath),"restored.png");
                 if(_restorationHost.Confirm?.Invoke(this,request)!=true)return;
                 await BeginRestorationAsync("Восстанавливаю рисунок…","restore:google/nano-banana-2:"+request.Resolution);
-                var token=_restorationCancellation.Token;
+                var runCancellation=_restorationCancellation;var token=runCancellation.Token;
                 var result=await _restorationHost.Generate(request,stage=>Dispatcher.BeginInvoke(new Action(()=> {
-                    if(_closed)return;_restorationStage=stage=="sending"?"Отправляю исходник…":stage=="cancelling"?"Отменяю запрос…":"Восстанавливаю рисунок…";
+                    if(_closed || !_restorationBusy || _restorationCancellation!=runCancellation)return;
+                    _restorationStage=stage=="sending"?"Отправляю исходник…":stage=="cancelling"?"Отменяю запрос…":
+                        stage=="downloading"?"Загружаю результат…":stage!=null && stage.StartsWith("retrying",StringComparison.Ordinal)?"Восстанавливаю связь…":"Восстанавливаю рисунок…";
+                    UpdateRestorationProgress();
                 })),token);
                 OperationTiming.Record(_restorationTiming,_restorationElapsed.Elapsed);
                 if(_closed)return;
                 _restoreReady=result;_restoreReference=request.SourcePath;_restoreKey=request.KeyColor;
                 _restoreReadyOriginX=_restorationOffsetX;_restoreReadyOriginY=_restorationOffsetY;generated=true;
-                _restoreStatus.Text="Результат сохранён. Сверьте рисунок перед продолжением.";
+                _restorationStage="ИИ завершён";_restoreStatus.Text="Результат сохранён. Сверьте рисунок перед продолжением.";
             }
-            catch(OperationCanceledException){if(!_closed)_restoreStatus.Text="Запрос отменён. Исходник сохранён; готовый файл можно открыть через «Последний результат ИИ».";}
-            catch(Exception error){if(!_closed){_restoreStatus.Text=error.GetBaseException().Message;ShowMessage(_restoreStatus.Text,true);}}
+            catch(OperationCanceledException){_restorationStage="ИИ отменён";if(!_closed)_restoreStatus.Text="Запрос отменён. Исходник сохранён; готовый файл можно открыть через «Последний результат ИИ».";}
+            catch(Exception error){_restorationStage="Ошибка ИИ";if(!_closed){_restoreStatus.Text=error.GetBaseException().Message;ShowMessage(_restoreStatus.Text,true);}}
             finally{if(_restorationBusy)EndRestoration();}
             if(generated && !_closed && _restoreReady!=null)await ReviewRestorationAsync();
         }
@@ -151,7 +171,9 @@ namespace VanyaTools.Native
             if(!RestorationAvailable || _restoreReady==null || _restorationHost?.Review==null)return;
             try
             {
-                if(!_restorationHost.Review(this,_restoreReference??_sourcePath,_restoreReady))return;
+                if(!File.Exists(_restoreReady))throw new FileNotFoundException("Не найден сохранённый результат ИИ.",_restoreReady);
+                string reference=RestorationReference();
+                if(!_restorationHost.Review(this,reference,_restoreReady))return;
                 await BeginRestorationAsync("Загружаю принятый рисунок…");
                 await AdoptRestorationSourceAsync(_restoreReady,_restorationOffsetX-_restoreReadyOriginX,_restorationOffsetY-_restoreReadyOriginY,_restorationCancellation.Token);
                 _restored=true;_restoreCropped=false;_restoreBackgroundDone=false;_restoreKnockoutPending=false;
@@ -160,6 +182,16 @@ namespace VanyaTools.Native
             catch(OperationCanceledException){}
             catch(Exception error){if(!_closed)ShowMessage(error.GetBaseException().Message,true);}
             finally{if(_restorationBusy)EndRestoration();}
+        }
+        private string RestorationReference()
+        {
+            if(!String.IsNullOrEmpty(_restoreReference) && File.Exists(_restoreReference))return _restoreReference;
+            // Recover sessions created by 1.2.42: its worker consumed reference.png.
+            // Rebuild comparison locally; never issue another paid request.
+            string path=RestorationPath("reference-recovered"),source=_workingSourcePath??_sourcePath;
+            if(String.Equals(source,_restoreReady,StringComparison.OrdinalIgnoreCase))source=_captureSourcePath;
+            if(File.Exists(source))File.Copy(source,path);else PrintRestorationImages.Save(_originalPixels.Bitmap(),path);
+            return _restoreReference=path;
         }
         private async Task LoadLastRestorationAsync()
         {
