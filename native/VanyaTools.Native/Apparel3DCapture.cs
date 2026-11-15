@@ -108,8 +108,10 @@ namespace VanyaTools.Native
                     stream.Position = 0;
                     image = BitmapFrame.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad); image.Freeze();
                 }
-                return new ApparelOrderSnapshot { Front = View(candidates[0], image, bounds, "Перед"),
+                var snapshot = new ApparelOrderSnapshot { Front = View(candidates[0], image, bounds, "Перед"),
                     Back = View(candidates[1], image, bounds, "Спинка"), SourceName = Convert.ToString(doc.Name) + " · " + Convert.ToString(page.Name) };
+                Apparel3DModel.Validate(snapshot.Front); Apparel3DModel.Validate(snapshot.Back);
+                return snapshot;
             }
             catch (Exception error)
             {

@@ -18,27 +18,37 @@ namespace VanyaTools.Native
         private Point? _last;
         private bool _pan;
         public Color FabricColor = Color.FromRgb(238, 240, 241);
+        private ApparelViewMap _textureFront, _textureBack;
+        private BitmapSource[] _textures;
+        private Color _textureColor;
+        private readonly ApparelViewMap _demoFront = ApparelViewMap.Demo(), _demoBack = ApparelViewMap.Demo(true);
         public ApparelSurface[] Surfaces { get; private set; }
         public Apparel3DScene()
         {
-            Background = Brushes.White; ClipToBounds = true; Child = _viewport; MinHeight = 220;
+            Background = new SolidColorBrush(Color.FromRgb(246, 247, 249)); ClipToBounds = true; Child = _viewport; MinHeight = 220;
             _viewport.Camera = _camera; _viewport.Children.Add(new ModelVisual3D { Content = _models });
             SizeChanged += (_, __) => Camera();
         }
         public void Set(ApparelOrderSnapshot snapshot, double folds, bool fit = false)
         {
-            var front = snapshot?.Front ?? ApparelViewMap.Demo();
-            var back = snapshot?.Back ?? ApparelViewMap.Demo(true);
+            var front = snapshot?.Front ?? _demoFront;
+            var back = snapshot?.Back ?? _demoBack;
             Surfaces = Apparel3DModel.Build(front, back, folds);
+            if (_textures == null || !ReferenceEquals(front, _textureFront) || !ReferenceEquals(back, _textureBack) || _textureColor != FabricColor)
+            {
+                _textures = Apparel3DTexture.Create(front, back, FabricColor);
+                _textureFront = front; _textureBack = back; _textureColor = FabricColor;
+            }
             _models.Children.Clear();
             _models.Children.Add(new AmbientLight(Color.FromRgb(85, 85, 85)));
             _models.Children.Add(new DirectionalLight(Color.FromRgb(220, 220, 220), new Vector3D(-.6, -.7, -1)));
             _models.Children.Add(new DirectionalLight(Color.FromRgb(180, 185, 190), new Vector3D(.5, -.2, 1)));
-            Material frontMaterial = Material(front.Image), backMaterial = Material(back.Image), plain = Material(null);
+            var materials = Array.ConvertAll(_textures, texture => Material(texture));
+            var plain = Material(null);
             Rect3D bounds = Rect3D.Empty;
             foreach (var surface in Surfaces)
             {
-                _models.Children.Add(new GeometryModel3D(surface.Mesh, surface.Collar ? plain : surface.Back ? backMaterial : frontMaterial)
+                _models.Children.Add(new GeometryModel3D(surface.Mesh, surface.Collar ? plain : materials[surface.PrintPart])
                     { BackMaterial = plain });
                 bounds.Union(surface.Mesh.Bounds);
             }
@@ -48,13 +58,13 @@ namespace VanyaTools.Native
         }
         private Material Material(BitmapSource image)
         {
-            // UVs address the complete flat view. Relative brush viewports would
-            // rescale the whole shirt image into each body's/sleeve's UV bounds.
+            // Each authored part uses its own print chart. Absolute brush
+            // viewports preserve its UVs, including sleeves and the curved neck.
             Brush brush = image == null ? (Brush)new SolidColorBrush(FabricColor) : new ImageBrush(image)
                 { Stretch = Stretch.Fill, ViewportUnits = BrushMappingMode.Absolute, Viewport = new Rect(0, 0, 1, 1) };
             var material = new MaterialGroup();
             material.Children.Add(new DiffuseMaterial(brush));
-            material.Children.Add(new SpecularMaterial(new SolidColorBrush(Color.FromRgb(24, 24, 24)), 14));
+            material.Children.Add(new SpecularMaterial(new SolidColorBrush(Color.FromRgb(7, 7, 7)), 30));
             material.Freeze(); return material;
         }
         public void Fit()

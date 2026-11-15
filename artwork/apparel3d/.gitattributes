@@ -1,0 +1,2 @@
+# Preserve the original CC0 OBJ bytes and the documented source checksum.
+*.obj -text

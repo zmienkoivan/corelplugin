@@ -81,37 +81,73 @@ foreach ($side in @(-1, 1)) {
 
 $front = Demo; $back = Demo $true
 Write-Output 'Checking mesh and print orientation...'
+Add-Type -ReferencedAssemblies @([Windows.Media.Media3D.MeshGeometry3D].Assembly.Location, [Windows.Point].Assembly.Location) -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Windows.Media.Media3D;
+public static class ApparelMeshChecks {
+    public static int Inspect(MeshGeometry3D mesh, MeshGeometry3D original) {
+        if (!mesh.IsFrozen || mesh.Positions.Count != mesh.TextureCoordinates.Count || mesh.Positions.Count != mesh.Normals.Count)
+            throw new Exception("Incomplete or mutable shirt surface");
+        int changed = 0;
+        for (int i = 0; i < mesh.Positions.Count; i++) {
+            var p = mesh.Positions[i]; var uv = mesh.TextureCoordinates[i]; var n = mesh.Normals[i];
+            foreach (double d in new [] { p.X, p.Y, p.Z, uv.X, uv.Y, n.X, n.Y, n.Z })
+                if (Double.IsNaN(d) || Double.IsInfinity(d)) throw new Exception("Invalid mesh coordinate");
+            if (Math.Abs(n.Length - 1) > .00001) throw new Exception("Non-unit cloth normal");
+            if (uv.X < -.001 || uv.X > 1.001 || uv.Y < -.001 || uv.Y > 1.001) throw new Exception("Print chart outside UV space");
+            if ((p - original.Positions[i]).Length > .000001) changed++;
+        }
+        if (mesh.TriangleIndices.Count % 3 != 0) throw new Exception("Incomplete triangles");
+        foreach (int index in mesh.TriangleIndices)
+            if (index < 0 || index >= mesh.Positions.Count) throw new Exception("Triangle outside mesh");
+        return changed;
+    }
+    public static double Direction(MeshGeometry3D mesh) {
+        double x = 0, u = 0, covariance = 0;
+        for (int i = 0; i < mesh.Positions.Count; i++) { x += mesh.Positions[i].X; u += mesh.TextureCoordinates[i].X; }
+        x /= mesh.Positions.Count; u /= mesh.Positions.Count;
+        for (int i = 0; i < mesh.Positions.Count; i++) covariance += (mesh.Positions[i].X-x)*(mesh.TextureCoordinates[i].X-u);
+        return covariance;
+    }
+    public static int Seam(MeshGeometry3D a, MeshGeometry3D b) {
+        var points = new Dictionary<Point3D,Vector3D>();
+        for (int i = 0; i < a.Positions.Count; i++) points[a.Positions[i]] = a.Normals[i];
+        int shared = 0;
+        for (int i = 0; i < b.Positions.Count; i++) {
+            Vector3D n;
+            if (points.TryGetValue(b.Positions[i], out n)) {
+                if (Vector3D.DotProduct(n,b.Normals[i]) < .9999) throw new Exception("Broken lighting across a sewn seam");
+                shared++;
+            }
+        }
+        return shared;
+    }
+}
+'@
 $flat = Build $front $back 0
 $folded = Build $front $back 1
-Check ($flat.Count -eq 11) 'Missing body, shoulder, sleeve or collar surface'
+Check ($flat.Count -eq 8) 'Missing body, sleeve, collar or inner surface'
 $changed = 0
 for ($s = 0; $s -lt $flat.Count; $s++) {
     $mesh = $folded[$s].Mesh; $base = $flat[$s].Mesh
     Write-Verbose ("Surface $s : " + $mesh.Positions.Count + ' vertices')
-    Check $mesh.IsFrozen 'Mesh must be immutable'
-    Check ($mesh.Positions.Count -eq $mesh.TextureCoordinates.Count) 'Incomplete texture coordinates'
-    $bad = 0
-    for ($i = 0; $i -lt $mesh.Positions.Count; $i++) {
-        $p = $mesh.Positions[$i]; $uv = $mesh.TextureCoordinates[$i]
-        foreach ($v in @($p.X, $p.Y, $p.Z, $uv.X, $uv.Y)) { if ([double]::IsNaN($v) -or [double]::IsInfinity($v)) { $bad++ } }
-        if (($p - $base.Positions[$i]).Length -gt 0.000001) { $changed++ }
-    }
-    Check ($bad -eq 0) 'Non-finite mesh coordinates'
-    Check (($mesh.TriangleIndices.Count % 3) -eq 0) 'Incomplete triangles'
-    $badIndices = @($mesh.TriangleIndices | Where-Object { $_ -lt 0 -or $_ -ge $mesh.Positions.Count })
-    Check ($badIndices.Count -eq 0) 'Triangle points outside mesh'
+    $changed += [ApparelMeshChecks]::Inspect($mesh, $base)
+    Check ($mesh.Positions.Count -gt 100) 'Empty authored surface'
 }
 Check ($changed -gt 100) 'Fold setting has no effect'
 Write-Output 'Checking seams and validation...'
-# The hem is shared and fixed while folds displace panel interiors.
-for ($i = 0; $i -le 48; $i++) { Near (($flat[0].Mesh.Positions[$i] - $folded[0].Mesh.Positions[$i]).Length) 0 }
-Check ($flat[0].Mesh.TextureCoordinates[0].X -lt $flat[0].Mesh.TextureCoordinates[48].X) 'Front is mirrored'
-Check ($flat[1].Mesh.TextureCoordinates[0].X -gt $flat[1].Mesh.TextureCoordinates[48].X) 'Back lettering will be mirrored'
-# Same physical sleeve uses opposite sides of the two flat views.
-Near $flat[6].Mesh.TextureCoordinates[0].X $front.ImageLeft.RootTop.X
-Near $flat[7].Mesh.TextureCoordinates[0].X $back.ImageRight.RootTop.X
-Near $flat[8].Mesh.TextureCoordinates[0].X $front.ImageRight.RootTop.X
-Near $flat[9].Mesh.TextureCoordinates[0].X $back.ImageLeft.RootTop.X
+Check ([ApparelMeshChecks]::Direction($flat[0].Mesh) -gt 0) 'Front is mirrored'
+Check ([ApparelMeshChecks]::Direction($flat[1].Mesh) -lt 0) 'Back lettering will be mirrored'
+foreach ($pair in @(@(0,2),@(0,4),@(1,3),@(1,5),@(0,1))) {
+    Check ([ApparelMeshChecks]::Seam($folded[$pair[0]].Mesh,$folded[$pair[1]].Mesh) -gt 8) 'Missing sewn seam'
+}
+$scaledFront = Demo; $scaledFront.BodyWidthMm = 650; $scaledFront.BodyHeightMm = 852
+$scaled = Build $scaledFront $back 1
+Near $scaled[0].Mesh.Bounds.SizeX ($folded[0].Mesh.Bounds.SizeX * 1.25)
+Near $scaled[0].Mesh.Bounds.SizeY ($folded[0].Mesh.Bounds.SizeY * 1.2)
+Near $scaled[0].Mesh.Bounds.SizeZ ($folded[0].Mesh.Bounds.SizeZ * 1.25)
+Check ($folded[7].Collar -and $folded[7].Mesh.Bounds.SizeZ -gt .15) 'Missing fabric interior and thickness'
 foreach ($folds in @([double]::NaN, [double]::PositiveInfinity, -1, 2)) { Reject { Build $front $back $folds } 'Invalid folds accepted' }
 $badView = Demo $true; $badView.NeckDepthMm = [double]::NaN
 Reject { Build $front $badView .5 } 'Invalid back neck accepted'
@@ -119,23 +155,37 @@ $badView = Demo; $badView.ImageLeft = $null
 Reject { Build $badView $back .5 } 'Missing sleeve map accepted'
 
 # Deliberately asymmetric synthetic images catch per-surface UV rescaling.
-function Texture($color) {
+function Texture($color, $left = [Windows.Media.Brushes]::Lime, $right = [Windows.Media.Brushes]::Magenta) {
     $visual = [Windows.Media.DrawingVisual]::new(); $draw = $visual.RenderOpen()
     try {
-        $draw.DrawRectangle([Windows.Media.Brushes]::Lime, $null, [Windows.Rect]::new(0, 0, 256, 256))
+        $draw.DrawRectangle($left, $null, [Windows.Rect]::new(0, 0, 256, 256))
         $draw.DrawRectangle($color, $null, [Windows.Rect]::new(44, 0, 168, 256))
-        $draw.DrawRectangle([Windows.Media.Brushes]::Magenta, $null, [Windows.Rect]::new(218, 0, 38, 256))
+        $draw.DrawRectangle($right, $null, [Windows.Rect]::new(218, 0, 38, 256))
     } finally { $draw.Close() }
     $image = [Windows.Media.Imaging.RenderTargetBitmap]::new(256, 256, 96, 96, [Windows.Media.PixelFormats]::Pbgra32)
     $image.Render($visual); $image.Freeze(); $image
 }
 $front.Image = Texture ([Windows.Media.Brushes]::Red)
 Write-Output 'Checking rendered views...'
-$back.Image = Texture ([Windows.Media.Brushes]::Blue)
+$back.Image = Texture ([Windows.Media.Brushes]::Blue) ([Windows.Media.Brushes]::Yellow) ([Windows.Media.Brushes]::Cyan)
 $snapshot = [Activator]::CreateInstance($assembly.GetType('VanyaTools.Native.ApparelOrderSnapshot'), $true)
 $snapshot.Front = $front; $snapshot.Back = $back; $snapshot.SourceName = 'Synthetic order'
 $scene = [Activator]::CreateInstance($sceneType, $true)
 $sceneType.GetMethod('Set').Invoke($scene, @($snapshot, [double]0.5, $true)) | Out-Null
+$textureField = $sceneType.GetField('_textures', $instance)
+$textures = $textureField.GetValue($scene)
+foreach ($part in @(2,3,4,5)) {
+    $pixel = [byte[]]::new(4); $image = $textures[$part]
+    $image.CopyPixels([Windows.Int32Rect]::new([int]($image.PixelWidth*.85),[int]($image.PixelHeight*.45),1,1),$pixel,4,0)
+    switch ($part) {
+        2 { Check ($pixel[1]-gt150-and$pixel[0]-lt10-and$pixel[2]-lt10) 'Right front sleeve did not use the left flat-view quad' }
+        3 { Check ($pixel[0]-gt150-and$pixel[1]-gt150-and$pixel[2]-lt10) 'Right back sleeve did not use the right flat-view quad' }
+        4 { Check ($pixel[0]-gt150-and$pixel[2]-gt150-and$pixel[1]-lt10) 'Left front sleeve did not use the right flat-view quad' }
+        5 { Check ($pixel[1]-gt150-and$pixel[2]-gt150-and$pixel[0]-lt10) 'Left back sleeve did not use the left flat-view quad' }
+    }
+}
+$sceneType.GetMethod('Set').Invoke($scene,@($snapshot,[double]1,$false)) | Out-Null
+Check ([Object]::ReferenceEquals($textures,$textureField.GetValue($scene))) 'Fold adjustment regenerated print textures'
 $parameters = [Windows.Interop.HwndSourceParameters]::new('Apparel3D checks')
 $parameters.Width = 800; $parameters.Height = 800; $parameters.WindowStyle = 0
 $hostSource = [Windows.Interop.HwndSource]::new($parameters)

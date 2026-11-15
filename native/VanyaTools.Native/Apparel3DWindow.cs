@@ -41,18 +41,18 @@ namespace VanyaTools.Native
             controls.Children.Add(Note("Исходные виды из заказа", true));
             controls.Children.Add(Note("Перед")); controls.Children.Add(_front);
             controls.Children.Add(Note("Спинка")); controls.Children.Add(_back);
-            controls.Children.Add(Note("Складки модели"));
-            _folds = new Slider { Minimum = 0, Maximum = 1, Value = .5, Margin = new Thickness(0, 0, 0, 10) }; controls.Children.Add(_folds);
+            controls.Children.Add(Note("Рельеф складок"));
+            _folds = new Slider { Minimum = 0, Maximum = 1, Value = 1, Margin = new Thickness(0, 0, 0, 10) }; controls.Children.Add(_folds);
             var views = new WrapPanel(); controls.Children.Add(views);
             views.Children.Add(Button("Перед", () => _scene.View(0))); views.Children.Add(Button("Спинка", () => _scene.View(180)));
             views.Children.Add(Button("¾", () => _scene.View(-25))); views.Children.Add(Button("Вписать", () => _scene.Fit()));
             controls.Children.Add(Note("Левая кнопка — вращение\nКолесо — масштаб\nПравая кнопка — перемещение"));
             controls.Children.Add(Note("Правьте рисунок в Corel и нажимайте «Обновить», пока активны исходный CDR и страница заказа. Окно остаётся открытым при работе с документом."));
             controls.Children.Add(Note("Первая версия читает две группы видов с корпусом и четырёхузловыми контурами рукавов. Если на странице несколько моделей, выделите нужные две группы перед загрузкой."));
-            controls.Children.Add(Note("Модель показывает размещение принта. Посадку, совпадение швов и производственные лекала проверяйте отдельно."));
+            controls.Children.Add(Note("Готовая модель футболки с горловиной, объёмными рукавами и толщиной ткани. Она показывает размещение принта; посадку и совпадение швов проверяйте отдельно."));
             Grid.SetColumn(_scene, 2); body.Children.Add(_scene);
-            _folds.ValueChanged += (_, __) => Apply();
-            Loaded += (_, __) => { Apply(); _scene.Fit(); };
+            _folds.ValueChanged += (_, __) => Safe(() => Apply());
+            Loaded += (_, __) => Safe(() => { Apply(); _scene.Fit(); });
             Closed += (_, __) => { _source = null; _snapshot = null; _front.Source = _back.Source = null; };
         }
         internal void SetSnapshot(ApparelOrderSnapshot snapshot) { _snapshot = snapshot; _swapped = false; Apply(true); }
