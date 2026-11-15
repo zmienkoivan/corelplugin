@@ -171,6 +171,13 @@ jobs:
           powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File scripts/Test-PhoneBatch.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Check apparel 3D preview
+        timeout-minutes: 3
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File scripts/Test-Apparel3D.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Publish GitHub release
         shell: pwsh
         env:
