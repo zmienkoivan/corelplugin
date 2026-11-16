@@ -12,7 +12,7 @@ namespace VanyaTools.Native
     {
         internal BitmapSource Image,Preview;
         internal string Letter,Warning;
-        internal bool Safe;
+        internal bool Safe,Recognized,RecognitionUncertain;
     }
     internal sealed class LetterTransferSheet
     {

@@ -19,7 +19,7 @@ internal static class Program
         _root=Path.Combine(Path.GetTempPath(),"Vanya-Letter-Checks-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(_root);
         try
         {
-            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();AdaptiveGrid();IrregularAlphabet();Layouts();Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();
+            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();AdaptiveGrid();IrregularAlphabet();Layouts();Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();RecognitionChecks.Run(_root);
             Console.WriteLine("Letter transfer checks passed: "+_checks+". Offline checks; no Replicate/Corel requests.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
@@ -178,6 +178,14 @@ internal static class Program
             if(!String.IsNullOrEmpty(export))LetterTransferImages.Save(cell.Image,Path.Combine(export,n.ToString("00")+".png"));
         }
         Check(before.SequenceEqual(LetterTransferImages.Pixels(sheet)),"Irregular source was mutated.");
+        string recognitionExport=Environment.GetEnvironmentVariable("VANYA_LETTER_RECOGNITION_PREVIEW");
+        if(!String.IsNullOrEmpty(recognitionExport))
+        {
+            var plan=LetterTransferRecognition.Prepare(recognitionExport,new LetterTransferJob{Output="requests/observed-sheet.png"},result);
+            var info=new System.Collections.Generic.Dictionary<string,object>{{"model",LetterTransferRecognition.Model},{"count",plan.Count},{"preview",plan.PreviewFile},{"output",plan.Output},{"prefix",plan.Prefix},{"fingerprint",plan.Fingerprint},{"prompt",plan.Prompt}};
+            File.WriteAllText(Path.Combine(recognitionExport,"plan.json"),new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(info),new System.Text.UTF8Encoding(false));
+            Console.WriteLine("Recognition preview: "+plan.PreviewFile+" · "+new FileInfo(plan.PreviewFile).Length+" bytes.");
+        }
         string labels=Environment.GetEnvironmentVariable("VANYA_LETTER_IRREGULAR_LABELS");
         if(!String.IsNullOrEmpty(labels) && !String.IsNullOrEmpty(export))
         {

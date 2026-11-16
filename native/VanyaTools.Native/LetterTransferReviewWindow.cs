@@ -27,15 +27,27 @@ namespace VanyaTools.Native
         }
         internal static Window Confirmation(Window owner,BitmapSource reference,string[] letters,string model,string resolution,string prompt,bool retry=false)
         {
-            var window=Dialog(owner,"Отправка референса в ИИ");var root=new DockPanel{Margin=new Thickness(12)};window.Content=root;
-            var note=new TextBlock{Text="Отправить это превью в "+model+" через Replicate?\nБуквы: "+String.Join(", ",letters)+" · "+resolution+" · один платный запрос.\nПревью референса: "+reference.PixelWidth+" × "+reference.PixelHeight+" px."+
-                (retry?"\nСохранённый запрос будет продолжен. Если предыдущая генерация завершилась ошибкой или была отменена, повтор создаст новый платный запрос.":""),TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,10)};
-            DockPanel.SetDock(note,Dock.Top);root.Children.Add(note);
+            string note="Отправить это превью в "+model+" через Replicate?\nБуквы: "+String.Join(", ",letters)+" · "+resolution+" · один платный запрос.\nПревью референса: "+reference.PixelWidth+" × "+reference.PixelHeight+" px."+
+                (retry?"\nСохранённый запрос будет продолжен. Если предыдущая генерация завершилась ошибкой или была отменена, повтор создаст новый платный запрос.":"");
+            return ConfirmationDialog(owner,"Отправка референса в ИИ",reference,note,prompt);
+        }
+        internal static bool ConfirmRecognition(Window owner,BitmapSource preview,int count,string prompt,bool retry)
+            =>RecognitionConfirmation(owner,preview,count,prompt,retry).ShowDialog()==true;
+        internal static Window RecognitionConfirmation(Window owner,BitmapSource preview,int count,string prompt,bool retry=false)
+        {
+            string note="Отправить показанный коллаж из "+count+" ячеек в GPT-5 mini через Replicate для распознавания букв? Это отдельный платный запрос анализа. Рисунки не перерисовываются.\n"+
+                "Повторы получат одинаковое обозначение и сохранятся как варианты. Размер превью: "+preview.PixelWidth+" × "+preview.PixelHeight+" px.\n"+
+                (retry?"Есть сохранённая попытка. Продолжение активного запроса не создаёт новую генерацию; повтор после завершившейся ошибки оплачивается отдельно.":"Результат распознавания сохранится в истории; его повторное открытие не требует нового анализа.");
+            return ConfirmationDialog(owner,"Распознавание букв · подтверждение",preview,note,prompt);
+        }
+        private static Window ConfirmationDialog(Window owner,string title,BitmapSource reference,string text,string prompt)
+        {
+            var window=Dialog(owner,title);var root=new DockPanel{Margin=new Thickness(12)};window.Content=root;
+            var note=new TextBlock{Text=text,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,10)};DockPanel.SetDock(note,Dock.Top);root.Children.Add(note);
             var footer=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};DockPanel.SetDock(footer,Dock.Bottom);root.Children.Add(footer);
             var cancel=Button("Отмена",()=>window.DialogResult=false);cancel.IsCancel=true;footer.Children.Add(cancel);footer.Children.Add(DockerTheme.Primary(Button("Подтвердить отправку",()=>window.DialogResult=true)));
             var preview=new Image{Source=reference,Stretch=Stretch.Uniform,Width=330,Margin=new Thickness(0,0,12,0)};DockPanel.SetDock(preview,Dock.Left);root.Children.Add(preview);
-            root.Children.Add(new TextBox{Text=prompt,IsReadOnly=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto});
-            return window;
+            root.Children.Add(new TextBox{Text=prompt,IsReadOnly=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto});return window;
         }
         internal static List<LetterTransferApproved> Review(Window owner,BitmapSource reference,BitmapSource sheet,LetterTransferSheet result)
         {
@@ -45,12 +57,12 @@ namespace VanyaTools.Native
         internal static Window ReviewDialog(Window owner,BitmapSource reference,BitmapSource sheet,LetterTransferSheet result,List<LetterTransferApproved> approved)
         {
             var cells=result.Cells;var window=Dialog(owner,"Проверка букв");var root=new DockPanel{Margin=new Thickness(12)};window.Content=root;
-            var checks=new CheckBox[cells.Length];var choices=new ComboBox[cells.Length];var excluded=new bool[cells.Length];
+            var checks=new CheckBox[cells.Length];var choices=new ComboBox[cells.Length];var excluded=new bool[cells.Length];bool manualLayout=result.LayoutChanged && !cells.Any(c=>c.Recognized);
             var note=new TextBlock{Text="Подготовлено ячеек: "+cells.Count(c=>c.Image!=null)+" из "+cells.Length+". "+(result.Notice??"")+" Проверьте целостность, кириллицу и стиль. Отметьте подходящие. Непринятые ячейки не добавляются; исходный лист останется в истории.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,10)};DockPanel.SetDock(note,Dock.Top);root.Children.Add(note);
             var footer=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};DockPanel.SetDock(footer,Dock.Bottom);root.Children.Add(footer);
             footer.Children.Add(Button("Назад",()=>window.DialogResult=false));
-            footer.Children.Add(Button("Отметить все целые",()=>{for(int i=0;i<checks.Length;i++)if(checks[i].IsEnabled && cells[i].Safe)checks[i].IsChecked=true;}));
-            if(result.LayoutChanged)footer.Children.Add(Button("Назначить по порядку",()=>{
+            footer.Children.Add(Button("Отметить все целые",()=>{for(int i=0;i<checks.Length;i++)if(checks[i].IsEnabled && cells[i].Safe && !cells[i].RecognitionUncertain)checks[i].IsChecked=true;}));
+            if(manualLayout)footer.Children.Add(Button("Назначить по порядку",()=>{
                 var selected=Enumerable.Range(0,cells.Length).Where(i=>!excluded[i] && cells[i].Image!=null).ToArray();
                 if(selected.Length!=result.Requested.Length){MessageBox.Show(window,"Оставьте "+result.Requested.Length+" ячеек: сейчас "+selected.Length+". Отметьте лишние ячейки или назначьте обозначения вручную.");return;}
                 for(int n=0;n<selected.Length;n++)choices[selected[n]].SelectedItem=result.Requested[n];
@@ -66,14 +78,20 @@ namespace VanyaTools.Native
             {
                 int index=i;var cell=cells[i];var card=new DockPanel{Margin=new Thickness(9)};var header=new WrapPanel{Orientation=Orientation.Horizontal};DockPanel.SetDock(header,Dock.Top);card.Children.Add(header);
                 header.Children.Add(new TextBlock{Text=(i+1)+" · ",VerticalAlignment=VerticalAlignment.Center});
-                checks[i]=new CheckBox{Content="Принять",Tag="accept",IsEnabled=cell.Image!=null && LetterTransferRules.ValidLetter(cell.Letter),IsChecked=false,VerticalAlignment=VerticalAlignment.Center};header.Children.Add(checks[i]);
+                checks[i]=new CheckBox{Content="Принять",Tag="accept",IsEnabled=cell.Image!=null && LetterTransferRules.ValidLetter(cell.Letter),IsChecked=cell.Recognized && !cell.RecognitionUncertain && cell.Safe && cell.Image!=null && LetterTransferRules.ValidLetter(cell.Letter),VerticalAlignment=VerticalAlignment.Center};header.Children.Add(checks[i]);
                 choices[i]=new ComboBox{ItemsSource=new[]{"—"}.Concat(LetterTransferRules.Alphabet.Select(c=>c.ToString())).ToArray(),SelectedItem=cell.Letter??"—",Width=65,Margin=new Thickness(8,0,0,0)};
                 choices[i].SelectionChanged+=(_,__)=>{checks[index].IsEnabled=!excluded[index] && cells[index].Image!=null && LetterTransferRules.ValidLetter(choices[index].SelectedItem as string);if(!checks[index].IsEnabled)checks[index].IsChecked=false;};header.Children.Add(choices[i]);
-                if(result.LayoutChanged)
+                if(manualLayout)
                 {
                     var skip=new CheckBox{Content="Лишняя ячейка",Tag="skip",Margin=new Thickness(0,4,0,2)};DockPanel.SetDock(skip,Dock.Top);card.Children.Add(skip);
                     skip.Checked+=(_,__)=>{excluded[index]=true;checks[index].IsChecked=false;checks[index].IsEnabled=false;choices[index].IsEnabled=false;};
                     skip.Unchecked+=(_,__)=>{excluded[index]=false;choices[index].IsEnabled=true;checks[index].IsEnabled=cells[index].Image!=null && LetterTransferRules.ValidLetter(choices[index].SelectedItem as string);};
+                }
+                if(cell.Recognized)
+                {
+                    var recognition=new TextBlock{Text=cell.RecognitionUncertain?"ИИ не уверен — проверьте обозначение":"Распознано · GPT mini"+(cells.Count(c=>c.Letter!=null && c.Letter==cell.Letter)>1?" · вариант":""),TextWrapping=TextWrapping.Wrap,FontSize=11,Margin=new Thickness(0,3,0,3)};
+                    DockPanel.SetDock(recognition,Dock.Top);card.Children.Add(recognition);
+                    choices[i].SelectionChanged+=(_,__)=>{cells[index].RecognitionUncertain=!LetterTransferRules.ValidLetter(choices[index].SelectedItem as string);recognition.Text="Обозначение изменено вручную";};
                 }
                 if(!String.IsNullOrEmpty(cell.Warning))
                 {var warning=new TextBlock{Text=cell.Warning,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,3,0,3)};DockPanel.SetDock(warning,Dock.Bottom);card.Children.Add(warning);}

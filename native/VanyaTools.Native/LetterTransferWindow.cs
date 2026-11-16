@@ -21,6 +21,8 @@ namespace VanyaTools.Native
         private readonly Func<string> _token,_capture,_captureReference;
         private readonly Func<BitmapSource,string[],string,string,string,bool,bool> _confirm;
         private readonly Action<string,bool> _status;
+        private readonly Func<BitmapSource,int,string,bool,bool> _confirmRecognition;
+        private readonly Func<BitmapSource,BitmapSource,LetterTransferSheet,List<LetterTransferApproved>> _review;
         private LetterTransferSet _set;
         private string _directory;
         private readonly string _root;
@@ -46,9 +48,11 @@ namespace VanyaTools.Native
         private CancellationTokenSource _request;
         private string _stage="",_timingKey;
         private double _zoom=1;
-        internal LetterTransferWindow(Func<string> token,Func<string> capture,Action<string,bool> status,string libraryRoot=null,Func<BitmapSource,string[],string,string,string,bool,bool> confirm=null,Func<string> captureReference=null)
+        internal LetterTransferWindow(Func<string> token,Func<string> capture,Action<string,bool> status,string libraryRoot=null,Func<BitmapSource,string[],string,string,string,bool,bool> confirm=null,Func<string> captureReference=null,Func<BitmapSource,int,string,bool,bool> confirmRecognition=null,Func<BitmapSource,BitmapSource,LetterTransferSheet,List<LetterTransferApproved>> review=null)
         {
             _token=token;_capture=capture;_captureReference=captureReference??capture;_status=status;_root=libraryRoot??LetterTransferStore.DefaultRoot;_confirm=confirm??((reference,letters,model,resolution,prompt,retry)=>LetterTransferReviewWindow.Confirm(this,reference,letters,model,resolution,prompt,retry));
+            _confirmRecognition=confirmRecognition??((preview,count,prompt,retry)=>LetterTransferReviewWindow.ConfirmRecognition(this,preview,count,prompt,retry));
+            _review=review??((reference,sheet,cells)=>LetterTransferReviewWindow.Review(this,reference,sheet,cells));
             Title="Буквы-трансферы · Vanya Tools";Width=Math.Min(1380,SystemParameters.WorkArea.Width-30);Height=Math.Min(900,SystemParameters.WorkArea.Height-30);MinWidth=1000;MinHeight=640;WindowStartupLocation=WindowStartupLocation.CenterOwner;DockerTheme.Apply(this);
             var root=new DockPanel{Margin=new Thickness(10)};Content=root;
             var bottom=new DockPanel();DockPanel.SetDock(bottom,Dock.Bottom);root.Children.Add(bottom);
@@ -95,7 +99,7 @@ namespace VanyaTools.Native
             _letter.ItemsSource=LetterTransferRules.Alphabet.Select(c=>c.ToString()).ToArray();_letter.SelectedIndex=0;_letter.Width=60;variantTools.Children.Add(_letter);
             variantTools.Children.Add(Button("PNG / изображение…",()=>Safe(()=>Import(false))));variantTools.Children.Add(Button("Из Corel",()=>Safe(()=>Import(true))));variantTools.Children.Add(Button("Удалить вариант",()=>Safe(Remove)));variantsPanel.Children.Add(_glyphs);tabs.Items.Add(new TabItem{Header="Варианты букв",Content=variantsPanel});
             var jobsPanel=new DockPanel();var jobTools=new WrapPanel();DockPanel.SetDock(jobTools,Dock.Top);jobsPanel.Children.Add(jobTools);
-            jobTools.Children.Add(Button("История Replicate",()=>Safe(()=>Process.Start(new ProcessStartInfo("https://replicate.com/predictions"){UseShellExecute=true}))));jobTools.Children.Add(Button("Проверить готовый ответ",()=>ReviewJob()));jobTools.Children.Add(Button("Продолжить / повторить…",()=>Retry()));jobsPanel.Children.Add(_jobs);tabs.Items.Add(new TabItem{Header="История ИИ",Content=jobsPanel});
+            jobTools.Children.Add(Button("История Replicate",()=>Safe(()=>Process.Start(new ProcessStartInfo("https://replicate.com/predictions"){UseShellExecute=true}))));jobTools.Children.Add(Button("Проверить готовый ответ",()=>ReviewJob()));jobTools.Children.Add(Button("Распознать буквы заново…",()=>ReviewJob(true)));jobTools.Children.Add(Button("Продолжить / повторить…",()=>Retry()));jobsPanel.Children.Add(_jobs);tabs.Items.Add(new TabItem{Header="История ИИ",Content=jobsPanel});
             _library.SelectionChanged+=(_,__)=>{if(_loading || _library.SelectedItem==null)return;Safe(()=>{Save();Load(((LetterTransferLibraryItem)_library.SelectedItem).Directory);});};
             foreach(var input in new[]{_name,_notes,_height,_sheetWidth,_sheetHeight,_gap,_margin,_target,_variants,_alphaThreshold})input.TextChanged+=(_,__)=>Queue();_style.SelectionChanged+=(_,__)=>Queue();_readyOnly.Checked+=(_,__)=>Queue();_readyOnly.Unchecked+=(_,__)=>Queue();_autoLength.Checked+=(_,__)=>{_sheetHeight.IsEnabled=false;Queue();};_autoLength.Unchecked+=(_,__)=>{_sheetHeight.IsEnabled=true;Queue();};
             _refresh.Tick+=(_,__)=>{_refresh.Stop();if(_loading || _request!=null)return;try{Save();Preview();}catch(Exception error){_pages.Children.Clear();_summary.Text=error.GetBaseException().Message;}};
@@ -236,7 +240,7 @@ namespace VanyaTools.Native
             if(_request!=null)return;try
             {
                 Save();var job=SelectedJob();if(job==null)throw new InvalidOperationException("Выберите запрос в истории.");
-                if(LetterTransferAi.HasResult(_directory,job)){Review(job);return;}
+                if(LetterTransferAi.HasResult(_directory,job)){await Review(job);return;}
                 if(LetterTransferAi.UncertainSubmission(_directory,job))
                 {await Run(job,_token());return;}
                 string token=_token();if(String.IsNullOrWhiteSpace(token))throw new InvalidOperationException("Укажите ключ Replicate в настройках ИИ.");
@@ -258,18 +262,43 @@ namespace VanyaTools.Native
             {
                 _clock.Stop();_elapsed.Stop();_timing.Text=OperationTiming.Display(_stage,_elapsed.Elapsed,_timingKey);_request.Dispose();_request=null;_body.IsEnabled=_tools.IsEnabled=true;_cancel.Content="Закрыть";RefreshAssets();
             }
-            if(LetterTransferAi.HasResult(_directory,job))Review(job);
+            if(LetterTransferAi.HasResult(_directory,job))await Review(job);
             return generated;
         }
-        private void ReviewJob(){Safe(()=>{var job=SelectedJob();if(job==null)throw new InvalidOperationException("В истории пока нет запросов.");Review(job);});}
-        private void Review(LetterTransferJob job)
+        private async void ReviewJob(bool forceRecognition=false)
+        {
+            if(_request!=null || _sequenceBusy)return;
+            try{var job=SelectedJob();if(job==null)throw new InvalidOperationException("В истории пока нет запросов.");await Review(job,forceRecognition);}catch(Exception error){Failure(error);}
+        }
+        private async Task Review(LetterTransferJob job,bool forceRecognition=false)
         {
             if(job.Reviewed){Report("Этот ответ уже проверен. Сохранённые буквы доступны во вкладке «Варианты букв».");return;}
             var sheet=LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,job.Output));var cells=LetterTransferSheet.Read(sheet,job.Letters,job.Key,_set.AlphaThreshold,CancellationToken.None);
-            var approved=LetterTransferReviewWindow.Review(this,LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,job.Reference)),sheet,cells);
+            try
+            {
+                var plan=LetterTransferRecognition.Prepare(_directory,job,cells);
+                if(!forceRecognition && LetterTransferRecognition.TryCached(plan,out var cached))LetterTransferRecognition.Apply(cells,cached);
+                else
+                {
+                    string token=_token();
+                    if(String.IsNullOrWhiteSpace(token))Report("Для распознавания нужен ключ Replicate. Можно проверить и назначить обозначения вручную.",true);
+                    else if(_confirmRecognition(plan.Preview,plan.Count,plan.Prompt,!forceRecognition && (File.Exists(plan.Output+".prediction.json") || File.Exists(plan.Output+".submitted"))))
+                    {
+                        _refresh.Stop();_request=new CancellationTokenSource();_body.IsEnabled=_tools.IsEnabled=false;_cancel.Content="Отменить распознавание";_stage="Распознавание букв · GPT mini";_timingKey="letters/recognition/"+LetterTransferRecognition.Model;_elapsed.Restart();_clock.Start();
+                        try
+                        {
+                            var labels=await Task.Run(()=>LetterTransferRecognition.Run(plan,token,progress=>Dispatcher.BeginInvoke(new Action(()=>{_stage=progress=="sending"?"Отправка коллажа букв":progress=="processing"?"Распознавание букв · GPT mini":progress=="recovering"?"Поиск сохранённого анализа":progress=="downloading"?"Получение обозначений":"Ожидание распознавания";})),_request.Token,forceRecognition));
+                            LetterTransferRecognition.Apply(cells,labels);OperationTiming.Record(_timingKey,_elapsed.Elapsed);
+                        }
+                        finally{_clock.Stop();_elapsed.Stop();_timing.Text=OperationTiming.Display(_stage,_elapsed.Elapsed,_timingKey);_request.Dispose();_request=null;_body.IsEnabled=_tools.IsEnabled=true;_cancel.Content="Закрыть";}
+                    }
+                }
+            }
+            catch(Exception error){Failure(error);}
+            var approved=_review(LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,job.Reference)),sheet,cells);
             if(approved.Count==0)return;
             foreach(var group in approved.GroupBy(a=>a.Letter))if(_set.Glyphs.Count(g=>g.Letter==group.Key)+group.Count()>8)throw new InvalidOperationException("Слишком много вариантов буквы «"+group.Key+"». Удалите ненужные.");
-            foreach(var glyph in approved)LetterTransferImages.Add(_directory,_set,glyph.Letter,glyph.Image,"ИИ · "+job.Id.Substring(0,8));job.Reviewed=true;Save();RefreshAssets();Preview();Report("Добавлено проверенных букв: "+approved.Count+" из "+job.Letters.Length+". Остальные можно догенерировать.");
+            foreach(var glyph in approved)LetterTransferImages.Add(_directory,_set,glyph.Letter,glyph.Image,"ИИ · "+job.Id.Substring(0,8));job.Reviewed=true;Save();RefreshAssets();Preview();Report("Добавлено проверенных рисунков: "+approved.Count+". Букв в наборе: "+_set.Glyphs.Select(g=>g.Letter).Distinct().Count()+"; повторы сохранены как варианты.");
         }
         private void Insert()
         {
