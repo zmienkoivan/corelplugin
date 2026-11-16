@@ -1,0 +1,1 @@
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net48</TargetFramework><LangVersion>latest</LangVersion></PropertyGroup><ItemGroup><Reference Include="System.Web.Extensions"/><Compile Include="../../native/VanyaTools.Native/DiagnosticReport.cs" Link="DiagnosticReport.cs"/></ItemGroup></Project>

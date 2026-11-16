@@ -167,6 +167,7 @@ namespace VanyaTools.Native
             settings.Children.Add(DockerSettings.Format(outlineSettings.CreateSettingsView(SetStatus), "Пресеты обводки ДТФ"));
             settings.Children.Add(aiTools.SettingsView);
             settings.Children.Add(orderCards.SettingsView);
+            settings.Children.Add(new DiagnosticTools(orderCards.DiagnosticConnection, aiTools.GetToken, SetStatus).SettingsView);
             Loaded += (_, __) =>
             {
                 WorkTimeRuntime.Initialize(Dispatcher);

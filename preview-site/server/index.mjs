@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createDiagnostics } from './diagnostics.mjs';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -76,6 +77,7 @@ function openToken(sealed) {
   return Buffer.concat([decipher.update(Buffer.from(sealed.data, 'hex')), decipher.final()]).toString('utf8');
 }
 const validAdmin = req => safeEqual(req.headers['x-admin-key'], adminKey);
+const diagnostics = createDiagnostics({ dataRoot, validAdmin, json });
 const remoteOrders = createRemoteOrders(process.env.PREVIEW_ORDER_SERVER, process.env.PREVIEW_ORDER_SERVER_KEY);
 const orders = remoteOrders ? null : createOrders({ dataRoot, token: process.env.ORDER_BOT_TOKEN,
   channel: process.env.ORDER_BOT_CHANNEL,
@@ -313,6 +315,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const requestUrl = new URL(req.url, 'http://localhost');
     const pathname = requestUrl.pathname;
+    if (pathname === '/api/diagnostics' || pathname.startsWith('/api/diagnostics/')) { await diagnostics(req, res, pathname); return; }
     if (['GET', 'HEAD'].includes(req.method) && ['/orders', '/orders/'].includes(pathname) &&
         (pathname.endsWith('/') || requestUrl.searchParams.has('v') || requestUrl.searchParams.has('version'))) {
       requestUrl.searchParams.delete('v');

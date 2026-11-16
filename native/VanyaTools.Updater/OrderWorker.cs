@@ -31,7 +31,8 @@ namespace VanyaTools.Updater
                 ServicePointManager.Expect100Continue = false;
                 string route = "/api/orders";
                 string method = "GET";
-                if (action == "publish")
+                if (action == "diagnostics") { route = "/api/diagnostics"; method = "POST"; }
+                else if (action == "publish")
                 {
                     int id = Convert.ToInt32(job.ContainsKey("id") ? job["id"] : 0);
                     route += id > 0 ? "/" + id : "";
@@ -94,8 +95,9 @@ namespace VanyaTools.Updater
                 request.KeepAlive = false;
                 request.AllowAutoRedirect = false;
                 if (action.StartsWith("print-", StringComparison.Ordinal)) request.Timeout = request.ReadWriteTimeout = 30000;
+                if (action == "diagnostics") request.Timeout = request.ReadWriteTimeout = 45000;
                 if (action == "publish") WriteMultipart(request, Required(job, "details"), job["photos"] as IEnumerable);
-                if (action == "state" || action == "pause" || action == "urgency" || action == "blanks-ready" || action == "deadline" || action == "assign" || action == "print-submit")
+                if (action == "state" || action == "pause" || action == "urgency" || action == "blanks-ready" || action == "deadline" || action == "assign" || action == "print-submit" || action == "diagnostics")
                     WriteJson(request, Required(job, "details"));
                 using (var response = (HttpWebResponse)request.GetResponse())
                 {

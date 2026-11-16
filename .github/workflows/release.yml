@@ -157,6 +157,18 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.CorrectionWindowChecks/VanyaTools.CorrectionWindowChecks.csproj --configuration Release
 
+      - name: Check saved diagnostic reports
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.DiagnosticReportChecks/VanyaTools.DiagnosticReportChecks.csproj --configuration Release
+
+      - name: Check diagnostic upload server
+        shell: pwsh
+        run: |
+          dotnet build native/VanyaTools.Updater/VanyaTools.Updater.csproj --configuration Release -p:Platform=x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:VANYA_DIAGNOSTIC_WORKER = Join-Path $PWD 'native/VanyaTools.Updater/bin/x64/Release/net48/VanyaTools.Updater.exe'
+          node --test preview-site/server/diagnostics.test.mjs preview-site/server/diagnostics-worker.test.mjs
+
       - name: Build installer package
         shell: pwsh
         run: .\package-native.ps1

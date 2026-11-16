@@ -95,6 +95,11 @@ namespace VanyaTools.Native
         internal static Task<Dictionary<string, object>> PrintStatus(string server, string key, string clientKey) =>
             Task.Run(() => RunWorker("print-status", server, key, 0, clientKey, null));
 
+        internal static Task<Dictionary<string,object>> SendDiagnostics(string server,string key,string path)=>Task.Run(()=> {
+            if(!File.Exists(path) || new FileInfo(path).Length>4L*1024*1024)throw new InvalidDataException("Отчёт не найден или слишком велик.");
+            return RunWorker("diagnostics",server,key,0,null,File.ReadAllText(path,Encoding.UTF8),timeoutMs:60000);
+        });
+
         private static Dictionary<string, object> RunWorker(string action, string server, string key,
             int orderId, string number, string details, IList<byte[]> photos = null, int? timeoutMs = null)
         {
