@@ -93,10 +93,23 @@ namespace VanyaTools.Native
             if(set.Glyphs==null || set.Glyphs.Count>264 || set.Glyphs.Any(g=>g==null || !Guid.TryParseExact(g.Id,"N",out _) || !ValidLetter(g.Letter) || g.Width<1 || g.Height<1 || g.Width>10000 || g.Height>10000 || (long)g.Width*g.Height>25000000) ||
                 set.Glyphs.Select(g=>g.Id).Distinct().Count()!=set.Glyphs.Count || set.Jobs==null || set.Jobs.Count>200 || set.Jobs.Select(j=>j?.Id).Distinct().Count()!=set.Jobs.Count)
                 throw new ArgumentException("Некорректные рисунки или история генераций набора.");
-            foreach(var job in set.Jobs)if(job==null || !Guid.TryParseExact(job.Id,"N",out _) || job.Letters==null || job.Letters.Length<1 || job.Letters.Length>4 || job.Letters.Any(letter=>!ValidLetter(letter)) ||
-                job.Letters.Distinct().Count()!=job.Letters.Length || (job.Model!="google/nano-banana-2" && job.Model!="google/nano-banana-pro") || (job.Resolution!="2K" && job.Resolution!="4K") || String.IsNullOrWhiteSpace(job.Prompt) || job.Prompt.Length>16000 || !LetterTransferImages.ValidKey(job.Key))
+            foreach(var job in set.Jobs)if(job==null || !Guid.TryParseExact(job.Id,"N",out _) || job.Letters==null || job.Letters.Length<1 || job.Letters.Length>33 || job.Letters.Any(letter=>!ValidLetter(letter)) ||
+                job.Letters.Distinct().Count()!=job.Letters.Length || (job.Model!="google/nano-banana-2" && job.Model!="google/nano-banana-pro") || (job.Resolution!="2K" && job.Resolution!="4K") || (job.Letters.Length>4 && job.Resolution!="4K") || String.IsNullOrWhiteSpace(job.Prompt) || job.Prompt.Length>16000 || !LetterTransferImages.ValidKey(job.Key))
                 throw new ArgumentException("Некорректное сохранённое задание ИИ.");
         }
+        internal static List<string[]> MissingPasses(LetterTransferSet set)
+        {
+            Validate(set);var passes=new List<string[]>();
+            for(int variant=1;variant<=set.VariantsPerLetter;variant++)
+            {
+                var letters=Alphabet.Select(c=>c.ToString()).Where(letter=>set.Glyphs.Count(g=>g.Letter==letter)<variant).ToArray();
+                if(letters.Length>0)passes.Add(letters);
+            }
+            return passes;
+        }
+        internal static int Columns(int count)=>(int)Math.Ceiling(Math.Sqrt(count));
+        internal static string Aspect(int count)
+        {int columns=Columns(count),rows=(count+columns-1)/columns;return columns==rows?"1:1":columns/(double)rows>=1.45?"3:2":"4:3";}
         internal static bool Finite(double value)=>!Double.IsNaN(value) && !Double.IsInfinity(value);
         private static bool In(double value,double min,double max)=>Finite(value) && value>=min && value<=max;
     }

@@ -7,8 +7,10 @@ namespace VanyaTools.Native
     // opaque magenta/foreground mixtures on antialiased outer and inner edges.
     internal static class PatternFillerMatte
     {
-        internal static void Remove(byte[] pixels, int width, int height, CancellationToken cancellation)
+        internal static void Remove(byte[] pixels, int width, int height, CancellationToken cancellation, byte[] expectedMatte = null)
         {
+            if(expectedMatte==null)expectedMatte=new byte[]{255,0,255};
+            if(expectedMatte.Length!=3)throw new ArgumentException("Invalid matte color.");
             int count = checked(width * height);
             if (width <= 0 || height <= 0 || pixels == null || pixels.Length != checked(count * 4))
                 throw new ArgumentException("Invalid filler bitmap.");
@@ -21,7 +23,7 @@ namespace VanyaTools.Native
                 for (int x = 0; x < width; x++)
                 {
                     int p = y * width + x, i = p * 4;
-                    int blueDistance = 255 - pixels[i], redDistance = 255 - pixels[i + 2], green = pixels[i + 1];
+                    int blueDistance = expectedMatte[0] - pixels[i], redDistance = expectedMatte[2] - pixels[i + 2], green = pixels[i + 1] - expectedMatte[1];
                     bool matte = blueDistance * blueDistance + redDistance * redDistance + green * green <= 40 * 40;
                     if (matte && pixels[i + 3] >= 250)
                     {
@@ -52,7 +54,7 @@ namespace VanyaTools.Native
             var background = new int[3];
             for (int c = 0; c < 3; c++)
             {
-                background[c] = c == 1 ? 0 : 255;
+                background[c] = expectedMatte[c];
                 for (int value = 0, sum = 0; samples > 0 && value < 256; value++)
                 {
                     sum += histograms[c][value];

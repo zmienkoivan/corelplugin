@@ -19,7 +19,7 @@ internal static class Program
         _root=Path.Combine(Path.GetTempPath(),"Vanya-Letter-Checks-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(_root);
         try
         {
-            Frequencies();Layouts();Preparation();LargeReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();
+            Frequencies();WholeAlphabet();Layouts();Preparation();LargeReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();
             Console.WriteLine("Letter transfer checks passed: "+_checks+". Synthetic assets and fake Replicate/Corel only.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
@@ -42,6 +42,22 @@ internal static class Program
         }
         Reject(()=>LetterTransferRules.Allocate(set.Letters,32),"Accepted insufficient alphabet total.");set.Letters[0].Weight=Double.NaN;Reject(()=>LetterTransferRules.Validate(set),"Accepted NaN.");
         set.Letters[0].Weight=0;foreach(var row in set.Letters)row.Weight=0;Reject(()=>LetterTransferRules.Allocate(set.Letters,100),"Accepted zero weights.");
+    }
+    private static void WholeAlphabet()
+    {
+        var set=new LetterTransferSet();foreach(var row in set.Letters)row.Copies=0;
+        var passes=LetterTransferRules.MissingPasses(set);Check(passes.Count==1 && passes[0].Length==33 && passes[0].Contains("Ё"),"Whole alphabet was split or dependent on print quantities.");
+        set.VariantsPerLetter=2;passes=LetterTransferRules.MissingPasses(set);Check(passes.Count==2 && passes.All(p=>p.Length==33),"Two styles should require two full sheets.");
+        string prompt=LetterTransferAi.Prompt(set,passes[0],"#FF00FF");Check(prompt.Contains("EXACTLY 33") && prompt.Contains("6 columns by 6 rows") && prompt.Contains("Cell 33: only «Я»"),"Full alphabet prompt lost ordered Cyrillic/grid.");
+        Check(LetterTransferRules.Columns(33)==6 && LetterTransferRules.Aspect(33)=="1:1","Full-sheet geometry is wrong.");
+        var data=LetterTransferImages.Pixels(Solid(600,600,Colors.Magenta));
+        for(int n=0;n<33;n++)for(int y=20;y<80;y++)for(int x=20;x<80;x++)
+        {int p=(((n/6)*100+y)*600+(n%6)*100+x)*4;data[p]=data[p+1]=data[p+2]=(byte)(200+n);data[p+3]=255;}
+        var sheet=BitmapSource.Create(600,600,96,96,PixelFormats.Bgra32,null,data,2400);
+        var cells=LetterTransferImages.Extract(sheet,33,"#FF00FF",CancellationToken.None);Check(cells.Length==33 && cells.All(i=>i!=null),"Could not extract all 33 glyphs.");
+        for(int n=0;n<33;n++){var pixels=LetterTransferImages.Pixels(cells[n]);int center=(cells[n].PixelHeight/2*cells[n].PixelWidth+cells[n].PixelWidth/2)*4;Check(pixels[center]==200+n,"Full-sheet cell assignment changed.");}
+        set.Glyphs.Add(new LetterTransferGlyph{Letter="А",File="glyphs/a.png",Width=20,Height=20});
+        passes=LetterTransferRules.MissingPasses(set);Check(passes.Count==2 && passes[0].Length==32 && !passes[0].Contains("А") && passes[1].Length==33,"Missing-only generation repeats completed variants or omits second style.");
     }
     internal static LetterTransferSet Printable()
     {
@@ -121,6 +137,40 @@ internal static class Program
             var pixels=LetterTransferImages.Pixels(cells[0]);Check(cells[0].PixelHeight>=56 && pixels.Where((b,i)=>i%4==3 && b==255).Count()>1600,"Detached dots or white ink removed.");
             Check(pixels.Where((b,i)=>i%4==3 && b==0).Any(),"Background remains opaque.");
         }
+        var shaded=LetterTransferImages.Pixels(Sheet("#00FF00"));
+        for(int y=0;y<160;y++)for(int x=0;x<160;x++)
+        {
+            int p=(y*160+x)*4;
+            if(shaded[p]==0 && shaded[p+1]==255 && shaded[p+2]==0){shaded[p+1]=(byte)(172+x/16);shaded[p]=20;}
+            if(x==79 || x==80 || y==79 || y==80)shaded[p]=shaded[p+1]=shaded[p+2]=0;
+        }
+        var shadedSheet=BitmapSource.Create(160,160,96,96,PixelFormats.Bgra32,null,shaded,640);
+        var shadedCells=LetterTransferImages.PrepareBatch(LetterTransferImages.Extract(shadedSheet,4,"#00FF00",CancellationToken.None),130,CancellationToken.None);
+        Check(shadedCells.All(c=>c!=null),"Shaded key or separator lines discarded whole letters.");
+        foreach(var cell in shadedCells)
+        {var bytes=LetterTransferImages.Pixels(cell);Check(bytes.Where((b,i)=>i%4==3).All(a=>a==0 || a==255),"Prepared shaded-key glyph has partial alpha.");}
+        string paid=Environment.GetEnvironmentVariable("VANYA_LETTER_PAID_SHEET");
+        if(!String.IsNullOrEmpty(paid))
+        {
+            var cells=LetterTransferImages.PrepareBatch(LetterTransferImages.Extract(LetterTransferImages.Load(paid),4,"#00FF00",CancellationToken.None),130,CancellationToken.None);
+            Check(cells.All(c=>c!=null),"Paid response did not yield four separate glyphs.");
+            var preparedSet=new LetterTransferSet{Name="Проверочный набор · золотые А–Г",Notes="В золотом цвете, сохранить объёмную фактуру и форму букв референса",HeightMm=20};
+            foreach(var row in preparedSet.Letters)row.Copies=0;
+            string preparedRoot=Path.Combine(Path.GetDirectoryName(paid),"prepared-set");
+            for(int i=0;i<cells.Length;i++)
+            {
+                byte[] data=LetterTransferImages.Pixels(cells[i]);Check(data.Where((b,p)=>p%4==3).All(a=>a==0 || a==255),"Real glyph retained partial alpha.");
+                LetterTransferImages.Save(cells[i],Path.Combine(Path.GetDirectoryName(paid),"prepared-"+i+".png"));
+                string letter=LetterTransferRules.Alphabet[i].ToString();preparedSet.Letters[i].Copies=1;
+                var savedGlyph=LetterTransferImages.Add(preparedRoot,preparedSet,letter,cells[i],"Проверочный запрос Nano Banana 2");
+                var savedImage=LetterTransferImages.Load(LetterTransferStore.Resolve(preparedRoot,savedGlyph.File));
+                Check(Math.Abs(savedImage.PixelHeight*25.4/savedImage.DpiY-20)<.02,"Real PNG did not retain selected physical height.");
+                Check(Enumerable.Range(0,data.Length/4).All(p=>data[p*4+3]!=0 || (data[p*4]==0 && data[p*4+1]==0 && data[p*4+2]==0)),"Hidden technical RGB remains in transparent pixels.");
+            }
+            string reference=Path.Combine(Path.GetDirectoryName(paid),"reference-upload.png");
+            if(File.Exists(reference)){preparedSet.Reference="reference.png";File.Copy(reference,LetterTransferStore.Resolve(preparedRoot,preparedSet.Reference),true);}
+            LetterTransferStore.Save(preparedRoot,preparedSet);
+        }
         Check(LetterTransferImages.Extract(Sheet("#FF00FF",true),4,"#FF00FF",CancellationToken.None)[0]==null,"Silently accepted clipped letter.");
         var cancel=new CancellationTokenSource();cancel.Cancel();Reject(()=>LetterTransferImages.Extract(Sheet("#FF00FF"),4,"#FF00FF",cancel.Token),"Ignored extraction cancellation.");
         var key2=LetterTransferImages.Key(Solid(30,30,Colors.Magenta));Check(key2!="#FF00FF","Chose key present in artwork.");
@@ -167,13 +217,14 @@ internal static class Program
     private static void Window()
     {
         var set=Printable();string uiRoot=Path.Combine(_root,"ui");string directory=LetterTransferStore.Create(uiRoot,set);foreach(var glyph in set.Glyphs)LetterTransferImages.Save(Solid(glyph.Width,glyph.Height,Colors.DarkBlue),LetterTransferStore.Resolve(directory,glyph.File));
-        int confirms=0,calls=ReplicateWorkerClient.Calls,referenceCaptures=0,artworkCaptures=0;set.Reference="references/style.png";LetterTransferImages.Save(Sheet("#FF00FF"),LetterTransferStore.Resolve(directory,set.Reference));LetterTransferStore.Save(directory,set);
-        var window=new LetterTransferWindow(()=>"synthetic-key",()=>{artworkCaptures++;throw new Exception("Full artwork capture must not be used for a reference");},(_,__)=>{},uiRoot,(reference,letters,model,resolution,prompt,retry)=>{confirms++;return false;},()=>{referenceCaptures++;return LetterTransferStore.Resolve(directory,set.Reference);});
+        int confirms=0,calls=ReplicateWorkerClient.Calls,referenceCaptures=0,artworkCaptures=0,lastCount=0;string lastResolution=null;set.Reference="references/style.png";LetterTransferImages.Save(Sheet("#FF00FF"),LetterTransferStore.Resolve(directory,set.Reference));LetterTransferStore.Save(directory,set);
+        var window=new LetterTransferWindow(()=>"synthetic-key",()=>{artworkCaptures++;throw new Exception("Full artwork capture must not be used for a reference");},(_,__)=>{},uiRoot,(reference,letters,model,resolution,prompt,retry)=>{confirms++;lastCount=letters.Length;lastResolution=resolution;return false;},()=>{referenceCaptures++;return LetterTransferStore.Resolve(directory,set.Reference);});
         var previousContext=SynchronizationContext.Current;SynchronizationContext.SetSynchronizationContext(new System.Windows.Threading.DispatcherSynchronizationContext(window.Dispatcher));
         try
         {
             Call(window,"Reference",true);Check(referenceCaptures==1 && artworkCaptures==0,"Reference path used the full artwork capture.");
-            Call(window,"Generate",true);Check(confirms==1 && ReplicateWorkerClient.Calls==calls && Field<LetterTransferSet>(window,"_set").Jobs.Count==0,"Declined preview still sent or created a job.");
+            Call(window,"Generate",false);Check(confirms==1 && lastCount==31 && lastResolution=="4K" && ReplicateWorkerClient.Calls==calls,"Whole-alphabet button did not prepare one 4K missing-letter sheet.");
+            Call(window,"Generate",true);Check(confirms==2 && ReplicateWorkerClient.Calls==calls && Field<LetterTransferSet>(window,"_set").Jobs.Count==0,"Declined preview still sent or created a job.");
             Check(Field<DataGrid>(window,"_table").Items.Count==33,"UI alphabet missing.");Check(Field<StackPanel>(window,"_pages").Children.Count>0,"No print preview.");
             Field<TextBox>(window,"_height").Text="19,5";Call(window,"Save");Check(LetterTransferStore.Load(directory).HeightMm==19.5,"Comma decimal not saved.");
             var selected=Field<LetterTransferSet>(window,"_set");Check(selected.Letters[0].Copies==11,"Manual quantity overwritten during auto-save.");

@@ -11,9 +11,9 @@ namespace VanyaTools.Native
     {
         internal static string Prompt(LetterTransferSet set,string[] letters,string key)
         {
-            if(letters==null || letters.Length<1 || letters.Length>4 || letters.Any(l=>!LetterTransferRules.ValidLetter(l)) || letters.Distinct().Count()!=letters.Length || !LetterTransferImages.ValidKey(key))
-                throw new ArgumentException("Выберите от 1 до 4 разных русских заглавных букв.");
-            int columns=letters.Length==1?1:2,rows=(letters.Length+columns-1)/columns;
+            if(letters==null || letters.Length<1 || letters.Length>33 || letters.Any(l=>!LetterTransferRules.ValidLetter(l)) || letters.Distinct().Count()!=letters.Length || !LetterTransferImages.ValidKey(key))
+                throw new ArgumentException("Выберите от 1 до 33 разных русских заглавных букв.");
+            int columns=LetterTransferRules.Columns(letters.Length),rows=(letters.Length+columns-1)/columns;
             return "Create a print-ready collection of EXACTLY "+letters.Length+" separate RUSSIAN CYRILLIC UPPERCASE LETTER designs from the supplied visual style reference. "+
                 "This is not a font file and not a product size chart. Keep the reference's letter construction, texture, line quality, palette, outlines and intentional collage/paper backings. "+
                 "If the reference is a uniform alphabet, keep a consistent alphabet family; if it is an eclectic collage, use its coherent eclectic language. Do not copy whole words or the reference sheet. "+
@@ -26,6 +26,7 @@ namespace VanyaTools.Native
         }
         internal static LetterTransferJob Create(string directory,LetterTransferSet set,string[] letters,string model,string resolution,BitmapSource approvedReference=null)
         {
+            if(letters.Length>4 && resolution!="4K")throw new ArgumentException("Для полного листа букв выберите 4K.");
             if(set.Jobs.Count>=200)throw new InvalidOperationException("История содержит 200 запросов. Создайте новый набор.");
             var reference=approvedReference??LetterTransferImages.Load(LetterTransferStore.Resolve(directory,set.Reference));
             string key=LetterTransferImages.Key(reference);
@@ -58,7 +59,7 @@ namespace VanyaTools.Native
                 File.Copy(LetterTransferStore.Resolve(directory,job.Reference),upload);
                 ReplicateWorkerClient.Run(job.Model,token,new Dictionary<string,object>{
                     ["prompt"]=job.Prompt,["image_input"]=new[]{"replicate-file:"+upload},["output_format"]="png",
-                    ["aspect_ratio"]=job.Letters.Length==2?"3:2":"1:1",["resolution"]=job.Resolution
+                    ["aspect_ratio"]=LetterTransferRules.Aspect(job.Letters.Length),["resolution"]=job.Resolution
                 },output,progress,cancel);
             }
             finally{try{File.Delete(upload);}catch(Exception error){Log.Error("Could not clean letter reference upload.",error);}}

@@ -84,6 +84,7 @@ namespace VanyaTools.Native
         {
             if(threshold<1 || threshold>255)throw new ArgumentOutOfRangeException(nameof(threshold));
             var pixels=DtfRasterOperations.Correct(Pixels(image),true,threshold,false,0,cancel);
+            for(int p=0;p<pixels.Length;p+=4)if(pixels[p+3]==0)pixels[p]=pixels[p+1]=pixels[p+2]=0;
             int left=image.PixelWidth,top=image.PixelHeight,right=-1,bottom=-1;
             for(int y=0;y<image.PixelHeight;y++)
             {
@@ -120,20 +121,26 @@ namespace VanyaTools.Native
             }
             return selected;
         }
-        internal static BitmapSource[] Extract(BitmapSource sheet,int count,string key,CancellationToken cancel)
+        internal static BitmapSource[] Extract(BitmapSource sheet,int count,string key,CancellationToken cancel,int alphaThreshold=130)
         {
-            if(count<1 || count>4 || !ValidKey(key))throw new ArgumentException("Некорректная сетка букв.");
+            if(count<1 || count>33 || !ValidKey(key))throw new ArgumentException("Некорректная сетка букв.");
             int width=sheet.PixelWidth,height=sheet.PixelHeight;
             if(width<32 || height<32 || (long)width*height>25000000)throw new InvalidDataException("Лист ИИ слишком мал.");
-            byte[] pixels=Pixels(sheet);var color=(Color)ColorConverter.ConvertFromString(key);
+            byte[] pixels=Pixels(sheet);int columns=LetterTransferRules.Columns(count),rows=(count+columns-1)/columns;RemoveSeparators(pixels,width,height,columns,rows);var color=(Color)ColorConverter.ConvertFromString(key);
             // Channel reflections preserve RGB distances and map the chosen technical
             // color to the tested magenta unmatting algorithm. White ink stays ink.
-            Transform(pixels,color);PatternFillerMatte.Remove(pixels,width,height,cancel);Transform(pixels,color);
-            int columns=count==1?1:2,rows=(count+columns-1)/columns;var result=new BitmapSource[count];
+            Transform(pixels,color);PatternFillerMatte.Remove(pixels,width,height,cancel,MatteAtBorder(pixels,width,height));
+            // The reserved hue must not survive as an opaque cast shadow or rim.
+            for(int p=0;p<pixels.Length;p+=4)if(pixels[p+3]>0 && Math.Min(pixels[p],pixels[p+2])-pixels[p+1]>=50)pixels[p]=pixels[p+1]=pixels[p+2]=pixels[p+3]=0;
+            Transform(pixels,color);
+            pixels=DtfRasterOperations.Correct(pixels,true,alphaThreshold,false,0,cancel);
+            for(int p=0;p<pixels.Length;p+=4)if(pixels[p+3]==0)pixels[p]=pixels[p+1]=pixels[p+2]=0;
+            var result=new BitmapSource[count];
             for(int n=0;n<count;n++)
             {
                 cancel.ThrowIfCancellationRequested();int x0=width*(n%columns)/columns,x1=width*(n%columns+1)/columns;
                 int y0=height*(n/columns)/rows,y1=height*(n/columns+1)/rows;
+                RemoveBoundarySpecks(pixels,width,x0,y0,x1,y1);
                 int left=x1,top=y1,right=-1,bottom=-1,visible=0;bool clipped=false;
                 for(int y=y0;y<y1;y++)for(int x=x0;x<x1;x++)
                 {
@@ -150,6 +157,71 @@ namespace VanyaTools.Native
                 result[n]=BitmapSource.Create(w,h,96,96,PixelFormats.Bgra32,null,cell,w*4);result[n].Freeze();
             }
             return result;
+        }
+        private static void RemoveBoundarySpecks(byte[] pixels,int stride,int x0,int y0,int x1,int y1)
+        {
+            void Check(int x,int y)
+            {
+                int start=y*stride+x;if(pixels[start*4+3]<=8)return;
+                var component=new List<int>{start};var seen=new HashSet<int>{start};
+                for(int cursor=0;cursor<component.Count && component.Count<8;cursor++)
+                {
+                    int p=component[cursor],px=p%stride,py=p/stride;
+                    for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++)
+                    {
+                        int nx=px+dx,ny=py+dy,q=ny*stride+nx;
+                        if(nx<x0 || nx>=x1 || ny<y0 || ny>=y1 || pixels[q*4+3]<=8 || !seen.Add(q))continue;
+                        component.Add(q);
+                    }
+                }
+                // A one-pixel speck at the border must not discard a whole
+                // glyph. Anything connected to real artwork still rejects cuts.
+                if(component.Count<8)foreach(int p in component)pixels[p*4+3]=0;
+            }
+            for(int x=x0;x<x1;x++){Check(x,y0);Check(x,y1-1);}
+            for(int y=y0;y<y1;y++){Check(x0,y);Check(x1-1,y);}
+        }
+        private static byte[] MatteAtBorder(byte[] pixels,int width,int height)
+        {
+            var channels=new[]{new List<byte>(),new List<byte>(),new List<byte>()};int checkedPixels=0;
+            void Sample(int x,int y)
+            {
+                int p=(y*width+x)*4;if(pixels[p+3]<250)return;checkedPixels++;
+                // The reserved key is reflected to magenta. Estimate its actual
+                // tone from the border; generated backgrounds may be shaded.
+                if(Math.Min(pixels[p],pixels[p+2])-pixels[p+1]<60 || Math.Min(pixels[p],pixels[p+2])<100)return;
+                for(int c=0;c<3;c++)channels[c].Add(pixels[p+c]);
+            }
+            int step=Math.Max(1,Math.Max(width,height)/512);
+            for(int x=0;x<width;x+=step){Sample(x,0);Sample(x,height-1);}
+            for(int y=0;y<height;y+=step){Sample(0,y);Sample(width-1,y);}
+            if(channels[0].Count<16 || channels[0].Count<checkedPixels*.5)return null;
+            var color=new byte[3];for(int c=0;c<3;c++){channels[c].Sort();color[c]=channels[c][channels[c].Count/2];}return color;
+        }
+        private static void RemoveSeparators(byte[] pixels,int width,int height,int columns,int rows)
+        {
+            // Only a neutral dark line spanning essentially the entire sheet at
+            // a known grid boundary qualifies. A clipped glyph remains invalid.
+            bool Dark(int x,int y)
+            {
+                int p=(y*width+x)*4;int min=Math.Min(pixels[p],Math.Min(pixels[p+1],pixels[p+2])),max=Math.Max(pixels[p],Math.Max(pixels[p+1],pixels[p+2]));
+                return pixels[p+3]>=250 && max<=96 && max-min<=16;
+            }
+            var xs=new HashSet<int>();var ys=new HashSet<int>();
+            for(int n=1;n<columns;n++)
+            {
+                int cut=width*n/columns;
+                for(int x=Math.Max(0,cut-8);x<Math.Min(width,cut+8);x++)
+                {int dark=0;for(int y=0;y<height;y++)if(Dark(x,y))dark++;if(dark>=height*.985)for(int dx=-2;dx<=2;dx++)if(x+dx>=0 && x+dx<width)xs.Add(x+dx);}
+            }
+            for(int n=1;n<rows;n++)
+            {
+                int cut=height*n/rows;
+                for(int y=Math.Max(0,cut-8);y<Math.Min(height,cut+8);y++)
+                {int dark=0;for(int x=0;x<width;x++)if(Dark(x,y))dark++;if(dark>=width*.985)for(int dy=-2;dy<=2;dy++)if(y+dy>=0 && y+dy<height)ys.Add(y+dy);}
+            }
+            foreach(int x in xs)for(int y=0;y<height;y++)pixels[(y*width+x)*4+3]=0;
+            foreach(int y in ys)for(int x=0;x<width;x++)pixels[(y*width+x)*4+3]=0;
         }
         private static void Transform(byte[] pixels,Color color)
         {

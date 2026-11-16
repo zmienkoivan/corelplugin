@@ -44,19 +44,20 @@ namespace VanyaTools.Native
             var note=new TextBlock{Text="Фон и полупрозрачность удалены пакетно. Проверьте, что в каждой ячейке ровно одна целая буква, верная кириллица и нужный стиль. Отметьте подходящие. Можно исправить обозначение буквы. Непринятые ячейки не добавляются; исходный лист останется в истории.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,10)};DockPanel.SetDock(note,Dock.Top);root.Children.Add(note);
             var footer=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};DockPanel.SetDock(footer,Dock.Bottom);root.Children.Add(footer);
             footer.Children.Add(Button("Назад",()=>window.DialogResult=false));
+            footer.Children.Add(Button("Отметить все целые",()=>{foreach(var check in checks)if(check.IsEnabled)check.IsChecked=true;}));
             footer.Children.Add(DockerTheme.Primary(Button("Добавить отмеченные",()=>{
                 for(int i=0;i<cells.Length;i++)if(checks[i].IsChecked==true && cells[i]!=null)approved.Add(new LetterTransferApproved{Letter=(string)choices[i].SelectedItem,Image=cells[i]});
                 if(approved.Count==0){MessageBox.Show(window,"Отметьте хотя бы одну проверенную букву.");return;}window.DialogResult=true;
             })));
-            var tabs=new TabControl();root.Children.Add(tabs);var grid=new UniformGrid{Columns=cells.Length==1?1:2};tabs.Items.Add(new TabItem{Header="Буквы",Content=grid});
+            var tabs=new TabControl();root.Children.Add(tabs);var grid=new UniformGrid{Columns=LetterTransferRules.Columns(cells.Length)};tabs.Items.Add(new TabItem{Header="Буквы",Content=new ScrollViewer{Content=grid,VerticalScrollBarVisibility=ScrollBarVisibility.Auto}});
             tabs.Items.Add(new TabItem{Header="Исходный лист ИИ",Content=new Image{Source=sheet,Stretch=Stretch.Uniform}});
             tabs.Items.Add(new TabItem{Header="Референс",Content=new Image{Source=reference,Stretch=Stretch.Uniform}});
             for(int i=0;i<cells.Length;i++)
             {
-                var card=new DockPanel{Margin=new Thickness(9)};var header=new StackPanel{Orientation=Orientation.Horizontal};DockPanel.SetDock(header,Dock.Top);card.Children.Add(header);
+                var card=new DockPanel{Margin=new Thickness(9)};var header=new WrapPanel{Orientation=Orientation.Horizontal};DockPanel.SetDock(header,Dock.Top);card.Children.Add(header);
                 checks[i]=new CheckBox{Content="Принять",IsEnabled=cells[i]!=null,IsChecked=false,VerticalAlignment=VerticalAlignment.Center};header.Children.Add(checks[i]);
-                choices[i]=new ComboBox{ItemsSource=LetterTransferRules.Alphabet.Select(c=>c.ToString()).ToArray(),SelectedItem=letters[i],Width=65,Margin=new Thickness(8,0,0,0)};header.Children.Add(choices[i]);
-                if(cells[i]!=null)card.Children.Add(new Image{Source=cells[i],Stretch=Stretch.Uniform,Margin=new Thickness(5)});
+                choices[i]=new ComboBox{ItemsSource=LetterTransferRules.Alphabet.Select(c=>c.ToString()).ToArray(),SelectedItem=letters[i],Width=cells.Length>4?50:65,Margin=new Thickness(8,0,0,0)};header.Children.Add(choices[i]);
+                if(cells[i]!=null)card.Children.Add(new Image{Source=cells[i],Height=cells.Length>4?140:Double.NaN,Stretch=Stretch.Uniform,Margin=new Thickness(5)});
                 else card.Children.Add(new TextBlock{Text="Ячейка пустая, обрезана или фон не отделился. Откройте исходный лист, обработайте букву вручную и импортируйте PNG.",TextWrapping=TextWrapping.Wrap,VerticalAlignment=VerticalAlignment.Center});
                 var border=new Border{Child=card,Background=LetterTransferImages.Checker(),BorderThickness=new Thickness(1),Margin=new Thickness(3)};DockerTheme.UseTheme(border,Border.BorderBrushProperty,DockerTheme.BorderBrush);grid.Children.Add(border);
             }
