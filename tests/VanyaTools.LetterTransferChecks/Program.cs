@@ -19,7 +19,7 @@ internal static class Program
         _root=Path.Combine(Path.GetTempPath(),"Vanya-Letter-Checks-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(_root);
         try
         {
-            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();Layouts();Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();
+            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();AdaptiveGrid();IrregularAlphabet();Layouts();Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();
             Console.WriteLine("Letter transfer checks passed: "+_checks+". Offline checks; no Replicate/Corel requests.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
@@ -98,6 +98,8 @@ internal static class Program
         var sheet=LetterTransferImages.Load(path);var original=LetterTransferImages.Pixels(sheet);
         var cells=LetterTransferImages.Extract(sheet,33,"#00FF00",CancellationToken.None);
         Check(cells.All(i=>i!=null),"Saved 4K response rejected one or more of 33 intact letters.");
+        var adaptive=LetterTransferSheet.Read(sheet,LetterTransferRules.Alphabet.Select(c=>c.ToString()).ToArray(),"#00FF00",130,CancellationToken.None);
+        Check(adaptive.Cells.Length==33 && adaptive.Cells.All(c=>c.Image!=null) && !adaptive.LayoutChanged,"Adaptive extraction regressed the previous golden alphabet: count="+adaptive.Cells.Length+", ready="+adaptive.Cells.Count(c=>c.Image!=null)+", changed="+adaptive.LayoutChanged);
         string export=Environment.GetEnvironmentVariable("VANYA_LETTER_ALPHABET_EXPORT");
         for(int n=0;n<cells.Length;n++)
         {
@@ -114,6 +116,80 @@ internal static class Program
             }
         }
         Check(original.SequenceEqual(LetterTransferImages.Pixels(sheet)),"Saved source sheet was mutated.");
+    }
+    private static void AdaptiveGrid()
+    {
+        const int width=360,height=400;var data=LetterTransferImages.Pixels(Solid(width,height,Color.FromRgb(252,203,250)));
+        void Pixel(int x,int y,Color color){int p=(y*width+x)*4;data[p]=color.B;data[p+1]=color.G;data[p+2]=color.R;data[p+3]=255;}
+        int candidate=0;
+        for(int row=0;row<4;row++)
+        {
+            int columns=row<2?3:2,cw=width/columns;
+            for(int col=0;col<columns;col++,candidate++)
+            {
+                for(int y=row*100+20;y<row*100+80;y++)for(int x=col*cw+20;x<(col+1)*cw-20;x++)Pixel(x,y,Colors.White);
+                // The requested key hue is legitimate ink when the model has
+                // replaced the requested background with pale pink.
+                if(candidate==3)for(int y=row*100+32;y<row*100+68;y++)for(int x=col*cw+32;x<(col+1)*cw-32;x++)Pixel(x,y,Colors.Magenta);
+            }
+            for(int x=0;x<width;x++)for(int d=0;d<2;d++){Pixel(x,row*100+d,Colors.Magenta);Pixel(x,(row+1)*100-1-d,Colors.Magenta);}
+            for(int col=0;col<=columns;col++)for(int y=row*100;y<(row+1)*100;y++)for(int d=0;d<2;d++)Pixel(Math.Min(width-1,col*cw+d),y,Colors.Magenta);
+        }
+        var source=BitmapSource.Create(width,height,96,96,PixelFormats.Bgra32,null,data,width*4);source.Freeze();
+        var result=LetterTransferSheet.Read(source,new[]{"А","Б","В","Г","Д","Е","Ё","Ж"},"#FF00FF",130,CancellationToken.None);
+        Check(result.Cells.Length==10 && result.Cells.All(c=>c.Image!=null && c.Safe),"Mixed-column grid discarded intact candidates.");
+        Check(result.LayoutChanged && result.Cells.All(c=>c.Letter==null) && result.Notice.Contains("10"),"Mismatched grid silently mislabels candidates.");
+        var magenta=LetterTransferImages.Pixels(result.Cells[3].Image);
+        Check(Enumerable.Range(0,magenta.Length/4).Any(p=>magenta[p*4+3]>0 && magenta[p*4]>240 && magenta[p*4+2]>240 && magenta[p*4+1]<20),"Observed matte cleanup removed real magenta ink.");
+        Check(data.SequenceEqual(LetterTransferImages.Pixels(source)),"Grid detection mutated original sheet.");
+        var window=LetterTransferReviewWindow.ReviewDialog(null,source,source,result,new List<LetterTransferApproved>());
+        try
+        {
+            var root=(FrameworkElement)window.Content;var size=new Size(950,760);root.Measure(size);root.Arrange(new Rect(size));root.UpdateLayout();
+            var controls=Descendants(root).ToArray();var checks=controls.OfType<CheckBox>().Where(c=>(string)c.Tag=="accept").ToArray();var choices=controls.OfType<ComboBox>().ToArray();
+            Check(controls.OfType<Image>().Count(i=>i.Source!=null)>=10,"Review hides rejected or unassigned previews.");
+            Check(checks.All(c=>!c.IsEnabled) && choices.All(c=>(string)c.SelectedItem=="—"),"Unassigned candidates can be accepted under incorrect labels.");
+            choices[0].SelectedItem="А";Check(checks[0].IsEnabled,"Manual assignment does not allow acceptance.");
+            controls.OfType<Button>().Single(b=>(string)b.Content=="Отметить все целые").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(checks[0].IsChecked==true && checks.Skip(1).All(c=>c.IsChecked!=true),"Bulk acceptance selected unnamed candidates.");
+            var skips=controls.OfType<CheckBox>().Where(c=>(string)c.Tag=="skip").ToArray();skips[1].IsChecked=true;skips[3].IsChecked=true;
+            controls.OfType<Button>().Single(b=>(string)b.Content=="Назначить по порядку").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var active=choices.Where((c,i)=>i!=1 && i!=3).Select(c=>(string)c.SelectedItem).ToArray();
+            Check(active.SequenceEqual(result.Requested) && !checks[1].IsEnabled && !checks[3].IsEnabled,"Order assignment ignored excluded duplicates.");
+            Check(checks.Skip(1).All(c=>c.IsChecked!=true),"Order assignment accepted candidates without review.");
+        }
+        finally{window.Close();}
+        var uniform=LetterTransferSheet.Read(Sheet("#00FF00"),new[]{"А","Б","В","Г"},"#00FF00",130,CancellationToken.None);
+        Check(uniform.Cells.Length==4 && uniform.Cells.All(c=>c.Image!=null) && !uniform.LayoutChanged,"Regular sheet fallback changed existing extraction.");
+    }
+    private static void IrregularAlphabet()
+    {
+        string path=Environment.GetEnvironmentVariable("VANYA_LETTER_IRREGULAR_SHEET");if(String.IsNullOrEmpty(path))return;
+        var sheet=LetterTransferImages.Load(path);var before=LetterTransferImages.Pixels(sheet);
+        var result=LetterTransferSheet.Read(sheet,LetterTransferRules.Alphabet.Select(c=>c.ToString()).ToArray(),"#FF00FF",130,CancellationToken.None);
+        Check(result.Cells.Length==35 && result.Cells.All(c=>c.Image!=null),"Irregular source did not yield all 35 candidates: "+result.Cells.Length);
+        Check(result.LayoutChanged && result.Cells.All(c=>c.Letter==null),"Wrong grid was silently assigned ordered labels.");
+        string export=Environment.GetEnvironmentVariable("VANYA_LETTER_IRREGULAR_EXPORT");
+        for(int n=0;n<result.Cells.Length;n++)
+        {
+            var cell=result.Cells[n];var bytes=LetterTransferImages.Pixels(cell.Image);
+            Console.WriteLine("Candidate "+n+": "+cell.Image.PixelWidth+"x"+cell.Image.PixelHeight+", safe="+cell.Safe+", "+cell.Warning);
+            Check(bytes.Where((b,i)=>i%4==3).All(a=>a==0 || a==255),"Irregular glyph retained partial alpha.");
+            if(!String.IsNullOrEmpty(export))LetterTransferImages.Save(cell.Image,Path.Combine(export,n.ToString("00")+".png"));
+        }
+        Check(before.SequenceEqual(LetterTransferImages.Pixels(sheet)),"Irregular source was mutated.");
+        string labels=Environment.GetEnvironmentVariable("VANYA_LETTER_IRREGULAR_LABELS");
+        if(!String.IsNullOrEmpty(labels) && !String.IsNullOrEmpty(export))
+        {
+            Check(labels.Length==result.Cells.Length && labels.Distinct().Count()==33,"Reviewed recovery labels do not cover the alphabet.");
+            var recovered=new LetterTransferSet{Name="Коллажные буквы · восстановленный набор",HeightMm=20,SheetWidthMm=300};
+            string directory=Path.Combine(export,"recovered-set");
+            for(int n=0;n<labels.Length;n++)LetterTransferImages.Add(directory,recovered,labels[n].ToString(),result.Cells[n].Image,"Разбор сохранённого листа · проверенный порядок");
+            string reference=Environment.GetEnvironmentVariable("VANYA_LETTER_IRREGULAR_REFERENCE");
+            if(!String.IsNullOrEmpty(reference)){recovered.Reference="reference.png";File.Copy(reference,LetterTransferStore.Resolve(directory,recovered.Reference),true);}
+            LetterTransferStore.Save(directory,recovered);
+            Check(LetterTransferStore.Load(directory).Glyphs.Count==35,"Recovery set lost extracted variants.");
+        }
     }
     internal static LetterTransferSet Printable()
     {

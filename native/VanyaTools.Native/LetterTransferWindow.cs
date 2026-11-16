@@ -265,8 +265,8 @@ namespace VanyaTools.Native
         private void Review(LetterTransferJob job)
         {
             if(job.Reviewed){Report("Этот ответ уже проверен. Сохранённые буквы доступны во вкладке «Варианты букв».");return;}
-            var sheet=LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,job.Output));var cells=LetterTransferImages.PrepareBatch(LetterTransferImages.Extract(sheet,job.Letters.Length,job.Key,CancellationToken.None,_set.AlphaThreshold),_set.AlphaThreshold,CancellationToken.None);
-            var approved=LetterTransferReviewWindow.Review(this,LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,job.Reference)),sheet,cells,job.Letters);
+            var sheet=LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,job.Output));var cells=LetterTransferSheet.Read(sheet,job.Letters,job.Key,_set.AlphaThreshold,CancellationToken.None);
+            var approved=LetterTransferReviewWindow.Review(this,LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,job.Reference)),sheet,cells);
             if(approved.Count==0)return;
             foreach(var group in approved.GroupBy(a=>a.Letter))if(_set.Glyphs.Count(g=>g.Letter==group.Key)+group.Count()>8)throw new InvalidOperationException("Слишком много вариантов буквы «"+group.Key+"». Удалите ненужные.");
             foreach(var glyph in approved)LetterTransferImages.Add(_directory,_set,glyph.Letter,glyph.Image,"ИИ · "+job.Id.Substring(0,8));job.Reviewed=true;Save();RefreshAssets();Preview();Report("Добавлено проверенных букв: "+approved.Count+" из "+job.Letters.Length+". Остальные можно догенерировать.");

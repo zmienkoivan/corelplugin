@@ -7,7 +7,7 @@ namespace VanyaTools.Native
     // opaque magenta/foreground mixtures on antialiased outer and inner edges.
     internal static class PatternFillerMatte
     {
-        internal static void Remove(byte[] pixels, int width, int height, CancellationToken cancellation, byte[] expectedMatte = null)
+        internal static void Remove(byte[] pixels, int width, int height, CancellationToken cancellation, byte[] expectedMatte = null, bool reservedHue = true, int tolerance = 40)
         {
             if(expectedMatte==null)expectedMatte=new byte[]{255,0,255};
             if(expectedMatte.Length!=3)throw new ArgumentException("Invalid matte color.");
@@ -24,7 +24,7 @@ namespace VanyaTools.Native
                 {
                     int p = y * width + x, i = p * 4;
                     int blueDistance = expectedMatte[0] - pixels[i], redDistance = expectedMatte[2] - pixels[i + 2], green = pixels[i + 1] - expectedMatte[1];
-                    bool matte = blueDistance * blueDistance + redDistance * redDistance + green * green <= 40 * 40;
+                    bool matte = blueDistance * blueDistance + redDistance * redDistance + green * green <= tolerance * tolerance;
                     if (matte && pixels[i + 3] >= 250)
                     {
                         for (int c = 0; c < 3; c++) histograms[c][pixels[i + c]]++;
@@ -38,7 +38,7 @@ namespace VanyaTools.Native
             // The model may add colored specks to otherwise flat magenta. Remove
             // only matte-like pixels away from real ink; keep mixed edge pixels
             // near an opaque drawing so the unmatting pass can preserve coverage.
-            for (int y = 0; y < height; y++)
+            for (int y = 0; reservedHue && y < height; y++)
             {
                 cancellation.ThrowIfCancellationRequested();
                 for (int x = 0; x < width; x++)
@@ -114,7 +114,7 @@ namespace VanyaTools.Native
                     }
                     if (denominator < 400) continue;
                     double mattePart = numerator / denominator;
-                    bool matteLike = pixels[i + 1] <= 90 && Math.Min(pixels[i], pixels[i + 2]) - pixels[i + 1] >= 90;
+                    bool matteLike = reservedHue && pixels[i + 1] <= 90 && Math.Min(pixels[i], pixels[i + 2]) - pixels[i + 1] >= 90;
                     if (mattePart >= .98 && matteLike)
                     {
                         pixels[i] = pixels[i + 1] = pixels[i + 2] = pixels[i + 3] = 0;

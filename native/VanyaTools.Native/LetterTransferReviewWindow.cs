@@ -37,31 +37,50 @@ namespace VanyaTools.Native
             root.Children.Add(new TextBox{Text=prompt,IsReadOnly=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto});
             return window;
         }
-        internal static List<LetterTransferApproved> Review(Window owner,BitmapSource reference,BitmapSource sheet,BitmapSource[] cells,string[] letters)
+        internal static List<LetterTransferApproved> Review(Window owner,BitmapSource reference,BitmapSource sheet,LetterTransferSheet result)
         {
-            var window=Dialog(owner,"Проверка букв");var root=new DockPanel{Margin=new Thickness(12)};window.Content=root;
-            var checks=new CheckBox[cells.Length];var choices=new ComboBox[cells.Length];var approved=new List<LetterTransferApproved>();
-            var note=new TextBlock{Text="Подготовлено букв: "+cells.Count(c=>c!=null)+" из "+cells.Length+". Проверьте, что в каждой ячейке ровно одна целая буква, верная кириллица и нужный стиль. Отметьте подходящие. Можно исправить обозначение буквы. Непринятые ячейки не добавляются; исходный лист останется в истории.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,10)};DockPanel.SetDock(note,Dock.Top);root.Children.Add(note);
+            var approved=new List<LetterTransferApproved>();var window=ReviewDialog(owner,reference,sheet,result,approved);
+            return window.ShowDialog()==true?approved:new List<LetterTransferApproved>();
+        }
+        internal static Window ReviewDialog(Window owner,BitmapSource reference,BitmapSource sheet,LetterTransferSheet result,List<LetterTransferApproved> approved)
+        {
+            var cells=result.Cells;var window=Dialog(owner,"Проверка букв");var root=new DockPanel{Margin=new Thickness(12)};window.Content=root;
+            var checks=new CheckBox[cells.Length];var choices=new ComboBox[cells.Length];var excluded=new bool[cells.Length];
+            var note=new TextBlock{Text="Подготовлено ячеек: "+cells.Count(c=>c.Image!=null)+" из "+cells.Length+". "+(result.Notice??"")+" Проверьте целостность, кириллицу и стиль. Отметьте подходящие. Непринятые ячейки не добавляются; исходный лист останется в истории.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,10)};DockPanel.SetDock(note,Dock.Top);root.Children.Add(note);
             var footer=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};DockPanel.SetDock(footer,Dock.Bottom);root.Children.Add(footer);
             footer.Children.Add(Button("Назад",()=>window.DialogResult=false));
-            footer.Children.Add(Button("Отметить все целые",()=>{foreach(var check in checks)if(check.IsEnabled)check.IsChecked=true;}));
+            footer.Children.Add(Button("Отметить все целые",()=>{for(int i=0;i<checks.Length;i++)if(checks[i].IsEnabled && cells[i].Safe)checks[i].IsChecked=true;}));
+            if(result.LayoutChanged)footer.Children.Add(Button("Назначить по порядку",()=>{
+                var selected=Enumerable.Range(0,cells.Length).Where(i=>!excluded[i] && cells[i].Image!=null).ToArray();
+                if(selected.Length!=result.Requested.Length){MessageBox.Show(window,"Оставьте "+result.Requested.Length+" ячеек: сейчас "+selected.Length+". Отметьте лишние ячейки или назначьте обозначения вручную.");return;}
+                for(int n=0;n<selected.Length;n++)choices[selected[n]].SelectedItem=result.Requested[n];
+            }));
             footer.Children.Add(DockerTheme.Primary(Button("Добавить отмеченные",()=>{
-                for(int i=0;i<cells.Length;i++)if(checks[i].IsChecked==true && cells[i]!=null)approved.Add(new LetterTransferApproved{Letter=(string)choices[i].SelectedItem,Image=cells[i]});
-                if(approved.Count==0){MessageBox.Show(window,"Отметьте хотя бы одну проверенную букву.");return;}window.DialogResult=true;
+                for(int i=0;i<cells.Length;i++)if(checks[i].IsChecked==true && cells[i].Image!=null && LetterTransferRules.ValidLetter(choices[i].SelectedItem as string))approved.Add(new LetterTransferApproved{Letter=(string)choices[i].SelectedItem,Image=cells[i].Image});
+                if(approved.Count==0){MessageBox.Show(window,"Назначьте обозначения и отметьте хотя бы одну проверенную букву.");return;}window.DialogResult=true;
             })));
             var tabs=new TabControl();root.Children.Add(tabs);var grid=new UniformGrid{Columns=LetterTransferRules.Columns(cells.Length)};tabs.Items.Add(new TabItem{Header="Буквы",Content=new ScrollViewer{Content=grid,VerticalScrollBarVisibility=ScrollBarVisibility.Auto}});
             tabs.Items.Add(new TabItem{Header="Исходный лист ИИ",Content=new Image{Source=sheet,Stretch=Stretch.Uniform}});
             tabs.Items.Add(new TabItem{Header="Референс",Content=new Image{Source=reference,Stretch=Stretch.Uniform}});
             for(int i=0;i<cells.Length;i++)
             {
-                var card=new DockPanel{Margin=new Thickness(9)};var header=new WrapPanel{Orientation=Orientation.Horizontal};DockPanel.SetDock(header,Dock.Top);card.Children.Add(header);
-                checks[i]=new CheckBox{Content="Принять",IsEnabled=cells[i]!=null,IsChecked=false,VerticalAlignment=VerticalAlignment.Center};header.Children.Add(checks[i]);
-                choices[i]=new ComboBox{ItemsSource=LetterTransferRules.Alphabet.Select(c=>c.ToString()).ToArray(),SelectedItem=letters[i],Width=cells.Length>4?50:65,Margin=new Thickness(8,0,0,0)};header.Children.Add(choices[i]);
-                if(cells[i]!=null)card.Children.Add(new Image{Source=cells[i],Height=cells.Length>4?140:Double.NaN,Stretch=Stretch.Uniform,Margin=new Thickness(5)});
-                else card.Children.Add(new TextBlock{Text="Ячейка пустая, обрезана или фон не отделился. Откройте исходный лист, обработайте букву вручную и импортируйте PNG.",TextWrapping=TextWrapping.Wrap,VerticalAlignment=VerticalAlignment.Center});
+                int index=i;var cell=cells[i];var card=new DockPanel{Margin=new Thickness(9)};var header=new WrapPanel{Orientation=Orientation.Horizontal};DockPanel.SetDock(header,Dock.Top);card.Children.Add(header);
+                header.Children.Add(new TextBlock{Text=(i+1)+" · ",VerticalAlignment=VerticalAlignment.Center});
+                checks[i]=new CheckBox{Content="Принять",Tag="accept",IsEnabled=cell.Image!=null && LetterTransferRules.ValidLetter(cell.Letter),IsChecked=false,VerticalAlignment=VerticalAlignment.Center};header.Children.Add(checks[i]);
+                choices[i]=new ComboBox{ItemsSource=new[]{"—"}.Concat(LetterTransferRules.Alphabet.Select(c=>c.ToString())).ToArray(),SelectedItem=cell.Letter??"—",Width=65,Margin=new Thickness(8,0,0,0)};
+                choices[i].SelectionChanged+=(_,__)=>{checks[index].IsEnabled=!excluded[index] && cells[index].Image!=null && LetterTransferRules.ValidLetter(choices[index].SelectedItem as string);if(!checks[index].IsEnabled)checks[index].IsChecked=false;};header.Children.Add(choices[i]);
+                if(result.LayoutChanged)
+                {
+                    var skip=new CheckBox{Content="Лишняя ячейка",Tag="skip",Margin=new Thickness(0,4,0,2)};DockPanel.SetDock(skip,Dock.Top);card.Children.Add(skip);
+                    skip.Checked+=(_,__)=>{excluded[index]=true;checks[index].IsChecked=false;checks[index].IsEnabled=false;choices[index].IsEnabled=false;};
+                    skip.Unchecked+=(_,__)=>{excluded[index]=false;choices[index].IsEnabled=true;checks[index].IsEnabled=cells[index].Image!=null && LetterTransferRules.ValidLetter(choices[index].SelectedItem as string);};
+                }
+                if(!String.IsNullOrEmpty(cell.Warning))
+                {var warning=new TextBlock{Text=cell.Warning,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,3,0,3)};DockPanel.SetDock(warning,Dock.Bottom);card.Children.Add(warning);}
+                card.Children.Add(new Image{Source=cell.Preview,Height=cells.Length>4?140:Double.NaN,Stretch=Stretch.Uniform,Margin=new Thickness(5)});
                 var border=new Border{Child=card,Background=LetterTransferImages.Checker(),BorderThickness=new Thickness(1),Margin=new Thickness(3)};DockerTheme.UseTheme(border,Border.BorderBrushProperty,DockerTheme.BorderBrush);grid.Children.Add(border);
             }
-            return window.ShowDialog()==true?approved:new List<LetterTransferApproved>();
+            return window;
         }
         private static Button Button(string text,Action action)
         {var b=new Button{Content=text,MinHeight=34,Margin=new Thickness(3),Padding=new Thickness(9,4,9,4)};b.Click+=(_,__)=>action();return b;}
