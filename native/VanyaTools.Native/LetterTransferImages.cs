@@ -293,22 +293,46 @@ namespace VanyaTools.Native
                 int end=y;while(end<h && !occupied[end])end++;
                 if(end<h*.45 && last-end+1>=h*.55)return last-end+1;
             }
-            return 0;
+            // A curved breve can overlap the top of И vertically while
+            // remaining a separate shape. Measure connected components when
+            // there is no completely empty horizontal row between them.
+            var seen=new bool[w*h];var queue=new int[w*h];var parts=new List<int[]>();int total=0;
+            for(int start=0;start<w*h;start++)
+            {
+                if(seen[start] || pixels[start*4+3]<130)continue;
+                int head=0,tail=1;queue[0]=start;seen[start]=true;int top=h,bottom=-1;
+                while(head<tail)
+                {
+                    int at=queue[head++],x=at%w,y=at/w;top=Math.Min(top,y);bottom=Math.Max(bottom,y);
+                    for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++)
+                    {
+                        int nx=x+dx,ny=y+dy;if(nx<0 || ny<0 || nx>=w || ny>=h)continue;int next=ny*w+nx;
+                        if(seen[next] || pixels[next*4+3]<130)continue;seen[next]=true;queue[tail++]=next;
+                    }
+                }
+                parts.Add(new[]{tail,top,bottom});total+=tail;
+            }
+            if(parts.Count<2)return 0;var body=parts.OrderByDescending(part=>part[0]).First();
+            bool accent=parts.Any(part=>!ReferenceEquals(part,body) && part[0]>=Math.Max(8,total*.003) && (part[1]+part[2])*.5<body[1] && part[2]<=body[1]+h*.12);
+            return accent && body[2]-body[1]+1>=h*.55 && body[1]>=h*.05?body[2]-body[1]+1:0;
+        }
+        internal static BitmapSource Physical(LetterTransferSet set,string letter,BitmapSource image)
+        {
+            int body=BodyHeight(letter,image);
+            double physicalHeight=(letter=="Ё" || letter=="Й")?(body>0?set.HeightMm*image.PixelHeight/body:set.HeightMm*1.2):set.HeightMm;
+            double dpi=image.PixelHeight*25.4/physicalHeight;
+            var result=BitmapSource.Create(image.PixelWidth,image.PixelHeight,dpi,dpi,PixelFormats.Bgra32,null,Pixels(image),image.PixelWidth*4);result.Freeze();return result;
         }
         internal static LetterTransferGlyph Add(string directory,LetterTransferSet set,string letter,BitmapSource image,string source)
         {
             if(!LetterTransferRules.ValidLetter(letter))throw new ArgumentException("Выберите русскую заглавную букву.");
             if(set.Glyphs.Count>=264 || set.Glyphs.Count(g=>g.Letter==letter)>=8)throw new InvalidOperationException("До 8 сохранённых вариантов на букву. Удалите ненужный вариант.");
-            image=Prepare(image,set.AlphaThreshold,CancellationToken.None);
-            if(image==null)throw new InvalidDataException("После удаления полупрозрачности в букве не осталось видимого рисунка.");
-            // Preserve detail while writing the chosen physical cap height into
-            // the separate PNG. Corel placement still uses current layout size.
-            int body=BodyHeight(letter,image);
-            double physicalHeight=(letter=="Ё" || letter=="Й")?(body>0?set.HeightMm*image.PixelHeight/body:set.HeightMm*1.2):set.HeightMm;
-            double dpi=image.PixelHeight*25.4/physicalHeight;
-            image=BitmapSource.Create(image.PixelWidth,image.PixelHeight,dpi,dpi,PixelFormats.Bgra32,null,Pixels(image),image.PixelWidth*4);image.Freeze();
-            var glyph=new LetterTransferGlyph{Letter=letter,Width=image.PixelWidth,Height=image.PixelHeight,BodyHeight=body,Source=source};
-            glyph.File="glyphs/"+glyph.Id+".png";Save(image,LetterTransferStore.Resolve(directory,glyph.File));set.Glyphs.Add(glyph);return glyph;
+            var original=Prepare(image,set.AlphaThreshold,CancellationToken.None);
+            if(original==null)throw new InvalidDataException("После удаления полупрозрачности в букве не осталось видимого рисунка.");
+            image=Physical(set,letter,LetterTransferEdges.Process(original,set.EdgeTrimPx,set.AlphaThreshold,set.SmoothEdges,CancellationToken.None));
+            var glyph=new LetterTransferGlyph{Letter=letter,Width=image.PixelWidth,Height=image.PixelHeight,BodyHeight=BodyHeight(letter,image),Source=source,EdgeTrimPx=set.EdgeTrimPx,Smoothed=set.SmoothEdges};
+            glyph.OriginalFile="glyphs/"+glyph.Id+"-source.png";glyph.File="glyphs/"+glyph.Id+".png";
+            Save(original,LetterTransferStore.Resolve(directory,glyph.OriginalFile));Save(image,LetterTransferStore.Resolve(directory,glyph.File));set.Glyphs.Add(glyph);return glyph;
         }
     }
 }

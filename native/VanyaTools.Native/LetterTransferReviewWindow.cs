@@ -13,7 +13,7 @@ namespace VanyaTools.Native
     internal sealed class LetterTransferApproved
     {
         internal string Letter;
-        internal BitmapSource Image;
+        internal BitmapSource Image,Original;
     }
     internal static class LetterTransferReviewWindow
     {
@@ -70,7 +70,7 @@ namespace VanyaTools.Native
                 note.Text=message;
             }));
             footer.Children.Add(DockerTheme.Primary(Button("Добавить отмеченные",()=>{
-                for(int i=0;i<cells.Length;i++)if(checks[i].IsChecked==true && cells[i].Image!=null && LetterTransferRules.ValidLetter(choices[i].SelectedItem as string))approved.Add(new LetterTransferApproved{Letter=(string)choices[i].SelectedItem,Image=cells[i].Image});
+                for(int i=0;i<cells.Length;i++)if(checks[i].IsChecked==true && cells[i].Image!=null && LetterTransferRules.ValidLetter(choices[i].SelectedItem as string))approved.Add(new LetterTransferApproved{Letter=(string)choices[i].SelectedItem,Image=cells[i].Image,Original=cells[i].Original});
                 if(approved.Count==0){MessageBox.Show(window,"Назначьте обозначения и отметьте хотя бы одну проверенную букву.");return;}window.DialogResult=true;
             })));
             var palette=new StackPanel();DockPanel.SetDock(palette,Dock.Top);root.Children.Add(palette);

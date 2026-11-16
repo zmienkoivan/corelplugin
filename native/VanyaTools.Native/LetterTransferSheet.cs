@@ -10,7 +10,7 @@ namespace VanyaTools.Native
 {
     internal sealed class LetterTransferCell
     {
-        internal BitmapSource Image,Preview;
+        internal BitmapSource Image,Preview,Original;
         internal string Letter,Warning;
         internal bool Safe,Recognized,RecognitionUncertain,Manual,Excluded;
     }

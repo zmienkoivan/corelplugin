@@ -68,7 +68,7 @@ internal static class RecognitionChecks
         for(int n=0;n<4;n++)for(int y=20;y<80;y++)for(int x=20;x<80;x++){int p=((n/2*100+y)*200+n%2*100+x)*4;pixels[p]=pixels[p+1]=pixels[p+2]=255;}
         image=System.Windows.Media.Imaging.BitmapSource.Create(200,200,96,96,PixelFormats.Bgra32,null,pixels,800);image.Freeze();LetterTransferImages.Save(image,LetterTransferStore.Resolve(directory,job.Output));
         bool allow=false,accept=false;int confirmations=0,reviews=0,calls=ReplicateWorkerClient.Calls;ReplicateWorkerClient.RecognitionResponse=Reply();
-        var window=new LetterTransferWindow(()=>"synthetic-key",()=>null,(_,__)=>{},library,confirmRecognition:(preview,count,prompt,retry)=>{confirmations++;return allow;},review:(reference,sheet,cells)=>{reviews++;if(!accept)return new List<LetterTransferApproved>();return cells.Cells.Select(c=>new LetterTransferApproved{Letter=c.Letter,Image=c.Image}).ToList();});
+        var window=new LetterTransferWindow(()=>"synthetic-key",()=>null,(_,__)=>{},library,confirmRecognition:(preview,count,prompt,retry)=>{confirmations++;return allow;},review:(reference,sheet,cells)=>{reviews++;if(!accept)return new List<LetterTransferApproved>();return cells.Cells.Select(c=>new LetterTransferApproved{Letter=c.Letter,Image=c.Image,Original=c.Original}).ToList();});
         var previous=SynchronizationContext.Current;SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(window.Dispatcher));
         var activeSet=(LetterTransferSet)typeof(LetterTransferWindow).GetField("_set",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);job=activeSet.Jobs.Single();
         void Review(bool missingOnly=false)

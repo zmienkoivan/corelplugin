@@ -17,6 +17,9 @@ namespace VanyaTools.Native
         public double SheetHeightMm { get; set; }=450;
         public bool AutoLength { get; set; }=true;
         public int AlphaThreshold { get; set; }=130;
+        public int EdgeTrimPx { get; set; }=1;
+        public bool SmoothEdges { get; set; }=true;
+        public string GenerationModel { get; set; }=LetterTransferModels.Nano2;
         public double GapMm { get; set; }=3;
         public double MarginMm { get; set; }=5;
         public int VariantsPerLetter { get; set; }=1;
@@ -37,6 +40,9 @@ namespace VanyaTools.Native
         public string Id { get; set; }=Guid.NewGuid().ToString("N");
         public string Letter { get; set; }
         public string File { get; set; }
+        public string OriginalFile { get; set; }
+        public bool Smoothed { get; set; }
+        public int EdgeTrimPx { get; set; }
         public int Width { get; set; }
         public int Height { get; set; }
         public int BodyHeight { get; set; }
@@ -89,13 +95,13 @@ namespace VanyaTools.Native
                 set.Letters.Select(row=>row.Letter).Distinct().Count()!=33 || set.Letters.Sum(row=>row.Copies)>5000)
                 throw new ArgumentException("Проверьте таблицу русских заглавных букв и количество копий (до 5000).");
             if(!In(set.HeightMm,1,500) || !In(set.SheetWidthMm,20,2000) || !In(set.SheetHeightMm,20,7000) || !In(set.GapMm,0,50) || !In(set.MarginMm,0,100) ||
-                set.SheetWidthMm<=2*set.MarginMm || (!set.AutoLength && set.SheetHeightMm<=2*set.MarginMm) || set.VariantsPerLetter<1 || set.VariantsPerLetter>4 || set.TargetCopies<33 || set.TargetCopies>5000 || set.AlphaThreshold<1 || set.AlphaThreshold>255)
+                set.SheetWidthMm<=2*set.MarginMm || (!set.AutoLength && set.SheetHeightMm<=2*set.MarginMm) || set.VariantsPerLetter<1 || set.VariantsPerLetter>4 || set.TargetCopies<33 || set.TargetCopies>5000 || set.AlphaThreshold<1 || set.AlphaThreshold>255 || set.EdgeTrimPx<0 || set.EdgeTrimPx>6 || !LetterTransferModels.Supports(set.GenerationModel))
                 throw new ArgumentException("Проверьте размер букв, листа, поля и количество вариантов.");
-            if(set.Glyphs==null || set.Glyphs.Count>264 || set.Glyphs.Any(g=>g==null || !Guid.TryParseExact(g.Id,"N",out _) || !ValidLetter(g.Letter) || g.Width<1 || g.Height<1 || g.Width>10000 || g.Height>10000 || g.BodyHeight<0 || g.BodyHeight>g.Height || (long)g.Width*g.Height>25000000) ||
+            if(set.Glyphs==null || set.Glyphs.Count>264 || set.Glyphs.Any(g=>g==null || !Guid.TryParseExact(g.Id,"N",out _) || !ValidLetter(g.Letter) || g.Width<1 || g.Height<1 || g.Width>10000 || g.Height>10000 || g.BodyHeight<0 || g.BodyHeight>g.Height || g.EdgeTrimPx<0 || g.EdgeTrimPx>6 || (long)g.Width*g.Height>25000000) ||
                 set.Glyphs.Select(g=>g.Id).Distinct().Count()!=set.Glyphs.Count || set.Jobs==null || set.Jobs.Count>200 || set.Jobs.Select(j=>j?.Id).Distinct().Count()!=set.Jobs.Count)
                 throw new ArgumentException("Некорректные рисунки или история генераций набора.");
             foreach(var job in set.Jobs)if(job==null || !Guid.TryParseExact(job.Id,"N",out _) || job.Letters==null || job.Letters.Length<1 || job.Letters.Length>33 || job.Letters.Any(letter=>!ValidLetter(letter)) ||
-                job.Letters.Distinct().Count()!=job.Letters.Length || (job.Model!="google/nano-banana-2" && job.Model!="google/nano-banana-pro") || (job.Resolution!="2K" && job.Resolution!="4K") || (job.Letters.Length>4 && job.Resolution!="4K") || String.IsNullOrWhiteSpace(job.Prompt) || job.Prompt.Length>16000 || !LetterTransferImages.ValidKey(job.Key))
+                job.Letters.Distinct().Count()!=job.Letters.Length || !LetterTransferModels.Supports(job.Model) || (job.Resolution!="2K" && job.Resolution!="4K") || (job.Letters.Length>4 && job.Resolution!="4K") || String.IsNullOrWhiteSpace(job.Prompt) || job.Prompt.Length>16000 || job.Model==LetterTransferModels.Seedream && job.Prompt.Length>4000 || !LetterTransferImages.ValidKey(job.Key))
                 throw new ArgumentException("Некорректное сохранённое задание ИИ.");
         }
         internal static List<string[]> MissingPasses(LetterTransferSet set)

@@ -56,7 +56,7 @@ namespace VanyaTools.Native
         private static void ValidateFiles(string directory,LetterTransferSet set)
         {
             if(!String.IsNullOrEmpty(set.Reference))Resolve(directory,set.Reference);
-            foreach(var glyph in set.Glyphs)Resolve(directory,glyph.File);
+            foreach(var glyph in set.Glyphs){Resolve(directory,glyph.File);if(!String.IsNullOrEmpty(glyph.OriginalFile))Resolve(directory,glyph.OriginalFile);}
             foreach(var job in set.Jobs){Resolve(directory,job.Reference);Resolve(directory,job.Output);}
         }
         internal static List<LetterTransferLibraryItem> List(string root)

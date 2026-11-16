@@ -19,7 +19,7 @@ internal static class Program
         _root=Path.Combine(Path.GetTempPath(),"Vanya-Letter-Checks-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(_root);
         try
         {
-            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();AdaptiveGrid();IrregularAlphabet();Layouts();GridAndLabelChecks.Run(_root);Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();RecognitionChecks.Run(_root);
+            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();AdaptiveGrid();IrregularAlphabet();Layouts();GridAndLabelChecks.Run(_root);Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();RecognitionChecks.Run(_root);AlternativeAndEdgeChecks.Run(_root);
             Console.WriteLine("Letter transfer checks passed: "+_checks+". Offline checks; no Replicate/Corel requests.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
@@ -104,6 +104,8 @@ internal static class Program
         for(int n=0;n<cells.Length;n++)
         {
             var bytes=LetterTransferImages.Pixels(cells[n]);
+            var inset=LetterTransferEdges.Process(cells[n],1,130,true,CancellationToken.None);
+            if(n==6 || n==10)Check(LetterTransferImages.BodyHeight(n==6?"Ё":"Й",inset)>0,"Observed golden accent was lost during inset.");
             Check(bytes.Where((b,i)=>i%4==3).All(a=>a==0 || a==255),"Saved alphabet retained partial alpha.");
             Check(Enumerable.Range(0,bytes.Length/4).All(p=>bytes[p*4+3]!=0 || (bytes[p*4]==0 && bytes[p*4+1]==0 && bytes[p*4+2]==0)),"Saved alphabet has hidden matte RGB.");
             Check(Enumerable.Range(0,bytes.Length/4).All(p=>bytes[p*4+3]==0 || bytes[p*4+1]-Math.Max(bytes[p*4],bytes[p*4+2])<50),"Saved alphabet retained a green matte rim.");
@@ -173,6 +175,8 @@ internal static class Program
         for(int n=0;n<result.Cells.Length;n++)
         {
             var cell=result.Cells[n];var bytes=LetterTransferImages.Pixels(cell.Image);
+            var inset=LetterTransferEdges.Process(cell.Image,1,130,true,CancellationToken.None);var cleaned=LetterTransferImages.Pixels(inset);
+            Check(cleaned.Where((b,i)=>i%4==3 && b>0).Count()>=bytes.Where((b,i)=>i%4==3 && b>0).Count()*.8,"Edge inset removed too much of an observed collage glyph.");
             Console.WriteLine("Candidate "+n+": "+cell.Image.PixelWidth+"x"+cell.Image.PixelHeight+", safe="+cell.Safe+", "+cell.Warning);
             Check(bytes.Where((b,i)=>i%4==3).All(a=>a==0 || a==255),"Irregular glyph retained partial alpha.");
             if(!String.IsNullOrEmpty(export))LetterTransferImages.Save(cell.Image,Path.Combine(export,n.ToString("00")+".png"));

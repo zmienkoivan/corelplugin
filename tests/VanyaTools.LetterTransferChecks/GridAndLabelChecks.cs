@@ -25,7 +25,11 @@ internal static class GridAndLabelChecks
         Box(20,0,15,10);Box(65,0,15,10);Box(0,20,100,100);
         var image=BitmapSource.Create(w,h,96,96,PixelFormats.Bgra32,null,bytes,w*4);image.Freeze();
         Program.Check(LetterTransferImages.BodyHeight("Ё",image)==100 && LetterTransferImages.BodyHeight("Й",image)==100,"Detached accent body was measured incorrectly.");
-        set=new LetterTransferSet{HeightMm=20,SheetWidthMm=130};foreach(var row in set.Letters)row.Copies=0;
+        var overlap=new byte[120*140*4];
+        for(int y=0;y<140;y++)for(int x=0;x<120;x++)if(y>=25 && (x<21 || y>=55) || y<40 && x>=50 && x<90)overlap[(y*120+x)*4+3]=255;
+        var overlappingAccent=BitmapSource.Create(120,140,96,96,PixelFormats.Bgra32,null,overlap,480);overlappingAccent.Freeze();
+        Program.Check(LetterTransferImages.BodyHeight("Й",overlappingAccent)==115,"Curved accent overlapping the cap vertically was mistaken for the body.");
+        set=new LetterTransferSet{HeightMm=20,SheetWidthMm=130,EdgeTrimPx=0};foreach(var row in set.Letters)row.Copies=0;
         string directory=LetterTransferStore.Create(Path.Combine(root,"accent-grid"),set);
         foreach(string letter in new[]{"Е","Ё","И","Й"})
         {
@@ -54,7 +58,7 @@ internal static class GridAndLabelChecks
         var sheet=LetterTransferSheet.Read(image,job.Letters,job.Key,130,System.Threading.CancellationToken.None);
         for(int n=0;n<8;n++)LetterTransferImages.Add(directory,set,job.Letters[n],sheet.Cells[n].Image,"ИИ · "+job.Id.Substring(0,8));job.Reviewed=true;LetterTransferStore.Save(directory,set);
         int calls=ReplicateWorkerClient.Calls,reviews=0;
-        var window=new LetterTransferWindow(()=>"synthetic-key",()=>null,(_,__)=>{},library,confirmRecognition:(preview,count,prompt,retry)=>false,review:(reference,source,cells)=>{reviews++;return cells.Cells.Select(c=>new LetterTransferApproved{Letter=c.Letter,Image=c.Image}).ToList();});
+        var window=new LetterTransferWindow(()=>"synthetic-key",()=>null,(_,__)=>{},library,confirmRecognition:(preview,count,prompt,retry)=>false,review:(reference,source,cells)=>{reviews++;return cells.Cells.Select(c=>new LetterTransferApproved{Letter=c.Letter,Image=c.Image,Original=c.Original}).ToList();});
         try
         {
             typeof(LetterTransferWindow).GetMethod("CompleteAlphabet",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).Invoke(window,null);
