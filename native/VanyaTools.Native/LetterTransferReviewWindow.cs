@@ -22,13 +22,13 @@ namespace VanyaTools.Native
             var window=new Window{Owner=owner,Title=title+" · Vanya Tools",Width=Math.Min(950,SystemParameters.WorkArea.Width-30),Height=Math.Min(760,SystemParameters.WorkArea.Height-30),MinWidth=650,MinHeight=450,WindowStartupLocation=WindowStartupLocation.CenterOwner};
             DockerTheme.Apply(window);return window;
         }
-        internal static bool Confirm(Window owner,BitmapSource reference,string[] letters,string model,string resolution,string prompt,bool retry=false)
+        internal static bool Confirm(Window owner,BitmapSource reference,string[] letters,string model,string resolution,string prompt,bool retry=false,string sequenceNote=null)
         {
-            return Confirmation(owner,reference,letters,model,resolution,prompt,retry).ShowDialog()==true;
+            return Confirmation(owner,reference,letters,model,resolution,prompt,retry,sequenceNote).ShowDialog()==true;
         }
-        internal static Window Confirmation(Window owner,BitmapSource reference,string[] letters,string model,string resolution,string prompt,bool retry=false)
+        internal static Window Confirmation(Window owner,BitmapSource reference,string[] letters,string model,string resolution,string prompt,bool retry=false,string sequenceNote=null)
         {
-            string note="Отправить это превью в "+model+" через Replicate?\nБуквы: "+String.Join(", ",letters)+" · "+resolution+" · один платный запрос.\nПревью референса: "+reference.PixelWidth+" × "+reference.PixelHeight+" px."+
+            string note=(String.IsNullOrWhiteSpace(sequenceNote)?"":sequenceNote+"\n")+"Отправить это превью в "+model+" через Replicate?\nБуквы: "+String.Join(", ",letters)+" · "+resolution+" · один платный запрос.\nПревью референса: "+reference.PixelWidth+" × "+reference.PixelHeight+" px."+
                 (retry?"\nСохранённый запрос будет продолжен. Если предыдущая генерация завершилась ошибкой или была отменена, повтор создаст новый платный запрос.":"");
             return ConfirmationDialog(owner,"Отправка референса в ИИ",reference,note,prompt);
         }

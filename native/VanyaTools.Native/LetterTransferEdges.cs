@@ -41,15 +41,17 @@ namespace VanyaTools.Native
                     distance[p]=(byte)d;
                 }
             }
+            var thin=ThinComponents(data,distance,w,h,pixels,cancel);
             for(int y=0;y<h;y++)
             {
                 cancel.ThrowIfCancellationRequested();
                 for(int x=0;x<w;x++)
                 {
                     int p=y*w+x,d=distance[p];if(d==0 || d>pixels)continue;
-                    // Preserve local ridges of narrow strokes and detached
-                    // accents, rather than erasing a thin detail completely.
-                    bool ridge=true;
+                    // Preserve a genuinely thin separate stroke or accent.
+                    // A narrow background ridge attached to a thick letter is
+                    // part of the requested inset and must not survive as hair.
+                    bool ridge=thin[p];
                     for(int dy=-1;dy<=1 && ridge;dy++)for(int dx=-1;dx<=1;dx++)
                     {int nx=x+dx,ny=y+dy;if(nx>=0 && ny>=0 && nx<w && ny<h && distance[ny*w+nx]>d){ridge=false;break;}}
                     if(!ridge){int i=p*4;data[i]=data[i+1]=data[i+2]=data[i+3]=0;}
@@ -57,6 +59,26 @@ namespace VanyaTools.Native
             }
             var result=BitmapSource.Create(w,h,image.DpiX,image.DpiY,PixelFormats.Bgra32,null,data,w*4);result.Freeze();
             return LetterTransferImages.Prepare(result,threshold,cancel);
+        }
+        private static bool[] ThinComponents(byte[] data,byte[] distance,int width,int height,int inset,CancellationToken cancel)
+        {
+            int count=width*height;var thin=new bool[count];var seen=new bool[count];var queue=new int[count];
+            for(int start=0;start<count;start++)
+            {
+                if(seen[start] || data[start*4+3]==0)continue;cancel.ThrowIfCancellationRequested();
+                int head=0,tail=1,peak=0;queue[0]=start;seen[start]=true;
+                while(head<tail)
+                {
+                    int at=queue[head++],x=at%width,y=at/width;peak=Math.Max(peak,distance[at]);
+                    for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++)
+                    {
+                        int nx=x+dx,ny=y+dy;if(nx<0 || ny<0 || nx>=width || ny>=height)continue;int next=ny*width+nx;
+                        if(seen[next] || data[next*4+3]==0)continue;seen[next]=true;queue[tail++]=next;
+                    }
+                }
+                if(peak<=inset+1)for(int i=0;i<tail;i++)thin[queue[i]]=true;
+            }
+            return thin;
         }
         internal static BitmapSource Process(BitmapSource source,int pixels,int threshold,bool smooth,CancellationToken cancel)
         {

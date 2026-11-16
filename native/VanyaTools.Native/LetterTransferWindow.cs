@@ -51,11 +51,11 @@ namespace VanyaTools.Native
         private readonly Stopwatch _elapsed=new Stopwatch();
         private readonly Button _cancel;
         private CancellationTokenSource _request;
-        private string _stage="",_timingKey;
+        private string _stage="",_timingKey,_sequenceNote;
         private double _zoom=1;
         internal LetterTransferWindow(Func<string> token,Func<string> capture,Action<string,bool> status,string libraryRoot=null,Func<BitmapSource,string[],string,string,string,bool,bool> confirm=null,Func<string> captureReference=null,Func<BitmapSource,int,string,bool,bool> confirmRecognition=null,Func<BitmapSource,BitmapSource,LetterTransferSheet,List<LetterTransferApproved>> review=null)
         {
-            _token=token;_capture=capture;_captureReference=captureReference??capture;_status=status;_root=libraryRoot??LetterTransferStore.DefaultRoot;_confirm=confirm??((reference,letters,model,resolution,prompt,retry)=>LetterTransferReviewWindow.Confirm(this,reference,letters,model,resolution,prompt,retry));
+            _token=token;_capture=capture;_captureReference=captureReference??capture;_status=status;_root=libraryRoot??LetterTransferStore.DefaultRoot;_confirm=confirm??((reference,letters,model,resolution,prompt,retry)=>LetterTransferReviewWindow.Confirm(this,reference,letters,model,resolution,prompt,retry,_sequenceNote));
             _confirmRecognition=confirmRecognition??((preview,count,prompt,retry)=>LetterTransferReviewWindow.ConfirmRecognition(this,preview,count,prompt,retry));
             _review=review??((reference,sheet,cells)=>LetterTransferReviewWindow.Review(this,reference,sheet,cells));
             Title="Буквы-трансферы · Vanya Tools";Width=Math.Min(1380,SystemParameters.WorkArea.Width-30);Height=Math.Min(900,SystemParameters.WorkArea.Height-30);MinWidth=1000;MinHeight=640;WindowStartupLocation=WindowStartupLocation.CenterOwner;DockerTheme.Apply(this);
@@ -156,9 +156,11 @@ namespace VanyaTools.Native
             if(_set==null || _saving)return;_saving=true;try{Read();LetterTransferStore.Save(_directory,_set);}finally{_saving=false;}
         }
         private void Queue(){if(_loading || _set==null)return;_refresh.Stop();_refresh.Start();}
+        private void RefreshCounts()
+        {foreach(var row in _set.Letters)row.Ready=_set.Glyphs.Count(g=>g.Letter==row.Letter)+" / "+_set.VariantsPerLetter;_table.Items.Refresh();}
         private void RefreshAssets()
         {
-            foreach(var row in _set.Letters)row.Ready=_set.Glyphs.Count(g=>g.Letter==row.Letter).ToString();_table.Items.Refresh();_glyphs.Items.Clear();
+            RefreshCounts();_glyphs.Items.Clear();
             foreach(var glyph in _set.Glyphs.OrderBy(g=>LetterTransferRules.Alphabet.IndexOf(g.Letter,StringComparison.Ordinal)))
             {
                 var panel=new StackPanel{Orientation=Orientation.Horizontal,Background=Brushes.LightGray};panel.Children.Add(new Image{Source=Thumb(glyph.File),Width=72,Height=65,Stretch=Stretch.Uniform,Margin=new Thickness(5)});
@@ -175,7 +177,7 @@ namespace VanyaTools.Native
         }
         private void Preview()
         {
-            _pages.Children.Clear();var placements=LetterTransferLayout.Build(_set,_readyOnly.IsChecked==true);int pages=placements.Count==0?0:placements.Max(p=>p.Page)+1;
+            RefreshCounts();_pages.Children.Clear();var placements=LetterTransferLayout.Build(_set,_readyOnly.IsChecked==true);int pages=placements.Count==0?0:placements.Max(p=>p.Page)+1;
             if(pages>200)throw new InvalidOperationException("Получается больше 200 листов. Увеличьте лист или уменьшите количество / размер букв.");
             foreach(var group in placements.GroupBy(p=>p.Page))
             {
@@ -197,8 +199,9 @@ namespace VanyaTools.Native
                 drawing.Freeze();var border=new Border{Child=new Image{Source=new DrawingImage(drawing),Width=_set.SheetWidthMm*2,Height=pageHeight*2},Margin=new Thickness(8)};_pages.Children.Add(border);
             }
             _pages.LayoutTransform=new ScaleTransform(_zoom,_zoom);int requested=_set.Letters.Sum(r=>r.Copies);int missing=_set.Letters.Count(r=>!_set.Glyphs.Any(g=>g.Letter==r.Letter));
-            _complete.Content=missing>0?"Получить все буквы · нет "+missing+"…":"Все 33 буквы готовы";_complete.IsEnabled=missing>0;
-            _summary.Text="На листах: "+placements.Count+" из "+requested+" копий · листов: "+pages+" · нет букв: "+missing+" · длина "+N(placements.GroupBy(p=>p.Page).Sum(g=>LetterTransferLayout.PageHeight(_set,g)))+" мм\nПрямая сетка · основа "+N(_set.HeightMm)+" мм; Ё/Й выше · Ctrl+колесо — зум. Исходные PNG сохраняются без масштабирования.";
+            int missingVariants=LetterTransferRules.MissingVariants(_set);
+            _complete.Content=missingVariants>0?"Довести до "+_set.VariantsPerLetter+" · не хватает "+missingVariants+"…":"Готово · по "+_set.VariantsPerLetter+" на букву";_complete.IsEnabled=missingVariants>0;
+            _summary.Text="На листах: "+placements.Count+" из "+requested+" копий · листов: "+pages+" · нет букв: "+missing+" · длина "+N(placements.GroupBy(p=>p.Page).Sum(g=>LetterTransferLayout.PageHeight(_set,g)))+" мм\nВариантов не хватает: "+missingVariants+" · цель: "+_set.VariantsPerLetter+" на каждую букву.\nПрямая сетка · основа "+N(_set.HeightMm)+" мм; Ё/Й выше · Ctrl+колесо — зум. Исходные PNG сохраняются без масштабирования.";
         }
         private void Zoom(double value){_zoom=Math.Max(.1,Math.Min(5,value));_pages.LayoutTransform=new ScaleTransform(_zoom,_zoom);}
         private void Reference(bool corel)
@@ -229,14 +232,20 @@ namespace VanyaTools.Native
             try
             {
                 Save();string token=_token();if(String.IsNullOrWhiteSpace(token))throw new InvalidOperationException("Укажите ключ Replicate в настройках ИИ.");
-                var passes=selected?new List<string[]>{_table.SelectedItems.Cast<LetterTransferRow>().Select(r=>r.Letter).Distinct().ToArray()}:LetterTransferRules.MissingPasses(_set);
-                if(passes.Count==0 || passes[0].Length==0)throw new InvalidOperationException(selected?"Выберите строки букв в таблице.":"Весь алфавит уже сохранён в выбранном числе оформлений.");
+                var targets=selected?_table.SelectedItems.Cast<LetterTransferRow>().Select(r=>r.Letter).Distinct().ToArray():LetterTransferRules.Alphabet.Select(c=>c.ToString()).ToArray();
+                if(targets.Length==0)throw new InvalidOperationException("Выберите строки букв в таблице.");
+                var passes=LetterTransferRules.MissingPasses(_set,targets);bool extra=selected && passes.Count==0;
+                if(extra)passes.Add(targets);
+                if(passes.Count==0)throw new InvalidOperationException("Весь алфавит уже сохранён в выбранном числе оформлений.");
+                var limits=targets.ToDictionary(l=>l,l=>extra?_set.Glyphs.Count(g=>g.Letter==l)+1:_set.VariantsPerLetter);
                 if(String.IsNullOrWhiteSpace(_set.Reference))throw new InvalidOperationException("Сначала добавьте референс стиля из файла или выделения Corel.");
                 var reference=LetterTransferImages.RequestReference(LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,_set.Reference)));
                 string model=_set.GenerationModel;
                 _sequenceBusy=true;
-                foreach(string[] letters in passes)
+                for(int pass=0;pass<passes.Count;pass++)
                 {
+                    var letters=passes[pass].Where(l=>_set.Glyphs.Count(g=>g.Letter==l)<limits[l]).ToArray();if(letters.Length==0)continue;
+                    _sequenceNote="Запрос "+(pass+1)+" из "+passes.Count+" · "+(extra?"ещё один вариант выбранных букв":"цель: "+_set.VariantsPerLetter+" оформления каждой буквы")+". Каждый запрос подтверждается отдельно.";
                     if(_set.Jobs.Count>=200)throw new InvalidOperationException("В наборе уже 200 запросов. Создайте новый набор.");
                     if(letters.Any(l=>_set.Glyphs.Count(g=>g.Letter==l)>=8))throw new InvalidOperationException("На букву можно сохранить до 8 вариантов. Удалите ненужные.");
                     string resolution=letters.Length>4?"4K":(string)_resolution.SelectedItem;
@@ -245,13 +254,13 @@ namespace VanyaTools.Native
                     var before=letters.ToDictionary(l=>l,l=>_set.Glyphs.Count(g=>g.Letter==l));
                     var job=LetterTransferAi.Create(_directory,_set,letters,model,resolution,reference);
                     if(!await Run(job,token))return;
-                    var missing=letters.Where(l=>_set.Glyphs.Count(g=>g.Letter==l)<=before[l]).ToArray();
-                    if(missing.Length>0){Report("Лист проверен. Осталось букв: "+missing.Length+". Выберите их в таблице для догенерации; повтор автоматически не отправляется.");return;}
+                    if(letters.All(l=>_set.Glyphs.Count(g=>g.Letter==l)<=before[l])){Report("Новых вариантов не принято. Серия остановлена; оставшиеся запросы не отправлены.");return;}
                 }
-                Report(selected?"Выбранные буквы сохранены.":"Полный алфавит сохранён: 33 буквы, оформлений на букву — "+_set.VariantsPerLetter+". Можно компоновать полотно.");
+                int missing=targets.Sum(l=>Math.Max(0,limits[l]-_set.Glyphs.Count(g=>g.Letter==l)));
+                Report(missing>0?"Серия проверена. До выбранной цели не хватает вариантов: "+missing+". Нажмите «Довести до "+_set.VariantsPerLetter+"» для оставшихся букв; новые запросы потребуют подтверждения.":selected?"Выбранные буквы сохранены.":"Полный алфавит сохранён: 33 буквы, оформлений на букву — "+_set.VariantsPerLetter+". Можно компоновать полотно.");
             }
             catch(Exception error){Failure(error);}
-            finally{_sequenceBusy=false;}
+            finally{_sequenceBusy=false;_sequenceNote=null;}
         }
         private LetterTransferJob SelectedJob()=>((_jobs.SelectedItem as ListBoxItem)?.Tag as LetterTransferJob)??_set.Jobs.LastOrDefault(j=>!j.Reviewed);
         private async void Retry()
@@ -295,6 +304,7 @@ namespace VanyaTools.Native
             try
             {
                 Save();var missing=new HashSet<string>(_set.Letters.Where(r=>!_set.Glyphs.Any(g=>g.Letter==r.Letter)).Select(r=>r.Letter));
+                if(missing.Count==0){Generate(false);return;}
                 var job=_set.Jobs.AsEnumerable().Reverse().FirstOrDefault(j=>j.Letters.Any(missing.Contains) && LetterTransferAi.HasResult(_directory,j));
                 if(job==null){Generate(false);return;}
                 await Review(job,false,true);

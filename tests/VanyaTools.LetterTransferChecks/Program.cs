@@ -19,7 +19,7 @@ internal static class Program
         _root=Path.Combine(Path.GetTempPath(),"Vanya-Letter-Checks-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(_root);
         try
         {
-            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();AdaptiveGrid();IrregularAlphabet();Layouts();GridAndLabelChecks.Run(_root);Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();RecognitionChecks.Run(_root);AlternativeAndEdgeChecks.Run(_root);ContentGridChecks.Run(_root);LightGridChecks.Run(_root);
+            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();AdaptiveGrid();IrregularAlphabet();Layouts();GridAndLabelChecks.Run(_root);Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();RecognitionChecks.Run(_root);AlternativeAndEdgeChecks.Run(_root);ContentGridChecks.Run(_root);LightGridChecks.Run(_root);VariantSequenceChecks.Run(_root);
             Console.WriteLine("Letter transfer checks passed: "+_checks+". Offline checks; no Replicate/Corel requests.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}

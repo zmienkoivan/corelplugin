@@ -104,12 +104,13 @@ namespace VanyaTools.Native
                 job.Letters.Distinct().Count()!=job.Letters.Length || !LetterTransferModels.Supports(job.Model) || (job.Resolution!="2K" && job.Resolution!="4K") || (job.Letters.Length>4 && job.Resolution!="4K") || String.IsNullOrWhiteSpace(job.Prompt) || job.Prompt.Length>16000 || job.Model==LetterTransferModels.Seedream && job.Prompt.Length>4000 || !LetterTransferImages.ValidKey(job.Key))
                 throw new ArgumentException("Некорректное сохранённое задание ИИ.");
         }
-        internal static List<string[]> MissingPasses(LetterTransferSet set)
+        internal static int MissingVariants(LetterTransferSet set)=>Alphabet.Sum(letter=>Math.Max(0,set.VariantsPerLetter-set.Glyphs.Count(g=>g.Letter==letter.ToString())));
+        internal static List<string[]> MissingPasses(LetterTransferSet set,IEnumerable<string> scope=null)
         {
-            Validate(set);var passes=new List<string[]>();
+            Validate(set);var allowed=scope==null?new HashSet<string>(Alphabet.Select(c=>c.ToString())):new HashSet<string>(scope);var passes=new List<string[]>();
             for(int variant=1;variant<=set.VariantsPerLetter;variant++)
             {
-                var letters=Alphabet.Select(c=>c.ToString()).Where(letter=>set.Glyphs.Count(g=>g.Letter==letter)<variant).ToArray();
+                var letters=Alphabet.Select(c=>c.ToString()).Where(letter=>allowed.Contains(letter) && set.Glyphs.Count(g=>g.Letter==letter)<variant).ToArray();
                 if(letters.Length>0)passes.Add(letters);
             }
             return passes;
