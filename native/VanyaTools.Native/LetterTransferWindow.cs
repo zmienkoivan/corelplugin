@@ -309,7 +309,7 @@ namespace VanyaTools.Native
             try
             {
                 var plan=LetterTransferRecognition.Prepare(_directory,job,cells);
-                if(!forceRecognition && LetterTransferRecognition.TryCached(plan,out var cached))LetterTransferRecognition.Apply(cells,cached);
+                if(!forceRecognition && LetterTransferRecognition.TryCached(plan,out var cached))LetterTransferRecognition.Apply(cells,cached,plan.CellIndices);
                 else if(forceRecognition || !manuallyComplete)
                 {
                     string token=_token();
@@ -320,7 +320,7 @@ namespace VanyaTools.Native
                         try
                         {
                             var labels=await Task.Run(()=>LetterTransferRecognition.Run(plan,token,progress=>Dispatcher.BeginInvoke(new Action(()=>{_stage=progress=="sending"?"Отправка коллажа букв":progress=="processing"?"Распознавание букв · GPT mini":progress=="recovering"?"Поиск сохранённого анализа":progress=="downloading"?"Получение обозначений":progress=="auto-cancelling"?"Автоотмена · лимит 10 минут":progress=="cancelling"?"Отмена распознавания":"Ожидание распознавания";})),_request.Token,forceRecognition));
-                            LetterTransferRecognition.Apply(cells,labels);OperationTiming.Record(_timingKey,_elapsed.Elapsed);
+                            LetterTransferRecognition.Apply(cells,labels,plan.CellIndices);OperationTiming.Record(_timingKey,_elapsed.Elapsed);
                         }
                         finally{_clock.Stop();_elapsed.Stop();_timing.Text=OperationTiming.Display(_stage,_elapsed.Elapsed,_timingKey);_request.Dispose();_request=null;_body.IsEnabled=_tools.IsEnabled=true;_cancel.Content="Закрыть";}
                     }
@@ -328,6 +328,8 @@ namespace VanyaTools.Native
             }
             catch(Exception error){Failure(error);}
             LetterTransferReviewDraft.Restore(output,cells);
+            if(job.Resolution=="4K" && Math.Max(sheet.PixelWidth,sheet.PixelHeight)<3000 || job.Resolution=="2K" && Math.Max(sheet.PixelWidth,sheet.PixelHeight)<1500)
+                cells.Notice=(cells.Notice??"")+" Внимание: запрошено "+job.Resolution+", получено "+sheet.PixelWidth+" × "+sheet.PixelHeight+" px. Размер ответа ниже запрошенного.";
             LetterTransferEdges.Preview(cells,_set.EdgeTrimPx,_set.AlphaThreshold,CancellationToken.None,_set.SmoothEdges);
             var approved=_review(LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,job.Reference)),sheet,cells);
             LetterTransferReviewDraft.Save(output,cells);

@@ -21,7 +21,7 @@ namespace VanyaTools.Native
             ValidatePrompt(job.Model,job.Prompt);
             var input=new Dictionary<string,object>{{"prompt",job.Prompt},{"image_input",new[]{reference}},{"aspect_ratio",LetterTransferRules.Aspect(job.Letters.Length)}};
             if(job.Model==Seedream){input["size"]=job.Resolution;input["sequential_image_generation"]="disabled";input["max_images"]=1;}
-            else{input["resolution"]=job.Resolution;input["output_format"]="png";}
+            else{input["resolution"]=job.Resolution;input["output_format"]="png";if(job.Model==NanoPro)input["allow_fallback_model"]=false;}
             return input;
         }
     }

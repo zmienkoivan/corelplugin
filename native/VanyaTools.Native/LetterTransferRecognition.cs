@@ -24,6 +24,7 @@ namespace VanyaTools.Native
         internal BitmapSource Preview;
         internal string Prefix,Output,PreviewFile,Fingerprint,Prompt;
         internal int Count;
+        internal int[] CellIndices;
     }
     internal static class LetterTransferRecognition
     {
@@ -44,18 +45,22 @@ namespace VanyaTools.Native
         internal static LetterTransferRecognitionPlan Prepare(string directory,LetterTransferJob job,LetterTransferSheet sheet)
         {
             if(sheet.Cells.Length<1 || sheet.Cells.Length>64)throw new InvalidDataException("Неверное количество ячеек для распознавания.");
-            string prompt=Prompt(sheet.Cells.Length),fingerprint;
+            var indices=Enumerable.Range(0,sheet.Cells.Length).Where(i=>sheet.Cells[i].Image!=null && sheet.Cells[i].Safe).ToArray();
+            if(indices.Length==0 || indices.Length*2<sheet.Cells.Length)throw new InvalidDataException("Слишком мало целых букв для распознавания: "+indices.Length+" из "+sheet.Cells.Length+". Проверьте разделение исходного листа; обрезанные фрагменты в ИИ не отправлены.");
+            var selected=indices.Select(i=>sheet.Cells[i]).ToArray();
+            string prompt=Prompt(selected.Length),fingerprint;
             using(var hash=SHA256.Create())using(var stream=new MemoryStream())using(var writer=new BinaryWriter(stream,Encoding.UTF8,true))
             {
                 writer.Write("letter-recognition-v1");writer.Write(Model);writer.Write(prompt);
-                foreach(var cell in sheet.Cells)
+                if(indices.Length!=sheet.Cells.Length){writer.Write("safe-cell-indices-v1");foreach(int index in indices)writer.Write(index);}
+                foreach(var cell in selected)
                 {
                     var image=cell.Image??cell.Preview;writer.Write(image.PixelWidth);writer.Write(image.PixelHeight);writer.Write(LetterTransferImages.Pixels(image));
                 }
                 writer.Flush();fingerprint=BitConverter.ToString(hash.ComputeHash(stream.ToArray())).Replace("-","").ToLowerInvariant();
             }
             string prefix=LetterTransferStore.Resolve(directory,job.Output)+".labels-"+fingerprint.Substring(0,24);
-            var plan=new LetterTransferRecognitionPlan{Count=sheet.Cells.Length,Prompt=prompt,Fingerprint=fingerprint,Prefix=prefix,Output=prefix+".txt",PreviewFile=prefix+".png"};
+            var plan=new LetterTransferRecognitionPlan{Count=selected.Length,CellIndices=indices,Prompt=prompt,Fingerprint=fingerprint,Prefix=prefix,Output=prefix+".txt",PreviewFile=prefix+".png"};
             if(File.Exists(prefix+".json"))
             {
                 var state=Json().Deserialize<State>(File.ReadAllText(prefix+".json",Encoding.UTF8));
@@ -63,7 +68,7 @@ namespace VanyaTools.Native
                     throw new InvalidDataException("Не удалось прочитать сохранённое задание распознавания. Файлы сохранены.");
                 plan.Output=Path.Combine(Path.GetDirectoryName(prefix),state.Output);
             }
-            plan.Preview=Preview(sheet.Cells);LetterTransferImages.Save(plan.Preview,plan.PreviewFile);return plan;
+            plan.Preview=Preview(selected);LetterTransferImages.Save(plan.Preview,plan.PreviewFile);return plan;
         }
         internal static BitmapSource Preview(LetterTransferCell[] cells)
         {
@@ -133,16 +138,22 @@ namespace VanyaTools.Native
             }
             finally{try{File.Delete(upload);}catch(IOException){}catch(UnauthorizedAccessException){}}
         }
-        internal static void Apply(LetterTransferSheet sheet,LetterTransferRecognized[] labels)
+        internal static void Apply(LetterTransferSheet sheet,LetterTransferRecognized[] labels,int[] cellIndices=null)
         {
-            if(labels.Length!=sheet.Cells.Length || labels.Select(l=>l.Id).Distinct().Count()!=labels.Length || labels.Any(l=>l.Id<1 || l.Id>sheet.Cells.Length))throw new InvalidDataException("Обозначения не соответствуют ячейкам.");
+            var indices=cellIndices??Enumerable.Range(0,sheet.Cells.Length).ToArray();
+            if(labels.Length!=indices.Length || indices.Distinct().Count()!=indices.Length || indices.Any(i=>i<0 || i>=sheet.Cells.Length) || labels.Select(l=>l.Id).Distinct().Count()!=labels.Length || labels.Any(l=>l.Id<1 || l.Id>labels.Length))throw new InvalidDataException("Обозначения не соответствуют целым ячейкам.");
+            foreach(var cell in sheet.Cells)if(cell.Image==null || !cell.Safe){cell.Letter=null;cell.Recognized=false;cell.RecognitionUncertain=true;}
             foreach(var label in labels)
             {
-                var cell=sheet.Cells[label.Id-1];cell.Letter=label.Letter;cell.Recognized=true;cell.RecognitionUncertain=label.Uncertain || label.Letter==null;
+                var cell=sheet.Cells[indices[label.Id-1]];
+                if(cell.Image==null || !cell.Safe)continue;
+                cell.Letter=label.Letter;cell.Recognized=true;cell.RecognitionUncertain=label.Uncertain || label.Letter==null;
             }
-            int uncertain=sheet.Cells.Count(c=>c.RecognitionUncertain),variants=labels.Where(l=>l.Letter!=null).GroupBy(l=>l.Letter).Sum(g=>Math.Max(0,g.Count()-1));
-            var named=labels.Where(l=>l.Letter!=null).Select(l=>l.Letter).Distinct().ToArray();var missing=sheet.Requested.Except(named).ToArray();
-            sheet.Notice="Обозначения распознаны GPT mini. Разных букв: "+named.Length+". Дополнительных вариантов: "+variants+". Требуют уточнения: "+uncertain+". "+(missing.Length>0?"Не найдены: "+String.Join(" ",missing)+". ":"")+"Проверьте результат перед добавлением.";
+            var usable=sheet.Cells.Where(c=>c.Image!=null && c.Safe && c.Recognized).ToArray();
+            int uncertain=sheet.Cells.Count(c=>c.Image==null || !c.Safe || c.RecognitionUncertain);
+            var named=usable.Where(c=>LetterTransferRules.ValidLetter(c.Letter)).Select(c=>c.Letter).ToArray();
+            int variants=named.GroupBy(l=>l).Sum(g=>Math.Max(0,g.Count()-1));var missing=sheet.Requested.Except(named).ToArray();
+            sheet.Notice="Обозначения распознаны GPT mini. Целых ячеек: "+usable.Length+" из "+sheet.Cells.Length+". Разных букв: "+named.Distinct().Count()+". Дополнительных вариантов: "+variants+". Требуют уточнения: "+uncertain+". "+(missing.Length>0?"Не найдены: "+String.Join(" ",missing)+". ":"")+"Проверьте результат перед добавлением.";
         }
     }
 }

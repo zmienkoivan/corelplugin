@@ -59,7 +59,7 @@ namespace VanyaTools.Native
         {
             var cells=result.Cells;var window=Dialog(owner,"Проверка букв");var root=new DockPanel{Margin=new Thickness(12)};window.Content=root;
             var checks=new CheckBox[cells.Length];var choices=new ComboBox[cells.Length];var borders=new Border[cells.Length];int active=-1;var excluded=cells.Select(c=>c.Excluded).ToArray();bool manualLayout=result.LayoutChanged && !cells.Any(c=>c.Recognized);
-            var note=new TextBlock{Text="Подготовлено ячеек: "+cells.Count(c=>c.Image!=null)+" из "+cells.Length+". "+(result.Notice??"")+" Проверьте целостность, кириллицу и стиль. Отметьте подходящие. Непринятые ячейки не добавляются; исходный лист останется в истории.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,10)};DockPanel.SetDock(note,Dock.Top);root.Children.Add(note);
+            var note=new TextBlock{Text="Подготовлено ячеек: "+cells.Count(c=>c.Image!=null && c.Safe)+" из "+cells.Length+". "+(result.Notice??"")+" Проверьте целостность, кириллицу и стиль. Отметьте подходящие. Непринятые ячейки не добавляются; исходный лист останется в истории.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,10)};DockPanel.SetDock(note,Dock.Top);root.Children.Add(note);
             var footer=new WrapPanel{HorizontalAlignment=HorizontalAlignment.Right};DockPanel.SetDock(footer,Dock.Bottom);root.Children.Add(footer);
             footer.Children.Add(Button("Назад",()=>window.DialogResult=false));
             footer.Children.Add(Button("Отметить все целые",()=>{for(int i=0;i<checks.Length;i++)if(checks[i].IsEnabled && cells[i].Safe && !cells[i].RecognitionUncertain)checks[i].IsChecked=true;}));

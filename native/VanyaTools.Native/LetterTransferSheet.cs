@@ -19,7 +19,7 @@ namespace VanyaTools.Native
         internal LetterTransferCell[] Cells;
         internal string[] Requested;
         internal string Notice;
-        internal bool LayoutChanged;
+        internal bool LayoutChanged,ContentLayout;
         private struct Band{internal int Start,End;internal Band(int start,int end){Start=start;End=end;}}
         internal static LetterTransferSheet Read(BitmapSource source,string[] letters,string key,int threshold,CancellationToken cancel)
         {
@@ -52,7 +52,13 @@ namespace VanyaTools.Native
                     if(right-left>=16)boxes.Add(new Int32Rect(left,top,right-left,bottom-top));
                 }
             }
-            if(boxes.Count<Math.Max(1,letters.Length/2) || boxes.Count>64)return Fixed(source,letters,key,threshold,cancel);
+            bool contentLayout=false;
+            if(boxes.Count<Math.Max(1,letters.Length/2) || boxes.Count>64)
+            {
+                var content=LetterTransferContentGrid.Find(pixels,w,h,pageMatte,cancel);
+                if(content==null)return Fixed(source,letters,key,threshold,cancel);
+                boxes=content;contentLayout=true;
+            }
             var cells=new List<LetterTransferCell>();
             foreach(var box in boxes)
             {
@@ -65,8 +71,8 @@ namespace VanyaTools.Native
             if(cells.Count==0)return Fixed(source,letters,key,threshold,cancel);
             bool changed=cells.Count!=letters.Length;
             for(int i=0;i<cells.Count;i++)cells[i].Letter=changed?null:letters[i];
-            return new LetterTransferSheet{Cells=cells.ToArray(),Requested=letters.ToArray(),LayoutChanged=changed,Notice=changed?
-                "ИИ изменил сетку: найдено ячеек "+cells.Count+", запрошено букв "+letters.Length+". Обозначьте повторы кнопками алфавита, затем нажмите «Назначить по порядку». Повторы сохранятся как варианты; лишние ячейки можно исключить.":null};
+            return new LetterTransferSheet{Cells=cells.ToArray(),Requested=letters.ToArray(),LayoutChanged=changed,ContentLayout=contentLayout,Notice=changed?
+                "На листе найдено рисунков: "+cells.Count+", запрошено букв: "+letters.Length+". Проверьте обозначения. Повторы сохраняются как варианты; отсутствующие буквы можно догенерировать отдельно.":null};
         }
         private static LetterTransferSheet Fixed(BitmapSource source,string[] letters,string key,int threshold,CancellationToken cancel)
         {
@@ -79,7 +85,8 @@ namespace VanyaTools.Native
                 cells[n]=new LetterTransferCell{Image=prepared[n],Preview=prepared[n]??Crop(data,w,new Int32Rect(x,y,x1-x,y1-y)),Letter=letters[n],Safe=prepared[n]!=null,
                     Warning=prepared[n]!=null?null:"Не удалось безопасно отделить фон или рисунок касается границы. Показан исходный фрагмент; он не добавится в набор."};
             }
-            return new LetterTransferSheet{Cells=cells,Requested=letters.ToArray()};
+            int ready=cells.Count(c=>c.Image!=null);
+            return new LetterTransferSheet{Cells=cells,Requested=letters.ToArray(),Notice=ready<cells.Length?"Не удалось определить границы всех букв. Фрагменты с предупреждением не отправляются на распознавание.":null};
         }
         private static List<Band> Bands(bool[] ink,int width,int height,Int32Rect region,bool vertical,CancellationToken cancel)
         {
@@ -130,15 +137,22 @@ namespace VanyaTools.Native
             int w=source.PixelWidth,h=source.PixelHeight;var data=LetterTransferImages.Pixels(source);var matte=Background(data,w,h);
             // Use the observed local background, preserving genuine artwork in
             // the requested key hue when the model chose a different backdrop.
-            PatternFillerMatte.Remove(data,w,h,cancel,matte,false,22);
-            int Reflected(byte value,byte expected,int channel)=>channel==1?(expected==255?255-value:value):(expected==0?255-value:value);
-            int mb=Reflected(matte[0],key.B,0),mg=Reflected(matte[1],key.G,1),mr=Reflected(matte[2],key.R,2);
-            bool reserved=mg<=90 && Math.Min(mb,mr)-mg>=60;
+            PatternFillerMatte.Remove(data,w,h,cancel,matte,false,45);
+            int Reflect(byte value,byte expected,int channel)=>channel==1?(expected==255?255-value:value):(expected==0?255-value:value);
+            int mb=Reflect(matte[0],key.B,0),mg=Reflect(matte[1],key.G,1),mr=Reflect(matte[2],key.R,2);
+            bool pureMatte=mg<=70 && Math.Min(mb,mr)-mg>=100;
             data=DtfRasterOperations.Correct(data,true,threshold,false,0,cancel);int visible=0;bool edge=false;
             for(int y=0;y<h;y++)for(int x=0;x<w;x++)
             {
                 int p=(y*w+x)*4;
-                if(reserved && Math.Min(Reflected(data[p],key.B,0),Reflected(data[p+2],key.R,2))-Reflected(data[p+1],key.G,1)>=50)data[p+3]=0;
+                if(pureMatte)
+                {
+                    int b=Reflect(data[p],key.B,0),g=Reflect(data[p+1],key.G,1),r=Reflect(data[p+2],key.R,2);
+                    // Remove shaded remnants of a pure technical key only. A
+                    // real green/purple fabric has other color channels and must
+                    // not be erased just because its hue resembles the backdrop.
+                    if(b>=mb-75 && r>=mr-75 && g<=mg+60 && Math.Min(b,r)-g>=60)data[p+3]=0;
+                }
                 if(data[p+3]==0){data[p]=data[p+1]=data[p+2]=0;continue;}
                 visible++;if(x==0 || y==0 || x==w-1 || y==h-1)edge=true;
             }
