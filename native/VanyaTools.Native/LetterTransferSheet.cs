@@ -12,7 +12,7 @@ namespace VanyaTools.Native
     {
         internal BitmapSource Image,Preview;
         internal string Letter,Warning;
-        internal bool Safe,Recognized,RecognitionUncertain;
+        internal bool Safe,Recognized,RecognitionUncertain,Manual,Excluded;
     }
     internal sealed class LetterTransferSheet
     {
@@ -66,7 +66,7 @@ namespace VanyaTools.Native
             bool changed=cells.Count!=letters.Length;
             for(int i=0;i<cells.Count;i++)cells[i].Letter=changed?null:letters[i];
             return new LetterTransferSheet{Cells=cells.ToArray(),Requested=letters.ToArray(),LayoutChanged=changed,Notice=changed?
-                "ИИ изменил сетку: найдено ячеек "+cells.Count+", запрошено букв "+letters.Length+". Отметьте лишние ячейки и назначьте буквы по порядку либо выберите обозначения вручную; повторы можно сохранить как варианты.":null};
+                "ИИ изменил сетку: найдено ячеек "+cells.Count+", запрошено букв "+letters.Length+". Обозначьте повторы кнопками алфавита, затем нажмите «Назначить по порядку». Повторы сохранятся как варианты; лишние ячейки можно исключить.":null};
         }
         private static LetterTransferSheet Fixed(BitmapSource source,string[] letters,string key,int threshold,CancellationToken cancel)
         {

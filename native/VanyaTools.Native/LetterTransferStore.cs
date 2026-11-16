@@ -44,7 +44,14 @@ namespace VanyaTools.Native
             if(fields==null || !fields.ContainsKey("Schema") || !fields.ContainsKey("Id") || !fields.ContainsKey("Name") || !fields.ContainsKey("Letters") || !fields.ContainsKey("Glyphs"))
                 throw new InvalidDataException("Это не файл сохранённого набора букв.");
             var set=serializer.Deserialize<LetterTransferSet>(json);
-            LetterTransferRules.Validate(set);ValidateFiles(directory,set);return set;
+            LetterTransferRules.Validate(set);ValidateFiles(directory,set);
+            foreach(var glyph in set.Glyphs.Where(g=>g.BodyHeight==0 && (g.Letter=="Ё" || g.Letter=="Й")))
+            {
+                string image=Resolve(directory,glyph.File);if(!File.Exists(image))continue;
+                try{glyph.BodyHeight=LetterTransferImages.BodyHeight(glyph.Letter,LetterTransferImages.Load(image));}
+                catch(Exception error)when(error is IOException || error is NotSupportedException || error is ArgumentException){ }
+            }
+            return set;
         }
         private static void ValidateFiles(string directory,LetterTransferSet set)
         {

@@ -71,9 +71,9 @@ internal static class RecognitionChecks
         var window=new LetterTransferWindow(()=>"synthetic-key",()=>null,(_,__)=>{},library,confirmRecognition:(preview,count,prompt,retry)=>{confirmations++;return allow;},review:(reference,sheet,cells)=>{reviews++;if(!accept)return new List<LetterTransferApproved>();return cells.Cells.Select(c=>new LetterTransferApproved{Letter=c.Letter,Image=c.Image}).ToList();});
         var previous=SynchronizationContext.Current;SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(window.Dispatcher));
         var activeSet=(LetterTransferSet)typeof(LetterTransferWindow).GetField("_set",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);job=activeSet.Jobs.Single();
-        void Review()
+        void Review(bool missingOnly=false)
         {
-            var task=(Task)typeof(LetterTransferWindow).GetMethod("Review",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(window,new object[]{job,false});
+            var task=(Task)typeof(LetterTransferWindow).GetMethod("Review",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(window,new object[]{job,false,missingOnly});
             var deadline=DateTime.UtcNow.AddSeconds(5);
             while(!task.IsCompleted && DateTime.UtcNow<deadline){var frame=new DispatcherFrame();window.Dispatcher.BeginInvoke(DispatcherPriority.Background,new Action(()=>frame.Continue=false));Dispatcher.PushFrame(frame);Thread.Sleep(5);}
             if(!task.IsCompleted)throw new Exception("Recognition UI did not finish.");task.GetAwaiter().GetResult();
@@ -84,6 +84,8 @@ internal static class RecognitionChecks
             allow=true;Review();Program.Check(confirmations==2 && ReplicateWorkerClient.Calls==calls+1,"Confirmed analysis did not run exactly once.");
             accept=true;Review();var saved=LetterTransferStore.Load(directory);
             Program.Check(confirmations==2 && ReplicateWorkerClient.Calls==calls+1 && saved.Glyphs.Count==4 && saved.Glyphs.Count(g=>g.Letter=="Б")==2 && saved.Jobs.Single().Reviewed,"Cached review recharged, lost labels or discarded duplicate variants.");
+            Review();Program.Check(LetterTransferStore.Load(directory).Glyphs.Count==4,"Repeated review imported already accepted source cells again.");
+            Review(true);Program.Check(LetterTransferStore.Load(directory).Glyphs.Count==4 && confirmations==2,"Reopening a partially reviewed sheet duplicated existing letters or reran recognition.");
         }
         finally{window.Close();SynchronizationContext.SetSynchronizationContext(previous);}
     }

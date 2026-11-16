@@ -29,7 +29,7 @@ internal static class WireChecks
             server.Reset("recover");string path=Path.Combine(root,"recover.png");
             string url=(string)Invoke(path);
             Program.Check(server.Posts==1 && server.Lists>=1 && url.EndsWith("/result.png"),"500 did not recover same request without another POST.");
-            Program.Check(server.ValidJson && server.InlineImage && server.Uploads==0,"JSON framing or small-image inline route failed.");
+            Program.Check(server.ValidJson && server.InlineImage && server.Uploads==0 && server.AutoCancelHeader=="10m","JSON framing or small-image inline route failed.");
             Program.Check(File.Exists(path+".submission.json") && File.Exists(path+".prediction.json"),"Recovery receipt or model ID missing.");
             string receipt=File.ReadAllText(path+".submission.json");Program.Check(!receipt.Contains("Синтетическая буква А · золото") && !receipt.Contains("synthetic-not-a-real-token") && !receipt.Contains("base64"),"Receipt leaked payload.");
             Invoke(path);Program.Check(server.Posts==1,"Ready recovered state caused a new POST.");
@@ -52,6 +52,28 @@ internal static class WireChecks
             server.IncludePrevious=false;
             server.Reset("reject");path=Path.Combine(root,"reject.png");failed=false;try{Invoke(path);}catch(InvalidOperationException){failed=true;}
             Program.Check(failed && server.Posts==1 && !File.Exists(path+".submitted") && server.Lists==0,"Definite rejection classification changed.");
+            foreach(string mode in new[]{"expired","finished-before","cancel-race","manual","cancel-fails","cancel-500-done","cancel-poll-fails","server-expired","cancel-pending","no-created"})
+            {
+                server.Reset(mode);path=Path.Combine(root,mode+".png");
+                var state=server.Live("processing");
+                if(mode=="manual")state["created_at"]=DateTime.UtcNow.ToString("o");
+                File.WriteAllText(path+".prediction.json",new JavaScriptSerializer().Serialize(state));
+                File.WriteAllText(path+".submission.json",new JavaScriptSerializer().Serialize(new ReplicateSubmissionStamp{SentUtc=DateTime.UtcNow.AddMinutes(-11).ToString("o")}));
+                if(mode=="manual")File.WriteAllText(path+".cancel","cancel");
+                Exception error=null;object output=null;try{output=Invoke(path);}catch(Exception e){error=e;}
+                Program.Check(server.Posts==0 && server.Uploads==0,"Cancellation submitted another paid model: "+mode);
+                string saved=File.ReadAllText(path+".prediction.json");
+                if(mode=="finished-before" || mode=="cancel-race")
+                    Program.Check(error==null && Convert.ToString(output).EndsWith("result.png") && saved.Contains("succeeded") && server.Cancels==(mode=="finished-before"?0:1),"Finished result lost a race with cancellation: "+mode);
+                else if(mode=="cancel-fails")
+                    Program.Check(error is InvalidOperationException && error.Message.Contains("Не удалось подтвердить") && saved.Contains("live-job") && saved.Contains("processing") && server.Cancels==1,"Cancellation failure falsely marked job canceled or lost its ID.");
+                else if(mode=="cancel-poll-fails")
+                    Program.Check(error is InvalidOperationException && error.Message.Contains("не подтвердил остановку") && saved.Contains("processing") && saved.Contains("live-job") && server.Cancels==1,"Polling failure falsely confirmed cancellation or lost resume state.");
+                else if(mode=="manual")
+                    Program.Check(error is OperationCanceledException && saved.Contains("canceled") && server.Cancels==1,"Manual cancellation regressed.");
+                else
+                    Program.Check(error is TimeoutException && error.Message.Contains("подтвердил автоматическую отмену") && saved.Contains("canceled") && server.Cancels==(mode=="server-expired"?0:1),"Expired request was not canceled and confirmed: "+mode);
+            }
             // The compact letter reference must take the same inline path as
             // small previews, without contacting file storage or altering bytes.
             string observed=Environment.GetEnvironmentVariable("VANYA_REPLICATE_COMPACT_REFERENCE");
@@ -71,9 +93,14 @@ internal sealed class LoopbackFactory:IWebRequestCreate
 internal sealed class FakeReplicateServer:IDisposable
 {
     private readonly TcpListener _listener;private readonly Thread _thread;private volatile bool _stop;
-    internal int Port,Posts,Lists,Uploads,MetadataReads;internal bool ValidJson,InlineImage;internal string FileHash;internal Dictionary<string,object> SeedInput;private string _mode;internal bool IncludePrevious;internal string Mode{set{_mode=value;}}
+    internal int Port,Posts,Lists,Uploads,MetadataReads,Cancels,PredictionReads;internal string AutoCancelHeader;internal bool ValidJson,InlineImage;internal string FileHash;internal Dictionary<string,object> SeedInput;private string _mode;internal bool IncludePrevious;internal string Mode{set{_mode=value;}}
     internal FakeReplicateServer(){_listener=new TcpListener(IPAddress.Loopback,0);_listener.Start();Port=((IPEndPoint)_listener.LocalEndpoint).Port;_thread=new Thread(Serve){IsBackground=true};_thread.Start();}
-    internal void Reset(string mode){_mode=mode;Posts=Lists=Uploads=MetadataReads=0;SeedInput=null;ValidJson=InlineImage=false;}
+    internal void Reset(string mode){_mode=mode;Posts=Lists=Uploads=MetadataReads=Cancels=PredictionReads=0;AutoCancelHeader=null;SeedInput=null;ValidJson=InlineImage=false;}
+    internal Dictionary<string,object> Live(string status)
+    {
+        var value=new Dictionary<string,object>{{"id","live-job"},{"status",status},{"urls",new Dictionary<string,object>{{"get","https://api.replicate.com/v1/predictions/live-job"},{"cancel","https://api.replicate.com/v1/predictions/live-job/cancel"}}},{"output",status=="succeeded"?"https://unit.replicate.delivery/result.png":null},{"error",null}};
+        if(_mode!="no-created")value["created_at"]=DateTime.UtcNow.AddMinutes(-11).ToString("o");return value;
+    }
     private void Serve()
     {
         while(!_stop)
@@ -96,11 +123,20 @@ internal sealed class FakeReplicateServer:IDisposable
         int code=200;object body;var json=new JavaScriptSerializer{MaxJsonLength=Int32.MaxValue};
         if(request[0]=="POST" && request[1]=="/v1/predictions")
         {
+            AutoCancelHeader=headers.ContainsKey("Cancel-After")?headers["Cancel-After"]:null;
             Posts++;var payload=json.Deserialize<Dictionary<string,object>>(Encoding.UTF8.GetString(bytes));SeedInput=(Dictionary<string,object>)payload["input"];
             ValidJson=Convert.ToString(payload["version"])=="google/nano-banana-2" && Convert.ToString(SeedInput["prompt"])=="Синтетическая буква А · золото" && !headers.ContainsKey("Transfer-Encoding") && !headers.ContainsKey("Expect") && headers["Content-Type"].Contains("utf-8");
             InlineImage=Convert.ToString(((System.Collections.IList)SeedInput["image_input"])[0]).StartsWith("data:image/png;base64,");
             code=_mode=="reject"?422:500;body=new Dictionary<string,object>{{"detail","Synthetic API error"}};
         }
+        else if(request[0]=="POST" && request[1]=="/v1/predictions/live-job/cancel")
+        {
+            Cancels++;
+            if(_mode=="cancel-fails" || _mode=="cancel-500-done"){code=503;body=new Dictionary<string,object>{{"detail","Synthetic cancel unavailable"}};}
+            else body=Live(_mode=="cancel-race"?"succeeded":(_mode=="cancel-pending" || _mode=="cancel-poll-fails")?"processing":"canceled");
+        }
+        else if(request[0]=="GET" && request[1]=="/v1/predictions/live-job")
+        {PredictionReads++;if(_mode=="cancel-poll-fails" && Cancels>0)code=503;body=Live(_mode=="finished-before"?"succeeded":_mode=="server-expired" || (_mode=="cancel-pending" || _mode=="cancel-500-done") && Cancels>0?"canceled":"processing");}
         else if(request[0]=="GET" && request[1].StartsWith("/v1/predictions"))
         {
             Lists++;var items=new List<object>();if(_mode!="missing" && SeedInput!=null)items.Add(new Dictionary<string,object>{

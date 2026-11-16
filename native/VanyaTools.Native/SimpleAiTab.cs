@@ -1694,7 +1694,7 @@ namespace VanyaTools.Native
             string message = progress == "sending" ? "Отправляю изображение…" :
                 progress == "processing" ? "Модель обрабатывает изображение…" :
                 progress == "downloading" ? "Загружаю результат…" :
-                progress == "cancelling" ? "Отменяю запрос…" : progress;
+                progress == "auto-cancelling" ? "автоотмена · лимит 10 минут" : progress == "cancelling" ? "Отменяю запрос…" : progress;
             Dispatcher.BeginInvoke(new Action(() => { if (_busy) SetStage(message); }));
         }
 

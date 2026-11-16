@@ -282,7 +282,7 @@ namespace VanyaTools.Native
             string message = value == "sending" ? "Отправляю кадр для правки…" :
                 value == "processing" ? "Нейросеть дорисовывает область…" :
                 value == "downloading" ? "Загружаю результат…" :
-                value == "cancelling" ? "Отменяю запрос…" : value;
+                value == "auto-cancelling" ? "автоотмена · лимит 10 минут" : value == "cancelling" ? "Отменяю запрос…" : value;
             Dispatcher.BeginInvoke(new Action(() => { if (_busy) Progress(message); }));
         }
 

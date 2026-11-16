@@ -32,6 +32,8 @@ namespace VanyaTools.Native
         private readonly ComboBox _previewBackground=new ComboBox{Width=110,Margin=new Thickness(3)};
         private readonly CheckBox _autoLength=new CheckBox{Content="Полотно · длина по заполнению",IsChecked=true};
         private readonly TextBox _alphaThreshold=new TextBox();
+        private readonly Button _complete;
+        private readonly CheckBox _showGrid=new CheckBox{Content="Сетка нарезки",IsChecked=true,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(5)};
         private readonly CheckBox _readyOnly=new CheckBox{Content="Только готовые буквы",IsChecked=true};
         private readonly DataGrid _table=new DataGrid{AutoGenerateColumns=false,CanUserAddRows=false,CanUserDeleteRows=false,SelectionMode=DataGridSelectionMode.Extended,HeadersVisibility=DataGridHeadersVisibility.Column,RowHeaderWidth=0,SelectionUnit=DataGridSelectionUnit.FullRow};
         private readonly Image _reference=new Image{Height=105,Stretch=Stretch.Uniform};
@@ -66,7 +68,7 @@ namespace VanyaTools.Native
             _body.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(285)});_body.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(255)});_body.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(1,GridUnitType.Star)});root.Children.Add(_body);
             var leftTabs=new TabControl{Margin=new Thickness(0,8,10,0)};_body.Children.Add(leftTabs);
             var sizes=new WrapPanel{Margin=new Thickness(0,4,0,0)};DockPanel.SetDock(sizes,Dock.Top);root.Children.Insert(root.Children.IndexOf(_body),sizes);
-            sizes.Children.Add(new TextBlock{Text="Высота букв, мм",VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(4)});_height.Width=70;_height.MinHeight=29;sizes.Children.Add(_height);
+            sizes.Children.Add(new TextBlock{Text="Высота основы букв, мм",VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(4)});_height.Width=70;_height.MinHeight=29;sizes.Children.Add(_height);
             sizes.Children.Add(new TextBlock{Text="Ширина полотна, мм",VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(12,0,4,0)});_sheetWidth.Width=80;_sheetWidth.MinHeight=29;sizes.Children.Add(_sheetWidth);
             var fields=new StackPanel{Margin=new Thickness(5)};var printFields=new StackPanel{Margin=new Thickness(5)};
             leftTabs.Items.Add(new TabItem{Header="Стиль и ИИ",Content=new ScrollViewer{Content=fields,VerticalScrollBarVisibility=ScrollBarVisibility.Auto}});
@@ -85,14 +87,16 @@ namespace VanyaTools.Native
             printFields.Children.Add(_autoLength);Field(printFields,"Высота фиксированного листа, мм",_sheetHeight);
             Field(printFields,"Порог удаления полупрозрачности (1–255)",_alphaThreshold);
             printFields.Children.Add(new TextBlock{Text="Каждая полученная буква автоматически очищается от фона и полупрозрачности. PNG сохраняются отдельно; высота задаётся сверху. Длина полотна рассчитывается по заполнению, до 7 м на страницу.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,7,0,7)});Field(printFields,"Зазор, мм",_gap);Field(printFields,"Поля, мм",_margin);printFields.Children.Add(_readyOnly);
+            printFields.Children.Add(new TextBlock{Text="Прямая сетка: одинаковые столбцы и ряды для нарезки. Ё и Й имеют дополнительное место над основной буквой.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,7,0,7)});
             var middle=new DockPanel{Margin=new Thickness(0,8,10,0)};Grid.SetColumn(middle,1);_body.Children.Add(middle);
             var tableNote=new TextBlock{Text="Буква · частотный вес · копий · вариантов\nCtrl / Shift — несколько строк",FontSize=11,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,5)};DockPanel.SetDock(tableNote,Dock.Top);middle.Children.Add(tableNote);
+            _complete=Button("Получить все буквы…",()=>CompleteAlphabet());DockPanel.SetDock(_complete,Dock.Bottom);middle.Children.Add(_complete);
             _table.Columns.Add(new DataGridTextColumn{Header="Буква",Binding=new Binding("Letter"),IsReadOnly=true,Width=48});
             _table.Columns.Add(new DataGridTextColumn{Header="Вес",Binding=new Binding("Weight"),Width=53});_table.Columns.Add(new DataGridTextColumn{Header="Копий",Binding=new Binding("Copies"),Width=60});_table.Columns.Add(new DataGridTextColumn{Header="Вар.",Binding=new Binding("Ready"),IsReadOnly=true,Width=56});middle.Children.Add(_table);
             _table.CellEditEnding+=(_,__)=>Queue();_table.SelectionChanged+=(_,__)=>{var row=_table.SelectedItem as LetterTransferRow;if(row!=null)_letter.SelectedItem=row.Letter;};
             var tabs=new TabControl{Margin=new Thickness(0,8,0,0)};Grid.SetColumn(tabs,2);_body.Children.Add(tabs);
             var print=new DockPanel();var previewTools=new WrapPanel();DockPanel.SetDock(previewTools,Dock.Top);print.Children.Add(previewTools);
-            previewTools.Children.Add(Button("−",()=>Zoom(_zoom/1.25)));previewTools.Children.Add(Button("+",()=>Zoom(_zoom*1.25)));previewTools.Children.Add(Button("Вписать",()=>Zoom(Math.Max(.15,(_scroll.ActualWidth-35)/(_set.SheetWidthMm*2)))));previewTools.Children.Add(Button("100%",()=>Zoom(1)));_previewBackground.ItemsSource=new[]{"Белый фон","Серый фон","Шахматка"};_previewBackground.SelectedIndex=1;_previewBackground.ToolTip="Только фон предпросмотра. На листы Corel не добавляется.";previewTools.Children.Add(_previewBackground);_previewBackground.SelectionChanged+=(_,__)=>Queue();
+            previewTools.Children.Add(Button("−",()=>Zoom(_zoom/1.25)));previewTools.Children.Add(Button("+",()=>Zoom(_zoom*1.25)));previewTools.Children.Add(Button("Вписать",()=>Zoom(Math.Max(.15,(_scroll.ActualWidth-35)/(_set.SheetWidthMm*2)))));previewTools.Children.Add(Button("100%",()=>Zoom(1)));_previewBackground.ItemsSource=new[]{"Белый фон","Серый фон","Шахматка"};_previewBackground.SelectedIndex=1;_previewBackground.ToolTip="Только фон предпросмотра. На листы Corel не добавляется.";previewTools.Children.Add(_previewBackground);previewTools.Children.Add(_showGrid);_showGrid.Checked+=(_,__)=>Queue();_showGrid.Unchecked+=(_,__)=>Queue();_showGrid.ToolTip="Направляющие только в предпросмотре; на печатный лист не добавляются.";_previewBackground.SelectionChanged+=(_,__)=>Queue();
             DockPanel.SetDock(_summary,Dock.Bottom);print.Children.Add(_summary);_scroll.Content=_pages;print.Children.Add(_scroll);tabs.Items.Add(new TabItem{Header="Печатные листы",Content=print});
             _scroll.PreviewMouseWheel+=(_,e)=>{if((Keyboard.Modifiers&ModifierKeys.Control)==0)return;Zoom(_zoom*(e.Delta>0?1.15:1/1.15));e.Handled=true;};
             var variantsPanel=new DockPanel();var variantTools=new WrapPanel();DockPanel.SetDock(variantTools,Dock.Top);variantsPanel.Children.Add(variantTools);
@@ -170,6 +174,12 @@ namespace VanyaTools.Native
                 double pageHeight=LetterTransferLayout.PageHeight(_set,group);var drawing=new DrawingGroup();using(var context=drawing.Open())
                 {
                     context.DrawRectangle(_previewBackground.SelectedIndex==2?LetterTransferImages.Checker():_previewBackground.SelectedIndex==1?Brushes.LightGray:Brushes.White,new Pen(Brushes.Gray,.3),new Rect(0,0,_set.SheetWidthMm,pageHeight));
+                    if(_showGrid.IsChecked==true)
+                    {
+                        var pen=new Pen(new SolidColorBrush(Color.FromArgb(100,75,90,110)),.15){DashStyle=DashStyles.Dash};
+                        foreach(var col in group.Select(p=>p.CellX+p.CellWidth+_set.GapMm/2).Distinct().Where(x=>x<_set.SheetWidthMm-_set.MarginMm))context.DrawLine(pen,new Point(col,_set.MarginMm),new Point(col,pageHeight-_set.MarginMm));
+                        foreach(var row in group.Select(p=>p.CellY+p.CellHeight+_set.GapMm/2).Distinct().Where(y=>y<pageHeight-_set.MarginMm))context.DrawLine(pen,new Point(_set.MarginMm,row),new Point(_set.SheetWidthMm-_set.MarginMm,row));
+                    }
                     foreach(var p in group)
                     {
                         var image=Thumb(p.Glyph.File);if(image==null)throw new FileNotFoundException("Не найден PNG буквы «"+p.Glyph.Letter+"». Восстановите файл или импортируйте новый вариант.");
@@ -178,8 +188,9 @@ namespace VanyaTools.Native
                 }
                 drawing.Freeze();var border=new Border{Child=new Image{Source=new DrawingImage(drawing),Width=_set.SheetWidthMm*2,Height=pageHeight*2},Margin=new Thickness(8)};_pages.Children.Add(border);
             }
-            _pages.LayoutTransform=new ScaleTransform(_zoom,_zoom);int requested=_set.Letters.Sum(r=>r.Copies);int missing=_set.Letters.Count(r=>r.Copies>0 && !_set.Glyphs.Any(g=>g.Letter==r.Letter));
-            _summary.Text="На листах: "+placements.Count+" из "+requested+" копий · листов: "+pages+" · нет букв: "+missing+" · длина "+N(placements.GroupBy(p=>p.Page).Sum(g=>LetterTransferLayout.PageHeight(_set,g)))+" мм\nВысота "+N(_set.HeightMm)+" мм · Ctrl+колесо — зум. Исходные PNG сохраняются без масштабирования.";
+            _pages.LayoutTransform=new ScaleTransform(_zoom,_zoom);int requested=_set.Letters.Sum(r=>r.Copies);int missing=_set.Letters.Count(r=>!_set.Glyphs.Any(g=>g.Letter==r.Letter));
+            _complete.Content=missing>0?"Получить все буквы · нет "+missing+"…":"Все 33 буквы готовы";_complete.IsEnabled=missing>0;
+            _summary.Text="На листах: "+placements.Count+" из "+requested+" копий · листов: "+pages+" · нет букв: "+missing+" · длина "+N(placements.GroupBy(p=>p.Page).Sum(g=>LetterTransferLayout.PageHeight(_set,g)))+" мм\nПрямая сетка · основа "+N(_set.HeightMm)+" мм; Ё/Й выше · Ctrl+колесо — зум. Исходные PNG сохраняются без масштабирования.";
         }
         private void Zoom(double value){_zoom=Math.Max(.1,Math.Min(5,value));_pages.LayoutTransform=new ScaleTransform(_zoom,_zoom);}
         private void Reference(bool corel)
@@ -254,7 +265,7 @@ namespace VanyaTools.Native
             _refresh.Stop();_request=new CancellationTokenSource();_body.IsEnabled=_tools.IsEnabled=false;_cancel.Content="Отменить запрос";_stage="Генерация букв";_timingKey="letters/"+job.Model+"/"+job.Resolution;_elapsed.Restart();_clock.Start();bool generated=false;Report("ИИ создаёт «"+String.Join(" ",job.Letters)+"». Ожидайте ответ.");
             try
             {
-                await Task.Run(()=>LetterTransferAi.Generate(_directory,job,token,progress=>Dispatcher.BeginInvoke(new Action(()=>{_stage=progress=="sending"?"Отправка превью":progress=="recovering"?"Поиск созданного запроса · без новой генерации":progress=="creating"?"Запуск модели":progress=="processing"?"Создание букв":progress=="downloading"?"Скачивание ответа":progress=="cancelling"?"Отмена":"Ожидание ИИ";})),_request.Token));
+                await Task.Run(()=>LetterTransferAi.Generate(_directory,job,token,progress=>Dispatcher.BeginInvoke(new Action(()=>{_stage=progress=="sending"?"Отправка превью":progress=="recovering"?"Поиск созданного запроса · без новой генерации":progress=="creating"?"Запуск модели":progress=="processing"?"Создание букв":progress=="downloading"?"Скачивание ответа":progress=="auto-cancelling"?"Автоотмена · лимит 10 минут":progress=="cancelling"?"Отмена":"Ожидание ИИ";})),_request.Token));
                 generated=true;OperationTiming.Record(_timingKey,_elapsed.Elapsed);Report("Ответ ИИ сохранён. Проверьте буквы перед добавлением.");
             }
             catch(Exception error){Failure(error);}
@@ -270,15 +281,28 @@ namespace VanyaTools.Native
             if(_request!=null || _sequenceBusy)return;
             try{var job=SelectedJob();if(job==null)throw new InvalidOperationException("В истории пока нет запросов.");await Review(job,forceRecognition);}catch(Exception error){Failure(error);}
         }
-        private async Task Review(LetterTransferJob job,bool forceRecognition=false)
+        private async void CompleteAlphabet()
         {
-            if(job.Reviewed){Report("Этот ответ уже проверен. Сохранённые буквы доступны во вкладке «Варианты букв».");return;}
+            if(_request!=null || _sequenceBusy)return;
+            try
+            {
+                Save();var missing=new HashSet<string>(_set.Letters.Where(r=>!_set.Glyphs.Any(g=>g.Letter==r.Letter)).Select(r=>r.Letter));
+                var job=_set.Jobs.AsEnumerable().Reverse().FirstOrDefault(j=>j.Letters.Any(missing.Contains) && LetterTransferAi.HasResult(_directory,j));
+                if(job==null){Generate(false);return;}
+                await Review(job,false,true);
+            }
+            catch(Exception error){Failure(error);}
+        }
+        private async Task Review(LetterTransferJob job,bool forceRecognition=false,bool onlyMissing=false)
+        {
             var sheet=LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,job.Output));var cells=LetterTransferSheet.Read(sheet,job.Letters,job.Key,_set.AlphaThreshold,CancellationToken.None);
+            string output=LetterTransferStore.Resolve(_directory,job.Output);LetterTransferReviewDraft.Restore(output,cells);
+            bool manuallyComplete=cells.Cells.Where(c=>c.Image!=null).All(c=>c.Manual && LetterTransferRules.ValidLetter(c.Letter));
             try
             {
                 var plan=LetterTransferRecognition.Prepare(_directory,job,cells);
                 if(!forceRecognition && LetterTransferRecognition.TryCached(plan,out var cached))LetterTransferRecognition.Apply(cells,cached);
-                else
+                else if(forceRecognition || !manuallyComplete)
                 {
                     string token=_token();
                     if(String.IsNullOrWhiteSpace(token))Report("Для распознавания нужен ключ Replicate. Можно проверить и назначить обозначения вручную.",true);
@@ -287,7 +311,7 @@ namespace VanyaTools.Native
                         _refresh.Stop();_request=new CancellationTokenSource();_body.IsEnabled=_tools.IsEnabled=false;_cancel.Content="Отменить распознавание";_stage="Распознавание букв · GPT mini";_timingKey="letters/recognition/"+LetterTransferRecognition.Model;_elapsed.Restart();_clock.Start();
                         try
                         {
-                            var labels=await Task.Run(()=>LetterTransferRecognition.Run(plan,token,progress=>Dispatcher.BeginInvoke(new Action(()=>{_stage=progress=="sending"?"Отправка коллажа букв":progress=="processing"?"Распознавание букв · GPT mini":progress=="recovering"?"Поиск сохранённого анализа":progress=="downloading"?"Получение обозначений":"Ожидание распознавания";})),_request.Token,forceRecognition));
+                            var labels=await Task.Run(()=>LetterTransferRecognition.Run(plan,token,progress=>Dispatcher.BeginInvoke(new Action(()=>{_stage=progress=="sending"?"Отправка коллажа букв":progress=="processing"?"Распознавание букв · GPT mini":progress=="recovering"?"Поиск сохранённого анализа":progress=="downloading"?"Получение обозначений":progress=="auto-cancelling"?"Автоотмена · лимит 10 минут":progress=="cancelling"?"Отмена распознавания":"Ожидание распознавания";})),_request.Token,forceRecognition));
                             LetterTransferRecognition.Apply(cells,labels);OperationTiming.Record(_timingKey,_elapsed.Elapsed);
                         }
                         finally{_clock.Stop();_elapsed.Stop();_timing.Text=OperationTiming.Display(_stage,_elapsed.Elapsed,_timingKey);_request.Dispose();_request=null;_body.IsEnabled=_tools.IsEnabled=true;_cancel.Content="Закрыть";}
@@ -295,8 +319,24 @@ namespace VanyaTools.Native
                 }
             }
             catch(Exception error){Failure(error);}
+            LetterTransferReviewDraft.Restore(output,cells);
             var approved=_review(LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,job.Reference)),sheet,cells);
-            if(approved.Count==0)return;
+            LetterTransferReviewDraft.Save(output,cells);
+            if(onlyMissing){var existing=new HashSet<string>(_set.Glyphs.Select(g=>g.Letter));approved=approved.Where(g=>!existing.Contains(g.Letter)).ToList();}
+            // Consume previously imported cells as a multiset. Reopening a
+            // partial review can add remaining variants without importing the
+            // accepted cells again, including visually identical duplicates.
+            string source="ИИ · "+job.Id.Substring(0,8);var imported=new Dictionary<string,int>();
+            foreach(var glyph in _set.Glyphs.Where(g=>g.Source==source))
+            {
+                string file=LetterTransferStore.Resolve(_directory,glyph.File);if(!File.Exists(file))continue;
+                string key=glyph.Letter+LetterTransferImages.Fingerprint(LetterTransferImages.Load(file));imported[key]=imported.TryGetValue(key,out int count)?count+1:1;
+            }
+            approved=approved.Where(g=>{
+                string key=g.Letter+LetterTransferImages.Fingerprint(LetterTransferImages.Prepare(g.Image,_set.AlphaThreshold,CancellationToken.None));
+                if(imported.TryGetValue(key,out int count) && count>0){imported[key]=count-1;return false;}return true;
+            }).ToList();
+            if(approved.Count==0){Report("Новых отмеченных букв нет. Уже добавленные рисунки сохранены в наборе.");return;}
             foreach(var group in approved.GroupBy(a=>a.Letter))if(_set.Glyphs.Count(g=>g.Letter==group.Key)+group.Count()>8)throw new InvalidOperationException("Слишком много вариантов буквы «"+group.Key+"». Удалите ненужные.");
             foreach(var glyph in approved)LetterTransferImages.Add(_directory,_set,glyph.Letter,glyph.Image,"ИИ · "+job.Id.Substring(0,8));job.Reviewed=true;Save();RefreshAssets();Preview();Report("Добавлено проверенных рисунков: "+approved.Count+". Букв в наборе: "+_set.Glyphs.Select(g=>g.Letter).Distinct().Count()+"; повторы сохранены как варианты.");
         }

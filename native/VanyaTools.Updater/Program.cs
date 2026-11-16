@@ -251,6 +251,8 @@ namespace VanyaTools.Updater
                 request.ContentType = "application/json; charset=utf-8";
                 request.Accept = "application/json";
                 request.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
+                request.Headers["Cancel-After"] = ReplicatePredictionLifetime.CancelAfterHeader;
+                // The server deadline survives HTTP 500, lost IDs and Corel closing.
                 // Return the prediction handle immediately; waiting on the create request
                 // can hit short gateway timeouts before polling has a chance to begin.
                 ReportWorkerProgress("sending");
@@ -262,6 +264,7 @@ namespace VanyaTools.Updater
                 body["version"] = model;
                 byte[] bytes = Encoding.UTF8.GetBytes(serializer.Serialize(body));
                 request.ContentLength=bytes.Length;request.SendChunked=false;request.ServicePoint.Expect100Continue=false;
+                if(File.Exists(cancelPath))throw new OperationCanceledException("Операция отменена до запуска модели.");
                 stamp.SentUtc=DateTime.UtcNow.ToString("o");SaveSubmissionStamp(outputPath,stamp,serializer);
                 try
                 {
@@ -296,45 +299,70 @@ namespace VanyaTools.Updater
             string status = Convert.ToString(result["status"]);
             if (status == "starting" || status == "processing") ReportWorkerProgress("processing");
 
-            bool cancelSent = false;
-            var pollingTimer = Stopwatch.StartNew();
-            while (status == "starting" || status == "processing")
+            bool cancelSent=false,automaticCancellation=false;
+            DateTime startedUtc=PredictionStartedUtc(result,outputPath,serializer,DateTime.UtcNow);
+            var cancellationWait=new Stopwatch();
+            while(status=="starting" || status=="processing")
             {
-                var urls = result["urls"] as Dictionary<string, object>;
-                if (urls == null || !urls.ContainsKey("get")) break;
-                if (File.Exists(cancelPath) && !cancelSent)
+                var urls=result["urls"] as Dictionary<string,object>;
+                if(urls==null || !urls.ContainsKey("get"))break;
+                bool manual=File.Exists(cancelPath),expired=ReplicatePredictionLifetime.Expired(startedUtc,DateTime.UtcNow);
+                if((manual || expired) && !cancelSent)
                 {
-                    ReportWorkerProgress("cancelling");
+                    // Check once more before cancellation: a completed result must
+                    // win the race with our deadline and remain downloadable.
+                    automaticCancellation=!manual;
+                    if(expired && !manual)
+                    {
+                        string id=ReplicateSubmissionRecovery.Value(result,"id");
+                        try{result=GetCancellationStatus(id,token,serializer);}
+                        catch(Exception error){LogWorker("Could not refresh status before deadline cancellation: "+error.GetType().Name+". Sending cancellation for the saved prediction ID.");}
+                        SavePrediction(statePath,result,serializer);status=Convert.ToString(result["status"]);
+                        if(status!="starting" && status!="processing")break;
+                        startedUtc=PredictionStartedUtc(result,outputPath,serializer,startedUtc);
+                        if(!ReplicatePredictionLifetime.Expired(startedUtc,DateTime.UtcNow)){automaticCancellation=false;continue;}
+                    }
+                    ReportWorkerProgress(automaticCancellation?"auto-cancelling":"cancelling");
                     try
                     {
-                        var cancel = CreateHttpRequest(Convert.ToString(urls["cancel"]));
-                        cancel.Method = "POST";
-                        cancel.ContentLength = 0;
-                        cancel.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
-                        result = ReadJson(cancel, serializer);
-                        SavePrediction(statePath, result, serializer);
-                        status = Convert.ToString(result["status"]);
-                        cancelSent = true;
-                        if (status != "starting" && status != "processing") break;
+                        result=CancelPrediction(token,result,serializer);
+                        SavePrediction(statePath,result,serializer);status=Convert.ToString(result["status"]);
+                        cancelSent=true;cancellationWait.Restart();
+                        if(status!="starting" && status!="processing")break;
                     }
-                    catch (Exception ex)
+                    catch(Exception error)
                     {
-                        throw new InvalidOperationException("Не удалось подтвердить отмену в Replicate. Запрос может продолжаться; повтор продолжит проверку того же запроса. " + ex.Message);
+                        // A failed HTTP response can still mean the server accepted
+                        // the cancellation. Confirm via GET; never send a new model.
+                        try
+                        {
+                            string id=ReplicateSubmissionRecovery.Value(result,"id");
+                            var latest=GetCancellationStatus(id,token,serializer);
+                            SavePrediction(statePath,latest,serializer);result=latest;status=Convert.ToString(result["status"]);
+                            if(status!="starting" && status!="processing")break;
+                        }
+                        catch(Exception refresh){LogWorker("Could not confirm cancel response: "+refresh.GetType().Name+".");}
+                        throw new InvalidOperationException("Не удалось подтвердить "+(automaticCancellation?"автоматическую ":"")+"отмену в Replicate. Номер запроса сохранён; новый запуск автоматически не отправлялся. Проверьте этот запрос в истории. "+error.Message,error);
                     }
                 }
-                if (pollingTimer.Elapsed > TimeSpan.FromMinutes(9))
-                    throw new TimeoutException("Модель ещё работает. Повтор продолжит этот же запрос без новой генерации.");
-                for (int delay = 0; delay < 20; delay++)
+                if(cancelSent && ReplicatePredictionLifetime.ConfirmationExpired(cancellationWait.Elapsed))
+                    throw new TimeoutException("Отмена отправлена в Replicate, но сервис ещё не подтвердил остановку. Номер запроса сохранён; повторная генерация автоматически не создаётся.");
+                for(int delay=0;delay<20;delay++)
+                {if(!cancelSent && File.Exists(cancelPath))break;Thread.Sleep(100);}
+                if(!cancelSent && File.Exists(cancelPath))continue;
+                if(cancelSent)
                 {
-                    if (!cancelSent && File.Exists(cancelPath)) break;
-                    Thread.Sleep(100);
+                    try{result=GetCancellationStatus(ReplicateSubmissionRecovery.Value(result,"id"),token,serializer);}
+                    catch(Exception error){throw new InvalidOperationException("Отмена отправлена в Replicate, но сервис ещё не подтвердил остановку. Номер запроса сохранён; новый запуск автоматически не отправлялся.",error);}
                 }
-                if (!cancelSent && File.Exists(cancelPath)) continue;
-                result = GetPredictionWithRetry(Convert.ToString(urls["get"]), token, serializer);
-                SavePrediction(statePath, result, serializer);
-                status = Convert.ToString(result["status"]);
+                else result=GetPredictionWithRetry(Convert.ToString(urls["get"]),token,serializer);
+                SavePrediction(statePath,result,serializer);status=Convert.ToString(result["status"]);
             }
-            if (status == "canceled") throw new OperationCanceledException("Replicate подтвердил отмену.");
+            if(status=="canceled")
+            {
+                if(automaticCancellation)throw new TimeoutException("Replicate подтвердил автоматическую отмену: превышен лимит 10 минут. Результаты предыдущих этапов сохранены. Новая попытка потребует отдельного подтверждения.");
+                throw new OperationCanceledException("Replicate подтвердил отмену.");
+            }
             if (status != "succeeded")
                 throw new InvalidOperationException("Модель завершилась со статусом " + status + ". " +
                     (result.ContainsKey("error") ? Convert.ToString(result["error"]) : ""));
@@ -359,6 +387,37 @@ namespace VanyaTools.Updater
             if (!Uri.TryCreate(url, UriKind.Absolute, out parsed) || parsed.Scheme != Uri.UriSchemeHttps)
                 throw new InvalidDataException("Replicate вернул некорректную ссылку на результат.");
             return url;
+        }
+
+        private static DateTime PredictionStartedUtc(Dictionary<string,object> prediction,string outputPath,JavaScriptSerializer serializer,DateTime fallbackUtc)
+        {
+            string submitted=null;
+            try
+            {
+                string receipt=outputPath+".submission.json";
+                if(File.Exists(receipt))submitted=serializer.Deserialize<ReplicateSubmissionStamp>(File.ReadAllText(receipt))?.SentUtc;
+                if(String.IsNullOrEmpty(submitted) && File.Exists(outputPath+".submitted"))submitted=File.GetLastWriteTimeUtc(outputPath+".submitted").ToString("o");
+            }
+            catch(IOException){}catch(UnauthorizedAccessException){}catch(ArgumentException){}catch(InvalidOperationException){}
+            return ReplicatePredictionLifetime.Started(prediction,submitted,fallbackUtc);
+        }
+        private static Dictionary<string,object> GetCancellationStatus(string id,string token,JavaScriptSerializer serializer)
+        {
+            // Deadline checks and cancellation confirmation must fit inside the
+            // worker's remaining lifetime even if the provider stops responding.
+            var request=CreateHttpRequest("https://api.replicate.com/v1/predictions/"+Uri.EscapeDataString(id));
+            request.Timeout=15000;request.ReadWriteTimeout=15000;
+            request.Headers[HttpRequestHeader.Authorization]="Bearer "+token;
+            return ReadJson(request,serializer);
+        }
+        private static Dictionary<string,object> CancelPrediction(string token,Dictionary<string,object> prediction,JavaScriptSerializer serializer)
+        {
+            string id=ReplicateSubmissionRecovery.Value(prediction,"id");
+            if(String.IsNullOrWhiteSpace(id))throw new InvalidDataException("Нет номера запроса для отмены.");
+            var request=CreateHttpRequest("https://api.replicate.com/v1/predictions/"+Uri.EscapeDataString(id)+"/cancel");
+            request.Method="POST";request.ContentLength=0;request.Timeout=20000;request.ReadWriteTimeout=20000;
+            request.Headers[HttpRequestHeader.Authorization]="Bearer "+token;
+            return ReadJson(request,serializer);
         }
 
         private static Dictionary<string, object> GetPredictionWithRetry(string url, string token, JavaScriptSerializer serializer)
@@ -529,7 +588,7 @@ namespace VanyaTools.Updater
         {
             // Store only resume metadata, never the API token or input image.
             var state = new Dictionary<string, object>();
-            foreach (string key in new[] { "id", "status", "urls", "output", "error", "metrics" })
+            foreach (string key in new[] { "id", "status", "urls", "output", "error", "metrics", "created_at", "started_at", "completed_at" })
                 if (result.ContainsKey(key)) state[key] = result[key];
             File.WriteAllText(path + ".tmp", serializer.Serialize(state));
             if (File.Exists(path)) File.Replace(path + ".tmp", path, null);

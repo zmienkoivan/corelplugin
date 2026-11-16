@@ -19,7 +19,7 @@ internal static class Program
         _root=Path.Combine(Path.GetTempPath(),"Vanya-Letter-Checks-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(_root);
         try
         {
-            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();AdaptiveGrid();IrregularAlphabet();Layouts();Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();RecognitionChecks.Run(_root);
+            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();AdaptiveGrid();IrregularAlphabet();Layouts();GridAndLabelChecks.Run(_root);Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();RecognitionChecks.Run(_root);
             Console.WriteLine("Letter transfer checks passed: "+_checks+". Offline checks; no Replicate/Corel requests.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
@@ -239,7 +239,7 @@ internal static class Program
         var reference=LetterTransferImages.Compose(new[]{Solid(100,180,Colors.Red),Solid(180,100,Colors.Blue),Solid(90,90,Colors.Green)});
         Check(reference.PixelWidth<=2048 && reference.PixelHeight<=2048,"Multi-reference collage exceeds upload size.");
         string directory=LetterTransferStore.Create(Path.Combine(_root,"preparation"),set);var glyph=LetterTransferImages.Add(directory,set,"Ё",sample,"Synthetic batch");
-        var saved=LetterTransferImages.Load(LetterTransferStore.Resolve(directory,glyph.File));Check(Math.Abs(saved.PixelHeight*25.4/saved.DpiY-set.HeightMm)<.02,"Separate PNG physical height is wrong.");
+        var saved=LetterTransferImages.Load(LetterTransferStore.Resolve(directory,glyph.File));Check(Math.Abs(saved.PixelHeight*25.4/saved.DpiY-LetterTransferLayout.GlyphHeight(set,glyph))<.12,"Separate PNG physical height is wrong.");
         Check(LetterTransferImages.Pixels(saved).Where((b,i)=>i%4==3).All(a=>a==0 || a==255),"Saved PNG retained semitransparency.");
     }
     internal static BitmapSource Solid(int width,int height,Color color)

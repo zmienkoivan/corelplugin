@@ -419,6 +419,7 @@ namespace VanyaTools.Native
                 case "recovering": message = "Восстанавливаю номер уже созданного запроса без новой генерации…"; break;
                 case "processing": message = "Модель обрабатывает изображение. Это может занять несколько минут…"; break;
                 case "downloading": message = "Модель готова. Загружаю результат…"; break;
+                case "auto-cancelling": message = "Автоотмена: превышен лимит 10 минут…"; break;
                 case "cancelling": message = "Ожидаю подтверждение отмены от Replicate…"; break;
                 default: message = stage; break;
             }

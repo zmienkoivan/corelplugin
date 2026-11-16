@@ -599,7 +599,7 @@ namespace VanyaTools.Native
             _activity.Text = message;
             _status(message, error);
         }
-        private static string ProgressName(string value) { return value == "sending" ? "отправка" : value == "creating" ? "запуск модели" : value == "recovering" ? "восстановление запроса без новой генерации" : value == "processing" ? "обработка" : value == "cancelling" ? "отмена" : value == "retrying-download" ? "повтор скачивания готового файла" : value == "retrying-upload" ? "повтор загрузки входного фрагмента" : value == "retrying-status" ? "повтор проверки запроса" : "получение"; }
+        private static string ProgressName(string value) { return value == "sending" ? "отправка" : value == "creating" ? "запуск модели" : value == "recovering" ? "восстановление запроса без новой генерации" : value == "processing" ? "обработка" : value == "auto-cancelling" ? "автоотмена · лимит 10 минут" : value == "cancelling" ? "отмена" : value == "retrying-download" ? "повтор скачивания готового файла" : value == "retrying-upload" ? "повтор загрузки входного фрагмента" : value == "retrying-status" ? "повтор проверки запроса" : "получение"; }
         private static string PendingPath() { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VanyaTools", "pending-sublimation-result.txt"); }
         private static string HistoryPath() { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VanyaTools", "sublimation-results.json"); }
 

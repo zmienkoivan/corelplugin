@@ -12,11 +12,20 @@ internal static class Program
     [STAThread]private static int Main()
     {
         string originalTemp=Environment.GetEnvironmentVariable("TEMP");string root=Path.Combine(Path.GetTempPath(),"Vanya-Recovery-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);Environment.SetEnvironmentVariable("TEMP",root);
-        try{Matching(root);WireChecks.Run(root);Console.WriteLine("Replicate recovery checks passed: "+_checks+". Loopback HTTP and synthetic credentials only.");return 0;}
+        try{Lifetime();Matching(root);WireChecks.Run(root);Console.WriteLine("Replicate recovery checks passed: "+_checks+". Loopback HTTP and synthetic credentials only.");return 0;}
         catch(Exception e){Console.Error.WriteLine(e);return 1;}
         finally{Environment.SetEnvironmentVariable("TEMP",originalTemp);string parent=Path.GetFullPath(originalTemp).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;if(Path.GetFullPath(root).StartsWith(parent,StringComparison.OrdinalIgnoreCase) && Path.GetFileName(root).StartsWith("Vanya-Recovery-"))Directory.Delete(root,true);}
     }
     internal static void Check(bool ok,string message){_checks++;if(!ok)throw new Exception(message);}
+    private static void Lifetime()
+    {
+        DateTime now=DateTime.UtcNow,start=now.AddMinutes(-10);
+        Check(!ReplicatePredictionLifetime.Expired(start,now.AddMilliseconds(-1)) && ReplicatePredictionLifetime.Expired(start,now),"Ten-minute cancellation boundary is wrong.");
+        Check(!ReplicatePredictionLifetime.ConfirmationExpired(TimeSpan.FromSeconds(29)) && ReplicatePredictionLifetime.ConfirmationExpired(TimeSpan.FromSeconds(30)),"Cancel confirmation grace is wrong.");
+        var state=new Dictionary<string,object>{{"created_at",start.ToString("o")}};
+        Check(ReplicatePredictionLifetime.Started(state,now.ToString("o"),now)==start,"Server creation time did not override receipt time.");
+        state.Clear();Check(ReplicatePredictionLifetime.Started(state,start.ToString("o"),now)==start && ReplicatePredictionLifetime.Started(state,"invalid",now)==now,"Legacy receipt/fallback timing failed.");
+    }
     private static Dictionary<string,object> Copy(Dictionary<string,object> source)=>new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(new JavaScriptSerializer().Serialize(source));
     private static void Matching(string root)
     {

@@ -151,7 +151,7 @@ namespace VanyaTools.Native
                 var runCancellation=_restorationCancellation;var token=runCancellation.Token;
                 var result=await _restorationHost.Generate(request,stage=>Dispatcher.BeginInvoke(new Action(()=> {
                     if(_closed || !_restorationBusy || _restorationCancellation!=runCancellation)return;
-                    _restorationStage=stage=="sending"?"Отправляю исходник…":stage=="cancelling"?"Отменяю запрос…":
+                    _restorationStage=stage=="sending"?"Отправляю исходник…":stage=="auto-cancelling"?"Автоотмена · лимит 10 минут":stage=="cancelling"?"Отменяю запрос…":
                         stage=="downloading"?"Загружаю результат…":stage!=null && stage.StartsWith("retrying",StringComparison.Ordinal)?"Восстанавливаю связь…":"Восстанавливаю рисунок…";
                     UpdateRestorationProgress();
                 })),token);

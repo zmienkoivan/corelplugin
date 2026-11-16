@@ -39,6 +39,7 @@ namespace VanyaTools.Native
         public string File { get; set; }
         public int Width { get; set; }
         public int Height { get; set; }
+        public int BodyHeight { get; set; }
         public string Source { get; set; }
     }
     internal sealed class LetterTransferJob
@@ -90,7 +91,7 @@ namespace VanyaTools.Native
             if(!In(set.HeightMm,1,500) || !In(set.SheetWidthMm,20,2000) || !In(set.SheetHeightMm,20,7000) || !In(set.GapMm,0,50) || !In(set.MarginMm,0,100) ||
                 set.SheetWidthMm<=2*set.MarginMm || (!set.AutoLength && set.SheetHeightMm<=2*set.MarginMm) || set.VariantsPerLetter<1 || set.VariantsPerLetter>4 || set.TargetCopies<33 || set.TargetCopies>5000 || set.AlphaThreshold<1 || set.AlphaThreshold>255)
                 throw new ArgumentException("Проверьте размер букв, листа, поля и количество вариантов.");
-            if(set.Glyphs==null || set.Glyphs.Count>264 || set.Glyphs.Any(g=>g==null || !Guid.TryParseExact(g.Id,"N",out _) || !ValidLetter(g.Letter) || g.Width<1 || g.Height<1 || g.Width>10000 || g.Height>10000 || (long)g.Width*g.Height>25000000) ||
+            if(set.Glyphs==null || set.Glyphs.Count>264 || set.Glyphs.Any(g=>g==null || !Guid.TryParseExact(g.Id,"N",out _) || !ValidLetter(g.Letter) || g.Width<1 || g.Height<1 || g.Width>10000 || g.Height>10000 || g.BodyHeight<0 || g.BodyHeight>g.Height || (long)g.Width*g.Height>25000000) ||
                 set.Glyphs.Select(g=>g.Id).Distinct().Count()!=set.Glyphs.Count || set.Jobs==null || set.Jobs.Count>200 || set.Jobs.Select(j=>j?.Id).Distinct().Count()!=set.Jobs.Count)
                 throw new ArgumentException("Некорректные рисунки или история генераций набора.");
             foreach(var job in set.Jobs)if(job==null || !Guid.TryParseExact(job.Id,"N",out _) || job.Letters==null || job.Letters.Length<1 || job.Letters.Length>33 || job.Letters.Any(letter=>!ValidLetter(letter)) ||
@@ -116,30 +117,43 @@ namespace VanyaTools.Native
     internal sealed class LetterTransferPlacement
     {
         internal LetterTransferGlyph Glyph;
-        internal int Page;
-        internal double X,Y,Width,Height;
+        internal int Page,Column,Row;
+        internal double X,Y,Width,Height,CellX,CellY,CellWidth,CellHeight;
     }
     internal static class LetterTransferLayout
     {
         internal static double PageLimit(LetterTransferSet set)=>set.AutoLength?7000:set.SheetHeightMm;
-        internal static double PageHeight(LetterTransferSet set,IEnumerable<LetterTransferPlacement> page)=>set.AutoLength?Math.Max(20,page.Max(p=>p.Y+p.Height)+set.MarginMm):set.SheetHeightMm;
+        internal static double PageHeight(LetterTransferSet set,IEnumerable<LetterTransferPlacement> page)=>set.AutoLength?Math.Max(20,page.Max(p=>p.CellY+p.CellHeight)+set.MarginMm):set.SheetHeightMm;
+        internal static double GlyphHeight(LetterTransferSet set,LetterTransferGlyph glyph)
+        {
+            if(glyph.Letter!="Ё" && glyph.Letter!="Й")return set.HeightMm;
+            // Older sets have no measured cap body. Reserve 20% above the body
+            // until an image with detached accents can be measured on load.
+            return glyph.BodyHeight>0?set.HeightMm*glyph.Height/glyph.BodyHeight:set.HeightMm*1.2;
+        }
         internal static List<LetterTransferPlacement> Build(LetterTransferSet set,bool readyOnly)
         {
-            LetterTransferRules.Validate(set);var placements=new List<LetterTransferPlacement>();
-            double x=set.MarginMm,y=set.MarginMm,rowHeight=0,length=PageLimit(set);int page=0;
+            LetterTransferRules.Validate(set);var glyphs=new List<LetterTransferGlyph>();
             foreach(var row in set.Letters.OrderBy(row=>LetterTransferRules.Alphabet.IndexOf(row.Letter,StringComparison.Ordinal)))
             {
                 var variants=set.Glyphs.Where(g=>g.Letter==row.Letter).ToArray();
                 if(row.Copies>0 && variants.Length==0 && !readyOnly)throw new InvalidOperationException("Нет готовой буквы «"+row.Letter+"». Догенерируйте её, установите количество 0 или включите «Только готовые».");
-                if(variants.Length==0)continue;
-                for(int copy=0;copy<row.Copies;copy++)
-                {
-                    var glyph=variants[copy%variants.Length];double h=set.HeightMm,w=h*glyph.Width/glyph.Height;
-                    if(w>set.SheetWidthMm-2*set.MarginMm || h>length-2*set.MarginMm)throw new InvalidOperationException("Буква «"+row.Letter+"» не помещается на лист при выбранной высоте.");
-                    if(x+w>set.SheetWidthMm-set.MarginMm+.00001){x=set.MarginMm;y+=rowHeight+set.GapMm;rowHeight=0;}
-                    if(y+h>length-set.MarginMm+.00001){page++;if(page>=200)throw new InvalidOperationException("Больше 200 листов. Уменьшите количество или размер букв либо увеличьте лист.");x=set.MarginMm;y=set.MarginMm;rowHeight=0;}
-                    placements.Add(new LetterTransferPlacement{Glyph=glyph,Page=page,X=x,Y=y,Width=w,Height=h});x+=w+set.GapMm;rowHeight=Math.Max(rowHeight,h);
-                }
+                if(variants.Length>0)for(int copy=0;copy<row.Copies;copy++)glyphs.Add(variants[copy%variants.Length]);
+            }
+            var placements=new List<LetterTransferPlacement>();if(glyphs.Count==0)return placements;
+            double cellHeight=glyphs.Max(g=>GlyphHeight(set,g)),cellWidth=glyphs.Max(g=>GlyphHeight(set,g)*g.Width/g.Height);
+            double width=set.SheetWidthMm-2*set.MarginMm,height=PageLimit(set)-2*set.MarginMm;
+            if(cellWidth>width+.00001 || cellHeight>height+.00001)throw new InvalidOperationException("Буквы не помещаются в ячейку при выбранной высоте. Увеличьте лист или уменьшите высоту букв.");
+            int columns=(int)Math.Floor((width+set.GapMm+.00001)/(cellWidth+set.GapMm));
+            int rows=(int)Math.Floor((height+set.GapMm+.00001)/(cellHeight+set.GapMm));
+            columns=Math.Min(columns,glyphs.Count);rows=Math.Min(rows,glyphs.Count);int capacity=columns*rows;
+            if((glyphs.Count+capacity-1)/capacity>200)throw new InvalidOperationException("Больше 200 листов. Уменьшите количество или размер букв либо увеличьте лист.");
+            for(int n=0;n<glyphs.Count;n++)
+            {
+                var glyph=glyphs[n];double h=GlyphHeight(set,glyph),w=h*glyph.Width/glyph.Height;
+                int slot=n%capacity,col=slot%columns,row=slot/columns;
+                double x=set.MarginMm+col*(cellWidth+set.GapMm),y=set.MarginMm+row*(cellHeight+set.GapMm);
+                placements.Add(new LetterTransferPlacement{Glyph=glyph,Page=n/capacity,Column=col,Row=row,CellX=x,CellY=y,CellWidth=cellWidth,CellHeight=cellHeight,X=x+(cellWidth-w)/2,Y=y+cellHeight-h,Width=w,Height=h});
             }
             return placements;
         }

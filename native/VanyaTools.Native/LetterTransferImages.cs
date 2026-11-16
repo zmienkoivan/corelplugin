@@ -1,4 +1,5 @@
 using System;
+using System.Security.Cryptography;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -278,6 +279,22 @@ namespace VanyaTools.Native
                 if(color.R==0)pixels[i+2]=(byte)(255-pixels[i+2]);
             }
         }
+        internal static string Fingerprint(BitmapSource image)
+        {using(var sha=SHA256.Create())return image.PixelWidth+"x"+image.PixelHeight+":"+Convert.ToBase64String(sha.ComputeHash(Pixels(image)));}
+        internal static int BodyHeight(string letter,BitmapSource image)
+        {
+            if(letter!="Ё" && letter!="Й")return image.PixelHeight;
+            byte[] pixels=Pixels(image);int w=image.PixelWidth,h=image.PixelHeight;var occupied=new bool[h];
+            for(int y=0;y<h;y++)for(int x=0;x<w;x++)if(pixels[(y*w+x)*4+3]>=130){occupied[y]=true;break;}
+            int first=Array.FindIndex(occupied,b=>b),last=Array.FindLastIndex(occupied,b=>b);
+            if(first<0)return 0;
+            for(int y=first+1;y<h*.4;y++)if(!occupied[y] && occupied[y-1])
+            {
+                int end=y;while(end<h && !occupied[end])end++;
+                if(end<h*.45 && last-end+1>=h*.55)return last-end+1;
+            }
+            return 0;
+        }
         internal static LetterTransferGlyph Add(string directory,LetterTransferSet set,string letter,BitmapSource image,string source)
         {
             if(!LetterTransferRules.ValidLetter(letter))throw new ArgumentException("Выберите русскую заглавную букву.");
@@ -286,9 +303,11 @@ namespace VanyaTools.Native
             if(image==null)throw new InvalidDataException("После удаления полупрозрачности в букве не осталось видимого рисунка.");
             // Preserve detail while writing the chosen physical cap height into
             // the separate PNG. Corel placement still uses current layout size.
-            double dpi=image.PixelHeight*25.4/set.HeightMm;
+            int body=BodyHeight(letter,image);
+            double physicalHeight=(letter=="Ё" || letter=="Й")?(body>0?set.HeightMm*image.PixelHeight/body:set.HeightMm*1.2):set.HeightMm;
+            double dpi=image.PixelHeight*25.4/physicalHeight;
             image=BitmapSource.Create(image.PixelWidth,image.PixelHeight,dpi,dpi,PixelFormats.Bgra32,null,Pixels(image),image.PixelWidth*4);image.Freeze();
-            var glyph=new LetterTransferGlyph{Letter=letter,Width=image.PixelWidth,Height=image.PixelHeight,Source=source};
+            var glyph=new LetterTransferGlyph{Letter=letter,Width=image.PixelWidth,Height=image.PixelHeight,BodyHeight=body,Source=source};
             glyph.File="glyphs/"+glyph.Id+".png";Save(image,LetterTransferStore.Resolve(directory,glyph.File));set.Glyphs.Add(glyph);return glyph;
         }
     }
