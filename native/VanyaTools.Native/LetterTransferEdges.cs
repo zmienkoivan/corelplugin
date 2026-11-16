@@ -143,6 +143,19 @@ namespace VanyaTools.Native
                 int p=pixel*4;data[p]=data[p+1]=data[p+2]=data[p+3]=0;
             }
         }
+        internal static BitmapSource Finish(BitmapSource source,LetterTransferSet set,string letter,CancellationToken cancel)
+        {
+            var image=Process(source,set.EdgeTrimPx,set.AlphaThreshold,set.SmoothEdges,cancel);if(!set.SharpContour)return image;
+            int body=LetterTransferImages.BodyHeight(letter,image);
+            double height=letter=="Ё" || letter=="Й"?(body>0?set.HeightMm*image.PixelHeight/body:set.HeightMm*1.2):set.HeightMm;
+            double scale=Math.Max(1,height*600/25.4/image.PixelHeight);
+            return LetterTransferContour.Refine(image,set.ContourSmoothPx,scale,cancel);
+        }
+        internal static void Preview(LetterTransferSheet sheet,LetterTransferSet set,CancellationToken cancel)
+        {
+            foreach(var cell in sheet.Cells)if(cell.Image!=null)
+            {cell.Original=cell.Image;cell.Image=Finish(cell.Original,set,cell.Letter,cancel);cell.Preview=cell.Image;}
+        }
         internal static void Preview(LetterTransferSheet sheet,int pixels,int threshold,CancellationToken cancel,bool smooth=false)
         {
             foreach(var cell in sheet.Cells)if(cell.Image!=null)
@@ -156,9 +169,9 @@ namespace VanyaTools.Native
                 foreach(var glyph in original)
                 {
                     cancel.ThrowIfCancellationRequested();string source=String.IsNullOrEmpty(glyph.OriginalFile)?glyph.File:glyph.OriginalFile;
-                    var image=Process(LetterTransferImages.Load(LetterTransferStore.Resolve(directory,source)),set.EdgeTrimPx,set.AlphaThreshold,set.SmoothEdges,cancel);
+                    var image=Finish(LetterTransferImages.Load(LetterTransferStore.Resolve(directory,source)),set,glyph.Letter,cancel);
                     image=LetterTransferImages.Physical(set,glyph.Letter,image);
-                    var next=new LetterTransferGlyph{Id=glyph.Id,Letter=glyph.Letter,Source=glyph.Source,OriginalFile=source,EdgeTrimPx=set.EdgeTrimPx,Smoothed=set.SmoothEdges,File="glyphs/"+glyph.Id+"-edge-"+Guid.NewGuid().ToString("N")+".png",Width=image.PixelWidth,Height=image.PixelHeight,BodyHeight=LetterTransferImages.BodyHeight(glyph.Letter,image)};
+                    var next=new LetterTransferGlyph{Id=glyph.Id,Letter=glyph.Letter,Source=glyph.Source,OriginalFile=source,EdgeTrimPx=set.EdgeTrimPx,Smoothed=set.SmoothEdges,SharpContour=set.SharpContour,ContourSmoothPx=set.SharpContour?set.ContourSmoothPx:0,File="glyphs/"+glyph.Id+"-edge-"+Guid.NewGuid().ToString("N")+".png",Width=image.PixelWidth,Height=image.PixelHeight,BodyHeight=LetterTransferImages.BodyHeight(glyph.Letter,image)};
                     string output=LetterTransferStore.Resolve(directory,next.File);files.Add(output);LetterTransferImages.Save(image,output);updated.Add(next);
                 }
                 cancel.ThrowIfCancellationRequested();set.Glyphs=updated;

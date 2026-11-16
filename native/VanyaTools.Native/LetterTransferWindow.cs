@@ -33,6 +33,9 @@ namespace VanyaTools.Native
         private readonly CheckBox _autoLength=new CheckBox{Content="Полотно · длина по заполнению",IsChecked=true};
         private readonly TextBox _alphaThreshold=new TextBox();
         private readonly CheckBox _smoothEdges=new CheckBox{Content="Сгладить край и убрать мелкий мусор",IsChecked=true,Margin=new Thickness(0,3,0,4)};
+        private readonly CheckBox _sharpContour=new CheckBox{Content="Чёткий ровный контур",Margin=new Thickness(0,7,0,3)};
+        private readonly Slider _contourSmooth=new Slider{Minimum=.25,Maximum=3,Value=1.5,TickFrequency=.25,IsSnapToTickEnabled=true,Margin=new Thickness(0,3,0,4)};
+        private readonly TextBlock _contourLabel=new TextBlock{Text="Выравнивание контура: 1,5 px"};
         private readonly Slider _edgeTrim=new Slider{Minimum=0,Maximum=6,Value=1,TickFrequency=1,IsSnapToTickEnabled=true,Margin=new Thickness(0,4,0,4)};
         private readonly TextBlock _edgeTrimLabel=new TextBlock{Text="Подрезать край: 1 px",Margin=new Thickness(0,6,0,0)};
         private readonly Button _complete;
@@ -51,12 +54,12 @@ namespace VanyaTools.Native
         private readonly Stopwatch _elapsed=new Stopwatch();
         private readonly Button _cancel;
         private CancellationTokenSource _request;
-        private string _stage="",_timingKey,_sequenceNote;
+        private string _stage="",_timingKey,_sequenceNote,_recognitionSourceNote;
         private double _zoom=1;
         internal LetterTransferWindow(Func<string> token,Func<string> capture,Action<string,bool> status,string libraryRoot=null,Func<BitmapSource,string[],string,string,string,bool,bool> confirm=null,Func<string> captureReference=null,Func<BitmapSource,int,string,bool,bool> confirmRecognition=null,Func<BitmapSource,BitmapSource,LetterTransferSheet,List<LetterTransferApproved>> review=null)
         {
             _token=token;_capture=capture;_captureReference=captureReference??capture;_status=status;_root=libraryRoot??LetterTransferStore.DefaultRoot;_confirm=confirm??((reference,letters,model,resolution,prompt,retry)=>LetterTransferReviewWindow.Confirm(this,reference,letters,model,resolution,prompt,retry,_sequenceNote));
-            _confirmRecognition=confirmRecognition??((preview,count,prompt,retry)=>LetterTransferReviewWindow.ConfirmRecognition(this,preview,count,prompt,retry));
+            _confirmRecognition=confirmRecognition??((preview,count,prompt,retry)=>LetterTransferReviewWindow.ConfirmRecognition(this,preview,count,prompt,retry,_recognitionSourceNote));
             _review=review??((reference,sheet,cells)=>LetterTransferReviewWindow.Review(this,reference,sheet,cells));
             Title="Буквы-трансферы · Vanya Tools";Width=Math.Min(1380,SystemParameters.WorkArea.Width-30);Height=Math.Min(900,SystemParameters.WorkArea.Height-30);MinWidth=1000;MinHeight=640;WindowStartupLocation=WindowStartupLocation.CenterOwner;DockerTheme.Apply(this);
             var root=new DockPanel{Margin=new Thickness(10)};Content=root;
@@ -90,10 +93,13 @@ namespace VanyaTools.Native
             printFields.Children.Add(_autoLength);Field(printFields,"Высота фиксированного листа, мм",_sheetHeight);
             Field(printFields,"Порог удаления полупрозрачности (1–255)",_alphaThreshold);
             printFields.Children.Add(_edgeTrimLabel);printFields.Children.Add(_edgeTrim);printFields.Children.Add(_smoothEdges);
+            printFields.Children.Add(_sharpContour);printFields.Children.Add(_contourLabel);printFields.Children.Add(_contourSmooth);
+            _sharpContour.ToolTip="Выравнивает внешний силуэт и отверстия, сохраняет углы и окантовку. Текстура остаётся внутри чёткого контура; PNG выводится с разрешением до 600 DPI. Новые детали изображения не создаются.";
+            _contourSmooth.ToolTip="Допустимое выравнивание края в пикселях исходной буквы. Меньше — ближе к исходнику, больше — ровнее силуэт.";
             _smoothEdges.ToolTip="Сглаживает маску без полупрозрачности и убирает отдельные частицы до 4 пикселей. Исходник сохраняется.";
             _edgeTrim.ToolTip="Пиксели исходной буквы после удаления фона. 0 — без подрезания. Для уже сохранённых букв нажмите кнопку ниже.";
             printFields.Children.Add(Button("Очистить края готовых букв",()=>Reclean()));
-            printFields.Children.Add(new TextBlock{Text="Исходники сохраняются. Для возврата исходного края: 0 px, отключить сглаживание и повторить очистку.",TextWrapping=TextWrapping.Wrap,FontSize=11});
+            printFields.Children.Add(new TextBlock{Text="Исходники сохраняются. Для возврата исходного края: 0 px, отключить сглаживание и ровный контур, повторить очистку.",TextWrapping=TextWrapping.Wrap,FontSize=11});
             printFields.Children.Add(new TextBlock{Text="Каждая полученная буква автоматически очищается от фона и полупрозрачности. PNG сохраняются отдельно; высота задаётся сверху. Длина полотна рассчитывается по заполнению, до 7 м на страницу.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,7,0,7)});Field(printFields,"Зазор, мм",_gap);Field(printFields,"Поля, мм",_margin);printFields.Children.Add(_readyOnly);
             printFields.Children.Add(new TextBlock{Text="Прямая сетка: одинаковые столбцы и ряды для нарезки. Ё и Й имеют дополнительное место над основной буквой.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,7,0,7)});
             var middle=new DockPanel{Margin=new Thickness(0,8,10,0)};Grid.SetColumn(middle,1);_body.Children.Add(middle);
@@ -109,11 +115,11 @@ namespace VanyaTools.Native
             _scroll.PreviewMouseWheel+=(_,e)=>{if((Keyboard.Modifiers&ModifierKeys.Control)==0)return;Zoom(_zoom*(e.Delta>0?1.15:1/1.15));e.Handled=true;};
             var variantsPanel=new DockPanel();var variantTools=new WrapPanel();DockPanel.SetDock(variantTools,Dock.Top);variantsPanel.Children.Add(variantTools);
             _letter.ItemsSource=LetterTransferRules.Alphabet.Select(c=>c.ToString()).ToArray();_letter.SelectedIndex=0;_letter.Width=60;variantTools.Children.Add(_letter);
-            variantTools.Children.Add(Button("PNG / изображение…",()=>Safe(()=>Import(false))));variantTools.Children.Add(Button("Из Corel",()=>Safe(()=>Import(true))));variantTools.Children.Add(Button("Удалить вариант",()=>Safe(Remove)));variantsPanel.Children.Add(_glyphs);tabs.Items.Add(new TabItem{Header="Варианты букв",Content=variantsPanel});
+            variantTools.Children.Add(Button("PNG / изображение…",()=>Safe(()=>Import(false))));variantTools.Children.Add(Button("Из Corel",()=>Safe(()=>Import(true))));variantTools.Children.Add(Button("Удалить вариант",()=>Safe(Remove)));variantTools.Children.Add(Button("Предпросмотр края…",()=>PreviewEdge()));variantsPanel.Children.Add(_glyphs);tabs.Items.Add(new TabItem{Header="Варианты букв",Content=variantsPanel});
             var jobsPanel=new DockPanel();var jobTools=new WrapPanel();DockPanel.SetDock(jobTools,Dock.Top);jobsPanel.Children.Add(jobTools);
             jobTools.Children.Add(Button("История Replicate",()=>Safe(()=>Process.Start(new ProcessStartInfo("https://replicate.com/predictions"){UseShellExecute=true}))));jobTools.Children.Add(Button("Проверить готовый ответ",()=>ReviewJob()));jobTools.Children.Add(Button("Распознать буквы заново…",()=>ReviewJob(true)));jobTools.Children.Add(Button("Продолжить / повторить…",()=>Retry()));jobsPanel.Children.Add(_jobs);tabs.Items.Add(new TabItem{Header="История ИИ",Content=jobsPanel});
             _library.SelectionChanged+=(_,__)=>{if(_loading || _library.SelectedItem==null)return;Safe(()=>{Save();Load(((LetterTransferLibraryItem)_library.SelectedItem).Directory);});};
-            foreach(var input in new[]{_name,_notes,_height,_sheetWidth,_sheetHeight,_gap,_margin,_target,_variants,_alphaThreshold})input.TextChanged+=(_,__)=>Queue();_style.SelectionChanged+=(_,__)=>Queue();_model.SelectionChanged+=(_,__)=>Queue();_smoothEdges.Checked+=(_,__)=>Queue();_smoothEdges.Unchecked+=(_,__)=>Queue();_edgeTrim.ValueChanged+=(_,__)=>{_edgeTrimLabel.Text="Подрезать край: "+((int)_edgeTrim.Value)+" px";Queue();};_readyOnly.Checked+=(_,__)=>Queue();_readyOnly.Unchecked+=(_,__)=>Queue();_autoLength.Checked+=(_,__)=>{_sheetHeight.IsEnabled=false;Queue();};_autoLength.Unchecked+=(_,__)=>{_sheetHeight.IsEnabled=true;Queue();};
+            foreach(var input in new[]{_name,_notes,_height,_sheetWidth,_sheetHeight,_gap,_margin,_target,_variants,_alphaThreshold})input.TextChanged+=(_,__)=>Queue();_style.SelectionChanged+=(_,__)=>Queue();_model.SelectionChanged+=(_,__)=>Queue();_smoothEdges.Checked+=(_,__)=>Queue();_smoothEdges.Unchecked+=(_,__)=>Queue();_edgeTrim.ValueChanged+=(_,__)=>{_edgeTrimLabel.Text="Подрезать край: "+((int)_edgeTrim.Value)+" px";Queue();};_sharpContour.Checked+=(_,__)=>{_contourSmooth.IsEnabled=true;Queue();};_sharpContour.Unchecked+=(_,__)=>{_contourSmooth.IsEnabled=false;Queue();};_contourSmooth.ValueChanged+=(_,__)=>{_contourLabel.Text="Выравнивание контура: "+N(_contourSmooth.Value)+" px";Queue();};_readyOnly.Checked+=(_,__)=>Queue();_readyOnly.Unchecked+=(_,__)=>Queue();_autoLength.Checked+=(_,__)=>{_sheetHeight.IsEnabled=false;Queue();};_autoLength.Unchecked+=(_,__)=>{_sheetHeight.IsEnabled=true;Queue();};
             _refresh.Tick+=(_,__)=>{_refresh.Stop();if(_loading || _request!=null)return;try{Save();Preview();}catch(Exception error){_pages.Children.Clear();_summary.Text=error.GetBaseException().Message;}};
             _clock.Tick+=(_,__)=>_timing.Text=OperationTiming.Display(_stage,_elapsed.Elapsed,_timingKey);
             Closing+=(_,e)=>{if(_request!=null){e.Cancel=true;_request.Cancel();Report("Дождитесь завершения отмены. Результат и история останутся в наборе.");return;}try{Save();}catch(Exception error){e.Cancel=true;Report(error.GetBaseException().Message,true);}};
@@ -139,7 +145,7 @@ namespace VanyaTools.Native
             try
             {
                 _set=set;_directory=directory;_cache.Clear();_name.Text=set.Name;_notes.Text=set.Notes;_style.SelectedItem=set.Style;if(_style.SelectedIndex<0)_style.SelectedIndex=0;
-                _autoLength.IsChecked=set.AutoLength;_sheetHeight.IsEnabled=!set.AutoLength;_alphaThreshold.Text=set.AlphaThreshold.ToString();_edgeTrim.Value=set.EdgeTrimPx;_smoothEdges.IsChecked=set.SmoothEdges;_model.SelectedIndex=Array.IndexOf(LetterTransferModels.Ids,set.GenerationModel);_height.Text=N(set.HeightMm);_sheetWidth.Text=N(set.SheetWidthMm);_sheetHeight.Text=N(set.SheetHeightMm);_gap.Text=N(set.GapMm);_margin.Text=N(set.MarginMm);_target.Text=set.TargetCopies.ToString();_variants.Text=set.VariantsPerLetter.ToString();
+                _autoLength.IsChecked=set.AutoLength;_sheetHeight.IsEnabled=!set.AutoLength;_alphaThreshold.Text=set.AlphaThreshold.ToString();_edgeTrim.Value=set.EdgeTrimPx;_smoothEdges.IsChecked=set.SmoothEdges;_sharpContour.IsChecked=set.SharpContour;_contourSmooth.Value=set.ContourSmoothPx;_contourSmooth.IsEnabled=set.SharpContour;_model.SelectedIndex=Array.IndexOf(LetterTransferModels.Ids,set.GenerationModel);_height.Text=N(set.HeightMm);_sheetWidth.Text=N(set.SheetWidthMm);_sheetHeight.Text=N(set.SheetHeightMm);_gap.Text=N(set.GapMm);_margin.Text=N(set.MarginMm);_target.Text=set.TargetCopies.ToString();_variants.Text=set.VariantsPerLetter.ToString();
                 _table.ItemsSource=set.Letters;_table.SelectedIndex=0;_reference.Source=String.IsNullOrEmpty(set.Reference)?null:Thumb(set.Reference);
                 RefreshAssets();Preview();Report("Набор загружен. Параметры сохраняются автоматически.");
             }
@@ -149,7 +155,7 @@ namespace VanyaTools.Native
         {
             if(_set==null)return;
             if(!_table.CommitEdit(DataGridEditingUnit.Cell,true) || !_table.CommitEdit(DataGridEditingUnit.Row,true))throw new ArgumentException("Завершите правку таблицы: нужны числовые значения.");
-            _set.Name=_name.Text.Trim();_set.Style=(string)_style.SelectedItem;_set.Notes=_notes.Text;_set.AutoLength=_autoLength.IsChecked==true;_set.AlphaThreshold=Integer(_alphaThreshold);_set.EdgeTrimPx=(int)_edgeTrim.Value;_set.SmoothEdges=_smoothEdges.IsChecked==true;_set.GenerationModel=LetterTransferModels.At(_model.SelectedIndex);_set.HeightMm=Number(_height);_set.SheetWidthMm=Number(_sheetWidth);_set.SheetHeightMm=Number(_sheetHeight);_set.GapMm=Number(_gap);_set.MarginMm=Number(_margin);_set.TargetCopies=Integer(_target);_set.VariantsPerLetter=Integer(_variants);LetterTransferRules.Validate(_set);
+            _set.Name=_name.Text.Trim();_set.Style=(string)_style.SelectedItem;_set.Notes=_notes.Text;_set.AutoLength=_autoLength.IsChecked==true;_set.AlphaThreshold=Integer(_alphaThreshold);_set.EdgeTrimPx=(int)_edgeTrim.Value;_set.SmoothEdges=_smoothEdges.IsChecked==true;_set.SharpContour=_sharpContour.IsChecked==true;_set.ContourSmoothPx=_contourSmooth.Value;_set.GenerationModel=LetterTransferModels.At(_model.SelectedIndex);_set.HeightMm=Number(_height);_set.SheetWidthMm=Number(_sheetWidth);_set.SheetHeightMm=Number(_sheetHeight);_set.GapMm=Number(_gap);_set.MarginMm=Number(_margin);_set.TargetCopies=Integer(_target);_set.VariantsPerLetter=Integer(_variants);LetterTransferRules.Validate(_set);
         }
         private void Save()
         {
@@ -166,14 +172,15 @@ namespace VanyaTools.Native
                 var panel=new StackPanel{Orientation=Orientation.Horizontal,Background=Brushes.LightGray};panel.Children.Add(new Image{Source=Thumb(glyph.File),Width=72,Height=65,Stretch=Stretch.Uniform,Margin=new Thickness(5)});
                 panel.Children.Add(new TextBlock{Text=glyph.Letter+" · "+glyph.Width+" × "+glyph.Height+" px\n"+(glyph.Source??""),VerticalAlignment=VerticalAlignment.Center,TextWrapping=TextWrapping.Wrap});_glyphs.Items.Add(new ListBoxItem{Content=panel,Tag=glyph});
             }
-            _jobs.Items.Clear();foreach(var job in _set.Jobs.AsEnumerable().Reverse())_jobs.Items.Add(new ListBoxItem{Content=LetterTransferModels.Name(job.Model)+" · "+String.Join(" ",job.Letters)+" · "+job.Resolution+" · "+(job.Reviewed?"проверено":File.Exists(LetterTransferStore.Resolve(_directory,job.Output))?"ответ готов":LetterTransferAi.UncertainSubmission(_directory,job)?"нет номера от Replicate":"запрос сохранён"),Tag=job});
+            _jobs.Items.Clear();foreach(var job in _set.Jobs.AsEnumerable().Reverse())_jobs.Items.Add(new ListBoxItem{Content=LetterTransferModels.Name(job.Model)+" · "+String.Join(" ",job.Letters)+" · "+"заказано "+job.Resolution+(File.Exists(LetterTransferStore.Resolve(_directory,job.Output))?" · получено "+LetterTransferImages.ActualSize(LetterTransferStore.Resolve(_directory,job.Output)):"")+" · "+(job.Reviewed?"проверено":File.Exists(LetterTransferStore.Resolve(_directory,job.Output))?"ответ готов":LetterTransferAi.UncertainSubmission(_directory,job)?"нет номера от Replicate":"запрос сохранён"),Tag=job});
         }
-        private BitmapSource Thumb(string relative)
+        private BitmapSource Thumb(string relative,int maximumHeight=250)
         {
-            if(_cache.TryGetValue(relative,out var image))return image;string path=LetterTransferStore.Resolve(_directory,relative);if(!File.Exists(path))return null;
-            try{using(var stream=File.OpenRead(path)){var thumbnail=new BitmapImage();thumbnail.BeginInit();thumbnail.CacheOption=BitmapCacheOption.OnLoad;thumbnail.StreamSource=stream;thumbnail.DecodePixelHeight=250;thumbnail.EndInit();thumbnail.Freeze();image=thumbnail;}}
+            string cacheKey=relative+"|"+maximumHeight;
+            if(_cache.TryGetValue(cacheKey,out var image))return image;string path=LetterTransferStore.Resolve(_directory,relative);if(!File.Exists(path))return null;
+            try{using(var stream=File.OpenRead(path)){var thumbnail=new BitmapImage();thumbnail.BeginInit();thumbnail.CacheOption=BitmapCacheOption.OnLoad;thumbnail.StreamSource=stream;thumbnail.DecodePixelHeight=maximumHeight;thumbnail.EndInit();thumbnail.Freeze();image=thumbnail;}}
             catch(Exception error)when(error is IOException || error is NotSupportedException || error is FileFormatException || error is ArgumentException){Log.Error("Could not load saved letter thumbnail.",error);image=null;}
-            _cache[relative]=image;return image;
+            _cache[cacheKey]=image;return image;
         }
         private void Preview()
         {
@@ -192,7 +199,7 @@ namespace VanyaTools.Native
                     }
                     foreach(var p in group)
                     {
-                        var image=Thumb(p.Glyph.File);if(image==null)throw new FileNotFoundException("Не найден PNG буквы «"+p.Glyph.Letter+"». Восстановите файл или импортируйте новый вариант.");
+                        var image=Thumb(p.Glyph.File,Math.Min(1024,p.Glyph.Height));if(image==null)throw new FileNotFoundException("Не найден PNG буквы «"+p.Glyph.Letter+"». Восстановите файл или импортируйте новый вариант.");
                         context.DrawImage(image,new Rect(p.X,p.Y,p.Width,p.Height));
                     }
                 }
@@ -313,7 +320,7 @@ namespace VanyaTools.Native
         }
         private async Task Review(LetterTransferJob job,bool forceRecognition=false,bool onlyMissing=false)
         {
-            var sheet=LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,job.Output));var cells=LetterTransferSheet.Read(sheet,job.Letters,job.Key,_set.AlphaThreshold,CancellationToken.None);
+            var sheet=LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,job.Output));_recognitionSourceNote="Исходный ответ: "+sheet.PixelWidth+" × "+sheet.PixelHeight+" px · заказано "+job.Resolution+".";var cells=LetterTransferSheet.Read(sheet,job.Letters,job.Key,_set.AlphaThreshold,CancellationToken.None);
             string output=LetterTransferStore.Resolve(_directory,job.Output);LetterTransferReviewDraft.Restore(output,cells);
             bool manuallyComplete=cells.Cells.Where(c=>c.Image!=null).All(c=>c.Manual && LetterTransferRules.ValidLetter(c.Letter));
             try
@@ -340,7 +347,7 @@ namespace VanyaTools.Native
             LetterTransferReviewDraft.Restore(output,cells);
             if(job.Resolution=="4K" && Math.Max(sheet.PixelWidth,sheet.PixelHeight)<3000 || job.Resolution=="2K" && Math.Max(sheet.PixelWidth,sheet.PixelHeight)<1500)
                 cells.Notice=(cells.Notice??"")+" Внимание: запрошено "+job.Resolution+", получено "+sheet.PixelWidth+" × "+sheet.PixelHeight+" px. Размер ответа ниже запрошенного.";
-            LetterTransferEdges.Preview(cells,_set.EdgeTrimPx,_set.AlphaThreshold,CancellationToken.None,_set.SmoothEdges);
+            LetterTransferEdges.Preview(cells,_set,CancellationToken.None);
             var approved=_review(LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,job.Reference)),sheet,cells);
             LetterTransferReviewDraft.Save(output,cells);
             if(onlyMissing){var existing=new HashSet<string>(_set.Glyphs.Select(g=>g.Letter));approved=approved.Where(g=>!existing.Contains(g.Letter)).ToList();}
@@ -361,6 +368,22 @@ namespace VanyaTools.Native
             foreach(var group in approved.GroupBy(a=>a.Letter))if(_set.Glyphs.Count(g=>g.Letter==group.Key)+group.Count()>8)throw new InvalidOperationException("Слишком много вариантов буквы «"+group.Key+"». Удалите ненужные.");
             foreach(var glyph in approved)LetterTransferImages.Add(_directory,_set,glyph.Letter,glyph.Original??glyph.Image,"ИИ · "+job.Id.Substring(0,8));job.Reviewed=true;Save();RefreshAssets();Preview();Report("Добавлено проверенных рисунков: "+approved.Count+". Букв в наборе: "+_set.Glyphs.Select(g=>g.Letter).Distinct().Count()+"; повторы сохранены как варианты.");
         }
+        private async void PreviewEdge()
+        {
+            if(_request!=null || _sequenceBusy)return;BitmapSource before=null,after=null;string letter=null;
+            try
+            {
+                Save();var glyph=(_glyphs.SelectedItem as ListBoxItem)?.Tag as LetterTransferGlyph??_set.Glyphs.FirstOrDefault();if(glyph==null)throw new InvalidOperationException("В наборе пока нет готовых букв.");
+                letter=glyph.Letter;before=LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,glyph.File));
+                var original=LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,String.IsNullOrEmpty(glyph.OriginalFile)?glyph.File:glyph.OriginalFile));
+                _refresh.Stop();_request=new CancellationTokenSource();_body.IsEnabled=_tools.IsEnabled=false;_cancel.Content="Отменить просмотр";Report("Готовлю новый край «"+letter+"»…");
+                after=await Task.Run(()=>LetterTransferEdges.Finish(original,_set,letter,_request.Token));
+            }
+            catch(OperationCanceledException){Report("Подготовка просмотра отменена.");}
+            catch(Exception error){Failure(error);}
+            finally{if(_request!=null){_request.Dispose();_request=null;}_body.IsEnabled=_tools.IsEnabled=true;_cancel.Content="Закрыть";}
+            if(after!=null)LetterTransferEdgePreview.Create(this,letter,before,after).ShowDialog();
+        }
         private async void Reclean()
         {
             if(_request!=null || _sequenceBusy)return;
@@ -369,7 +392,7 @@ namespace VanyaTools.Native
                 Save();if(_set.Glyphs.Count==0)throw new InvalidOperationException("В наборе пока нет готовых букв.");
                 _refresh.Stop();_request=new CancellationTokenSource();_body.IsEnabled=_tools.IsEnabled=false;_cancel.Content="Отменить очистку";Report("Очищаю края готовых букв · "+_set.EdgeTrimPx+" px…");
                 int count=await Task.Run(()=>LetterTransferEdges.Reclean(_directory,_set,_request.Token));
-                _cache.Clear();RefreshAssets();Preview();Report("Края очищены: "+count+" рисунков. Исходные PNG сохранены; 0 px и отключённое сглаживание возвращают исходный край.");
+                _cache.Clear();RefreshAssets();Preview();Report("Края очищены: "+count+" рисунков. Исходные PNG сохранены; 0 px, отключённое сглаживание и ровный контур возвращают исходный край.");
             }
             catch(OperationCanceledException){Report("Очистка отменена. Буквы и исходные PNG сохранены.");}
             catch(Exception error){Failure(error);}

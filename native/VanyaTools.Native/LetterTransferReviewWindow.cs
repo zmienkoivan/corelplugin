@@ -32,11 +32,11 @@ namespace VanyaTools.Native
                 (retry?"\nСохранённый запрос будет продолжен. Если предыдущая генерация завершилась ошибкой или была отменена, повтор создаст новый платный запрос.":"");
             return ConfirmationDialog(owner,"Отправка референса в ИИ",reference,note,prompt);
         }
-        internal static bool ConfirmRecognition(Window owner,BitmapSource preview,int count,string prompt,bool retry)
-            =>RecognitionConfirmation(owner,preview,count,prompt,retry).ShowDialog()==true;
-        internal static Window RecognitionConfirmation(Window owner,BitmapSource preview,int count,string prompt,bool retry=false)
+        internal static bool ConfirmRecognition(Window owner,BitmapSource preview,int count,string prompt,bool retry,string sourceNote=null)
+            =>RecognitionConfirmation(owner,preview,count,prompt,retry,sourceNote).ShowDialog()==true;
+        internal static Window RecognitionConfirmation(Window owner,BitmapSource preview,int count,string prompt,bool retry=false,string sourceNote=null)
         {
-            string note="Отправить показанный коллаж из "+count+" ячеек в GPT-5 mini через Replicate для распознавания букв? Это отдельный платный запрос анализа. Рисунки не перерисовываются.\n"+
+            string note=(String.IsNullOrWhiteSpace(sourceNote)?"":sourceNote+"\n")+"Отправить показанный коллаж из "+count+" ячеек в GPT-5 mini через Replicate для распознавания букв? Это отдельный платный запрос анализа. Рисунки не перерисовываются.\n"+
                 "Повторы получат одинаковое обозначение и сохранятся как варианты. Размер превью: "+preview.PixelWidth+" × "+preview.PixelHeight+" px.\n"+
                 (retry?"Есть сохранённая попытка. Продолжение активного запроса не создаёт новую генерацию; повтор после завершившейся ошибки оплачивается отдельно.":"Результат распознавания сохранится в истории; его повторное открытие не требует нового анализа.");
             return ConfirmationDialog(owner,"Распознавание букв · подтверждение",preview,note,prompt);

@@ -19,6 +19,8 @@ namespace VanyaTools.Native
         public int AlphaThreshold { get; set; }=130;
         public int EdgeTrimPx { get; set; }=1;
         public bool SmoothEdges { get; set; }=true;
+        public bool SharpContour { get; set; }
+        public double ContourSmoothPx { get; set; }=1.5;
         public string GenerationModel { get; set; }=LetterTransferModels.Nano2;
         public double GapMm { get; set; }=3;
         public double MarginMm { get; set; }=5;
@@ -42,6 +44,8 @@ namespace VanyaTools.Native
         public string File { get; set; }
         public string OriginalFile { get; set; }
         public bool Smoothed { get; set; }
+        public bool SharpContour { get; set; }
+        public double ContourSmoothPx { get; set; }
         public int EdgeTrimPx { get; set; }
         public int Width { get; set; }
         public int Height { get; set; }
@@ -95,9 +99,9 @@ namespace VanyaTools.Native
                 set.Letters.Select(row=>row.Letter).Distinct().Count()!=33 || set.Letters.Sum(row=>row.Copies)>5000)
                 throw new ArgumentException("Проверьте таблицу русских заглавных букв и количество копий (до 5000).");
             if(!In(set.HeightMm,1,500) || !In(set.SheetWidthMm,20,2000) || !In(set.SheetHeightMm,20,7000) || !In(set.GapMm,0,50) || !In(set.MarginMm,0,100) ||
-                set.SheetWidthMm<=2*set.MarginMm || (!set.AutoLength && set.SheetHeightMm<=2*set.MarginMm) || set.VariantsPerLetter<1 || set.VariantsPerLetter>4 || set.TargetCopies<33 || set.TargetCopies>5000 || set.AlphaThreshold<1 || set.AlphaThreshold>255 || set.EdgeTrimPx<0 || set.EdgeTrimPx>6 || !LetterTransferModels.Supports(set.GenerationModel))
+                set.SheetWidthMm<=2*set.MarginMm || (!set.AutoLength && set.SheetHeightMm<=2*set.MarginMm) || set.VariantsPerLetter<1 || set.VariantsPerLetter>4 || set.TargetCopies<33 || set.TargetCopies>5000 || set.AlphaThreshold<1 || set.AlphaThreshold>255 || set.EdgeTrimPx<0 || set.EdgeTrimPx>6 || !In(set.ContourSmoothPx,.25,3) || !LetterTransferModels.Supports(set.GenerationModel))
                 throw new ArgumentException("Проверьте размер букв, листа, поля и количество вариантов.");
-            if(set.Glyphs==null || set.Glyphs.Count>264 || set.Glyphs.Any(g=>g==null || !Guid.TryParseExact(g.Id,"N",out _) || !ValidLetter(g.Letter) || g.Width<1 || g.Height<1 || g.Width>10000 || g.Height>10000 || g.BodyHeight<0 || g.BodyHeight>g.Height || g.EdgeTrimPx<0 || g.EdgeTrimPx>6 || (long)g.Width*g.Height>25000000) ||
+            if(set.Glyphs==null || set.Glyphs.Count>264 || set.Glyphs.Any(g=>g==null || !Guid.TryParseExact(g.Id,"N",out _) || !ValidLetter(g.Letter) || g.Width<1 || g.Height<1 || g.Width>10000 || g.Height>10000 || g.BodyHeight<0 || g.BodyHeight>g.Height || g.EdgeTrimPx<0 || g.EdgeTrimPx>6 || g.SharpContour && !In(g.ContourSmoothPx,.25,3) || (long)g.Width*g.Height>25000000) ||
                 set.Glyphs.Select(g=>g.Id).Distinct().Count()!=set.Glyphs.Count || set.Jobs==null || set.Jobs.Count>200 || set.Jobs.Select(j=>j?.Id).Distinct().Count()!=set.Jobs.Count)
                 throw new ArgumentException("Некорректные рисунки или история генераций набора.");
             foreach(var job in set.Jobs)if(job==null || !Guid.TryParseExact(job.Id,"N",out _) || job.Letters==null || job.Letters.Length<1 || job.Letters.Length>33 || job.Letters.Any(letter=>!ValidLetter(letter)) ||

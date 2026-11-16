@@ -6,7 +6,7 @@ using System.Windows.Threading;
 namespace VanyaTools.Native
 {
     internal static class DockerRenderingCompatibility{internal static void Attach(System.Windows.FrameworkElement element){} }
-    internal static class Log{internal static void Error(string message,Exception error){} }
+    internal static class Log{internal static void Info(string text){}internal static void Error(string message,Exception error){} }
     internal static class OperationTiming{internal static string Display(string stage,TimeSpan elapsed,string key)=>stage;internal static void Record(string key,TimeSpan elapsed){} }
     internal static class DockerUiWatchdog{internal static IDisposable Trace(Dispatcher dispatcher,string text)=>new Scope();private sealed class Scope:IDisposable{public void Dispose(){} } }
     internal static class CorelApp{internal static object Get()=>throw new Exception("No real Corel allowed.");}

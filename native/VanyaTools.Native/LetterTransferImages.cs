@@ -124,6 +124,11 @@ namespace VanyaTools.Native
         {
             var result=new BitmapSource[images.Length];for(int i=0;i<images.Length;i++){cancel.ThrowIfCancellationRequested();if(images[i]!=null)result[i]=Prepare(images[i],threshold,cancel);}return result;
         }
+        internal static string ActualSize(string file)
+        {
+            try{using(var stream=File.OpenRead(file)){var decoder=BitmapDecoder.Create(stream,BitmapCreateOptions.DelayCreation,BitmapCacheOption.None);var frame=decoder.Frames[0];return frame.PixelWidth+" × "+frame.PixelHeight+" px";}}
+            catch(Exception error)when(error is IOException || error is NotSupportedException || error is ArgumentException || error is FileFormatException){return "размер не прочитан";}
+        }
         internal static byte[] Pixels(BitmapSource image)
         {
             var converted=new FormatConvertedBitmap(image,PixelFormats.Bgra32,null,0);
@@ -329,8 +334,8 @@ namespace VanyaTools.Native
             if(set.Glyphs.Count>=264 || set.Glyphs.Count(g=>g.Letter==letter)>=8)throw new InvalidOperationException("До 8 сохранённых вариантов на букву. Удалите ненужный вариант.");
             var original=Prepare(image,set.AlphaThreshold,CancellationToken.None);
             if(original==null)throw new InvalidDataException("После удаления полупрозрачности в букве не осталось видимого рисунка.");
-            image=Physical(set,letter,LetterTransferEdges.Process(original,set.EdgeTrimPx,set.AlphaThreshold,set.SmoothEdges,CancellationToken.None));
-            var glyph=new LetterTransferGlyph{Letter=letter,Width=image.PixelWidth,Height=image.PixelHeight,BodyHeight=BodyHeight(letter,image),Source=source,EdgeTrimPx=set.EdgeTrimPx,Smoothed=set.SmoothEdges};
+            image=Physical(set,letter,LetterTransferEdges.Finish(original,set,letter,CancellationToken.None));
+            var glyph=new LetterTransferGlyph{Letter=letter,Width=image.PixelWidth,Height=image.PixelHeight,BodyHeight=BodyHeight(letter,image),Source=source,EdgeTrimPx=set.EdgeTrimPx,Smoothed=set.SmoothEdges,SharpContour=set.SharpContour,ContourSmoothPx=set.SharpContour?set.ContourSmoothPx:0};
             glyph.OriginalFile="glyphs/"+glyph.Id+"-source.png";glyph.File="glyphs/"+glyph.Id+".png";
             Save(original,LetterTransferStore.Resolve(directory,glyph.OriginalFile));Save(image,LetterTransferStore.Resolve(directory,glyph.File));set.Glyphs.Add(glyph);return glyph;
         }
