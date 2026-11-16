@@ -3,6 +3,7 @@
   <ItemGroup>
     <Reference Include="Microsoft.CSharp" /><Reference Include="System.Web.Extensions" />
     <Compile Include="../../native/VanyaTools.Native/LetterTransfer*.cs" Exclude="../../native/VanyaTools.Native/LetterTransferTab.cs" Link="%(Filename)%(Extension)" />
+    <Compile Include="../../native/VanyaTools.Native/DtfRasterOperations.cs" Link="DtfRasterOperations.cs" />
     <Compile Include="../../native/VanyaTools.Native/PatternFillerMatte.cs" Link="PatternFillerMatte.cs" />
     <Compile Include="../../native/VanyaTools.Native/DockerTheme.cs" Link="DockerTheme.cs" />
     <Compile Include="../../native/VanyaTools.Native/CorelConstants.cs" Link="CorelConstants.cs" />

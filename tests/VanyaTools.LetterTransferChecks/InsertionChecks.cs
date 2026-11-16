@@ -16,6 +16,8 @@ internal static class InsertionChecks
         int offset=0;foreach(var page in app.ActiveDocument.Pages.Skip(1))foreach(var shape in page.Layer.Shapes)
         {var p=plan[offset++];Program.Check(Math.Abs(shape.LeftX-page.LeftX-p.X)<.00001 && Math.Abs(page.TopY-shape.TopY-p.Y)<.00001,"Placement does not match preview.");}
         Program.Check(app.ActiveDocument.Imports<18 && app.ActiveDocument.Unit==7 && !app.Optimization && app.ActiveDocument.Dirty && app.ActiveDocument.Ends==1,"Import reuse or state restoration failed.");
+        set.AutoLength=true;var roll=new FakeLetterApp();LetterTransferService.Insert(roll,directory,set,false);var rollPlan=LetterTransferLayout.Build(set,false);
+        Program.Check(roll.ActiveDocument.Pages.Count==2 && roll.ActiveDocument.ActivePage.Width==set.SheetWidthMm && roll.ActiveDocument.ActivePage.Height==LetterTransferLayout.PageHeight(set,rollPlan),"Corel roll dimensions differ from preview.");
         var fail=new FakeLetterApp();fail.ActiveDocument.FailImport=2;bool threw=false;try{LetterTransferService.Insert(fail,directory,set,false);}catch{threw=true;}
         Program.Check(threw && fail.ActiveDocument.Pages.Count==1 && fail.ActiveDocument.Unit==7 && !fail.Optimization && !fail.ActiveDocument.Dirty && fail.ActiveDocument.Ends==1,"Partial insertion not rolled back.");
         File.Delete(LetterTransferStore.Resolve(directory,set.Glyphs[0].File));fail=new FakeLetterApp();threw=false;try{LetterTransferService.Insert(fail,directory,set,false);}catch{threw=true;}
@@ -37,8 +39,8 @@ public sealed class FakeLetterDoc
 }
 public sealed class FakeLetterPage
 {
-    public FakeLetterDoc Doc;public string Name{get;set;}public double LeftX=>40;public double TopY=>500;public FakeLetterLayer Layer;
-    public FakeLetterPage(FakeLetterDoc doc){Doc=doc;}public void Activate(){Doc.ActivePage=this;}public void SetSize(double w,double h){}public void Delete(){Doc.Pages.Remove(this);}
+    public FakeLetterDoc Doc;public string Name{get;set;}public double LeftX=>40;public double TopY=>500;public FakeLetterLayer Layer;public double Width,Height;
+    public FakeLetterPage(FakeLetterDoc doc){Doc=doc;}public void Activate(){Doc.ActivePage=this;}public void SetSize(double w,double h){Width=w;Height=h;}public void Delete(){Doc.Pages.Remove(this);}
     public FakeLetterLayer CreateLayer(string text){Layer=new FakeLetterLayer(this);return Layer;}
 }
 public sealed class FakeLetterLayer

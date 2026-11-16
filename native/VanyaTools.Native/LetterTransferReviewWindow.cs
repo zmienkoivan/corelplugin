@@ -41,7 +41,7 @@ namespace VanyaTools.Native
         {
             var window=Dialog(owner,"Проверка букв");var root=new DockPanel{Margin=new Thickness(12)};window.Content=root;
             var checks=new CheckBox[cells.Length];var choices=new ComboBox[cells.Length];var approved=new List<LetterTransferApproved>();
-            var note=new TextBlock{Text="Проверьте, что в каждой ячейке ровно одна целая буква, верная кириллица и нужный стиль. Отметьте подходящие. Можно исправить обозначение буквы. Непринятые ячейки не добавляются; исходный лист останется в истории.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,10)};DockPanel.SetDock(note,Dock.Top);root.Children.Add(note);
+            var note=new TextBlock{Text="Фон и полупрозрачность удалены пакетно. Проверьте, что в каждой ячейке ровно одна целая буква, верная кириллица и нужный стиль. Отметьте подходящие. Можно исправить обозначение буквы. Непринятые ячейки не добавляются; исходный лист останется в истории.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,10)};DockPanel.SetDock(note,Dock.Top);root.Children.Add(note);
             var footer=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};DockPanel.SetDock(footer,Dock.Bottom);root.Children.Add(footer);
             footer.Children.Add(Button("Назад",()=>window.DialogResult=false));
             footer.Children.Add(DockerTheme.Primary(Button("Добавить отмеченные",()=>{

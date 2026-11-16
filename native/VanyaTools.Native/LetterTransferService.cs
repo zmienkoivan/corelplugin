@@ -30,7 +30,7 @@ namespace VanyaTools.Native
                 doc.Unit=CorelConstants.CdrMillimeter;app.Optimization=true;doc.BeginCommandGroup("Vanya Tools · буквы-трансферы");begun=true;
                 foreach(var group in placements.GroupBy(p=>p.Page))
                 {
-                    dynamic page=doc.AddPages(1);pages.Add((object)page);page.Activate();page.SetSize(set.SheetWidthMm,set.SheetHeightMm);
+                    dynamic page=doc.AddPages(1);pages.Add((object)page);page.Activate();page.SetSize(set.SheetWidthMm,LetterTransferLayout.PageHeight(set,group));
                     page.Name=set.Name+" · буквы · "+(group.Key+1);dynamic layer=page.CreateLayer("Буквы-трансферы"),range=app.CreateShapeRange();
                     var sources=new Dictionary<string,object>();
                     foreach(var item in group)

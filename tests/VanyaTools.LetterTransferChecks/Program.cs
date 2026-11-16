@@ -19,7 +19,7 @@ internal static class Program
         _root=Path.Combine(Path.GetTempPath(),"Vanya-Letter-Checks-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(_root);
         try
         {
-            Frequencies();Layouts();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();
+            Frequencies();Layouts();Preparation();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();
             Console.WriteLine("Letter transfer checks passed: "+_checks+". Synthetic assets and fake Replicate/Corel only.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
@@ -45,7 +45,7 @@ internal static class Program
     }
     internal static LetterTransferSet Printable()
     {
-        var set=new LetterTransferSet{SheetWidthMm=64,SheetHeightMm=55,HeightMm=20,GapMm=3,MarginMm=5};foreach(var row in set.Letters)row.Copies=0;
+        var set=new LetterTransferSet{AutoLength=false,SheetWidthMm=64,SheetHeightMm=55,HeightMm=20,GapMm=3,MarginMm=5};foreach(var row in set.Letters)row.Copies=0;
         set.Letters[0].Copies=11;set.Letters[1].Copies=7;
         set.Glyphs.Add(new LetterTransferGlyph{Letter="А",File="glyphs/a.png",Width=20,Height=20});set.Glyphs.Add(new LetterTransferGlyph{Letter="А",File="glyphs/a2.png",Width=16,Height=20});set.Glyphs.Add(new LetterTransferGlyph{Letter="Б",File="glyphs/b.png",Width=18,Height=20});return set;
     }
@@ -63,6 +63,28 @@ internal static class Program
         set.Glyphs[0].Width=1000;Reject(()=>LetterTransferLayout.Build(set,true),"Oversize letter cropped.");
         set=Printable();set.GapMm=Double.PositiveInfinity;Reject(()=>LetterTransferLayout.Build(set,true),"Infinite gap accepted.");
         set=Printable();set.SheetWidthMm=30;set.SheetHeightMm=30;set.Letters[0].Copies=5000;set.Letters[1].Copies=0;Reject(()=>LetterTransferLayout.Build(set,true),"Unbounded page generation.");
+    }
+    private static void Preparation()
+    {
+        var set=Printable();set.AutoLength=true;var plan=LetterTransferLayout.Build(set,false);
+        Check(plan.All(p=>p.Page==0),"Roll mode still breaks at fixed page height.");
+        Check(LetterTransferLayout.PageHeight(set,plan)==plan.Max(p=>p.Y+p.Height)+set.MarginMm,"Roll length is not tight to contents.");
+        var data=LetterTransferImages.Pixels(Solid(4,4,Colors.Red));data[3]=0;data[7]=129;data[11]=130;data[15]=254;
+        var sample=BitmapSource.Create(4,4,96,96,PixelFormats.Bgra32,null,data,16);
+        var batch=LetterTransferImages.PrepareBatch(new[]{sample,null,sample},130,CancellationToken.None);
+        foreach(var image in batch.Where(i=>i!=null))
+        {
+            var pixels=LetterTransferImages.Pixels(image);Check(pixels.Where((b,i)=>i%4==3).All(a=>a==0 || a==255),"Prepared batch has semitransparent pixels.");
+            Check(pixels[3]==0 && pixels[7]==0 && pixels[11]==255 && pixels[15]==255,"Threshold differs from correction tool.");
+        }
+        Check(batch[1]==null,"Missing AI cell became an asset.");
+        Check(LetterTransferImages.Pixels(sample)[7]==129,"Batch alpha cleanup mutated the source image.");
+        set.AlphaThreshold=0;Reject(()=>LetterTransferRules.Validate(set),"Invalid alpha threshold accepted.");set.AlphaThreshold=130;
+        var reference=LetterTransferImages.Compose(new[]{Solid(100,180,Colors.Red),Solid(180,100,Colors.Blue),Solid(90,90,Colors.Green)});
+        Check(reference.PixelWidth<=2048 && reference.PixelHeight<=2048,"Multi-reference collage exceeds upload size.");
+        string directory=LetterTransferStore.Create(Path.Combine(_root,"preparation"),set);var glyph=LetterTransferImages.Add(directory,set,"Ё",sample,"Synthetic batch");
+        var saved=LetterTransferImages.Load(LetterTransferStore.Resolve(directory,glyph.File));Check(Math.Abs(saved.PixelHeight*25.4/saved.DpiY-set.HeightMm)<.02,"Separate PNG physical height is wrong.");
+        Check(LetterTransferImages.Pixels(saved).Where((b,i)=>i%4==3).All(a=>a==0 || a==255),"Saved PNG retained semitransparency.");
     }
     internal static BitmapSource Solid(int width,int height,Color color)
     {

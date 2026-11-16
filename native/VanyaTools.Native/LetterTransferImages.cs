@@ -43,6 +43,44 @@ namespace VanyaTools.Native
             if(scale==1)return source;
             var image=new TransformedBitmap(source,new ScaleTransform(scale,scale));image.Freeze();return image;
         }
+        internal static BitmapSource Compose(IReadOnlyList<BitmapSource> sources)
+        {
+            if(sources==null || sources.Count<1 || sources.Count>16)throw new ArgumentException("Выберите от 1 до 16 изображений референса.");
+            if(sources.Count==1)return Reference(sources[0]);
+            int columns=(int)Math.Ceiling(Math.Sqrt(sources.Count)),rows=(sources.Count+columns-1)/columns;
+            int cell=2048/columns,width=columns*cell,height=rows*cell;var visual=new DrawingVisual();
+            using(var context=visual.RenderOpen())
+            {
+                context.DrawRectangle(Brushes.LightGray,null,new Rect(0,0,width,height));
+                for(int i=0;i<sources.Count;i++)
+                {
+                    var image=sources[i];double scale=Math.Min((cell-20.0)/image.PixelWidth,(cell-20.0)/image.PixelHeight);
+                    double w=image.PixelWidth*scale,h=image.PixelHeight*scale;
+                    context.DrawImage(image,new Rect((i%columns)*cell+(cell-w)/2,(i/columns)*cell+(cell-h)/2,w,h));
+                }
+            }
+            var result=new RenderTargetBitmap(width,height,96,96,PixelFormats.Pbgra32);result.Render(visual);result.Freeze();return result;
+        }
+        internal static BitmapSource Prepare(BitmapSource image,int threshold,CancellationToken cancel)
+        {
+            if(threshold<1 || threshold>255)throw new ArgumentOutOfRangeException(nameof(threshold));
+            var pixels=DtfRasterOperations.Correct(Pixels(image),true,threshold,false,0,cancel);
+            int left=image.PixelWidth,top=image.PixelHeight,right=-1,bottom=-1;
+            for(int y=0;y<image.PixelHeight;y++)
+            {
+                cancel.ThrowIfCancellationRequested();
+                for(int x=0;x<image.PixelWidth;x++)if(pixels[(y*image.PixelWidth+x)*4+3]!=0)
+                {left=Math.Min(left,x);right=Math.Max(right,x);top=Math.Min(top,y);bottom=Math.Max(bottom,y);}
+            }
+            if(right<left)return null;
+            int w=right-left+1,h=bottom-top+1;var cropped=new byte[w*h*4];
+            for(int y=0;y<h;y++)Buffer.BlockCopy(pixels,((y+top)*image.PixelWidth+left)*4,cropped,y*w*4,w*4);
+            var result=BitmapSource.Create(w,h,image.DpiX,image.DpiY,PixelFormats.Bgra32,null,cropped,w*4);result.Freeze();return result;
+        }
+        internal static BitmapSource[] PrepareBatch(BitmapSource[] images,int threshold,CancellationToken cancel)
+        {
+            var result=new BitmapSource[images.Length];for(int i=0;i<images.Length;i++){cancel.ThrowIfCancellationRequested();if(images[i]!=null)result[i]=Prepare(images[i],threshold,cancel);}return result;
+        }
         internal static byte[] Pixels(BitmapSource image)
         {
             var converted=new FormatConvertedBitmap(image,PixelFormats.Bgra32,null,0);
@@ -108,7 +146,12 @@ namespace VanyaTools.Native
         {
             if(!LetterTransferRules.ValidLetter(letter))throw new ArgumentException("Выберите русскую заглавную букву.");
             if(set.Glyphs.Count>=264 || set.Glyphs.Count(g=>g.Letter==letter)>=8)throw new InvalidOperationException("До 8 сохранённых вариантов на букву. Удалите ненужный вариант.");
-            if(!Pixels(image).Where((value,index)=>index%4==3).Any(alpha=>alpha>8))throw new InvalidDataException("В изображении нет видимого рисунка буквы.");
+            image=Prepare(image,set.AlphaThreshold,CancellationToken.None);
+            if(image==null)throw new InvalidDataException("После удаления полупрозрачности в букве не осталось видимого рисунка.");
+            // Preserve detail while writing the chosen physical cap height into
+            // the separate PNG. Corel placement still uses current layout size.
+            double dpi=image.PixelHeight*25.4/set.HeightMm;
+            image=BitmapSource.Create(image.PixelWidth,image.PixelHeight,dpi,dpi,PixelFormats.Bgra32,null,Pixels(image),image.PixelWidth*4);image.Freeze();
             var glyph=new LetterTransferGlyph{Letter=letter,Width=image.PixelWidth,Height=image.PixelHeight,Source=source};
             glyph.File="glyphs/"+glyph.Id+".png";Save(image,LetterTransferStore.Resolve(directory,glyph.File));set.Glyphs.Add(glyph);return glyph;
         }
