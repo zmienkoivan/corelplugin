@@ -171,7 +171,7 @@ namespace VanyaTools.Native
                     cancel.ThrowIfCancellationRequested();string source=String.IsNullOrEmpty(glyph.OriginalFile)?glyph.File:glyph.OriginalFile;
                     var image=Finish(LetterTransferImages.Load(LetterTransferStore.Resolve(directory,source)),set,glyph.Letter,cancel);
                     image=LetterTransferImages.Physical(set,glyph.Letter,image);
-                    var next=new LetterTransferGlyph{Id=glyph.Id,Letter=glyph.Letter,Source=glyph.Source,OriginalFile=source,EdgeTrimPx=set.EdgeTrimPx,Smoothed=set.SmoothEdges,SharpContour=set.SharpContour,ContourSmoothPx=set.SharpContour?set.ContourSmoothPx:0,File="glyphs/"+glyph.Id+"-edge-"+Guid.NewGuid().ToString("N")+".png",Width=image.PixelWidth,Height=image.PixelHeight,BodyHeight=LetterTransferImages.BodyHeight(glyph.Letter,image)};
+                    var next=new LetterTransferGlyph{Id=glyph.Id,Letter=glyph.Letter,Source=glyph.Source,SourceJobId=glyph.SourceJobId,SourceCell=glyph.SourceCell,OriginalFile=source,EdgeTrimPx=set.EdgeTrimPx,Smoothed=set.SmoothEdges,SharpContour=set.SharpContour,ContourSmoothPx=set.SharpContour?set.ContourSmoothPx:0,File="glyphs/"+glyph.Id+"-edge-"+Guid.NewGuid().ToString("N")+".png",Width=image.PixelWidth,Height=image.PixelHeight,BodyHeight=LetterTransferImages.BodyHeight(glyph.Letter,image)};
                     string output=LetterTransferStore.Resolve(directory,next.File);files.Add(output);LetterTransferImages.Save(image,output);updated.Add(next);
                 }
                 cancel.ThrowIfCancellationRequested();set.Glyphs=updated;

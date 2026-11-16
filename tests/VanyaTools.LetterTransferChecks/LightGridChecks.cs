@@ -42,6 +42,7 @@ internal static class LightGridChecks
         Box(44,34,94,104,Color.FromRgb(3,110,3));Box(47,37,88,98,Color.FromRgb(6,170,5));
         Box(50,40,80,90,Colors.Pink);Box(54,44,72,82,Color.FromRgb(60,145,50));
         Box(80,60,5,20,Colors.Black);Box(90,80,10,10,Color.FromRgb(7,221,6));
+        for(int n=0;n<10;n++){Box(90+n,80,1,1,Color.FromRgb(3,160,3));Box(90+n,89,1,1,Color.FromRgb(3,160,3));Box(90,80+n,1,1,Color.FromRgb(3,160,3));Box(99,80+n,1,1,Color.FromRgb(3,160,3));}
         // A pink antialias fringe mixed with a separately darkened green
         // backdrop is not just a darker copy of that backdrop.
         Box(49,60,1,8,Color.FromRgb(93,178,74));
@@ -49,7 +50,7 @@ internal static class LightGridChecks
         var result=LetterTransferSheet.Read(source,new[]{"А"},"#00FF00",130,CancellationToken.None);
         var image=result.Cells.Single().Image;var clean=LetterTransferImages.Pixels(image);
         Program.Check(result.Cells[0].Safe && image.PixelWidth==80 && image.PixelHeight==90,"Darkened technical backdrop remained as a drop shadow: "+image.PixelWidth+"x"+image.PixelHeight);
-        Program.Check(Enumerable.Range(0,clean.Length/4).Count(p=>clean[p*4+3]>0)==80*90-100,"Shadow cleanup removed artwork or filled a letter hole.");
+        Program.Check(Enumerable.Range(0,clean.Length/4).Count(p=>clean[p*4+3]>0)==80*90-100,"Shadow cleanup removed artwork or filled a letter hole: "+Enumerable.Range(0,clean.Length/4).Count(p=>clean[p*4+3]>0));
         Program.Check(Enumerable.Range(0,clean.Length/4).Count(p=>clean[p*4+3]==255 && clean[p*4+1]==145 && clean[p*4+2]==60)==72*82-200,"Shadow cleanup erased genuine green fabric.");
         Program.Check(Enumerable.Range(0,clean.Length/4).Count(p=>clean[p*4+3]==255 && clean[p*4]==0 && clean[p*4+1]==0 && clean[p*4+2]==0)==100,"Shadow cleanup erased black artwork.");
     }

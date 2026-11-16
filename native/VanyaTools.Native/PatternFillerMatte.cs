@@ -7,13 +7,14 @@ namespace VanyaTools.Native
     // opaque magenta/foreground mixtures on antialiased outer and inner edges.
     internal static class PatternFillerMatte
     {
-        internal static void Remove(byte[] pixels, int width, int height, CancellationToken cancellation, byte[] expectedMatte = null, bool reservedHue = true, int tolerance = 40)
+        internal static void Remove(byte[] pixels, int width, int height, CancellationToken cancellation, byte[] expectedMatte = null, bool reservedHue = true, int tolerance = 40, bool[] protectedPixels = null)
         {
             if(expectedMatte==null)expectedMatte=new byte[]{255,0,255};
             if(expectedMatte.Length!=3)throw new ArgumentException("Invalid matte color.");
             int count = checked(width * height);
             if (width <= 0 || height <= 0 || pixels == null || pixels.Length != checked(count * 4))
                 throw new ArgumentException("Invalid filler bitmap.");
+            if(protectedPixels!=null && protectedPixels.Length!=count)throw new ArgumentException("Invalid protected matte mask.");
             var distance = new byte[count];
             var histograms = new[] { new int[256], new int[256], new int[256] };
             int samples = 0;
@@ -23,6 +24,7 @@ namespace VanyaTools.Native
                 for (int x = 0; x < width; x++)
                 {
                     int p = y * width + x, i = p * 4;
+                    if(protectedPixels!=null && protectedPixels[p]){distance[p]=4;continue;}
                     int blueDistance = expectedMatte[0] - pixels[i], redDistance = expectedMatte[2] - pixels[i + 2], green = pixels[i + 1] - expectedMatte[1];
                     bool matte = blueDistance * blueDistance + redDistance * redDistance + green * green <= tolerance * tolerance;
                     if (matte && pixels[i + 3] >= 250)
@@ -44,7 +46,7 @@ namespace VanyaTools.Native
                 for (int x = 0; x < width; x++)
                 {
                     int p = y * width + x, i = p * 4;
-                    if (pixels[i + 3] == 0 || pixels[i + 1] > 90 ||
+                    if (protectedPixels!=null && protectedPixels[p] || pixels[i + 3] == 0 || pixels[i + 1] > 90 ||
                         Math.Min(pixels[i], pixels[i + 2]) - pixels[i + 1] < 90 ||
                         NearInk(pixels, width, height, x, y)) continue;
                     pixels[i] = pixels[i + 1] = pixels[i + 2] = pixels[i + 3] = 0;
@@ -102,7 +104,7 @@ namespace VanyaTools.Native
                 for (int x = 0; x < width; x++)
                 {
                     int p = y * width + x, i = p * 4;
-                    if (distance[p] == 0 || distance[p] >= 4 || pixels[i + 3] < 250) continue;
+                    if (protectedPixels!=null && protectedPixels[p] || distance[p] == 0 || distance[p] >= 4 || pixels[i + 3] < 250) continue;
                     int foreground = NearestCore(pixels, distance, width, height, x, y);
                     if (foreground < 0) continue;
                     double numerator = 0, denominator = 0;

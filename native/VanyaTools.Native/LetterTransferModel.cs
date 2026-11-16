@@ -43,6 +43,8 @@ namespace VanyaTools.Native
         public string Letter { get; set; }
         public string File { get; set; }
         public string OriginalFile { get; set; }
+        public string SourceJobId { get; set; }
+        public int[] SourceCell { get; set; }
         public bool Smoothed { get; set; }
         public bool SharpContour { get; set; }
         public double ContourSmoothPx { get; set; }
@@ -101,12 +103,17 @@ namespace VanyaTools.Native
             if(!In(set.HeightMm,1,500) || !In(set.SheetWidthMm,20,2000) || !In(set.SheetHeightMm,20,7000) || !In(set.GapMm,0,50) || !In(set.MarginMm,0,100) ||
                 set.SheetWidthMm<=2*set.MarginMm || (!set.AutoLength && set.SheetHeightMm<=2*set.MarginMm) || set.VariantsPerLetter<1 || set.VariantsPerLetter>4 || set.TargetCopies<33 || set.TargetCopies>5000 || set.AlphaThreshold<1 || set.AlphaThreshold>255 || set.EdgeTrimPx<0 || set.EdgeTrimPx>6 || !In(set.ContourSmoothPx,.25,3) || !LetterTransferModels.Supports(set.GenerationModel))
                 throw new ArgumentException("Проверьте размер букв, листа, поля и количество вариантов.");
-            if(set.Glyphs==null || set.Glyphs.Count>264 || set.Glyphs.Any(g=>g==null || !Guid.TryParseExact(g.Id,"N",out _) || !ValidLetter(g.Letter) || g.Width<1 || g.Height<1 || g.Width>10000 || g.Height>10000 || g.BodyHeight<0 || g.BodyHeight>g.Height || g.EdgeTrimPx<0 || g.EdgeTrimPx>6 || g.SharpContour && !In(g.ContourSmoothPx,.25,3) || (long)g.Width*g.Height>25000000) ||
+            if(set.Glyphs==null || set.Glyphs.Count>264 || set.Glyphs.Any(g=>g==null || !Guid.TryParseExact(g.Id,"N",out _) || !ValidLetter(g.Letter) || g.Width<1 || g.Height<1 || g.Width>10000 || g.Height>10000 || g.BodyHeight<0 || g.BodyHeight>g.Height || g.EdgeTrimPx<0 || g.EdgeTrimPx>6 || !ValidSource(g) || g.SharpContour && !In(g.ContourSmoothPx,.25,3) || (long)g.Width*g.Height>25000000) ||
                 set.Glyphs.Select(g=>g.Id).Distinct().Count()!=set.Glyphs.Count || set.Jobs==null || set.Jobs.Count>200 || set.Jobs.Select(j=>j?.Id).Distinct().Count()!=set.Jobs.Count)
                 throw new ArgumentException("Некорректные рисунки или история генераций набора.");
             foreach(var job in set.Jobs)if(job==null || !Guid.TryParseExact(job.Id,"N",out _) || job.Letters==null || job.Letters.Length<1 || job.Letters.Length>33 || job.Letters.Any(letter=>!ValidLetter(letter)) ||
                 job.Letters.Distinct().Count()!=job.Letters.Length || !LetterTransferModels.Supports(job.Model) || (job.Resolution!="2K" && job.Resolution!="4K") || (job.Letters.Length>4 && job.Resolution!="4K") || String.IsNullOrWhiteSpace(job.Prompt) || job.Prompt.Length>16000 || job.Model==LetterTransferModels.Seedream && job.Prompt.Length>4000 || !LetterTransferImages.ValidKey(job.Key))
                 throw new ArgumentException("Некорректное сохранённое задание ИИ.");
+        }
+        private static bool ValidSource(LetterTransferGlyph glyph)
+        {
+            if(String.IsNullOrEmpty(glyph.SourceJobId))return glyph.SourceCell==null;
+            return Guid.TryParseExact(glyph.SourceJobId,"N",out _) && glyph.SourceCell!=null && glyph.SourceCell.Length==4 && glyph.SourceCell[0]>=0 && glyph.SourceCell[1]>=0 && glyph.SourceCell[2]>0 && glyph.SourceCell[3]>0 && glyph.SourceCell.All(n=>n<=10000) && (long)glyph.SourceCell[0]+glyph.SourceCell[2]<=10000 && (long)glyph.SourceCell[1]+glyph.SourceCell[3]<=10000;
         }
         internal static int MissingVariants(LetterTransferSet set)=>Alphabet.Sum(letter=>Math.Max(0,set.VariantsPerLetter-set.Glyphs.Count(g=>g.Letter==letter.ToString())));
         internal static List<string[]> MissingPasses(LetterTransferSet set,IEnumerable<string> scope=null)

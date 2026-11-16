@@ -149,7 +149,7 @@ namespace VanyaTools.Native
             }
             return selected;
         }
-        internal static BitmapSource[] Extract(BitmapSource sheet,int count,string key,CancellationToken cancel,int alphaThreshold=130)
+        internal static BitmapSource[] Extract(BitmapSource sheet,int count,string key,CancellationToken cancel,int alphaThreshold=130,bool protectArtwork=false)
         {
             if(count<1 || count>33 || !ValidKey(key))throw new ArgumentException("Некорректная сетка букв.");
             int width=sheet.PixelWidth,height=sheet.PixelHeight;
@@ -157,9 +157,11 @@ namespace VanyaTools.Native
             byte[] pixels=Pixels(sheet);int columns=LetterTransferRules.Columns(count),rows=(count+columns-1)/columns;var bounds=RemoveSeparators(pixels,width,height,columns,rows,cancel);var color=(Color)ColorConverter.ConvertFromString(key);
             // Channel reflections preserve RGB distances and map the chosen technical
             // color to the tested magenta unmatting algorithm. White ink stays ink.
-            Transform(pixels,color);PatternFillerMatte.Remove(pixels,width,height,cancel,MatteAtBorder(pixels,width,height));
+            Transform(pixels,color);var matte=MatteAtBorder(pixels,width,height)??new byte[]{255,0,255};
+            var protection=protectArtwork?LetterTransferMatteProtection.Create(pixels,width,height,matte,Colors.Magenta,cancel,true):null;
+            PatternFillerMatte.Remove(pixels,width,height,cancel,matte,true,40,protection);
             // The reserved hue must not survive as an opaque cast shadow or rim.
-            for(int p=0;p<pixels.Length;p+=4)if(pixels[p+3]>0 && Math.Min(pixels[p],pixels[p+2])-pixels[p+1]>=50)pixels[p]=pixels[p+1]=pixels[p+2]=pixels[p+3]=0;
+            for(int p=0;p<pixels.Length;p+=4)if((protection==null || !protection[p/4]) && pixels[p+3]>0 && Math.Min(pixels[p],pixels[p+2])-pixels[p+1]>=50)pixels[p]=pixels[p+1]=pixels[p+2]=pixels[p+3]=0;
             Transform(pixels,color);
             pixels=DtfRasterOperations.Correct(pixels,true,alphaThreshold,false,0,cancel);
             for(int p=0;p<pixels.Length;p+=4)if(pixels[p+3]==0)pixels[p]=pixels[p+1]=pixels[p+2]=0;

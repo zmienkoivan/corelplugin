@@ -99,6 +99,7 @@ namespace VanyaTools.Native
             _smoothEdges.ToolTip="Сглаживает маску без полупрозрачности и убирает отдельные частицы до 4 пикселей. Исходник сохраняется.";
             _edgeTrim.ToolTip="Пиксели исходной буквы после удаления фона. 0 — без подрезания. Для уже сохранённых букв нажмите кнопку ниже.";
             printFields.Children.Add(Button("Очистить края готовых букв",()=>Reclean()));
+            printFields.Children.Add(Button("Пересобрать из ответов ИИ",()=>RebuildSources()));
             printFields.Children.Add(new TextBlock{Text="Исходники сохраняются. Для возврата исходного края: 0 px, отключить сглаживание и ровный контур, повторить очистку.",TextWrapping=TextWrapping.Wrap,FontSize=11});
             printFields.Children.Add(new TextBlock{Text="Каждая полученная буква автоматически очищается от фона и полупрозрачности. PNG сохраняются отдельно; высота задаётся сверху. Длина полотна рассчитывается по заполнению, до 7 м на страницу.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,7,0,7)});Field(printFields,"Зазор, мм",_gap);Field(printFields,"Поля, мм",_margin);printFields.Children.Add(_readyOnly);
             printFields.Children.Add(new TextBlock{Text="Прямая сетка: одинаковые столбцы и ряды для нарезки. Ё и Й имеют дополнительное место над основной буквой.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,7,0,7)});
@@ -366,7 +367,12 @@ namespace VanyaTools.Native
             }).ToList();
             if(approved.Count==0){Report("Новых отмеченных букв нет. Уже добавленные рисунки сохранены в наборе.");return;}
             foreach(var group in approved.GroupBy(a=>a.Letter))if(_set.Glyphs.Count(g=>g.Letter==group.Key)+group.Count()>8)throw new InvalidOperationException("Слишком много вариантов буквы «"+group.Key+"». Удалите ненужные.");
-            foreach(var glyph in approved)LetterTransferImages.Add(_directory,_set,glyph.Letter,glyph.Original??glyph.Image,"ИИ · "+job.Id.Substring(0,8));job.Reviewed=true;Save();RefreshAssets();Preview();Report("Добавлено проверенных рисунков: "+approved.Count+". Букв в наборе: "+_set.Glyphs.Select(g=>g.Letter).Distinct().Count()+"; повторы сохранены как варианты.");
+            foreach(var glyph in approved)
+            {
+                var saved=LetterTransferImages.Add(_directory,_set,glyph.Letter,glyph.Original??glyph.Image,"ИИ · "+job.Id.Substring(0,8));
+                if(glyph.Bounds.Width>0 && glyph.Bounds.Height>0){saved.SourceJobId=job.Id;saved.SourceCell=new[]{glyph.Bounds.X,glyph.Bounds.Y,glyph.Bounds.Width,glyph.Bounds.Height};}
+            }
+            job.Reviewed=true;Save();RefreshAssets();Preview();Report("Добавлено проверенных рисунков: "+approved.Count+". Букв в наборе: "+_set.Glyphs.Select(g=>g.Letter).Distinct().Count()+"; повторы сохранены как варианты.");
         }
         private async void PreviewEdge()
         {
@@ -383,6 +389,20 @@ namespace VanyaTools.Native
             catch(Exception error){Failure(error);}
             finally{if(_request!=null){_request.Dispose();_request=null;}_body.IsEnabled=_tools.IsEnabled=true;_cancel.Content="Закрыть";}
             if(after!=null)LetterTransferEdgePreview.Create(this,letter,before,after).ShowDialog();
+        }
+        private async void RebuildSources()
+        {
+            if(_request!=null || _sequenceBusy)return;
+            try
+            {
+                Save();if(_set.Glyphs.Count==0)throw new InvalidOperationException("В наборе пока нет готовых букв.");
+                _refresh.Stop();_request=new CancellationTokenSource();_body.IsEnabled=_tools.IsEnabled=false;_cancel.Content="Отменить пересборку";Report("Восстанавливаю рисунки из сохранённых ответов ИИ · без новой генерации…");
+                int count=await Task.Run(()=>LetterTransferSourceRecovery.Rebuild(_directory,_set,_request.Token));
+                _cache.Clear();RefreshAssets();Preview();Report("Пересобрано из ответов ИИ: "+count+" из "+_set.Glyphs.Count+" рисунков. Остальные сохранены без изменений. Старые PNG остаются в папке набора; платных запросов не было.");
+            }
+            catch(OperationCanceledException){Report("Пересборка отменена. Прежние рисунки сохранены.");}
+            catch(Exception error){Failure(error);}
+            finally{if(_request!=null){_request.Dispose();_request=null;}_body.IsEnabled=_tools.IsEnabled=true;_cancel.Content="Закрыть";}
         }
         private async void Reclean()
         {
