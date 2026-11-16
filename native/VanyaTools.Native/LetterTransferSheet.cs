@@ -55,9 +55,14 @@ namespace VanyaTools.Native
             bool contentLayout=false;
             if(boxes.Count<Math.Max(1,letters.Length/2) || boxes.Count>64)
             {
-                var content=LetterTransferContentGrid.Find(pixels,w,h,pageMatte,cancel);
-                if(content==null)return Fixed(source,letters,key,threshold,cancel);
-                boxes=content;contentLayout=true;
+                var light=LightGrid(pixels,w,h,pageMatte,cancel);
+                if(light!=null)boxes=light;
+                else
+                {
+                    var content=LetterTransferContentGrid.Find(pixels,w,h,pageMatte,cancel);
+                    if(content==null)return Fixed(source,letters,key,threshold,cancel);
+                    boxes=content;contentLayout=true;
+                }
             }
             var cells=new List<LetterTransferCell>();
             foreach(var box in boxes)
@@ -87,6 +92,51 @@ namespace VanyaTools.Native
             }
             int ready=cells.Count(c=>c.Image!=null);
             return new LetterTransferSheet{Cells=cells,Requested=letters.ToArray(),Notice=ready<cells.Length?"Не удалось определить границы всех букв. Фрагменты с предупреждением не отправляются на распознавание.":null};
+        }
+        private static List<Int32Rect> LightGrid(byte[] pixels,int width,int height,byte[] matte,CancellationToken cancel)
+        {
+            var strokes=new bool[width*height];
+            for(int y=0;y<height;y++)
+            {
+                cancel.ThrowIfCancellationRequested();
+                for(int x=0;x<width;x++)
+                {
+                    int at=y*width+x,p=at*4,min=Math.Min(pixels[p],Math.Min(pixels[p+1],pixels[p+2])),max=Math.Max(pixels[p],Math.Max(pixels[p+1],pixels[p+2]));
+                    int b=pixels[p]-matte[0],g=pixels[p+1]-matte[1],r=pixels[p+2]-matte[2];
+                    // Generated white lines can be tinted by the technical
+                    // backdrop. Require a continuous line, not a white glyph.
+                    strokes[at]=pixels[p+3]>=250 && min>=128 && max-min<=128 && b*b+g*g+r*r>=90*90;
+                }
+            }
+            List<Band> Bounds(List<Band> lines,int size)
+            {
+                if(lines.Count==0)return null;
+                var result=new List<Band>(lines);
+                if(result[0].Start>=16)result.Insert(0,new Band(0,0));
+                if(size-result[result.Count-1].End>=16)result.Add(new Band(size,size));
+                return result;
+            }
+            var horizontal=Bounds(Bands(strokes,width,height,new Int32Rect(0,0,width,height),false,cancel),height);
+            if(horizontal==null || horizontal.Count<3 || horizontal.Count>17)return null;
+            var globalVertical=Bounds(Bands(strokes,width,height,new Int32Rect(0,0,width,height),true,cancel),width);
+            var boxes=new List<Int32Rect>();
+            for(int row=0;row+1<horizontal.Count;row++)
+            {
+                int top=horizontal[row].End,bottom=horizontal[row+1].Start;
+                if(bottom-top<16)return null;
+                var vertical=Bounds(Bands(strokes,width,height,new Int32Rect(0,top,width,bottom-top),true,cancel),width);
+                // A glyph crossing one divider must be flagged by Clean,
+                // rather than causing its two neighboring cells to be merged.
+                if(globalVertical!=null && (vertical==null || vertical.Count<globalVertical.Count))vertical=globalVertical;
+                if(vertical==null || vertical.Count<3 || vertical.Count>17)return null;
+                for(int col=0;col+1<vertical.Count;col++)
+                {
+                    int left=vertical[col].End,right=vertical[col+1].Start;
+                    if(right-left<16)return null;
+                    boxes.Add(new Int32Rect(left,top,right-left,bottom-top));
+                }
+            }
+            return boxes.Count>=2 && boxes.Count<=64?boxes:null;
         }
         private static List<Band> Bands(bool[] ink,int width,int height,Int32Rect region,bool vertical,CancellationToken cancel)
         {
@@ -132,15 +182,83 @@ namespace VanyaTools.Native
             if(colors.Count==0)return new byte[]{255,0,255};int best=colors.OrderByDescending(p=>p.Value).First().Key;
             return sums[best].Select(s=>(byte)(s/colors[best])).ToArray();
         }
+        private static void RemoveShadows(byte[] pixels,int width,int height,byte[] matte,CancellationToken cancel)
+        {
+            double norm=matte.Sum(c=>(int)c*c);if(norm<10000)return;
+            for(int y=0;y<height;y++)
+            {
+                cancel.ThrowIfCancellationRequested();
+                for(int x=0;x<width;x++)
+                {
+                    int p=(y*width+x)*4;if(pixels[p+3]==0)continue;
+                    double brightness=0;for(int c=0;c<3;c++)brightness+=pixels[p+c]*matte[c];brightness/=norm;
+                    // A cast shadow darkens the reserved backdrop while keeping
+                    // its chromatic direction. Do not treat neutral black or a
+                    // genuine green fabric with other color channels as matte.
+                    if(brightness<.25 || brightness>1.1)continue;
+                    double residual=0;for(int c=0;c<3;c++){double d=pixels[p+c]-brightness*matte[c];residual+=d*d;}
+                    if(residual<=24*24)pixels[p]=pixels[p+1]=pixels[p+2]=pixels[p+3]=0;
+                }
+            }
+        }
+        private static void ShadowEdges(byte[] pixels,int width,int height,byte[] matte,CancellationToken cancel)
+        {
+            var distance=new byte[width*height];
+            for(int y=0;y<height;y++)for(int x=0;x<width;x++)
+            {
+                int at=y*width+x;if(pixels[at*4+3]==0)continue;int value=x==0 || y==0 || x==width-1 || y==height-1?1:4;
+                if(x>0)value=Math.Min(value,distance[at-1]+1);
+                if(y>0){value=Math.Min(value,distance[at-width]+1);if(x>0)value=Math.Min(value,distance[at-width-1]+1);if(x+1<width)value=Math.Min(value,distance[at-width+1]+1);}
+                distance[at]=(byte)value;
+            }
+            for(int y=height-1;y>=0;y--)for(int x=width-1;x>=0;x--)
+            {
+                int at=y*width+x,value=distance[at];if(value==0)continue;
+                if(x+1<width)value=Math.Min(value,distance[at+1]+1);
+                if(y+1<height){value=Math.Min(value,distance[at+width]+1);if(x>0)value=Math.Min(value,distance[at+width-1]+1);if(x+1<width)value=Math.Min(value,distance[at+width+1]+1);}
+                distance[at]=(byte)value;
+            }
+            var original=(byte[])pixels.Clone();
+            for(int y=0;y<height;y++)
+            {
+                cancel.ThrowIfCancellationRequested();
+                for(int x=0;x<width;x++)
+                {
+                    int at=y*width+x,p=at*4;if(distance[at]==0 || distance[at]>=4 || original[p+3]<250)continue;
+                    int core=-1,best=Int32.MaxValue;
+                    for(int dy=-6;dy<=6;dy++)for(int dx=-6;dx<=6;dx++)
+                    {
+                        int nx=x+dx,ny=y+dy,d=dx*dx+dy*dy;if(nx<0 || ny<0 || nx>=width || ny>=height || d>=best)continue;
+                        int n=ny*width+nx;if(distance[n]<4 || original[n*4+3]<250)continue;core=n*4;best=d;
+                    }
+                    if(core<0)continue;
+                    double ff=0,fm=0,mm=0,cf=0,cm=0;
+                    for(int c=0;c<3;c++){ff+=original[core+c]*original[core+c];fm+=original[core+c]*matte[c];mm+=matte[c]*matte[c];cf+=original[p+c]*original[core+c];cm+=original[p+c]*matte[c];}
+                    double determinant=ff*mm-fm*fm;if(determinant<1000000)continue;
+                    double ink=(cf*mm-cm*fm)/determinant,backdrop=(cm*ff-cf*fm)/determinant;
+                    if(ink<0 || ink>1 || backdrop<.03 || backdrop>1.1 || ink+backdrop>1.2)continue;
+                    double residual=0;for(int c=0;c<3;c++){double d=original[p+c]-ink*original[core+c]-backdrop*matte[c];residual+=d*d;}
+                    if(residual>3*12*12)continue;
+                    if(ink<.02){pixels[p]=pixels[p+1]=pixels[p+2]=pixels[p+3]=0;continue;}
+                    // Fit foreground coverage and a separately darkened matte.
+                    // Interior texture is immutable; only a three-pixel edge
+                    // band with a matching local color mixture is unmatted.
+                    for(int c=0;c<3;c++)pixels[p+c]=(byte)Math.Max(0,Math.Min(255,Math.Round((original[p+c]-backdrop*matte[c])/ink)));
+                    pixels[p+3]=(byte)Math.Max(1,Math.Round(ink*original[p+3]));
+                }
+            }
+        }
         private static BitmapSource Clean(BitmapSource source,Color key,int threshold,CancellationToken cancel,out bool safe,out string warning)
         {
             int w=source.PixelWidth,h=source.PixelHeight;var data=LetterTransferImages.Pixels(source);var matte=Background(data,w,h);
             // Use the observed local background, preserving genuine artwork in
             // the requested key hue when the model chose a different backdrop.
-            PatternFillerMatte.Remove(data,w,h,cancel,matte,false,45);
             int Reflect(byte value,byte expected,int channel)=>channel==1?(expected==255?255-value:value):(expected==0?255-value:value);
             int mb=Reflect(matte[0],key.B,0),mg=Reflect(matte[1],key.G,1),mr=Reflect(matte[2],key.R,2);
             bool pureMatte=mg<=70 && Math.Min(mb,mr)-mg>=100;
+            if(pureMatte)RemoveShadows(data,w,h,matte,cancel);
+            PatternFillerMatte.Remove(data,w,h,cancel,matte,false,45);
+            if(pureMatte)ShadowEdges(data,w,h,matte,cancel);
             data=DtfRasterOperations.Correct(data,true,threshold,false,0,cancel);int visible=0;bool edge=false;
             for(int y=0;y<h;y++)for(int x=0;x<w;x++)
             {
