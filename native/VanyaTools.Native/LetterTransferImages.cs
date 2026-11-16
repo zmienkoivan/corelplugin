@@ -32,6 +32,25 @@ namespace VanyaTools.Native
                 image.Freeze();return image;
             }
         }
+        internal static BitmapSource LoadReference(string path)
+        {
+            int width,height;
+            // Read dimensions before requesting any full-resolution pixels.
+            // A large source is valid for a style reference; decode its preview.
+            using(var stream=File.OpenRead(path))
+            {
+                var decoder=BitmapDecoder.Create(stream,BitmapCreateOptions.PreservePixelFormat,BitmapCacheOption.None);
+                width=decoder.Frames[0].PixelWidth;height=decoder.Frames[0].PixelHeight;
+                if(width<=0 || height<=0 || width>100000 || height>100000 || (long)width*height>250000000)
+                    throw new InvalidDataException("Не удалось подготовить превью референса: проверьте размер исходного файла.");
+            }
+            using(var stream=File.OpenRead(path))
+            {
+                var image=new BitmapImage();image.BeginInit();image.CacheOption=BitmapCacheOption.OnLoad;image.StreamSource=stream;
+                if(Math.Max(width,height)>2048){if(width>=height)image.DecodePixelWidth=2048;else image.DecodePixelHeight=2048;}
+                image.EndInit();image.Freeze();return image;
+            }
+        }
         internal static void Save(BitmapSource image,string path)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(image));

@@ -241,6 +241,7 @@ namespace VanyaTools.Updater
                 ReportWorkerProgress("sending");
                 input = ResolveUploadedInputs(input, token, cancelPath, serializer) as Dictionary<string, object>;
                 if (input == null) throw new InvalidDataException("Не удалось подготовить входные данные для Replicate.");
+                ReportWorkerProgress("creating");
                 var requestTimer = Stopwatch.StartNew();
                 var body = new Dictionary<string, object> { ["input"] = input };
                 if (versionedModel) body["version"] = model;
@@ -261,8 +262,10 @@ namespace VanyaTools.Updater
                 {
                     // A definite rejection may be retried; an ambiguous response must not
                     // create a second paid prediction automatically.
-                    if (ex.StatusCode >= 400 && ex.StatusCode < 500 && ex.StatusCode != 408)
+                    if (ReplicateSubmissionFailure.DefinitelyRejected(ex.StatusCode))
                         File.Delete(outputPath + ".submitted");
+                    else if (File.Exists(outputPath + ".submitted"))
+                        throw new InvalidOperationException(ReplicateSubmissionFailure.DescribeUnknown(ex.StatusCode, ex.Message), ex);
                     throw;
                 }
                 catch (Exception ex) when (IsTransientNetworkError(ex))

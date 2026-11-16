@@ -34,6 +34,11 @@ namespace VanyaTools.Native
             LetterTransferImages.Save(reference,LetterTransferStore.Resolve(directory,job.Reference));set.Jobs.Add(job);
             try{LetterTransferStore.Save(directory,set);}catch{set.Jobs.Remove(job);throw;}return job;
         }
+        internal static bool UncertainSubmission(string directory,LetterTransferJob job)
+        {
+            string output=LetterTransferStore.Resolve(directory,job.Output);
+            return File.Exists(output+".submitted") && !File.Exists(output+".prediction.json") && !HasResult(directory,job);
+        }
         internal static bool HasResult(string directory,LetterTransferJob job)
         {
             try{LetterTransferImages.Load(LetterTransferStore.Resolve(directory,job.Output));return true;}

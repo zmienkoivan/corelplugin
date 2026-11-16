@@ -16,6 +16,12 @@ internal static class Program
     {
         try
         {
+            foreach (int status in new[] {400, 401, 403, 422, 429})
+                Check(VanyaTools.Updater.ReplicateSubmissionFailure.DefinitelyRejected(status), "Definite rejection should allow explicit retry: " + status);
+            foreach (int status in new[] {408, 500, 502, 503, 504})
+                Check(!VanyaTools.Updater.ReplicateSubmissionFailure.DefinitelyRejected(status), "Unknown submission must retain duplicate guard: " + status);
+            string uncertain = VanyaTools.Updater.ReplicateSubmissionFailure.DescribeUnknown(500, "Synthetic provider failure");
+            Check(uncertain.Contains("500") && uncertain.Contains("номер генерации не получен") && uncertain.Contains("платный") && uncertain.Contains("автоматический повтор заблокирован") && uncertain.Contains("Synthetic provider failure"), "Unknown creation error loses billing context or provider details");
             const string refusal = "Модель завершилась со статусом failed. The input or output was flagged as sensitive. " +
                 "Please try again with different inputs. (E005) (uJl6I3ruRD)";
             Check(SublimationFailure.IsSensitiveError(refusal), "Actual provider refusal is classified");

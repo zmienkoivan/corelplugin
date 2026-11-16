@@ -19,7 +19,7 @@ internal static class Program
         _root=Path.Combine(Path.GetTempPath(),"Vanya-Letter-Checks-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(_root);
         try
         {
-            Frequencies();Layouts();Preparation();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();
+            Frequencies();Layouts();Preparation();LargeReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();
             Console.WriteLine("Letter transfer checks passed: "+_checks+". Synthetic assets and fake Replicate/Corel only.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
@@ -103,6 +103,16 @@ internal static class Program
         return BitmapSource.Create(width,height,96,96,PixelFormats.Bgra32,null,data,width*4);
         void Box(int x0,int y0,int w,int h){for(int y=y0;y<y0+h;y++)for(int x=x0;x<x0+w;x++){int p=(y*width+x)*4;data[p]=data[p+1]=data[p+2]=255;data[p+3]=255;}}
     }
+    private static void LargeReference()
+    {
+        string path=Path.Combine(_root,"large-reference.png");var original=Solid(6000,5000,Colors.DarkRed);LetterTransferImages.Save(original,path);
+        var before=new FileInfo(path).Length;var preview=LetterTransferImages.LoadReference(path);
+        Check(preview.PixelWidth==2048 && Math.Abs(preview.PixelWidth/(double)preview.PixelHeight-1.2)<.001,"Large reference was not decoded to a proportional preview.");
+        Check(preview.IsFrozen && new FileInfo(path).Length==before,"Reference decoding changed source or retained a live decoder.");
+        Check(LetterTransferImages.LoadReference(path).PixelHeight==preview.PixelHeight,"Preview kept source file locked.");
+        string small=Path.Combine(_root,"small-reference.png");LetterTransferImages.Save(Solid(100,75,Colors.Blue),small);
+        Check(LetterTransferImages.LoadReference(small).PixelWidth==100,"Small reference was enlarged.");
+    }
     private static void Images()
     {
         foreach(string key in new[]{"#FF00FF","#00FF00","#00FFFF","#FFFF00","#0000FF","#FF0000"})
@@ -157,10 +167,11 @@ internal static class Program
     private static void Window()
     {
         var set=Printable();string uiRoot=Path.Combine(_root,"ui");string directory=LetterTransferStore.Create(uiRoot,set);foreach(var glyph in set.Glyphs)LetterTransferImages.Save(Solid(glyph.Width,glyph.Height,Colors.DarkBlue),LetterTransferStore.Resolve(directory,glyph.File));
-        int confirms=0,calls=ReplicateWorkerClient.Calls;set.Reference="references/style.png";LetterTransferImages.Save(Sheet("#FF00FF"),LetterTransferStore.Resolve(directory,set.Reference));LetterTransferStore.Save(directory,set);
-        var window=new LetterTransferWindow(()=>"synthetic-key",()=>throw new Exception("Capture not requested"),(_,__)=>{},uiRoot,(reference,letters,model,resolution,prompt,retry)=>{confirms++;return false;});
+        int confirms=0,calls=ReplicateWorkerClient.Calls,referenceCaptures=0,artworkCaptures=0;set.Reference="references/style.png";LetterTransferImages.Save(Sheet("#FF00FF"),LetterTransferStore.Resolve(directory,set.Reference));LetterTransferStore.Save(directory,set);
+        var window=new LetterTransferWindow(()=>"synthetic-key",()=>{artworkCaptures++;throw new Exception("Full artwork capture must not be used for a reference");},(_,__)=>{},uiRoot,(reference,letters,model,resolution,prompt,retry)=>{confirms++;return false;},()=>{referenceCaptures++;return LetterTransferStore.Resolve(directory,set.Reference);});
         try
         {
+            Call(window,"Reference",true);Check(referenceCaptures==1 && artworkCaptures==0,"Reference path used the full artwork capture.");
             Call(window,"Generate",true);Check(confirms==1 && ReplicateWorkerClient.Calls==calls && Field<LetterTransferSet>(window,"_set").Jobs.Count==0,"Declined preview still sent or created a job.");
             Check(Field<DataGrid>(window,"_table").Items.Count==33,"UI alphabet missing.");Check(Field<StackPanel>(window,"_pages").Children.Count>0,"No print preview.");
             Field<TextBox>(window,"_height").Text="19,5";Call(window,"Save");Check(LetterTransferStore.Load(directory).HeightMm==19.5,"Comma decimal not saved.");
@@ -174,6 +185,11 @@ internal static class Program
                 if(!String.IsNullOrEmpty(render))
                 {var image=new RenderTargetBitmap((int)size.Width,(int)size.Height,96,96,PixelFormats.Pbgra32);var visual=new DrawingVisual();using(var context=visual.RenderOpen()){context.DrawRectangle(Brushes.White,null,new Rect(size));}image.Render(visual);image.Render(root);LetterTransferImages.Save(image,Path.Combine(render,"letters-"+(int)size.Width+".png"));}
             }
+            var uncertain=LetterTransferAi.Create(directory,selected,new[]{"Ё"},"google/nano-banana-2","2K");
+            File.WriteAllText(LetterTransferStore.Resolve(directory,uncertain.Output)+".submitted","sent");
+            Check(LetterTransferAi.UncertainSubmission(directory,uncertain),"Missing prediction ID is not classified as uncertain.");
+            int consentBefore=confirms;Call(window,"Retry");
+            Check(confirms==consentBefore && ReplicateWorkerClient.Calls==calls && Field<TextBlock>(window,"_message").Text.Contains("повтор заблокирован"),"Unknown submission tried another upload or requested a misleading repeat consent.");
         }
         finally{window.Close();}
     }

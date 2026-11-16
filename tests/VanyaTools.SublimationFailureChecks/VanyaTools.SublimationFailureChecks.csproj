@@ -8,5 +8,6 @@
   <ItemGroup>
     <Reference Include="System.Web.Extensions" />
     <Compile Include="../../native/VanyaTools.Native/SublimationFailure.cs" Link="SublimationFailure.cs" />
+    <Compile Include="../../native/VanyaTools.Updater/ReplicateSubmissionFailure.cs" Link="ReplicateSubmissionFailure.cs" />
   </ItemGroup>
 </Project>
