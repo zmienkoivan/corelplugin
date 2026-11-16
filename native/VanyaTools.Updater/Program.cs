@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
@@ -174,6 +175,7 @@ namespace VanyaTools.Updater
                 else DownloadWithSystemProxy(outputUrl, outputPath, cancelPath);
                 foreach (string inputFile in localInputFiles)
                     try { if (File.Exists(inputFile)) File.Delete(inputFile); } catch { }
+                try{File.Delete(outputPath+".submission.json");}catch(IOException){}catch(UnauthorizedAccessException){}
                 LogWorker("Replicate request completed in " + timer.ElapsedMilliseconds + " ms.");
                 WriteWorkerResponse(serializer, new Dictionary<string, object> { ["ok"] = true });
                 return 0;
@@ -219,21 +221,34 @@ namespace VanyaTools.Updater
             string statePath = outputPath + ".prediction.json";
             Dictionary<string, object> result = File.Exists(statePath)
                 ? serializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(statePath)) : null;
+            bool recoveredSubmission=false;
+            if(result==null && File.Exists(outputPath+".submitted"))
+            {
+                result=RecoverSubmission(token,model,input,serializer,outputPath,cancelPath);
+                if(result==null)throw new InvalidOperationException("Сервер мог принять запрос, но его номер не получен. Поиск в истории не дал однозначного совпадения; автоматический дубль заблокирован. Проверьте историю Replicate.");
+                SavePrediction(statePath,result,serializer);recoveredSubmission=true;
+            }
             string previousStatus = result == null ? "" : Convert.ToString(result["status"]);
-            if (result == null || previousStatus == "failed" || previousStatus == "canceled")
+            if (!recoveredSubmission && (result == null || previousStatus == "failed" || previousStatus == "canceled"))
             {
                 if (File.Exists(cancelPath)) throw new OperationCanceledException("Операция отменена до отправки в Replicate.");
                 if (result == null && File.Exists(outputPath + ".submitted"))
                     throw new InvalidOperationException("Сервер мог принять запрос, но его номер не получен. Проверьте запрос в Replicate перед новым платным запуском; автоматический дубль заблокирован.");
+                var ignoreIds=new List<string>();
+                if(result!=null)
+                {
+                    string priorId=ReplicateSubmissionRecovery.Value(result,"id");if(!String.IsNullOrEmpty(priorId))ignoreIds.Add(priorId);
+                    try{var prior=serializer.Deserialize<ReplicateSubmissionStamp>(File.ReadAllText(outputPath+".submission.json"));if(prior?.IgnoreIds!=null)ignoreIds.AddRange(prior.IgnoreIds);}catch(IOException){}catch(ArgumentException){}
+                    if(File.Exists(outputPath+".submitted"))File.Delete(outputPath+".submitted");
+                }
                 if (File.Exists(statePath)) File.Delete(statePath);
-                // Community models require a pinned version on /v1/predictions;
-                // official models support the owner/name predictions endpoint.
-                bool versionedModel = model.IndexOf(':') >= 0;
-                var request = CreateHttpRequest(versionedModel
-                    ? "https://api.replicate.com/v1/predictions"
-                    : "https://api.replicate.com/v1/models/" + model + "/predictions");
+                result=null;
+                var stamp=ReplicateSubmissionRecovery.Create(model,input,DateTime.UtcNow);stamp.IgnoreIds=ignoreIds.Distinct().Take(100).ToArray();
+                // The generic prediction endpoint supports official owner/name
+                // identifiers as well as pinned community model versions.
+                var request = CreateHttpRequest("https://api.replicate.com/v1/predictions");
                 request.Method = "POST";
-                request.ContentType = "application/json";
+                request.ContentType = "application/json; charset=utf-8";
                 request.Accept = "application/json";
                 request.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
                 // Return the prediction handle immediately; waiting on the create request
@@ -244,8 +259,10 @@ namespace VanyaTools.Updater
                 ReportWorkerProgress("creating");
                 var requestTimer = Stopwatch.StartNew();
                 var body = new Dictionary<string, object> { ["input"] = input };
-                if (versionedModel) body["version"] = model;
+                body["version"] = model;
                 byte[] bytes = Encoding.UTF8.GetBytes(serializer.Serialize(body));
+                request.ContentLength=bytes.Length;request.SendChunked=false;request.ServicePoint.Expect100Continue=false;
+                stamp.SentUtc=DateTime.UtcNow.ToString("o");SaveSubmissionStamp(outputPath,stamp,serializer);
                 try
                 {
                     using (var stream = request.GetRequestStream())
@@ -260,19 +277,17 @@ namespace VanyaTools.Updater
                 }
                 catch (ReplicateApiException ex)
                 {
-                    // A definite rejection may be retried; an ambiguous response must not
-                    // create a second paid prediction automatically.
                     if (ReplicateSubmissionFailure.DefinitelyRejected(ex.StatusCode))
-                        File.Delete(outputPath + ".submitted");
-                    else if (File.Exists(outputPath + ".submitted"))
-                        throw new InvalidOperationException(ReplicateSubmissionFailure.DescribeUnknown(ex.StatusCode, ex.Message), ex);
-                    throw;
+                    {File.Delete(outputPath + ".submitted");throw;}
+                    if(File.Exists(outputPath+".submitted"))result=RecoverSubmission(token,model,input,serializer,outputPath,cancelPath);
+                    if(result==null)throw new InvalidOperationException(ReplicateSubmissionFailure.DescribeUnknown(ex.StatusCode,ex.Message),ex);
                 }
                 catch (Exception ex) when (IsTransientNetworkError(ex))
                 {
                     bool submitted = File.Exists(outputPath + ".submitted");
-                    throw new InvalidOperationException(submitted
-                        ? "Соединение оборвалось при создании запроса. Сервер мог принять платный запуск; автоматический дубль заблокирован. Проверьте запрос в Replicate."
+                    if(submitted)result=RecoverSubmission(token,model,input,serializer,outputPath,cancelPath);
+                    if(result==null)throw new InvalidOperationException(submitted
+                        ? "Соединение оборвалось при создании запроса. Однозначно восстановить его номер не удалось; автоматический дубль заблокирован. Проверьте историю Replicate."
                         : "Соединение оборвалось до отправки запроса. Нажмите «Повторить запрос».", ex);
                 }
                 SavePrediction(statePath, result, serializer);
@@ -372,6 +387,11 @@ namespace VanyaTools.Updater
 
         private static object ResolveUploadedInputs(object value, string token, string cancelPath, JavaScriptSerializer serializer)
         {
+            int remaining=ReplicateInputEncoding.InlineBudget;
+            return ResolveUploadedInputs(value,token,cancelPath,serializer,ref remaining);
+        }
+        private static object ResolveUploadedInputs(object value,string token,string cancelPath,JavaScriptSerializer serializer,ref int remaining)
+        {
             var text = value as string;
             if (text != null)
             {
@@ -382,15 +402,19 @@ namespace VanyaTools.Updater
                     var info = new FileInfo(path);
                     if (!info.Exists) throw new FileNotFoundException("Не найден временный PNG для отправки в Replicate.", path);
                     if (info.Length > 100L * 1024 * 1024) throw new InvalidDataException("Изображение превышает лимит загрузки Replicate 100 МБ.");
-                    return UploadReplicateFile(token, File.ReadAllBytes(path), info.Name, "image/png", serializer, cancelPath);
+                    byte[] bytes=File.ReadAllBytes(path);
+                    if(ReplicateInputEncoding.TryInline(bytes,"image/png",ref remaining,out string inline))
+                    {LogWorker("Input kept inline without a file-host fetch; bytes="+bytes.Length+".");return inline;}
+                    return UploadReplicateFile(token, bytes, info.Name, "image/png", serializer, cancelPath);
                 }
                 if (text.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
                 {
                     int comma = text.IndexOf(',');
-                    if (comma > 0 && text.Length > 350000)
+                    if (comma > 0)
                     {
                         byte[] bytes = Convert.FromBase64String(text.Substring(comma + 1));
                         string mime = text.Substring(5, text.IndexOf(';') - 5);
+                        if(ReplicateInputEncoding.TryInline(bytes,mime,ref remaining,out _))return text;
                         return UploadReplicateFile(token, bytes, "input", mime, serializer, cancelPath);
                     }
                 }
@@ -401,13 +425,13 @@ namespace VanyaTools.Updater
             if (dictionary != null)
             {
                 var keys = new List<string>(dictionary.Keys);
-                foreach (string key in keys) dictionary[key] = ResolveUploadedInputs(dictionary[key], token, cancelPath, serializer);
+                foreach (string key in keys) dictionary[key] = ResolveUploadedInputs(dictionary[key], token, cancelPath, serializer,ref remaining);
                 return dictionary;
             }
             var list = value as IList;
             if (list != null)
             {
-                for (int i = 0; i < list.Count; i++) list[i] = ResolveUploadedInputs(list[i], token, cancelPath, serializer);
+                for (int i = 0; i < list.Count; i++) list[i] = ResolveUploadedInputs(list[i], token, cancelPath, serializer,ref remaining);
                 return list;
             }
             return value;
@@ -510,6 +534,88 @@ namespace VanyaTools.Updater
             File.WriteAllText(path + ".tmp", serializer.Serialize(state));
             if (File.Exists(path)) File.Replace(path + ".tmp", path, null);
             else File.Move(path + ".tmp", path);
+        }
+
+        private static void SaveSubmissionStamp(string output,ReplicateSubmissionStamp stamp,JavaScriptSerializer serializer)
+        {
+            string path=output+".submission.json";File.WriteAllText(path+".tmp",serializer.Serialize(stamp));
+            if(File.Exists(path))File.Replace(path+".tmp",path,null);else File.Move(path+".tmp",path);
+        }
+        private static Dictionary<string,object> RecoverSubmission(string token,string model,Dictionary<string,object> input,JavaScriptSerializer serializer,string output,string cancelPath)
+        {
+            ReportWorkerProgress("recovering");
+            try
+            {
+                ReplicateSubmissionStamp stamp;
+                string receipt=output+".submission.json";
+                if(File.Exists(receipt))
+                {
+                    if(new FileInfo(receipt).Length>262144)throw new InvalidDataException("Submission receipt too large.");
+                    stamp=serializer.Deserialize<ReplicateSubmissionStamp>(File.ReadAllText(receipt));
+                    ReplicateSubmissionRecovery.Validate(stamp);
+                    if(stamp.Model!=model)throw new InvalidDataException("Submission model mismatch.");
+                }
+                else stamp=ReplicateSubmissionRecovery.Create(model,input,File.GetLastWriteTimeUtc(output+".submitted"));
+                var fingerprints=new Dictionary<string,string>();
+                for(int attempt=0;attempt<3;attempt++)
+                {
+                    if(attempt>0 && !File.Exists(cancelPath))Thread.Sleep(attempt*500);
+                    var candidates=new List<Dictionary<string,object>>();string next="https://api.replicate.com/v1/predictions";
+                    for(int page=0;page<3 && !String.IsNullOrEmpty(next);page++)
+                    {
+                        var uri=new Uri(next);
+                        if(uri.Scheme!="https" || uri.Host!="api.replicate.com" || uri.AbsolutePath!="/v1/predictions")throw new InvalidDataException("Unexpected prediction history URL.");
+                        var response=ReadRecoveryJson(next,token,serializer);
+                        if(response.ContainsKey("results") && response["results"] is IList list)
+                            foreach(object item in list)if(item is Dictionary<string,object> candidate)candidates.Add(candidate);
+                        next=response.ContainsKey("next")?Convert.ToString(response["next"]):null;
+                    }
+                    if(!String.IsNullOrEmpty(next))
+                    {
+                        var floor=DateTime.Parse(stamp.SentUtc,System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.RoundtripKind).ToUniversalTime().AddMinutes(-5);
+                        bool passedWindow=candidates.Exists(candidate=>DateTime.TryParse(ReplicateSubmissionRecovery.Value(candidate,"created_at"),System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.RoundtripKind,out var time) && time.ToUniversalTime()<floor);
+                        if(!passedWindow){LogWorker("Prediction history window is incomplete; recovery remains blocked.");return null;}
+                    }
+                    var matches=ReplicateSubmissionRecovery.Match(stamp,candidates,url=>{
+                        if(!fingerprints.TryGetValue(url,out string hash))fingerprints[url]=hash=RecoveryFileHash(url,token,serializer);
+                        return hash;
+                    });
+                    if(matches.Count>1){LogWorker("Prediction recovery found multiple exact matches; no new prediction submitted.");return null;}
+                    if(matches.Count==1)
+                    {
+                        LogWorker("Recovered existing prediction " + ReplicateSubmissionRecovery.Value(matches[0],"id") + "; no new prediction submitted.");
+                        return matches[0];
+                    }
+                }
+            }
+            catch(Exception error){LogWorker("Prediction recovery could not establish a unique match: "+error.GetType().Name+". No new prediction submitted.");}
+            return null;
+        }
+        private static Dictionary<string,object> ReadRecoveryJson(string url,string token,JavaScriptSerializer serializer)
+        {
+            var request=CreateHttpRequest(url);request.Headers[HttpRequestHeader.Authorization]="Bearer "+token;
+            request.Timeout=request.ReadWriteTimeout=15000;return ReadJson(request,serializer);
+        }
+        private static string RecoveryFileHash(string url,string token,JavaScriptSerializer serializer)
+        {
+            if(!Uri.TryCreate(url,UriKind.Absolute,out var uri) || uri.Scheme!="https" || !uri.IsDefaultPort)throw new InvalidDataException("Unexpected input file URL.");
+            if(uri.Host=="api.replicate.com" && uri.AbsolutePath.StartsWith("/v1/files/",StringComparison.Ordinal))
+            {
+                var file=ReadRecoveryJson(url,token,serializer);
+                var checksums=file.ContainsKey("checksums")?file["checksums"] as Dictionary<string,object>:null;
+                return ReplicateSubmissionRecovery.Value(checksums,"sha256");
+            }
+            if(uri.Host!="replicate.delivery" && !uri.Host.EndsWith(".replicate.delivery",StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("Unexpected input file host.");
+            var request=CreateHttpRequest(url);request.Timeout=request.ReadWriteTimeout=15000;request.AllowAutoRedirect=false;
+            using(var response=request.GetResponse())
+            using(var stream=response.GetResponseStream())
+            using(var memory=new MemoryStream())
+            {
+                if(response.ContentLength>100L*1024*1024)throw new InvalidDataException("Input file too large.");
+                var buffer=new byte[65536];int read;
+                while((read=stream.Read(buffer,0,buffer.Length))>0){if(memory.Length+read>100L*1024*1024)throw new InvalidDataException("Input file too large.");memory.Write(buffer,0,read);}
+                memory.Position=0;return ReplicateSubmissionRecovery.Digest(memory);
+            }
         }
 
         private static HttpWebRequest CreateHttpRequest(string url)

@@ -157,6 +157,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.CorrectionWindowChecks/VanyaTools.CorrectionWindowChecks.csproj --configuration Release
 
+      - name: Check Replicate request recovery
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.ReplicateRecoveryChecks/VanyaTools.ReplicateRecoveryChecks.csproj --configuration Release
+
       - name: Check letter transfer sets
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.LetterTransferChecks/VanyaTools.LetterTransferChecks.csproj --configuration Release

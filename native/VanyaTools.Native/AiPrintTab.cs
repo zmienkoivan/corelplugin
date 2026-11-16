@@ -415,6 +415,8 @@ namespace VanyaTools.Native
             switch (stage)
             {
                 case "sending": message = "Отправляю изображение модели…"; break;
+                case "creating": message = "Запускаю модель…"; break;
+                case "recovering": message = "Восстанавливаю номер уже созданного запроса без новой генерации…"; break;
                 case "processing": message = "Модель обрабатывает изображение. Это может занять несколько минут…"; break;
                 case "downloading": message = "Модель готова. Загружаю результат…"; break;
                 case "cancelling": message = "Ожидаю подтверждение отмены от Replicate…"; break;

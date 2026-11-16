@@ -224,7 +224,8 @@ namespace VanyaTools.Native
             {
                 Save();var job=SelectedJob();if(job==null)throw new InvalidOperationException("Выберите запрос в истории.");
                 if(LetterTransferAi.HasResult(_directory,job)){Review(job);return;}
-                if(LetterTransferAi.UncertainSubmission(_directory,job))throw new InvalidOperationException("Replicate не вернул номер этого запроса. Автоматический повтор заблокирован: генерация могла начаться. Проверьте «История Replicate» перед новым платным запуском.");
+                if(LetterTransferAi.UncertainSubmission(_directory,job))
+                {await Run(job,_token());return;}
                 string token=_token();if(String.IsNullOrWhiteSpace(token))throw new InvalidOperationException("Укажите ключ Replicate в настройках ИИ.");
                 var reference=LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,job.Reference));
                 if(!_confirm(reference,job.Letters,job.Model,job.Resolution,job.Prompt,true))return;await Run(job,token);
@@ -236,7 +237,7 @@ namespace VanyaTools.Native
             _refresh.Stop();_request=new CancellationTokenSource();_body.IsEnabled=_tools.IsEnabled=false;_cancel.Content="Отменить запрос";_stage="Генерация букв";_timingKey="letters/"+job.Model+"/"+job.Resolution;_elapsed.Restart();_clock.Start();Report("ИИ создаёт «"+String.Join(" ",job.Letters)+"». Ожидайте ответ.");
             try
             {
-                await Task.Run(()=>LetterTransferAi.Generate(_directory,job,token,progress=>Dispatcher.BeginInvoke(new Action(()=>{_stage=progress=="sending"?"Отправка превью":progress=="creating"?"Запуск модели":progress=="processing"?"Создание букв":progress=="downloading"?"Скачивание ответа":progress=="cancelling"?"Отмена":"Ожидание ИИ";})),_request.Token));
+                await Task.Run(()=>LetterTransferAi.Generate(_directory,job,token,progress=>Dispatcher.BeginInvoke(new Action(()=>{_stage=progress=="sending"?"Отправка превью":progress=="recovering"?"Поиск созданного запроса · без новой генерации":progress=="creating"?"Запуск модели":progress=="processing"?"Создание букв":progress=="downloading"?"Скачивание ответа":progress=="cancelling"?"Отмена":"Ожидание ИИ";})),_request.Token));
                 OperationTiming.Record(_timingKey,_elapsed.Elapsed);Report("Ответ ИИ сохранён. Проверьте буквы перед добавлением.");
             }
             catch(Exception error){Failure(error);}

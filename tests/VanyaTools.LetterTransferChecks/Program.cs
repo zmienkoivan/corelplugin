@@ -169,6 +169,7 @@ internal static class Program
         var set=Printable();string uiRoot=Path.Combine(_root,"ui");string directory=LetterTransferStore.Create(uiRoot,set);foreach(var glyph in set.Glyphs)LetterTransferImages.Save(Solid(glyph.Width,glyph.Height,Colors.DarkBlue),LetterTransferStore.Resolve(directory,glyph.File));
         int confirms=0,calls=ReplicateWorkerClient.Calls,referenceCaptures=0,artworkCaptures=0;set.Reference="references/style.png";LetterTransferImages.Save(Sheet("#FF00FF"),LetterTransferStore.Resolve(directory,set.Reference));LetterTransferStore.Save(directory,set);
         var window=new LetterTransferWindow(()=>"synthetic-key",()=>{artworkCaptures++;throw new Exception("Full artwork capture must not be used for a reference");},(_,__)=>{},uiRoot,(reference,letters,model,resolution,prompt,retry)=>{confirms++;return false;},()=>{referenceCaptures++;return LetterTransferStore.Resolve(directory,set.Reference);});
+        var previousContext=SynchronizationContext.Current;SynchronizationContext.SetSynchronizationContext(new System.Windows.Threading.DispatcherSynchronizationContext(window.Dispatcher));
         try
         {
             Call(window,"Reference",true);Check(referenceCaptures==1 && artworkCaptures==0,"Reference path used the full artwork capture.");
@@ -188,9 +189,12 @@ internal static class Program
             var uncertain=LetterTransferAi.Create(directory,selected,new[]{"Ё"},"google/nano-banana-2","2K");
             File.WriteAllText(LetterTransferStore.Resolve(directory,uncertain.Output)+".submitted","sent");
             Check(LetterTransferAi.UncertainSubmission(directory,uncertain),"Missing prediction ID is not classified as uncertain.");
-            int consentBefore=confirms;Call(window,"Retry");
-            Check(confirms==consentBefore && ReplicateWorkerClient.Calls==calls && Field<TextBlock>(window,"_message").Text.Contains("повтор заблокирован"),"Unknown submission tried another upload or requested a misleading repeat consent.");
+            int consentBefore=confirms,recoveriesBefore=ReplicateWorkerClient.Recoveries;Call(window,"Retry");
+            var deadline=DateTime.UtcNow.AddSeconds(5);
+            while(Field<CancellationTokenSource>(window,"_request")!=null && DateTime.UtcNow<deadline)
+            {var frame=new System.Windows.Threading.DispatcherFrame();System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,new Action(()=>frame.Continue=false));System.Windows.Threading.Dispatcher.PushFrame(frame);System.Threading.Thread.Sleep(10);}
+            Check(confirms==consentBefore && ReplicateWorkerClient.Recoveries==recoveriesBefore+1 && ReplicateWorkerClient.Calls==calls && Field<TextBlock>(window,"_message").Text.Contains("повтор заблокирован"),"Unknown submission tried another upload or requested a misleading repeat consent.");
         }
-        finally{window.Close();}
+        finally{window.Close();SynchronizationContext.SetSynchronizationContext(previousContext);}
     }
 }

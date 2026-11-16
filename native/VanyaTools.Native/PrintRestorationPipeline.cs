@@ -145,7 +145,7 @@ namespace VanyaTools.Native
             if (File.Exists(output) && new FileInfo(output).Length > 0) { progress(name + " · уже готово"); return; }
             progress(name);
             await Task.Run(() => ReplicateWorkerClient.Run(model, key, input, output,
-                stage => progress(name + " · " + (stage == "sending" ? "отправка" : stage == "processing" ? "обработка" : stage == "cancelling" ? "отмена" : "получение результата")), cancellation));
+                stage => progress(name + " · " + (stage == "sending" ? "отправка" : stage == "creating" ? "запуск модели" : stage == "recovering" ? "восстановление запроса без новой генерации" : stage == "processing" ? "обработка" : stage == "cancelling" ? "отмена" : "получение результата")), cancellation));
         }
 
         private static bool HasDarkEdge(BitmapSource image)
