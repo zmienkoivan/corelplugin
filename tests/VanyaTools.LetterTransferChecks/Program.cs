@@ -19,8 +19,8 @@ internal static class Program
         _root=Path.Combine(Path.GetTempPath(),"Vanya-Letter-Checks-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(_root);
         try
         {
-            Frequencies();WholeAlphabet();Layouts();Preparation();LargeReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();
-            Console.WriteLine("Letter transfer checks passed: "+_checks+". Synthetic assets and fake Replicate/Corel only.");return 0;
+            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();Layouts();Preparation();LargeReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();
+            Console.WriteLine("Letter transfer checks passed: "+_checks+". Offline checks; no Replicate/Corel requests.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
         finally
@@ -58,6 +58,62 @@ internal static class Program
         for(int n=0;n<33;n++){var pixels=LetterTransferImages.Pixels(cells[n]);int center=(cells[n].PixelHeight/2*cells[n].PixelWidth+cells[n].PixelWidth/2)*4;Check(pixels[center]==200+n,"Full-sheet cell assignment changed.");}
         set.Glyphs.Add(new LetterTransferGlyph{Letter="А",File="glyphs/a.png",Width=20,Height=20});
         passes=LetterTransferRules.MissingPasses(set);Check(passes.Count==2 && passes[0].Length==32 && !passes[0].Contains("А") && passes[1].Length==33,"Missing-only generation repeats completed variants or omits second style.");
+    }
+    private static void FramedAlphabet()
+    {
+        const int size=720,cell=120;var data=LetterTransferImages.Pixels(Solid(size,size,Colors.Lime));
+        void Paint(int x,int y,byte ink){int p=(y*size+x)*4;data[p]=data[p+1]=data[p+2]=ink;data[p+3]=255;}
+        void Divider(int x,int y){Paint(x,y,8);data[(y*size+x)*4+1]=28;}
+        for(int n=0;n<33;n++)for(int y=20;y<100;y++)for(int x=20;x<100;x++)Paint(n%6*cell+x,n/6*cell+y,240);
+        // A generated grid wanders between adjacent pixel rows and has an outer
+        // frame. No individual scanline covers 98.5% of the sheet.
+        for(int n=0;n<=6;n++)for(int along=0;along<size;along++)
+        {
+            int cut=n*cell+(along/31%3-1);
+            for(int d=-1;d<=1;d++)
+            {
+                int at=Math.Max(0,Math.Min(size-1,cut+d));Divider(at,along);Divider(along,at);
+            }
+        }
+        BitmapSource Sheet()=>BitmapSource.Create(size,size,96,96,PixelFormats.Bgra32,null,data,size*4);
+        var cells=LetterTransferImages.Extract(Sheet(),33,"#00FF00",CancellationToken.None);
+        Check(cells.All(i=>i!=null),"Framed, non-straight grid rejected intact alphabet.");
+        foreach(var image in cells)
+        {
+            var bytes=LetterTransferImages.Pixels(image);
+            Check(bytes.Where((b,i)=>i%4==3).All(a=>a==0 || a==255),"Framed alphabet retained partial alpha.");
+            Check(Enumerable.Range(0,bytes.Length/4).All(p=>bytes[p*4+3]==0 || bytes[p*4]>200),"Grid fragments survived in a glyph.");
+        }
+        // Removing a divider must not hide a real glyph crossing it.
+        for(int y=45;y<70;y++)for(int x=95;x<130;x++)Paint(x,y,240);
+        cells=LetterTransferImages.Extract(Sheet(),33,"#00FF00",CancellationToken.None);
+        Check(cells[0]==null && cells[1]==null && cells.Skip(2).All(i=>i!=null),"Separator cleanup hid a genuinely clipped glyph; accepted: "+String.Join(",",cells.Select((c,i)=>c==null?"-":i.ToString())));
+        for(int y=45;y<70;y++)for(int x=95;x<130;x++)Paint(x,y,8);
+        cells=LetterTransferImages.Extract(Sheet(),33,"#00FF00",CancellationToken.None);
+        Check(cells[0]==null && cells[1]==null && cells.Skip(2).All(i=>i!=null),"Separator cleanup hid dark ink crossing the divider.");
+    }
+    private static void SavedAlphabet()
+    {
+        string path=Environment.GetEnvironmentVariable("VANYA_LETTER_ALPHABET_SHEET");if(String.IsNullOrEmpty(path))return;
+        var sheet=LetterTransferImages.Load(path);var original=LetterTransferImages.Pixels(sheet);
+        var cells=LetterTransferImages.Extract(sheet,33,"#00FF00",CancellationToken.None);
+        Check(cells.All(i=>i!=null),"Saved 4K response rejected one or more of 33 intact letters.");
+        string export=Environment.GetEnvironmentVariable("VANYA_LETTER_ALPHABET_EXPORT");
+        for(int n=0;n<cells.Length;n++)
+        {
+            var bytes=LetterTransferImages.Pixels(cells[n]);
+            Check(bytes.Where((b,i)=>i%4==3).All(a=>a==0 || a==255),"Saved alphabet retained partial alpha.");
+            Check(Enumerable.Range(0,bytes.Length/4).All(p=>bytes[p*4+3]!=0 || (bytes[p*4]==0 && bytes[p*4+1]==0 && bytes[p*4+2]==0)),"Saved alphabet has hidden matte RGB.");
+            Check(Enumerable.Range(0,bytes.Length/4).All(p=>bytes[p*4+3]==0 || bytes[p*4+1]-Math.Max(bytes[p*4],bytes[p*4+2])<50),"Saved alphabet retained a green matte rim.");
+            if(!String.IsNullOrEmpty(export))
+            {
+                double dpi=cells[n].PixelHeight*25.4/20;
+                var physical=BitmapSource.Create(cells[n].PixelWidth,cells[n].PixelHeight,dpi,dpi,PixelFormats.Bgra32,null,bytes,cells[n].PixelWidth*4);
+                LetterTransferImages.Save(physical,Path.Combine(export,LetterTransferRules.Alphabet[n]+".png"));
+                Check(Math.Abs(LetterTransferImages.Load(Path.Combine(export,LetterTransferRules.Alphabet[n]+".png")).DpiY-dpi)<.1,"Export lost the 20 mm physical height.");
+            }
+        }
+        Check(original.SequenceEqual(LetterTransferImages.Pixels(sheet)),"Saved source sheet was mutated.");
     }
     internal static LetterTransferSet Printable()
     {

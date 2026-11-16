@@ -126,7 +126,7 @@ namespace VanyaTools.Native
             if(count<1 || count>33 || !ValidKey(key))throw new ArgumentException("Некорректная сетка букв.");
             int width=sheet.PixelWidth,height=sheet.PixelHeight;
             if(width<32 || height<32 || (long)width*height>25000000)throw new InvalidDataException("Лист ИИ слишком мал.");
-            byte[] pixels=Pixels(sheet);int columns=LetterTransferRules.Columns(count),rows=(count+columns-1)/columns;RemoveSeparators(pixels,width,height,columns,rows);var color=(Color)ColorConverter.ConvertFromString(key);
+            byte[] pixels=Pixels(sheet);int columns=LetterTransferRules.Columns(count),rows=(count+columns-1)/columns;var bounds=RemoveSeparators(pixels,width,height,columns,rows,cancel);var color=(Color)ColorConverter.ConvertFromString(key);
             // Channel reflections preserve RGB distances and map the chosen technical
             // color to the tested magenta unmatting algorithm. White ink stays ink.
             Transform(pixels,color);PatternFillerMatte.Remove(pixels,width,height,cancel,MatteAtBorder(pixels,width,height));
@@ -138,8 +138,8 @@ namespace VanyaTools.Native
             var result=new BitmapSource[count];
             for(int n=0;n<count;n++)
             {
-                cancel.ThrowIfCancellationRequested();int x0=width*(n%columns)/columns,x1=width*(n%columns+1)/columns;
-                int y0=height*(n/columns)/rows,y1=height*(n/columns+1)/rows;
+                cancel.ThrowIfCancellationRequested();var box=bounds[n];if(box.Width<4 || box.Height<4)continue;
+                int x0=box.X,x1=box.X+box.Width,y0=box.Y,y1=box.Y+box.Height;
                 RemoveBoundarySpecks(pixels,width,x0,y0,x1,y1);
                 int left=x1,top=y1,right=-1,bottom=-1,visible=0;bool clipped=false;
                 for(int y=y0;y<y1;y++)for(int x=x0;x<x1;x++)
@@ -198,30 +198,53 @@ namespace VanyaTools.Native
             if(channels[0].Count<16 || channels[0].Count<checkedPixels*.5)return null;
             var color=new byte[3];for(int c=0;c<3;c++){channels[c].Sort();color[c]=channels[c][channels[c].Count/2];}return color;
         }
-        private static void RemoveSeparators(byte[] pixels,int width,int height,int columns,int rows)
+        private static Int32Rect[] RemoveSeparators(byte[] pixels,int width,int height,int columns,int rows,CancellationToken cancel)
         {
-            // Only a neutral dark line spanning essentially the entire sheet at
-            // a known grid boundary qualifies. A clipped glyph remains invalid.
             bool Dark(int x,int y)
             {
                 int p=(y*width+x)*4;int min=Math.Min(pixels[p],Math.Min(pixels[p+1],pixels[p+2])),max=Math.Max(pixels[p],Math.Max(pixels[p+1],pixels[p+2]));
-                return pixels[p+3]>=250 && max<=96 && max-min<=16;
+                return pixels[p+3]>=250 && max<=96 && max-min<=64;
             }
-            var xs=new HashSet<int>();var ys=new HashSet<int>();
-            for(int n=1;n<columns;n++)
+            int[] Find(bool vertical,int cut)
             {
-                int cut=width*n/columns;
-                for(int x=Math.Max(0,cut-8);x<Math.Min(width,cut+8);x++)
-                {int dark=0;for(int y=0;y<height;y++)if(Dark(x,y))dark++;if(dark>=height*.985)for(int dx=-2;dx<=2;dx++)if(x+dx>=0 && x+dx<width)xs.Add(x+dx);}
+                int across=vertical?width:height,length=vertical?height:width;
+                int radius=Math.Max(8,Math.Min(24,across/250));
+                int first=Math.Max(0,cut-radius),last=Math.Min(across-1,cut+radius),covered=0;
+                var counts=new int[last-first+1];
+                // Generated lines drift across neighboring pixels. Require a dark
+                // divider somewhere in this narrow band along the entire sheet,
+                // rather than an unrealistically perfect single pixel column.
+                for(int along=0;along<length;along++)
+                {
+                    cancel.ThrowIfCancellationRequested();bool hit=false;
+                    for(int at=first;at<=last;at++)if(vertical?Dark(at,along):Dark(along,at)){counts[at-first]++;hit=true;}
+                    if(hit)covered++;
+                }
+                if(covered<length*.95)return null;
+                // Ignore sparse crossings of perpendicular dividers when
+                // measuring this line, so its removal cannot widen into ink.
+                int lo=last+1,hi=first-1;
+                for(int at=first;at<=last;at++)if(counts[at-first]>=Math.Max(2,length*.10)){lo=Math.Min(lo,at);hi=Math.Max(hi,at);}
+                if(hi<lo)return null;
+                return new[]{Math.Max(0,lo-2),Math.Min(across,hi+3)};
             }
-            for(int n=1;n<rows;n++)
+            var xs=new int[columns+1][];var ys=new int[rows+1][];
+            // Inspect both axes before clearing crossings, including the frame.
+            for(int n=0;n<=columns;n++)xs[n]=Find(true,Math.Min(width-1,width*n/columns));
+            for(int n=0;n<=rows;n++)ys[n]=Find(false,Math.Min(height-1,height*n/rows));
+            foreach(var strip in xs.Where(s=>s!=null))for(int x=strip[0];x<strip[1];x++)for(int y=0;y<height;y++)pixels[(y*width+x)*4+3]=0;
+            foreach(var strip in ys.Where(s=>s!=null))for(int y=strip[0];y<strip[1];y++)for(int x=0;x<width;x++)pixels[(y*width+x)*4+3]=0;
+            var bounds=new Int32Rect[columns*rows];
+            for(int n=0;n<bounds.Length;n++)
             {
-                int cut=height*n/rows;
-                for(int y=Math.Max(0,cut-8);y<Math.Min(height,cut+8);y++)
-                {int dark=0;for(int x=0;x<width;x++)if(Dark(x,y))dark++;if(dark>=width*.985)for(int dy=-2;dy<=2;dy++)if(y+dy>=0 && y+dy<height)ys.Add(y+dy);}
+                int col=n%columns,row=n/columns;
+                int left=xs[col]?[1]??width*col/columns,right=xs[col+1]?[0]??width*(col+1)/columns;
+                int top=ys[row]?[1]??height*row/rows,bottom=ys[row+1]?[0]??height*(row+1)/rows;
+                // Check clipping at the artwork side of each removed divider.
+                // Otherwise clearing a grid line could conceal a crossing glyph.
+                bounds[n]=new Int32Rect(left,top,Math.Max(0,right-left),Math.Max(0,bottom-top));
             }
-            foreach(int x in xs)for(int y=0;y<height;y++)pixels[(y*width+x)*4+3]=0;
-            foreach(int y in ys)for(int x=0;x<width;x++)pixels[(y*width+x)*4+3]=0;
+            return bounds;
         }
         private static void Transform(byte[] pixels,Color color)
         {
