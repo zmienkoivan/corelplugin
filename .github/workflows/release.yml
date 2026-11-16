@@ -157,6 +157,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.CorrectionWindowChecks/VanyaTools.CorrectionWindowChecks.csproj --configuration Release
 
+      - name: Check letter transfer sets
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.LetterTransferChecks/VanyaTools.LetterTransferChecks.csproj --configuration Release
+
       - name: Check saved diagnostic reports
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.DiagnosticReportChecks/VanyaTools.DiagnosticReportChecks.csproj --configuration Release
