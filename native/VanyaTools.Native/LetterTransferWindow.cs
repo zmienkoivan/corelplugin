@@ -209,7 +209,7 @@ namespace VanyaTools.Native
                 var passes=selected?new List<string[]>{_table.SelectedItems.Cast<LetterTransferRow>().Select(r=>r.Letter).Distinct().ToArray()}:LetterTransferRules.MissingPasses(_set);
                 if(passes.Count==0 || passes[0].Length==0)throw new InvalidOperationException(selected?"Выберите строки букв в таблице.":"Весь алфавит уже сохранён в выбранном числе оформлений.");
                 if(String.IsNullOrWhiteSpace(_set.Reference))throw new InvalidOperationException("Сначала добавьте референс стиля из файла или выделения Corel.");
-                var reference=LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,_set.Reference));
+                var reference=LetterTransferImages.RequestReference(LetterTransferImages.Load(LetterTransferStore.Resolve(_directory,_set.Reference)));
                 string model=_model.SelectedIndex==1?"google/nano-banana-pro":"google/nano-banana-2";
                 _sequenceBusy=true;
                 foreach(string[] letters in passes)

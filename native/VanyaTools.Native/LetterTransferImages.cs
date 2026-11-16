@@ -62,6 +62,28 @@ namespace VanyaTools.Native
             if(scale==1)return source;
             var image=new TransformedBitmap(source,new ScaleTransform(scale,scale));image.Freeze();return image;
         }
+        // Keep a single approved style preview below the worker's 1 MiB
+        // inline budget. File-host resolution can stall upstream model runs.
+        internal const int RequestReferenceByteLimit=900*1024;
+        internal static BitmapSource RequestReference(BitmapSource source)
+        {
+            var preview=Reference(source);var original=preview;
+            while(true)
+            {
+                long bytes=PngSize(preview);if(bytes<=RequestReferenceByteLimit)return preview;
+                double factor=Math.Min(.85,Math.Sqrt(RequestReferenceByteLimit/(double)bytes)*.95);
+                int width=Math.Max(1,(int)(preview.PixelWidth*factor)),height=Math.Max(1,(int)(preview.PixelHeight*factor));
+                // Always sample from the original preview, avoiding repeated
+                // resampling and preserving the source file and its alpha.
+                var resized=new TransformedBitmap(original,new ScaleTransform(width/(double)original.PixelWidth,height/(double)original.PixelHeight));
+                resized.Freeze();preview=resized;
+            }
+        }
+        private static long PngSize(BitmapSource image)
+        {
+            var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(image));
+            using(var stream=new MemoryStream()){encoder.Save(stream);return stream.Length;}
+        }
         internal static BitmapSource Compose(IReadOnlyList<BitmapSource> sources)
         {
             if(sources==null || sources.Count<1 || sources.Count>16)throw new ArgumentException("Выберите от 1 до 16 изображений референса.");

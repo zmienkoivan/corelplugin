@@ -28,7 +28,7 @@ namespace VanyaTools.Native
         internal static Window Confirmation(Window owner,BitmapSource reference,string[] letters,string model,string resolution,string prompt,bool retry=false)
         {
             var window=Dialog(owner,"Отправка референса в ИИ");var root=new DockPanel{Margin=new Thickness(12)};window.Content=root;
-            var note=new TextBlock{Text="Отправить это превью в "+model+" через Replicate?\nБуквы: "+String.Join(", ",letters)+" · "+resolution+" · один платный запрос."+
+            var note=new TextBlock{Text="Отправить это превью в "+model+" через Replicate?\nБуквы: "+String.Join(", ",letters)+" · "+resolution+" · один платный запрос.\nПревью референса: "+reference.PixelWidth+" × "+reference.PixelHeight+" px."+
                 (retry?"\nСохранённый запрос будет продолжен. Если предыдущая генерация завершилась ошибкой или была отменена, повтор создаст новый платный запрос.":""),TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,10)};
             DockPanel.SetDock(note,Dock.Top);root.Children.Add(note);
             var footer=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};DockPanel.SetDock(footer,Dock.Bottom);root.Children.Add(footer);

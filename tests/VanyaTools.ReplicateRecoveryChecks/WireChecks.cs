@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
@@ -51,6 +52,14 @@ internal static class WireChecks
             server.IncludePrevious=false;
             server.Reset("reject");path=Path.Combine(root,"reject.png");failed=false;try{Invoke(path);}catch(InvalidOperationException){failed=true;}
             Program.Check(failed && server.Posts==1 && !File.Exists(path+".submitted") && server.Lists==0,"Definite rejection classification changed.");
+            // The compact letter reference must take the same inline path as
+            // small previews, without contacting file storage or altering bytes.
+            string observed=Environment.GetEnvironmentVariable("VANYA_REPLICATE_COMPACT_REFERENCE");
+            byte[] compact=String.IsNullOrEmpty(observed)?new byte[900*1024]:File.ReadAllBytes(observed);
+            File.WriteAllBytes(file,compact);using(var stream=File.OpenRead(file))server.FileHash=ReplicateSubmissionRecovery.Digest(stream);
+            server.Reset("recover");path=Path.Combine(root,"compact-reference.png");Invoke(path);
+            string encoded=Convert.ToString(((System.Collections.IList)server.SeedInput["image_input"])[0]);
+            Program.Check(server.Posts==1 && server.Uploads==0 && server.InlineImage && Convert.FromBase64String(encoded.Substring(encoded.IndexOf(',')+1)).SequenceEqual(compact),"Compact style preview did not stay byte-identical and inline.");
         }
     }
 }

@@ -28,7 +28,7 @@ namespace VanyaTools.Native
         {
             if(letters.Length>4 && resolution!="4K")throw new ArgumentException("Для полного листа букв выберите 4K.");
             if(set.Jobs.Count>=200)throw new InvalidOperationException("История содержит 200 запросов. Создайте новый набор.");
-            var reference=approvedReference??LetterTransferImages.Load(LetterTransferStore.Resolve(directory,set.Reference));
+            var reference=approvedReference??LetterTransferImages.RequestReference(LetterTransferImages.Load(LetterTransferStore.Resolve(directory,set.Reference)));
             string key=LetterTransferImages.Key(reference);
             var job=new LetterTransferJob{Letters=letters.ToArray(),Model=model,Resolution=resolution,Key=key};
             job.Reference="requests/"+job.Id+"-reference.png";job.Output="requests/"+job.Id+"-output.png";job.Prompt=Prompt(set,letters,key);

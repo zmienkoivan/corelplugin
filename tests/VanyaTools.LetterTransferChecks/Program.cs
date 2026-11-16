@@ -19,7 +19,7 @@ internal static class Program
         _root=Path.Combine(Path.GetTempPath(),"Vanya-Letter-Checks-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(_root);
         try
         {
-            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();Layouts();Preparation();LargeReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();
+            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();Layouts();Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();
             Console.WriteLine("Letter transfer checks passed: "+_checks+". Offline checks; no Replicate/Corel requests.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
@@ -184,6 +184,36 @@ internal static class Program
         Check(LetterTransferImages.LoadReference(path).PixelHeight==preview.PixelHeight,"Preview kept source file locked.");
         string small=Path.Combine(_root,"small-reference.png");LetterTransferImages.Save(Solid(100,75,Colors.Blue),small);
         Check(LetterTransferImages.LoadReference(small).PixelWidth==100,"Small reference was enlarged.");
+    }
+    private static void RequestReference()
+    {
+        const int width=1085,height=1305;var data=new byte[width*height*4];var random=new Random(974);
+        random.NextBytes(data);for(int p=3;p<data.Length;p+=4)data[p]=255;
+        var source=BitmapSource.Create(width,height,96,96,PixelFormats.Bgra32,null,data,width*4);source.Freeze();
+        var preview=LetterTransferImages.RequestReference(source);
+        string path=Path.Combine(_root,"request-reference.png");LetterTransferImages.Save(preview,path);
+        Check(new FileInfo(path).Length<=LetterTransferImages.RequestReferenceByteLimit,"Large style reference still requires remote file-host resolution.");
+        Check(preview.PixelWidth<width && preview.PixelHeight<height && Math.Abs(preview.PixelWidth/(double)preview.PixelHeight-width/(double)height)<.005,"Compact style preview changed aspect or was not reduced.");
+        Check(data.SequenceEqual(LetterTransferImages.Pixels(source)),"Compact style preview modified original pixels.");
+        var small=Solid(30,40,Colors.Transparent);Check(ReferenceEquals(small,LetterTransferImages.RequestReference(small)),"Small transparent preview was changed.");
+        var set=Printable();set.Reference="reference.png";string directory=LetterTransferStore.Create(Path.Combine(_root,"compact-reference"),set);
+        LetterTransferImages.Save(source,LetterTransferStore.Resolve(directory,set.Reference));
+        byte[] before=File.ReadAllBytes(LetterTransferStore.Resolve(directory,set.Reference));
+        var job=LetterTransferAi.Create(directory,set,new[]{"А","Ё"},"google/nano-banana-2","2K",preview);
+        var saved=LetterTransferImages.Load(LetterTransferStore.Resolve(directory,job.Reference));
+        Check(LetterTransferImages.Pixels(saved).SequenceEqual(LetterTransferImages.Pixels(preview)),"Saved request differs from approved compact preview.");
+        Check(before.SequenceEqual(File.ReadAllBytes(LetterTransferStore.Resolve(directory,set.Reference))),"Saved full reference changed during compact request preparation.");
+        string observed=Environment.GetEnvironmentVariable("VANYA_LETTER_LARGE_STYLE_REFERENCE");
+        if(!String.IsNullOrEmpty(observed))
+        {
+            var actual=LetterTransferImages.Load(observed);var pixels=LetterTransferImages.Pixels(actual);var ready=LetterTransferImages.RequestReference(actual);
+            string export=Environment.GetEnvironmentVariable("VANYA_LETTER_LARGE_STYLE_EXPORT");
+            string target=String.IsNullOrEmpty(export)?Path.Combine(_root,"observed-compact-preview.png"):export;
+            LetterTransferImages.Save(ready,target);
+            Check(new FileInfo(target).Length<=LetterTransferImages.RequestReferenceByteLimit,"Observed reference still exceeds inline budget.");
+            Check(pixels.SequenceEqual(LetterTransferImages.Pixels(actual)),"Observed reference was mutated.");
+            Console.WriteLine("Prepared style preview: "+ready.PixelWidth+"x"+ready.PixelHeight+", "+new FileInfo(target).Length+" bytes.");
+        }
     }
     private static void Images()
     {
