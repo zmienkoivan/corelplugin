@@ -18,6 +18,8 @@
     <Compile Include="../../native/VanyaTools.Native/PatternBottle.cs" Link="PatternBottle.cs" />
     <Compile Include="../../native/VanyaTools.Native/PatternMotifRotation.cs" Link="PatternMotifRotation.cs" />
     <Compile Include="../../native/VanyaTools.Native/PatternPreviewSurface.cs" Link="PatternPreviewSurface.cs" />
+    <Compile Include="../../native/VanyaTools.Native/PatternPreviewBottleGrid.cs" Link="PatternPreviewBottleGrid.cs" />
+    <Compile Include="../../native/VanyaTools.Native/PatternPreviewBottleEditing.cs" Link="PatternPreviewBottleEditing.cs" />
     <Compile Include="../../native/VanyaTools.Native/PatternPreviewMotifEditing.cs" Link="PatternPreviewMotifEditing.cs" />
     <Compile Include="../../native/VanyaTools.Native/PatternSilhouette.cs" Link="PatternSilhouette.cs" />
     <Compile Include="../../native/VanyaTools.Native/AlphaMaskVectorizer.cs" Link="AlphaMaskVectorizer.cs" />

@@ -25,7 +25,7 @@ internal static class Program
     [STAThread] private static int Main()
     {
         string previous=Environment.GetEnvironmentVariable("TEMP"),temporary=System.IO.Path.Combine(System.IO.Path.GetTempPath(),"Vanya-pattern-ui-"+Guid.NewGuid().ToString("N"));System.IO.Directory.CreateDirectory(temporary);Environment.SetEnvironmentVariable("TEMP",temporary);
-        try{WindowActions();RetryButton();ClicksAndCellColors();MultipleInsertion();Console.WriteLine("Pattern window checks passed: "+_checks+". Synthetic WPF and managed Corel stand-in only; no network or live document.");return 0;}
+        try{WindowActions();RetryButton();ClicksAndCellColors();MultipleInsertion();BottleEditorChecks.Run(Check);Console.WriteLine("Pattern window checks passed: "+_checks+". Synthetic WPF and managed Corel stand-in only; no network or live document.");return 0;}
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
         finally{Environment.SetEnvironmentVariable("TEMP",previous);System.IO.Directory.Delete(temporary,true);}
     }

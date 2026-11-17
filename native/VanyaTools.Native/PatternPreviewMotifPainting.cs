@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
@@ -16,19 +16,21 @@ namespace VanyaTools.Native
         internal bool SupportsMotifEditing=>CanEditMotifs;
         internal event Action<string> MotifNotice;
         internal void SetMotifTool(int tool)
-        {_motifTool=tool;_rotatingMotif=false;ReleaseMouseCapture();ClearMotifSelection();}
+        {_motifTool=tool;_rotatingMotif=false;ReleaseMouseCapture();if(tool==3)ClearMotifSelection();}
 
         internal void ClearMotifs()
         {
             if(!CanEditMotifs)return;
-            foreach(string key in _motifKeys.Where(k=>k!=null))_removedMotifs.Add(key);
+            if(!CommitMotifItems(new List<PatternPlacement>()))return;
+            foreach(string key in _motifKeys.Concat(_automaticMotifs.Select(MotifKey)).Where(k=>k!=null))_removedMotifs.Add(key);
+            _anchors.Clear();
             _addedMotifs.Clear();_motifTurns.Clear();_selectedMotif=null;_baseMotifs=Array.Empty<PatternPlacement>();_motifKeys=Array.Empty<string>();_draft.Items.Clear();
             InvalidateVisual();MotifSelectionChanged?.Invoke();MotifNotice?.Invoke("Раскладка очищена локально. Добавляйте основные гальки и заполнители кликами.");
         }
         internal void RestoreAutomaticMotifs()
         {
             if(!CanEditMotifs)return;
-            _addedMotifs.Clear();_removedMotifs.Clear();_motifTurns.Clear();_selectedMotif=null;
+            _addedMotifs.Clear();_removedMotifs.Clear();_motifTurns.Clear();_anchors.Clear();_selectedMotif=null;
             _draft.Items=_automaticMotifs.Select(PatternMotifRotation.Copy).ToList();UpdateMotifEdits();InvalidateVisual();
             MotifNotice?.Invoke("Автоматическая раскладка восстановлена.");
         }
@@ -44,10 +46,19 @@ namespace VanyaTools.Native
             return -1;
         }
 
+        private bool TryMotifClick(Point screen)
+        {
+            if(!CanEditMotifs)return false;
+            if(_motifTool!=3 && HitMotifHandle(screen)){StartMotifTurn(screen);return true;}
+            if(_motifTool==0)return false;
+            PaintMotif(screen);
+            return true;
+        }
+
         private bool PaintMotif(Point screen)
         {
             if(!CanEditMotifs || _scale<=0)return false;
-            var view=_viewport.World(screen);if(!_frame.Geometry.FillContains(view))return false;
+            var view=_viewport.World(screen);if(!(_draft.BottleCutView??_frame.Geometry).FillContains(view))return false;
             var point=new PatternPoint(view.X,_frame.Height-view.Y);
             if(_motifTool==3)return EraseMotif(point);
             return AddMotif(point,_motifTool==2);
@@ -56,23 +67,44 @@ namespace VanyaTools.Native
         private bool EraseMotif(PatternPoint point)
         {
             int found=FindMotif(point,false);if(found<0)return false;string key=_motifKeys[found];
-            _removedMotifs.Add(key);_addedMotifs.RemoveAll(p=>p.Key==key);_motifTurns.Remove(key);
+            if(_frame.Bottle!=null)
+            {
+                var saved=_addedMotifs.ToArray();bool anchored=_anchors.Remove(key),removed=_removedMotifs.Add(key);_addedMotifs.RemoveAll(p=>p.Key==key);
+                if(!ReflowBottle(null)){_addedMotifs.Clear();_addedMotifs.AddRange(saved);if(anchored)_anchors.Add(key);if(removed)_removedMotifs.Remove(key);return false;}
+                _motifTurns.Remove(key);_selectedMotif=null;InvalidateVisual();MotifSelectionChanged?.Invoke();MotifNotice?.Invoke("Галька удалена. Соседняя сетка перестроена.");return true;
+            }
             var kept=Enumerable.Range(0,_baseMotifs.Length).Where(i=>_motifKeys[i]!=key).ToArray();
-            _baseMotifs=kept.Select(i=>_baseMotifs[i]).ToArray();_draft.Items=kept.Select(i=>_draft.Items[i]).ToList();_motifKeys=kept.Select(i=>_motifKeys[i]).ToArray();
-            _selectedMotif=null;PatternHeroFill.LimitFillerSizes(_draft);InvalidateVisual();MotifSelectionChanged?.Invoke();MotifNotice?.Invoke("Галька удалена. Остальные ячейки сохранены.");return true;
+            if(!CommitMotifItems(kept.Select(i=>_draft.Items[i]).ToList()))return false;
+            _removedMotifs.Add(key);_addedMotifs.RemoveAll(p=>p.Key==key);_motifTurns.Remove(key);
+            _baseMotifs=kept.Select(i=>_baseMotifs[i]).ToArray();_motifKeys=kept.Select(i=>_motifKeys[i]).ToArray();
+            _selectedMotif=null;InvalidateVisual();MotifSelectionChanged?.Invoke();MotifNotice?.Invoke("Галька удалена. Остальные ячейки сохранены.");return true;
         }
 
         private bool AddMotif(PatternPoint point,bool filler)
         {
+            if(_frame.Bottle!=null)
+            {
+                var uv=_frame.Bottle.Project(new PatternPoint(point.X+_frame.BottleOrigin.X,point.Y+_frame.BottleOrigin.Y));
+                point=PatternBottleLayout.OnFrame(_frame,_frame.Bottle.Wrap(uv.X),uv.Y);
+            }
             var choices=Enumerable.Range(0,_draft.Motifs.Length).Where(i=>_draft.Motifs[i].IsFiller==filler).ToArray();
             if(choices.Length==0){MotifNotice?.Invoke(filler?"Добавьте в набор мини-заполнители. Основной принт не будет уменьшен вместо них.":"Добавьте основные рисунки в набор.");return false;}
+            if(_frame.Bottle!=null)
+            {
+                if(_draft.Reserve?.FillContains(new Point(point.X,point.Y))==true){MotifNotice?.Invoke("Здесь свободная зона главного логотипа. Выберите другое место.");return false;}
+                return AddBottlePin(point,choices,filler);
+            }
             if(_draft.Reserve?.FillContains(new Point(point.X,point.Y))==true || FindMotif(point,false)>=0)
             {MotifNotice?.Invoke("Здесь уже есть рисунок. Выберите свободное место или удалите гальку ластиком.");return false;}
             double desired=filler?PatternHeroFill.FillerSizeAt(_draft,point):_draft.Options.SizeMm;
             if(desired<.1)return false;
             // Reserve the automatic poses too: resetting a turned neighbour must
             // remain possible without colliding with a newly added print.
-            var obstacles=_draft.Items.Concat(_baseMotifs).Select(p=>_draft.Motifs[p.Motif].Footprint.At(p)).ToArray();
+            var obstacles=_draft.Items.Concat(_baseMotifs).SelectMany(p=>
+            {
+                var hull=_draft.Motifs[p.Motif].Footprint.At(p);
+                return _frame.Bottle==null?new[]{hull}:new[]{hull,hull.Select(v=>PatternBottleLayout.TurnPoint(_frame,v,-1)).ToArray(),hull.Select(v=>PatternBottleLayout.TurnPoint(_frame,v,1)).ToArray()};
+            }).ToArray();
             var polygon=new List<PatternPoint>{new PatternPoint(point.X-desired,point.Y-desired),new PatternPoint(point.X+desired,point.Y-desired),new PatternPoint(point.X+desired,point.Y+desired),new PatternPoint(point.X-desired,point.Y+desired)};
             foreach(var hull in obstacles)
             {
@@ -86,6 +118,7 @@ namespace VanyaTools.Native
             for(int pass=0;pass<choices.Length;pass++)
             {
                 int index=choices[(_nextMotif+pass)%choices.Length];var asset=_draft.Motifs[index];double angle=_draft.Options.Angle;
+                if(_frame.Bottle!=null){var uv=_frame.Bottle.Project(new PatternPoint(point.X+_frame.BottleOrigin.X,point.Y+_frame.BottleOrigin.Y));angle+=_frame.Bottle.RotationAt(uv.X);}
                 var rotated=PatternTransform.RotatedSize(asset.Size.X,asset.Size.Y,angle);
                 var original=new PatternPlacement{Motif=index,Angle=angle,Size=desired*Math.Max(rotated.X,rotated.Y)/Math.Max(asset.Size.X,asset.Size.Y),Center=point,Cell=polygon.ToArray()};
                 var fitted=PatternMotifRotation.Fit(original,asset.Footprint,_draft.Options,angle);if(fitted==null)continue;
@@ -97,6 +130,7 @@ namespace VanyaTools.Native
                     foreach(var copy in copies)
                     {
                         var pose=PatternMotifRotation.Resize(copy,asset.Footprint,candidate);var hull=asset.Footprint.At(pose);var silhouette=PatternSilhouette.At(asset,pose);
+                        if(_frame.Bottle!=null && !PatternBottleLayout.FitsOnRing(_frame,_draft.Motifs,pose,_draft.Items,_draft.Options.GapMm,filler || _draft.BottleWhole))return false;
                         if(clip!=null && clip.FillContainsWithDetail(silhouette,.05,ToleranceType.Absolute)!=IntersectionDetail.FullyContains)return false;
                         if(_draft.Reserve!=null && _draft.Reserve.FillContainsWithDetail(silhouette,.05,ToleranceType.Absolute)!=IntersectionDetail.Empty)return false;
                         foreach(var obstacle in obstacles)if(!PatternMotifRotation.Separated(hull,obstacle,_draft.Options.GapMm))return false;
@@ -111,9 +145,10 @@ namespace VanyaTools.Native
                 }
                 double actual=scale*Math.Max(asset.Size.X,asset.Size.Y);if(actual<Math.Max(.1,desired*(filler ? .12 : .3)))continue;
                 string key="manual/"+(++_manualMotifId);var poses=copies.Select(p=>PatternMotifRotation.Resize(p,asset.Footprint,scale)).ToArray();
+                if(!CommitMotifItems(_draft.Items.Concat(poses).ToList()))continue;
                 foreach(var pose in poses)_addedMotifs.Add(new AddedMotif{Key=key,Pose=PatternMotifRotation.Copy(pose)});
-                _baseMotifs=_baseMotifs.Concat(poses.Select(PatternMotifRotation.Copy)).ToArray();_motifKeys=_motifKeys.Concat(poses.Select(_=>key)).ToArray();_draft.Items.AddRange(poses);
-                _nextMotif=(_nextMotif+pass+1)%choices.Length;_selectedMotif=null;PatternHeroFill.LimitFillerSizes(_draft);InvalidateVisual();MotifSelectionChanged?.Invoke();
+                _baseMotifs=_baseMotifs.Concat(poses.Select(PatternMotifRotation.Copy)).ToArray();_motifKeys=_motifKeys.Concat(poses.Select(_=>key)).ToArray();
+                _nextMotif=(_nextMotif+pass+1)%choices.Length;_selectedMotif=null;InvalidateVisual();MotifSelectionChanged?.Invoke();
                 MotifNotice?.Invoke(filler?"Добавлен небольшой заполнитель из готового набора.":"Добавлена основная галька из готового набора.");return true;
             }
             MotifNotice?.Invoke("Рисунок не помещается с заданным зазором. Щёлкните в более свободном месте.");return false;
@@ -121,7 +156,7 @@ namespace VanyaTools.Native
 
         private IEnumerable<PatternPlacement> PlacementCopies(PatternPlacement item,PatternAsset asset)
         {
-            if(!_draft.Options.Repeat){yield return item;yield break;}
+            if(_frame.Bottle!=null || !_draft.Options.Repeat){yield return item;yield break;}
             double angle=_draft.Options.Angle*Math.PI/180,c=Math.Cos(angle),s=Math.Sin(angle),width=_draft.Options.RepeatWidthMm,height=_draft.Options.RepeatHeightMm;
             // Enumerate the inverse-rotated frame, with a bounded budget for
             // very small periods. A partial rapport must never be accepted.

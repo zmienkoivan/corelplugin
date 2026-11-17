@@ -3,5 +3,6 @@
 <ItemGroup><Reference Include="System.Web.Extensions" />
 <Compile Include="../../native/VanyaTools.Updater/ReplicateSubmissionRecovery.cs" Link="ReplicateSubmissionRecovery.cs" />
 <Compile Include="../../native/VanyaTools.Updater/ReplicatePredictionLifetime.cs" Link="ReplicatePredictionLifetime.cs" />
+<Compile Include="../../native/VanyaTools.Updater/ReplicateStatusPolling.cs" Link="ReplicateStatusPolling.cs" />
 <ProjectReference Include="../../native/VanyaTools.Updater/VanyaTools.Updater.csproj" />
 </ItemGroup></Project>

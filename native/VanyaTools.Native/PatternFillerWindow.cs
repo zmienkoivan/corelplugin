@@ -188,7 +188,7 @@ namespace VanyaTools.Native
                 {
                     _request = request;
                     SetBusy(true, analysis);
-                    await Task.Run(()=>saved.Run(_token,resume,request.Token),request.Token);
+                    await Task.Run(()=>saved.Run(_token,resume,request.Token,Progress),request.Token);
                     if (analysis)
                     {
                         var proposed = await Task.Run(saved.ReadAnalysis,request.Token);
@@ -236,6 +236,22 @@ namespace VanyaTools.Native
                 if(_pending!=null && !_pending.CanResume){_pending.Finish();_pending=null;}
                 if (!_closed) SetBusy(false, analysis);
             }
+        }
+
+        private void Progress(string code)
+        {
+            Dispatcher.BeginInvoke(new Action(()=>
+            {
+                if(_closed || _request==null)return;
+                string stage=code=="retrying-status"?"Replicate временно недоступен. Автоматически проверяю тот же запрос…":
+                    code=="recovered-status"?"Статус сохранённого запроса получен из истории…":
+                    code=="processing"?"Модель выполняет сохранённый запрос…":
+                    code=="downloading"?"Скачиваю готовый результат…":
+                    code=="auto-cancelling"?"Истёк лимит ожидания. Проверяю отмену запроса…":
+                    code=="cancelling"?"Отменяю сохранённый запрос…":null;
+                if(stage==null)return;_stage=stage;
+                Report(OperationTiming.Display(_stage,_elapsed.Elapsed,_timingKey),false);
+            }));
         }
 
         private void SetBusy(bool busy, bool analysis)

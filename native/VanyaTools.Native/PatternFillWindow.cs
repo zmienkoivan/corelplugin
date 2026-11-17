@@ -17,7 +17,7 @@ namespace VanyaTools.Native
         internal PatternFillOptions Layout = new PatternFillOptions();
         internal double Allowance, HeroSize, HeroAngle;
         internal double HeroX = 50, HeroY = 50, HeroGap = 5;
-        internal bool UseHero = true, BottleWhole, BottleCenterMarks;
+        internal bool UseHero = true, BottleWhole, BottleCenterMarks, AlignHeroVertical;
         internal double BottleTop = 70, BottleBottom = 70, BottleHeight = 100;
     }
 
@@ -67,7 +67,7 @@ namespace VanyaTools.Native
             _frame = session.BottleMode ? BottleFrame(initial) : session.Seam;
             _seed = initial.Layout.Seed;
             Title = session.BottleMode ? "Паттерн для бутылки · Vanya Tools" : "Паттерн по контуру · Vanya Tools";
-            Width = Math.Min(1180, SystemParameters.WorkArea.Width - 28);
+            Width = Math.Min(session.BottleMode?1280:1180, SystemParameters.WorkArea.Width - 28);
             Height = Math.Min(840, SystemParameters.WorkArea.Height - 28);
             MinWidth = 680; MinHeight = 480; WindowStartupLocation = WindowStartupLocation.CenterOwner;
             DockerTheme.Apply(this);
@@ -112,19 +112,25 @@ namespace VanyaTools.Native
             }
             toolButtons[initialTool].IsChecked=true;
             motifTools.Children.Add(Button("Очистить",(_,__)=>_preview.ClearMotifs()));
-            motifTools.Children.Add(Button("Вернуть авто",(_,__)=>_preview.RestoreAutomaticMotifs()));
+            var restoreAuto=Button("Вернуть авто",(_,__)=>_preview.RestoreAutomaticMotifs());restoreAuto.ToolTip="Сбросить ручные гальки и опоры; вернуть автоматическую раскладку.";motifTools.Children.Add(restoreAuto);
             motifTools.ToolTip="Клики размещают рисунки из готового набора без ИИ. Основные гальки — синий контур; упрощённые заполнители — зелёный, не больше четверти основного принта. Ластик удаляет рисунок под курсором. В рапорте вместе меняются соответствующие повторения. Цветные контуры видны только в редакторе.";
             DockPanel.SetDock(motifTools,Dock.Top);previewPanel.Children.Add(motifTools);
-            _preview.MotifNotice+=text=>ShowMessage(text,false);
+            var clickHint=new TextBlock {Text="Выбор / поворот: выберите рисунок и тяните кружок. + Заполнитель: клик создаёт мини-ячейку и перестраивает соседей.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,5)};
+            DockPanel.SetDock(clickHint,Dock.Top);previewPanel.Children.Add(clickHint);
+            _preview.MotifNotice+=text=>{clickHint.Text=text;ShowMessage(text,false);};
             var selectedTools = new DockPanel { Margin = new Thickness(0,0,0,5), Visibility = Visibility.Collapsed };
             var resetSelected = Button("Вернуть автоповорот", (_,__) => _preview.ResetSelectedMotif());
             DockPanel.SetDock(resetSelected,Dock.Right);selectedTools.Children.Add(resetSelected);
             var clearSelected = Button("Снять выбор", (_,__) => _preview.ClearMotifSelection());
             DockPanel.SetDock(clearSelected,Dock.Right);selectedTools.Children.Add(clearSelected);
+            bool syncAnchor=false;
+            var anchor=new CheckBox {Content="Опорная · красный контур",VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(6,0,8,0)};
+            DockPanel.SetDock(anchor,Dock.Right);selectedTools.Children.Add(anchor);
+            anchor.Checked+=(_,__)=>{if(!syncAnchor)_preview.SetSelectedAnchor(true);};anchor.Unchecked+=(_,__)=>{if(!syncAnchor)_preview.SetSelectedAnchor(false);};
             var selectedText = new TextBlock { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
             selectedTools.Children.Add(selectedText);DockPanel.SetDock(selectedTools,Dock.Top);previewPanel.Children.Add(selectedTools);
-            selectedTools.ToolTip = "Оранжевый кружок поворачивает выбранный принт внутри его ячейки. При необходимости рисунок уменьшается, чтобы сохранить зазор. В рапорте меняются соответствующие повторения. Escape отменяет текущее перетаскивание. При смене параметров раскладки или состава набора ручные правки сбрасываются.";
-            _preview.MotifSelectionChanged += () => { motifTools.Visibility = _preview.SupportsMotifEditing ? Visibility.Visible : Visibility.Collapsed; selectedTools.Visibility = _preview.HasSelectedMotif ? Visibility.Visible : Visibility.Collapsed; selectedText.Text = _preview.SelectedMotifDescription; if (!_rendering && Draft != null) _apply.IsEnabled = Draft.Items.Count > 0 || Draft.Hero != null; };
+            selectedTools.ToolTip = "Оранжевый кружок поворачивает выбранный принт внутри его ячейки. При необходимости рисунок уменьшается, чтобы сохранить зазор. В рапорте меняются соответствующие повторения. Escape отменяет текущее перетаскивание. Опорные гальки сохраняются при смене варианта. Изменение размеров бутылки или состава набора сбрасывает опоры.";
+            _preview.MotifSelectionChanged += () => { motifTools.Visibility = _preview.SupportsMotifEditing ? Visibility.Visible : Visibility.Collapsed; selectedTools.Visibility = _preview.HasSelectedMotif ? Visibility.Visible : Visibility.Collapsed; selectedText.Text = _preview.SelectedMotifDescription; syncAnchor=true;anchor.IsChecked=_preview.SelectedMotifAnchored;syncAnchor=false;resetSelected.IsEnabled=!_preview.SelectedMotifAnchored; if (!_rendering && Draft != null) _apply.IsEnabled = Draft.Items.Count > 0 || Draft.Hero != null; };
             previewPanel.Children.Add(_preview);
             _preview.ViewChanged += () =>
             {
@@ -154,6 +160,9 @@ namespace VanyaTools.Native
                 var bottle = DockerLayout.ToolGroup("Размеры бутылки",
                     "Измерьте диаметры на границах печати и высоту кольца вдоль оси бутылки. Оранжевые пунктиры показывают два края одного оборота: при наклейке они сходятся в один стык.");
                 settings.Children.Add(bottle);
+                var bic=Button("BIC · Ø20 × 64 мм",(_,__)=>ApplyBicPreset());
+                bic.ToolTip="Галька: рисунки 17 мм, зазор 2 мм; логотип вертикально, высота 35 мм, свободная зона 3 мм. Все размеры можно изменить.";
+                bottle.Children.Add(bic);
                 _bottleTop = AddField(bottle, "Диаметр сверху, мм", 1, 1000, initial.BottleTop);
                 _bottleTaper = new CheckBox { Content = "Конусная бутылка", IsChecked = initial.BottleTop != initial.BottleBottom,
                     Margin = new Thickness(0, 0, 0, 4) };
@@ -231,7 +240,8 @@ namespace VanyaTools.Native
             _heroSize = AddField(_heroFields, "Размер, мм", .5, 2000, initial.HeroSize > 0 ? initial.HeroSize : suggested);
             _heroX = AddField(_heroFields, session.BottleMode ? "От стыка по окружности, %" : "От левого края, %", 0, 100, initial.HeroX);
             _heroY = AddField(_heroFields, "От верхнего края, %", 0, 100, initial.HeroY);
-            _heroAngle = AddField(_heroFields, "Поворот главного элемента, °", -360, 360, initial.HeroAngle);
+            _heroAngle = AddField(_heroFields, "Поворот главного элемента, °", -360, 360,
+                initial.AlignHeroVertical && session.Hero!=null?PatternBottlePresets.VerticalAngle(session.Hero.Size):initial.HeroAngle);
             _heroGap = AddField(_heroFields, "Свободная зона, мм", 0, 1000, initial.HeroGap);
             _heroFields.Children.Add(Button("По центру", (_, __) => SetPosition(50, 50)));
             _preview.HeroPositionChanged += SetPosition;
@@ -257,6 +267,15 @@ namespace VanyaTools.Native
             _ready = true;
             ShowMessage("Готовлю предпросмотр…", false);
             QueuePreview();
+        }
+
+        private void ApplyBicPreset()
+        {
+            var preset=PatternBottlePresets.Bic();
+            _bottleTop.Set(preset.BottleTop);_bottleBottom.Set(preset.BottleBottom);_bottleHeight.Set(preset.BottleHeight);_bottleTaper.IsChecked=false;
+            _mode.SelectedIndex=(int)preset.Layout.Mode;_size.Set(preset.Layout.SizeMm);_gap.Set(preset.Layout.GapMm);
+            _heroSize.Set(preset.HeroSize);_heroAngle.Set(_session.Hero==null?0:PatternBottlePresets.VerticalAngle(_session.Hero.Size));_heroGap.Set(preset.HeroGap);
+            _heroX.Set(50);_heroY.Set(50);_useHero.IsChecked=_session.Hero!=null;QueuePreview();
         }
 
         private void ApplyCurrent()
@@ -442,7 +461,7 @@ namespace VanyaTools.Native
                 var motifs = variants.ToArray();
                 PatternLayoutGuides guides;
                 List<PatternPlacement> items;
-                if (motifs.Length == 0 && options.Texture && frame.Bottle == null)
+                if (motifs.Length == 0 && options.Texture)
                 { items=new List<PatternPlacement>();guides=null; }
                 else if (frame.Bottle != null)
                 {
@@ -471,7 +490,7 @@ namespace VanyaTools.Native
             }
 
             var draft = new PatternDraft { Frame = frame, Options = options, Motifs = _layoutMotifs, MirroredIds = mirroredIds,
-                Items = _layoutItems, Allowance = settings.Allowance,
+                Items = _layoutItems, Allowance = settings.Allowance, BottleWhole=settings.BottleWhole,
                 CellGuides = _layoutCellGuides, RepeatGuides = _layoutRepeatGuides };
             if (useHero) PatternFillService.PrepareSilhouette(_session.Hero);
             if (frame.Bottle != null)

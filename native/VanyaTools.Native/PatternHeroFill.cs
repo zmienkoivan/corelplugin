@@ -71,8 +71,14 @@ namespace VanyaTools.Native
 
         internal static double FillerSizeAt(PatternDraft draft,PatternPoint point)
         {
-            var nearest=draft.Items.Where(p=>!draft.Motifs[p.Motif].IsFiller)
-                .OrderBy(p=>Math.Pow(p.Center.X-point.X,2)+Math.Pow(p.Center.Y-point.Y,2)).FirstOrDefault();
+            PatternPlacement nearest=null;double best=Double.PositiveInfinity;
+            foreach(var item in draft.Items.Where(p=>!draft.Motifs[p.Motif].IsFiller))
+            {
+                double Distance(PatternPoint p)=>Math.Pow(p.X-point.X,2)+Math.Pow(p.Y-point.Y,2);
+                double distance=Distance(item.Center);
+                if(draft.Frame?.Bottle!=null)distance=Math.Min(distance,Math.Min(Distance(PatternBottleLayout.TurnPoint(draft.Frame,item.Center,-1)),Distance(PatternBottleLayout.TurnPoint(draft.Frame,item.Center,1))));
+                if(distance<best){best=distance;nearest=item;}
+            }
             double main=nearest==null?(draft.Hero?.Size??draft.Options.SizeMm):Longest(draft.Motifs[nearest.Motif],nearest);
             return Math.Min(12,main*.25);
         }

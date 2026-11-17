@@ -78,6 +78,7 @@ namespace VanyaTools.Native
         internal PatternPlacement Hero;
         internal Geometry Reserve, CellGuides, RepeatGuides, CenterMarks, BottleCutView, BottleSeamGuide;
         internal double Allowance;
+        internal bool BottleWhole;
     }
 
     internal sealed class PatternFillService

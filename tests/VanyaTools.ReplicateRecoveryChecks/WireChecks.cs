@@ -78,6 +78,17 @@ internal static class WireChecks
                 else
                     Program.Check(error is TimeoutException && error.Message.Contains("подтвердил автоматическую отмену") && saved.Contains("canceled") && server.Cancels==(mode=="server-expired"?0:1),"Expired request was not canceled and confirmed: "+mode);
             }
+            foreach(string mode in new[]{"status-history","status-history-page2","poll-outage-cancel"})
+            {
+                server.Reset(mode);path=Path.Combine(root,mode+".png");var state=server.Live("processing");state["created_at"]=DateTime.UtcNow.ToString("o");
+                File.WriteAllText(path+".prediction.json",new JavaScriptSerializer().Serialize(state));
+                server.CancelOnRead=mode=="poll-outage-cancel"?path+".cancel":null;
+                object output=null;Exception error=null;try{output=Invoke(path,true);}catch(Exception failure){error=failure;}
+                Program.Check(server.Posts==0 && server.Uploads==0,"Status recovery submitted another model or uploaded a reference: "+mode);
+                if(mode=="poll-outage-cancel")Program.Check(error is OperationCanceledException && server.Cancels==1 && File.ReadAllText(path+".prediction.json").Contains("canceled"),"Cancel during a status outage failed to confirm the saved job's cancellation.");
+                else Program.Check(error==null && Convert.ToString(output).EndsWith("result.png") && server.Lists==(mode=="status-history-page2"?2:1) && File.ReadAllText(path+".prediction.json").Contains("succeeded"),"A failed direct GET did not recover the same ID from history: "+mode);
+            }
+            server.CancelOnRead=null;
             // The full-size print must bypass file hosting without resizing or
             // recompressing the approved source, just like a compact preview.
             byte[] restoration=new byte[2287350];for(int n=0;n<restoration.Length;n++)restoration[n]=(byte)(n%251);
@@ -104,7 +115,7 @@ internal sealed class LoopbackFactory:IWebRequestCreate
 internal sealed class FakeReplicateServer:IDisposable
 {
     private readonly TcpListener _listener;private readonly Thread _thread;private volatile bool _stop;
-    internal int Port,Posts,Lists,Uploads,MetadataReads,Cancels,PredictionReads;internal string AutoCancelHeader;internal bool ValidJson,InlineImage;internal string FileHash;internal Dictionary<string,object> SeedInput;private string _mode;internal bool IncludePrevious;internal string Mode{set{_mode=value;}}
+    internal int Port,Posts,Lists,Uploads,MetadataReads,Cancels,PredictionReads;internal string CancelOnRead;internal string AutoCancelHeader;internal bool ValidJson,InlineImage;internal string FileHash;internal Dictionary<string,object> SeedInput;private string _mode;internal bool IncludePrevious;internal string Mode{set{_mode=value;}}
     internal FakeReplicateServer(){_listener=new TcpListener(IPAddress.Loopback,0);_listener.Start();Port=((IPEndPoint)_listener.LocalEndpoint).Port;_thread=new Thread(Serve){IsBackground=true};_thread.Start();}
     internal void Reset(string mode){_mode=mode;Posts=Lists=Uploads=MetadataReads=Cancels=PredictionReads=0;AutoCancelHeader=null;SeedInput=null;ValidJson=InlineImage=false;}
     internal Dictionary<string,object> Live(string status)
@@ -147,7 +158,13 @@ internal sealed class FakeReplicateServer:IDisposable
             else body=Live(_mode=="cancel-race"?"succeeded":(_mode=="cancel-pending" || _mode=="cancel-poll-fails")?"processing":"canceled");
         }
         else if(request[0]=="GET" && request[1]=="/v1/predictions/live-job")
-        {PredictionReads++;if(_mode=="cancel-poll-fails" && Cancels>0)code=503;body=Live(_mode=="finished-before"?"succeeded":_mode=="server-expired" || (_mode=="cancel-pending" || _mode=="cancel-500-done") && Cancels>0?"canceled":"processing");}
+        {PredictionReads++;if(_mode.StartsWith("status-history") || _mode=="poll-outage-cancel" && Cancels==0)code=503;if(CancelOnRead!=null && Cancels==0)File.WriteAllText(CancelOnRead,"cancel");if(_mode=="cancel-poll-fails" && Cancels>0)code=503;body=Live(_mode=="finished-before"?"succeeded":_mode=="server-expired" || (_mode=="cancel-pending" || _mode=="cancel-500-done") && Cancels>0?"canceled":"processing");}
+        else if(request[0]=="GET" && _mode.StartsWith("status-history") && request[1].StartsWith("/v1/predictions"))
+        {
+            Lists++;var wrong=Live("succeeded");wrong["id"]="different-job";
+            bool more=_mode=="status-history-page2" && !request[1].Contains("cursor=");
+            body=new Dictionary<string,object>{{"results",more?new object[]{wrong}:new object[]{wrong,Live("succeeded")}},{"next",more?"https://api.replicate.com/v1/predictions?cursor=next":null}};
+        }
         else if(request[0]=="GET" && request[1].StartsWith("/v1/predictions"))
         {
             Lists++;var items=new List<object>();if(_mode!="missing" && SeedInput!=null)items.Add(new Dictionary<string,object>{

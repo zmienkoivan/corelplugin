@@ -356,7 +356,12 @@ namespace VanyaTools.Updater
                     try{result=GetCancellationStatus(ReplicateSubmissionRecovery.Value(result,"id"),token,serializer);}
                     catch(Exception error){throw new InvalidOperationException("Отмена отправлена в Replicate, но сервис ещё не подтвердил остановку. Номер запроса сохранён; новый запуск автоматически не отправлялся.",error);}
                 }
-                else result=GetPredictionWithRetry(Convert.ToString(urls["get"]),token,serializer);
+                else
+                {
+                    var updated=GetPredictionWithRetry(Convert.ToString(urls["get"]),token,serializer,cancelPath,startedUtc);
+                    if(updated==null)continue;
+                    result=updated;
+                }
                 SavePrediction(statePath,result,serializer);status=Convert.ToString(result["status"]);
             }
             if(status=="canceled")
@@ -421,28 +426,46 @@ namespace VanyaTools.Updater
             return ReadJson(request,serializer);
         }
 
-        private static Dictionary<string, object> GetPredictionWithRetry(string url, string token, JavaScriptSerializer serializer)
+        private static Dictionary<string, object> GetPredictionWithRetry(string url,string token,JavaScriptSerializer serializer,string cancelPath,DateTime startedUtc)
         {
-            for (int attempt = 1; attempt <= 4; attempt++)
+            bool Stopped()=>File.Exists(cancelPath) || ReplicatePredictionLifetime.Expired(startedUtc,DateTime.UtcNow);
+            Dictionary<string,object> Read(string address)
             {
-                try
+                var poll=CreateHttpRequest(address);poll.Timeout=poll.ReadWriteTimeout=15000;
+                poll.Headers[HttpRequestHeader.Authorization]="Bearer "+token;
+                using(var watch=new Timer(_=>{if(Stopped())try{poll.Abort();}catch{}},null,250,250))
                 {
-                    var poll = CreateHttpRequest(url);
-                    poll.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
-                    return ReadJson(poll, serializer);
-                }
-                catch (Exception ex) when (attempt < 4 && IsTransientNetworkError(ex))
-                {
-                    LogWorker("Prediction status attempt " + attempt + "/4 failed: " + ex.GetType().Name + ". Retrying the same prediction.");
-                    ReportWorkerProgress("retrying-status");
-                    Thread.Sleep(attempt * 2000);
-                }
-                catch (Exception ex) when (IsTransientNetworkError(ex))
-                {
-                    throw new InvalidOperationException("Связь оборвалась при проверке запроса. Нажмите «Повторить запрос»: продолжится тот же запуск без новой оплаты.", ex);
+                    try{return ReadJson(poll,serializer);}
+                    catch(Exception) when(Stopped()){return null;}
                 }
             }
-            throw new InvalidOperationException("Не удалось получить статус запроса Replicate.");
+            Dictionary<string,object> History()
+            {
+                var uri=new Uri(url);
+                const string prefix="/v1/predictions/";
+                if(uri.Scheme!="https" || uri.Host!="api.replicate.com" || !uri.IsDefaultPort || !uri.AbsolutePath.StartsWith(prefix,StringComparison.Ordinal))return null;
+                string id=uri.AbsolutePath.Substring(prefix.Length);if(String.IsNullOrEmpty(id) || id.Contains("/"))return null;
+                string next="https://api.replicate.com/v1/predictions";
+                for(int page=0;page<3 && !String.IsNullOrEmpty(next) && !Stopped();page++)
+                {
+                    var address=new Uri(next);
+                    if(address.Scheme!="https" || address.Host!="api.replicate.com" || !address.IsDefaultPort || address.AbsolutePath!="/v1/predictions" || !String.IsNullOrEmpty(address.UserInfo))return null;
+                    var response=Read(next);if(response==null)return null;
+                    var found=ReplicateStatusPolling.Find(response.TryGetValue("results",out var rows)?rows as IList:null,id);
+                    if(found!=null){LogWorker("Prediction status recovered from history for saved ID "+id+". No new prediction submitted.");ReportWorkerProgress("recovered-status");return found;}
+                    next=response.TryGetValue("next",out var more)?Convert.ToString(more):null;
+                }
+                return null;
+            }
+            return ReplicateStatusPolling.Wait(()=>Read(url),History,IsTransientNetworkError,Stopped,delay=>
+            {
+                for(double waited=0;waited<delay.TotalMilliseconds && !Stopped();waited+=200)
+                    Thread.Sleep((int)Math.Min(200,delay.TotalMilliseconds-waited));
+            },(attempt,error)=>
+            {
+                LogWorker("Prediction status attempt "+attempt+" failed: "+error.Message+". Waiting and retrying the saved prediction; no new submission.");
+                ReportWorkerProgress("retrying-status");
+            },error=>(error as ReplicateApiException)?.RetryAfter,()=>DateTime.UtcNow);
         }
 
         private static object ResolveUploadedInputs(object value, string token, string cancelPath, JavaScriptSerializer serializer)
@@ -719,7 +742,7 @@ namespace VanyaTools.Updater
                         string route=request.RequestUri.AbsolutePath;
                         string phase=route=="/v1/files"?"загрузка исходника":route=="/v1/predictions" && request.Method=="POST"?"запуск модели":route.StartsWith("/v1/predictions/",StringComparison.Ordinal)?"проверка задания":"получение данных API";
                         throw new ReplicateApiException((int)response.StatusCode, "Replicate вернул HTTP " +
-                            (int)response.StatusCode + " " + response.StatusDescription + ". Этап: "+phase+". Ответ API: " + body);
+                            (int)response.StatusCode + " " + response.StatusDescription + ". Этап: "+phase+". Ответ API: " + body,response.Headers["Retry-After"]);
                     }
                 }
                 throw;
@@ -807,7 +830,8 @@ namespace VanyaTools.Updater
         private sealed class ReplicateApiException : InvalidOperationException
         {
             public int StatusCode { get; private set; }
-            public ReplicateApiException(int statusCode, string message) : base(message) { StatusCode = statusCode; }
+            public string RetryAfter {get;private set;}
+            public ReplicateApiException(int statusCode,string message,string retryAfter=null):base(message){StatusCode=statusCode;RetryAfter=retryAfter;}
         }
 
         private static string ReadRepository()

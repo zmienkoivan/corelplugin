@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -10,10 +10,10 @@ namespace VanyaTools.Native
     internal static partial class PatternBottleLayout
     {
         // Cutting changes ownership across the seam, never the layout on the bottle.
-        internal static void CloseSeam(PatternDraft draft, PatternAsset hero, CancellationToken cancellation)
+        internal static void CloseSeam(PatternDraft draft, PatternAsset hero, CancellationToken cancellation, HashSet<int> fixedItems=null)
         {
             var frame = draft.Frame;
-            var items = draft.Items.Select(item => OwnBestSide(frame, draft.Motifs[item.Motif], item)).ToList();
+            var items = draft.Items.Select((item,index) => fixedItems?.Contains(index)==true?CopyPlacement(item):OwnBestSide(frame, draft.Motifs[item.Motif], item)).ToList();
             if (draft.Hero != null) draft.Hero = OwnBestSide(frame, hero, draft.Hero);
             double padding = Math.Min(.1, draft.Options.GapMm / 5);
             var outsideLeft = OutsideSeam(frame, 0);
@@ -35,6 +35,7 @@ namespace VanyaTools.Native
                 {
                     int turn = RequiredTurn(draft.Motifs[items[i].Motif].Footprint, items[i]);
                     if (turn == 0) continue;
+                    if(fixedItems?.Contains(i)==true)throw new InvalidOperationException("Стык затрагивает опорную гальку. Измените место новой ячейки или снимите опору.");
                     if (moved[i]) throw new InvalidOperationException("Не удалось провести стык между целыми рисунками. Увеличьте зазор между ними.");
                     items[i] = TurnPlacement(frame, draft.Motifs[items[i].Motif].Footprint, items[i], turn);
                     moved[i] = true; changed = true;
@@ -179,7 +180,7 @@ namespace VanyaTools.Native
             new Pose(new PatternPlacement { Center = TurnPoint(frame, pose.Item.Center, turns) },
                 pose.Hull.Select(p => TurnPoint(frame, p, turns)).ToArray());
 
-        private static PatternPoint TurnPoint(PatternFrame frame, PatternPoint point, int turns)
+        internal static PatternPoint TurnPoint(PatternFrame frame, PatternPoint point, int turns)
         {
             var transformed = frame.Bottle.Repeat(ToBottle(frame, point), turns);
             return new PatternPoint(transformed.X - frame.BottleOrigin.X, transformed.Y - frame.BottleOrigin.Y);

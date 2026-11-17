@@ -42,8 +42,26 @@ namespace VanyaTools.Native
 
         internal void Update(PatternFrame frame, PatternDraft draft, double heroAngle)
         {
+            var previousFrame=_frame;var previousDraft=_draft;double previousAngle=_heroAngle;
+            var previousBase=_baseMotifs;var previousKeys=_motifKeys;var previousAutomatic=_automaticMotifs;
+            string previousSelection=_selectedMotif,previousLayout=_motifLayout,previousScope=_anchorScope;
+            var turns=_motifTurns.ToArray();var anchors=_anchors.ToArray();var removed=_removedMotifs.ToArray();
+            var added=_addedMotifs.Select(p=>new AddedMotif{Key=p.Key,Pose=PatternMotifRotation.Copy(p.Pose)}).ToArray();
             _frame = frame; _draft = draft; _heroAngle = heroAngle;
-            UpdateMotifEdits();
+            try{UpdateMotifEdits();}
+            catch
+            {
+                // A conflicting hero or seam must not replace the visible fixed
+                // cells with a partly rebuilt automatic grid.
+                _frame=previousFrame;_draft=previousDraft;_heroAngle=previousAngle;
+                _baseMotifs=previousBase;_motifKeys=previousKeys;_automaticMotifs=previousAutomatic;
+                _selectedMotif=previousSelection;_motifLayout=previousLayout;_anchorScope=previousScope;
+                _motifTurns.Clear();foreach(var turn in turns)_motifTurns.Add(turn.Key,turn.Value);
+                _anchors.Clear();foreach(var key in anchors)_anchors.Add(key);
+                _removedMotifs.Clear();foreach(var key in removed)_removedMotifs.Add(key);
+                _addedMotifs.Clear();_addedMotifs.AddRange(added);
+                InvalidateVisual();MotifSelectionChanged?.Invoke();throw;
+            }
             if (draft?.Hero == null) Cursor = Cursors.Arrow;
             InvalidateVisual();
             ViewChanged?.Invoke();
@@ -76,13 +94,14 @@ namespace VanyaTools.Native
                 var mainOutline = new Pen(new SolidColorBrush(Color.FromRgb(25,95,220)),hairline*1.5);
                 var fillerOutline = new Pen(new SolidColorBrush(Color.FromRgb(25,175,65)),hairline*1.5);
                 drawing.PushClip(outline);
-                foreach (var item in _draft.Items)
+                var anchorOutline=new Pen(Brushes.Crimson,hairline*1.8);
+                for(int itemIndex=0;itemIndex<_draft.Items.Count;itemIndex++)
                 {
-                    var motif = _draft.Motifs[item.Motif];
+                    var item=_draft.Items[itemIndex];var motif = _draft.Motifs[item.Motif];
                     if (!DrawArea(motif, item).IntersectsWith(visible)) continue;
                     DrawMotif(drawing, motif, item, Brushes.SteelBlue);
                     if (_draft.Options.Texture && item.Cell != null)
-                        for(int n=0;n<item.Cell.Length;n++)drawing.DrawLine(motif.IsFiller ? fillerOutline : mainOutline,ToView(item.Cell[n]),ToView(item.Cell[(n+1)%item.Cell.Length]));
+                        for(int n=0;n<item.Cell.Length;n++)drawing.DrawLine(itemIndex<_motifKeys.Length && _anchors.Contains(_motifKeys[itemIndex])?anchorOutline:motif.IsFiller ? fillerOutline : mainOutline,ToView(item.Cell[n]),ToView(item.Cell[(n+1)%item.Cell.Length]));
                 }
                 if (_showCells && _draft.CellGuides != null)
                     DrawGuide(drawing, _draft.CellGuides, new Pen(Brushes.MediumPurple, hairline) { DashStyle = DashStyles.Dot },
@@ -325,7 +344,7 @@ namespace VanyaTools.Native
             if (Keyboard.IsKeyDown(Key.Space)) { StartPan(e); return; }
             if (_draft == null || _scale <= 0) return;
             Point point = e.GetPosition(this);
-            if (CanEditMotifs && _motifTool > 0) { PaintMotif(point); e.Handled = true; return; }
+            if (TryMotifClick(point)) { e.Handled = true; return; }
             if (StartMotifTurn(point)) { e.Handled = true; return; }
             bool heroHit = HitHero(point);
             if (!heroHit && SelectMotif(point)) { e.Handled = true; return; }
@@ -363,8 +382,8 @@ namespace VanyaTools.Native
                 if (e.LeftButton == MouseButtonState.Pressed) TurnMotifTo(point); else ReleaseMouseCapture();
                 e.Handled = true; return;
             }
-            if (CanEditMotifs && _motifTool > 0) { Cursor = Cursors.Cross; return; }
             if (HitMotifHandle(point)) { Cursor = Cursors.Hand; return; }
+            if (CanEditMotifs && _motifTool > 0) { Cursor = Cursors.Cross; return; }
             if (_draft?.Hero == null || _scale <= 0) { Cursor = Cursors.Arrow; return; }
             if (_drag != DragMode.None && e.LeftButton == MouseButtonState.Pressed) DragTo(point);
             var mode = _drag == DragMode.None ? HitHandle(point) : _drag;

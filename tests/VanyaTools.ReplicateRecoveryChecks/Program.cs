@@ -12,7 +12,7 @@ internal static class Program
     [STAThread]private static int Main()
     {
         string originalTemp=Environment.GetEnvironmentVariable("TEMP");string root=Path.Combine(Path.GetTempPath(),"Vanya-Recovery-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);Environment.SetEnvironmentVariable("TEMP",root);
-        try{Lifetime();Matching(root);WireChecks.Run(root);Console.WriteLine("Replicate recovery checks passed: "+_checks+". Loopback HTTP and synthetic credentials only.");return 0;}
+        try{Lifetime();PollingChecks.Run();Matching(root);WireChecks.Run(root);Console.WriteLine("Replicate recovery checks passed: "+_checks+". Loopback HTTP and synthetic credentials only.");return 0;}
         catch(Exception e){Console.Error.WriteLine(e);return 1;}
         finally{Environment.SetEnvironmentVariable("TEMP",originalTemp);string parent=Path.GetFullPath(originalTemp).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;if(Path.GetFullPath(root).StartsWith(parent,StringComparison.OrdinalIgnoreCase) && Path.GetFileName(root).StartsWith("Vanya-Recovery-"))Directory.Delete(root,true);}
     }
