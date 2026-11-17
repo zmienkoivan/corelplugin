@@ -58,8 +58,48 @@ const nativeRich = fields => {
   const convert = blocks => blocks.map(block => block.type === 'photo'
     ? { type: 'photo', photo: [{ file_id: block.photo.media }] }
     : { ...block, ...(block.blocks ? { blocks: convert(block.blocks) } : {}) });
-  return { rich_message: { blocks: convert(JSON.parse(fields.rich_message).blocks) } };
+  return { rich_message: { blocks: convert(JSON.parse(fields.rich_message).blocks) }, reply_markup: JSON.parse(fields.reply_markup) };
 };
+test('an open card recovers a missed native photo replacement through a keyboard-only read', async t => {
+  const { orders, row, rich, calls } = await fixture(t);
+  const fetchBefore = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    if (url.endsWith('/editMessageReplyMarkup')) {
+      const fields=Object.fromEntries(options.body);calls.push({method:'editMessageReplyMarkup',fields});
+      return Response.json({ok:true,result:{message_id:500,chat:{id:-1007,type:'channel'},edit_date:Math.floor(Date.now()/1000)+10,
+        ...rich(row.caption,['original-0','replacement']),reply_markup:JSON.parse(fields.reply_markup)}});
+    }
+    return fetchBefore(url,options);
+  };
+  orders.observeTelegram(row.id);await orders.flushTelegramRefresh();
+  const next=orders.get(row.id);
+  assert.equal(next.revision,row.revision+1);assert.equal(next.photoCount,2);
+  assert.equal(next.photoVersions[0],row.photoVersions[0]);assert.notEqual(next.photoVersions[1],row.photoVersions[1]);
+  for(const key of ['number','customer','caption','description','items','state','dueDate','isUrgent','completedAt'])assert.deepEqual(next[key],row[key],key);
+  const probe=JSON.parse(calls[0].fields.reply_markup).inline_keyboard.flat().find(button=>button.callback_data.includes(':sync:'));
+  assert.match(probe.callback_data,/:sync:p[a-z0-9]+$/u);
+  assert.equal(calls[0].fields.rich_message,undefined);assert.equal(next.telegramEditError,null);
+  assert.ok(!calls.some(call=>/^(send|delete)/u.test(call.method)));
+  await orders.processBotUpdates({callback_query:{id:'probe-sync',from:{id:42},data:probe.callback_data,
+    message:{message_id:500,chat:{id:-1007,type:'channel'},...rich(next.caption,['original-0','replacement'])}}});
+  assert.match(calls.findLast(call=>call.method==='answerCallbackQuery').fields.text,/уже изменена/u);
+});
+test('background photo recovery leaves pending human text edits and queued website writes untouched', async t => {
+  const { orders,row,rich,calls,db,directory }=await fixture(t);
+  const fetchBefore=globalThis.fetch;
+  globalThis.fetch=async(url,options)=>url.endsWith('/editMessageReplyMarkup')
+    ? Response.json({ok:true,result:{message_id:500,chat:{id:-1007,type:'channel'},edit_date:Math.floor(Date.now()/1000)+10,
+      ...rich('Другое имя ВК\nВышивка\n40 футболок',['replacement'])}})
+    :fetchBefore(url,options);
+  orders.observeTelegram(row.id);await orders.flushTelegramRefresh();
+  assert.deepEqual(orders.get(row.id),row);assert.equal(calls.filter(call=>call.method==='editMessageText').length,0);
+  db.prepare('INSERT INTO order_telegram_sync(order_id,chat_id,action,pin_required) VALUES(?,?,?,0)').run(row.id,'-1007','photo');
+  // A fresh worker starts after a server restart; queued site writes still take precedence.
+  const reopened=createOrders({dataRoot:directory,token:'fake-test-token',channel:'-1007',startPolling:false});
+  const queued=reopened.get(row.id);
+  try {reopened.observeTelegram(row.id);await reopened.flushTelegramRefresh();assert.deepEqual(reopened.get(row.id),queued);}
+  finally {reopened.close();}
+});
 test('embedded rich controls preserve pending manual photo/quantity edits and do not duplicate the post', async t => {
   const { orders, row, calls } = await fixture(t);
   const rendered = await orders.setUrgency(row.id, false, row.revision);
@@ -76,9 +116,9 @@ test('embedded rich controls preserve pending manual photo/quantity edits and do
   assert.equal(next.state, 'new'); assert.equal(next.photoCount, 2); assert.notDeepEqual(next.photoVersions, rendered.photoVersions);
   assert.equal(next.number, row.number); assert.equal(next.id, row.id); assert.equal(next.telegramEditError, null);
   assert.ok(!calls.some(call => /^(send|delete)/u.test(call.method)));
-  assert.deepEqual(JSON.parse(calls.findLast(call => call.method === 'editMessageText').fields.reply_markup), { inline_keyboard: [] });
+  assert.equal(JSON.parse(calls.findLast(call => call.method === 'editMessageText').fields.reply_markup).inline_keyboard.flat().length, 8);
   await orders.refreshWorkflowButtons();
-  assert.deepEqual(JSON.parse(calls.findLast(call => call.method === 'editMessageReplyMarkup').fields.reply_markup), { inline_keyboard: [] });
+  assert.equal(JSON.parse(calls.findLast(call => call.method === 'editMessageReplyMarkup').fields.reply_markup).inline_keyboard.flat().length, 8);
 });
 test('sync on an unchanged rich bot echo refreshes the layout once, with no revision or text change', async t => {
   const { orders, row, calls } = await fixture(t);
@@ -98,7 +138,7 @@ test('manual rich edits reject stale embedded revisions and broken section ancho
   const current = await orders.setUrgency(row.id, false, row.revision);
   const message = nativeRich(calls.findLast(call => call.method === 'editMessageText').fields);
   message.rich_message.blocks.find(block => block.type === 'blockquote').blocks[0].text = '40 футболок';
-  const buttons = message.rich_message.blocks.find(block => block.type === 'buttons').buttons;
+  const buttons = message.reply_markup.inline_keyboard[0];
   buttons[0].callback_data = `order:${row.id}:${row.revision}:new`;
   await orders.processBotUpdates(edit(message));
   assert.equal(orders.get(row.id).revision, current.revision); assert.equal(orders.get(row.id).description, row.description);

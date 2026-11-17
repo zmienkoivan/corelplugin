@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import { createOrderPhotos, photoCount, photoVersions } from './order-photos.mjs';
 import { createLegacyImports } from './legacy-orders.mjs';
-import { createTelegramEdits, telegramContent } from './telegram-edits.mjs';
+import { createTelegramEdits, telegramContent, unchangedTelegramOrderText } from './telegram-edits.mjs';
 import { createTelegramDeletions } from './telegram-deletions.mjs';
 import { createTelegramCleanup } from './telegram-cleanup.mjs';
 import { createTelegramWorkflowSync } from './telegram-workflow-sync.mjs';
@@ -13,7 +13,8 @@ import { createOrderNotes } from './order-notes.mjs';
 import { createPhotoMarkup } from './photo-markup.mjs';
 import { createTelegramPhotoMarkup } from './telegram-photo-markup.mjs';
 import { listOrders } from './order-list.mjs';
-import { renderRichOrderCard, richOrderCallbacks } from './telegram-order-card.mjs';
+import { renderRichOrderCard, richOrderCallbacks, orderCardKeyboard } from './telegram-order-card.mjs';
+import { createTelegramOrderRefresh } from './telegram-order-refresh.mjs';
 
 const now = () => new Date().toISOString();
 const text = (value, max) => String(value ?? '').trim().slice(0, max);
@@ -70,7 +71,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
     CREATE UNIQUE INDEX IF NOT EXISTS orders_label_token ON orders(label_token);`);
   const telegramEnabled = Boolean(token && channel);
   const telegramNotesEnabled = telegramEnabled && notesTelegram;
-  const buttonsVersion = telegramNotesEnabled ? 'v6' : 'v7';
+  const buttonsVersion = telegramNotesEnabled ? 'v8-notes' : 'v8';
   const orderPhotos = createOrderPhotos({ dataRoot, token });
   const users = new Set(String(allowedUsers || '').split(',').map(x => x.trim()).filter(Boolean));
   const pending = new Map();
@@ -112,7 +113,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
       const body = await response.json();
       if (response.ok && body.ok) {
         if (fields.rich_message?.blocks?.some(block => block.type === 'anchor' && block.name === 'vanya-order-v2-customer')) {
-          const id = /^order:(\d+):/.exec(richOrderCallbacks({ rich_message: fields.rich_message })[0] || '')?.[1];
+          const id = /^order:(\d+):/.exec(richOrderCallbacks({ rich_message: fields.rich_message, reply_markup: fields.reply_markup })[0] || '')?.[1];
           if (id) db.prepare('INSERT OR REPLACE INTO bot_state(name,value) VALUES(?,?)').run(`rich-card-v2:${id}`, now());
         }
         if (method !== 'editMessageReplyMarkup' && /^(send|edit)Message|^send(Photo|MediaGroup|RichMessage)$/.test(method)) {
@@ -142,7 +143,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
     if(telegramEnabled&&!telegramMissing(row)&&markupTelegram.needsSync(row))workflowSync.enqueue(row,'markup');
   }});
   const markupTelegram=createTelegramPhotoMarkup({db,markup:photoMarkup,photos:orderPhotos,api,richContent,richPhotoFiles,
-    composePhoto,buttons:row=>row.publication_mode === 'rich' ? { inline_keyboard: [] } : buttons(row),singleCaption:row=>singleCaption(row),photoCaption:row=>photoCaption(row)});
+    composePhoto,buttons:row=>externalButtons(row),singleCaption:row=>singleCaption(row),photoCaption:row=>photoCaption(row)});
   const notes = createOrderNotes({ db, getOrder: get, api, channel, enabled: telegramNotesEnabled,
     onLinked: thread => {
       const rows = db.prepare(`SELECT id FROM orders WHERE deleted_at IS NULL AND chat_id=? AND
@@ -153,7 +154,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
         db.prepare("UPDATE order_note_outbox SET retry_at=0 WHERE state='pending' AND note_id IN (SELECT id FROM order_notes WHERE order_id=?)").run(id);
       }
     } });
-  const telegramMissing = row => (db.prepare('SELECT value FROM bot_state WHERE name=?')
+  const telegramMissing = row => (db.prepare('SELECT value FROM bot_state WHERE name=?').get(`workflow-buttons-${buttonsVersion}:${row.id}`)?.value ?? db.prepare('SELECT value FROM bot_state WHERE name=?')
     .get(`workflow-buttons-v7:${row.id}`)?.value ?? db.prepare('SELECT value FROM bot_state WHERE name=?')
     .get(`workflow-buttons-v6:${row.id}`)?.value ?? db.prepare('SELECT value FROM bot_state WHERE name=?')
     .get(`workflow-buttons-v5:${row.id}`)?.value ?? db.prepare('SELECT value FROM bot_state WHERE name=?')
@@ -257,8 +258,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
       callback_data: `order:${row.id}:${row.revision}:${row.is_customer_textile ? 'own-textile' : 'customer-textile'}` }], [{ text: '🔄 Обновить карточку', callback_data: `order:${row.id}:${row.revision}:sync` }],
       ...(telegramNotesEnabled ? [[{ text: '💬 Комментарии', ...(commentsUrl ? { url: commentsUrl } : { callback_data: `order:${row.id}:${row.revision}:comments` }) }]] : [])] };
   };
-  const externalButtons = row => row.publication_mode === 'rich' && db.prepare('SELECT 1 FROM bot_state WHERE name=?').get(`rich-card-v2:${row.id}`)
-    ? { inline_keyboard: [] } : buttons(row);
+  const externalButtons = (row, probe = '') => orderCardKeyboard(buttons(row), probe);
   const numberLine = row => `Заказ №${row.order_number || row.id}`;
   const completedTime = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Asia/Yekaterinburg',
     day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -344,7 +344,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
     if (row.publication_mode === 'rich')
       return await api('editMessageText', { chat_id: row.chat_id, message_id: row.status_message_id,
         rich_message: richContent(row, markupTelegram.media(row)),
-        reply_markup: { inline_keyboard: [] } });
+        reply_markup: externalButtons(row) });
     else if (row.publication_mode === 'single')
       return await api('editMessageCaption', { chat_id: row.chat_id, message_id: row.status_message_id,
         caption: singleCaption(row), reply_markup: buttons(row) });
@@ -510,7 +510,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
     try {
       const message = await api('sendRichMessage', { chat_id: channel,
         rich_message: richContent(assignedRow, photos.map((_, i) => `attach://photo${i}`)),
-        reply_markup: { inline_keyboard: [] }, disable_notification: true }, photos);
+        reply_markup: externalButtons(assignedRow), disable_notification: true }, photos);
       const chatId = String(message.chat.id);
       const messageId = message.message_id;
       const fileIds = richPhotoFiles(message);
@@ -586,7 +586,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
         : markupTelegram.media(row);
       const edited = await api('editMessageText', { chat_id: row.chat_id,
         message_id: row.status_message_id, rich_message: richContent(next, media),
-        reply_markup: { inline_keyboard: [] } }, photos);
+        reply_markup: externalButtons(next) }, photos);
       if (photos.length) {
         const files = richPhotoFiles(edited);
         if (files.length !== photos.length)
@@ -803,7 +803,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
     try {
       const message = fileIds.length
         ? await api('sendRichMessage', { chat_id: channel, rich_message: richContent(row, fileIds),
-          reply_markup: { inline_keyboard: [] }, disable_notification: true })
+          reply_markup: externalButtons(row), disable_notification: true })
         : await api('sendMessage', { chat_id: channel, text: singleCaption(row),
           reply_markup: buttons(row), disable_notification: true });
       const savedFiles = richPhotoFiles(message);
@@ -836,6 +836,28 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
   }
 
   const telegramEdits = createTelegramEdits({ db, locked, get, syncControls: syncAllControls,normalizePhotos:markupTelegram.normalize });
+  const hasPendingSync = id => db.prepare('SELECT 1 FROM order_telegram_sync WHERE order_id=?').get(id) ||
+    db.prepare("SELECT 1 FROM order_telegram_edits WHERE order_id=? AND state='sync-pending'").get(id);
+  const telegramRefresh = createTelegramOrderRefresh({
+    read: (id, probe) => locked(id, async () => {
+      const row = get(id);
+      if (!telegramEnabled || !row || row.send_state !== 'sent' || row.publication_mode !== 'rich' ||
+          row.chat_id !== String(channel) || hasPendingSync(id)) return;
+      const message = await api('editMessageReplyMarkup', { chat_id: row.chat_id, message_id: row.status_message_id,
+        reply_markup: externalButtons(row, probe) });
+      return { id, revision: row.revision, message };
+    }),
+    apply: async ({ id, revision, message }) => {
+      await telegramEdits.process({ edited_channel_post: message }, { skipUnchanged: true, expectedRevision: revision, photoOnly: true });
+      // Earlier rich cards carried natural-width buttons in their body. Remove
+      // those only after checking the fresh post, preserving pending staff edits.
+      if (message?.rich_message?.blocks?.some(block => block.type === 'buttons')) await locked(id, async () => {
+        const row = get(id);
+        if (row && row.revision === revision && !hasPendingSync(id) && !telegramEdits.latestError(id) &&
+            unchangedTelegramOrderText(telegramContent(message), row)) await syncAllControls(row);
+      });
+    }
+  });
   let offset = Number(db.prepare("SELECT value FROM bot_state WHERE name='offset'").get()?.value || 0);
   async function handleUpdate(update) {
     if (update.message) await notes.observe(update.message).catch(error => console.error('Order discussion lookup:', error.message));
@@ -844,7 +866,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
     if (update.channel_post && imports) { imports.enqueue(update.channel_post); return; }
     if (update.message && imports) { imports.enqueue(update.message); return; }
     const query = update.callback_query;
-    const match = /^order:(\d+):(\d+):(comments|sync|new|done|urgent|normal|delivery|no-delivery|customer-textile|own-textile|blanks-(?:ready|unready)|(?:blanks|application)-(?:pause|resume))$/.exec(query?.data || '');
+    const match = /^order:(\d+):(\d+):(comments|sync|new|done|urgent|normal|delivery|no-delivery|customer-textile|own-textile|blanks-(?:ready|unready)|(?:blanks|application)-(?:pause|resume))(?::p[a-z0-9]+)?$/.exec(query?.data || '');
     if (!match) return;
     let answer = 'Готово';
     try {
@@ -896,20 +918,17 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
   let workflowRetryAt = 0;
   async function refreshWorkflowButtons() {
     if (Date.now() < workflowRetryAt) return;
-    if (startPolling) workflowRetryAt = Date.now() + 4000;
+    if (startPolling) workflowRetryAt = Date.now() + 8000;
     const rows = db.prepare(`SELECT id FROM orders WHERE deleted_at IS NULL AND send_state='sent' AND chat_id=? AND status_message_id IS NOT NULL
       ORDER BY EXISTS(SELECT 1 FROM order_notes WHERE order_id=orders.id) DESC,id DESC`).all(String(channel));
     for (const { id } of rows) {
       const marker = `workflow-buttons-${buttonsVersion}:${id}`;
       if (db.prepare('SELECT value FROM bot_state WHERE name=?').get(marker)) continue;
-      if (!telegramNotesEnabled && !db.prepare('SELECT 1 FROM bot_state WHERE name=?').get(`workflow-buttons-v6:${id}`)) {
-        const previous = db.prepare('SELECT value FROM bot_state WHERE name=?').get(`workflow-buttons-v5:${id}`);
-        if (previous) { db.prepare('INSERT OR REPLACE INTO bot_state(name,value) VALUES(?,?)').run(marker, previous.value); continue; }
-      }
       try {
         const message = await locked(id, async () => {
           const row = get(id);
           if (!row || row.send_state !== 'sent' || row.chat_id !== String(channel)) return;
+          if (hasPendingSync(id)) return;
           // Upgrade only the keyboard; text and photos may be awaiting an employee edit.
           try {
             const message = await api('editMessageReplyMarkup', { chat_id: row.chat_id,
@@ -920,7 +939,7 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
           db.prepare('INSERT OR REPLACE INTO bot_state(name,value) VALUES(?,?)').run(marker, now());
         });
         if (message?.rich_message || typeof message?.text === 'string' || typeof message?.caption === 'string')
-          await telegramEdits.process({ edited_channel_post: message }, { skipUnchanged: true });
+          await telegramRefreshApply(id, message);
       } catch (error) {
         if (/message to edit not found|MESSAGE_ID_INVALID/i.test(error.message))
           db.prepare('INSERT OR REPLACE INTO bot_state(name,value) VALUES(?,?)').run(marker, 'missing');
@@ -992,7 +1011,15 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     return { id, number: row.order_number, deleted: true, ...await cleanup.process(id) };
   }
-  let timer, importTimer, deletionTimer, cleanupTimer, syncTimer, notesTimer, controlsTimer;
+  async function telegramRefreshApply(id, message) {
+    await telegramEdits.process({ edited_channel_post: message }, { skipUnchanged: true });
+    if (message.rich_message?.blocks?.some(block => block.type === 'buttons')) await locked(id, async () => {
+      const row = get(id);
+      if (row && !hasPendingSync(id) && !telegramEdits.latestError(id) && unchangedTelegramOrderText(telegramContent(message), row))
+        await syncAllControls(row);
+    });
+  }
+  let timer, importTimer, deletionTimer, cleanupTimer, syncTimer, notesTimer, controlsTimer, photoRefreshTimer;
   if (telegramEnabled && startPolling) {
     if (telegramNotesEnabled) {
       notesTimer = setInterval(() => notes.flush().catch(error => console.error('Order note sync:', error.message)), 3000);
@@ -1000,6 +1027,8 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
     }
     controlsTimer = setInterval(() => refreshWorkflowButtons().catch(error => console.error('Order controls:', error.message)), 3000);
     controlsTimer.unref();
+    photoRefreshTimer = setInterval(() => telegramRefresh.flush(), 2000);
+    photoRefreshTimer.unref();
     syncTimer = setInterval(() => workflowSync.flush().catch(error => console.error('Telegram workflow sync:', error.message)), 1000);
     syncTimer.unref();
     workflowSync.flush().catch(error => console.error('Telegram workflow sync:', error.message));
@@ -1041,10 +1070,11 @@ export function createOrders({ dataRoot, token, channel, allowedUsers, startPoll
       await syncAllControls(row); return publicOrder(get(id));
     }),
     processBotUpdates: handleUpdate, flushImports: () => imports?.flush(), flushTelegramEdits: telegramEdits.flush,
+    observeTelegram: id => { if (telegramEnabled) telegramRefresh.observe(id); }, flushTelegramRefresh: telegramRefresh.flush,
     refreshWorkflowButtons, flushTelegramWorkflow: workflowSync.flush,
     checkTelegramDeletions: deletions.check,
     flushTelegramCleanup: cleanup.flush,
-    close: () => { notes.stop(); clearInterval(notesTimer); clearInterval(controlsTimer); clearInterval(timer); clearInterval(importTimer); clearInterval(deletionTimer); clearInterval(cleanupTimer); clearInterval(syncTimer); db.close(); },
+    close: () => { notes.stop(); clearInterval(photoRefreshTimer); clearInterval(notesTimer); clearInterval(controlsTimer); clearInterval(timer); clearInterval(importTimer); clearInterval(deletionTimer); clearInterval(cleanupTimer); clearInterval(syncTimer); db.close(); },
     setState: (id, state, revision) => locked(id, () => setState(id, state, revision)),
     get: id => { const row = get(id); return row ? publicOrder(row) : null; },
     getByNumber: (number, year) => {

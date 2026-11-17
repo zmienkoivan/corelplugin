@@ -502,6 +502,7 @@ const server = http.createServer(async (req, res) => {
             const value = await readSmallJson(req);
             json(res, 200, await orders.setState(id, value.state, Number(value.revision)));
           } else if (req.method === 'GET') {
+            orders.observeTelegram(id);
             const value = orders.get(id);
             json(res, value ? 200 : 404, value || { error: 'Заказ не найден.' });
           } else if (req.method === 'PUT' && !pathname.endsWith('/state'))

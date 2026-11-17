@@ -45,6 +45,11 @@ function withoutFooter(value) {
   }
   return lines.join('\n').trim();
 }
+export function unchangedTelegramOrderText(content, row) {
+  try {
+    return content.orderCard ? parseRichOrderEdit(content.orderCard, row) === null : withoutFooter(content.text) === row.caption;
+  } catch { return false; }
+}
 
 export function createTelegramEdits({ db, locked, get, syncControls, normalizePhotos = (_row,files)=>files }) {
   db.exec(`CREATE TABLE IF NOT EXISTS telegram_bot_versions (
@@ -68,7 +73,7 @@ export function createTelegramEdits({ db, locked, get, syncControls, normalizePh
   const latestError = id => db.prepare('SELECT state,error FROM order_telegram_edits WHERE order_id=? ORDER BY id DESC LIMIT 1')
     .get(id)?.error || null;
 
-  async function process(update, { skipUnchanged = false } = {}) {
+  async function process(update, { skipUnchanged = false, expectedRevision, photoOnly = false } = {}) {
     const message = update.edited_channel_post;
     if (!message || message.chat?.type !== 'channel' || !Number.isSafeInteger(message.message_id) ||
         !Number.isSafeInteger(message.edit_date)) return;
@@ -80,6 +85,9 @@ export function createTelegramEdits({ db, locked, get, syncControls, normalizePh
     return locked(row.id, async () => {
       const current = get(row.id), content = telegramContent(message), hash = fingerprint(content);
       if (!current) return;
+      if (expectedRevision !== undefined && current.revision !== expectedRevision) return;
+      // A background read may recover missing photo updates, but never replace newer site text.
+      if (photoOnly && (current.publication_mode !== 'rich' || !unchangedTelegramOrderText(content, current))) return;
       if (db.prepare('SELECT 1 FROM telegram_bot_versions WHERE chat_id=? AND message_id=? AND event_date=? AND fingerprint=?')
         .get(String(message.chat.id), message.message_id, message.edit_date, hash)) return;
       const eventKey = Number.isSafeInteger(update.update_id) ? `update:${update.update_id}`
@@ -143,9 +151,9 @@ export function createTelegramEdits({ db, locked, get, syncControls, normalizePh
         if (previous && message.edit_date < previous.edit_date ||
             message.edit_date < Math.floor(Date.parse(current.updated_at) / 1000))
           throw new Error('Правка Telegram старше последнего изменения карточки. Откройте актуальную карточку и повторите правку.');
-        const callback = richOrderCallbacks(message)
-          .find(value => new RegExp(`^order:${current.id}:\\d+:`).test(value || ''));
-        if (callback && Number(callback.split(':')[2]) !== current.revision)
+        const callbacks = richOrderCallbacks(message)
+          .filter(value => new RegExp(`^order:${current.id}:\\d+:`).test(value || ''));
+        if (callbacks.some(callback => Number(callback.split(':')[2]) !== current.revision))
           throw new Error('Карточка уже изменена на сайте или другим сотрудником. Повторите правку актуального сообщения.');
         const limit = next.publication_mode === 'rich' ? Infinity : JSON.parse(next.photo_ids).length ? 1024 : 4096;
         // Reserve room for the protected status, completion time and order number.

@@ -71,13 +71,20 @@ function styledButton(button) {
     : action === 'sync' ? '↻ Обновить' : button.text;
   return { ...button, text, style };
 }
-export function renderRichOrderCard(row, media, { keyboard, status, number, archived = false }) {
+export function orderCardKeyboard(keyboard, probe = '') {
+  const controls = keyboard.inline_keyboard.map(buttons => buttons.map(button => {
+    const styled = styledButton(button);
+    if (styled.style === 'link') delete styled.style;
+    if (probe && styled.callback_data?.endsWith(':sync')) styled.callback_data += `:p${probe}`;
+    return styled;
+  }));
+  if (controls[3]?.length === 1 && controls[4]?.length === 1) controls.splice(3, 2, [...controls[3], ...controls[4]]);
+  return { inline_keyboard: controls };
+}
+export function renderRichOrderCard(row, media, { status, number, archived = false }) {
   if (!media.length) throw new Error('Для карточки не найдены фотографии Telegram.');
   const photos = media.map(value => ({ type: 'photo', photo: { type: 'photo', media: value } }));
   const fields = orderCardFields(row);
-  const controls = keyboard.inline_keyboard.map(buttons => buttons.map(styledButton));
-  // Put the two utility actions on one row, keeping the production actions above them.
-  if (controls[3]?.length === 1 && controls[4]?.length === 1) controls.splice(3, 2, [...controls[3], ...controls[4]]);
   return { blocks: [
     photos.length === 1 ? photos[0] : { type: 'collage', blocks: photos },
     { type: 'anchor', name: sections[0] },
@@ -92,7 +99,6 @@ export function renderRichOrderCard(row, media, { keyboard, status, number, arch
       ...(row.items ? [[{ text: 'Количество', is_header: true }, { text: row.items.replace(/^Количество:\s*/u, '') }]] : [])
     ] },
     ...(row.created_at ? [{ type: 'footer', text: `Принят ${received.format(new Date(row.created_at))}` }] : []),
-    ...(!archived ? [{ type: 'divider' }, ...controls.map(buttons => ({ type: 'buttons', buttons, align: 'left' }))] : []),
     { type: 'heading', size: 5, text: archived ? '🗄️ Архив — заказ убран из работы' : status },
     { type: 'paragraph', text: number }
   ] };

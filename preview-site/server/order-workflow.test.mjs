@@ -12,7 +12,7 @@ const orderText = blocks => {
   const fields = readRichOrderCard({ rich_message: { blocks } });
   return `${fields.customer} ${fields.meta} ${fields.description}`.replace(/\s*·\s*|\s+/gu, ' ').trim();
 };
-const controls = fields => ({ inline_keyboard: JSON.parse(fields.rich_message).blocks.filter(block => block.type === 'buttons').map(block => block.buttons) });
+const controls = fields => JSON.parse(fields.reply_markup);
 
 test('private forwarded album is imported end to end with staff access, channel publication, preserved sources and persistent deduplication', async t => {
   const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'private-forward-integration-'));

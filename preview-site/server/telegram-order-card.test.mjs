@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderRichOrderCard, readRichOrderCard, parseRichOrderEdit, richOrderCallbacks } from './telegram-order-card.mjs';
+import { renderRichOrderCard, readRichOrderCard, parseRichOrderEdit, richOrderCallbacks, orderCardKeyboard } from './telegram-order-card.mjs';
 import { telegramContent } from './telegram-edits.mjs';
 import { parseLegacyOrder } from './legacy-orders.mjs';
 
@@ -10,22 +10,25 @@ const row = { id: 37, revision: 8, customer: 'Вера & Антон', source: '�
 const keyboard = { inline_keyboard: [['done','normal'],['blanks-resume','application-pause'],['blanks-unready','no-delivery'],['own-textile'],['sync']]
   .map(actions => actions.map(action => ({ text: action, callback_data: `order:${row.id}:${row.revision}:${action}` }))) };
 const render = (extra = {}) => renderRichOrderCard(row, ['one','two'], { keyboard, status: '🌲 В работе', number: 'Заказ №11037', ...extra });
-const native = content => ({ rich_message: { blocks: content.blocks.map(block => block.type === 'collage'
+const native = content => ({ reply_markup: orderCardKeyboard(keyboard), rich_message: { blocks: content.blocks.map(block => block.type === 'collage'
   ? { ...block, blocks: block.blocks.map(photo => ({ type: 'photo', photo: [{ file_id: photo.photo.media }] })) } : block) } });
 
-test('native rich card has contained media, compact metadata, colored embedded controls and the number last', () => {
-  const content = render(), buttons = content.blocks.filter(block => block.type === 'buttons');
+test('native rich card has contained media, compact metadata, full-width keyboard rows and the number last', () => {
+  const content = render(), buttons = orderCardKeyboard(keyboard).inline_keyboard;
   assert.equal(content.blocks[0].type, 'collage'); assert.equal(content.blocks[0].blocks.length, 2);
   assert.equal(content.blocks.find(block => block.type === 'heading').text, row.customer);
   assert.equal(content.blocks.find(block => block.type === 'table').is_compact, true);
-  assert.equal(buttons.length, 4); assert.ok(buttons.every(block => block.buttons.length <= 8));
-  assert.equal(buttons[0].buttons[0].style, 'success'); assert.equal(buttons[0].buttons[1].style, 'danger');
-  assert.equal(buttons[1].buttons[0].style, 'danger'); assert.equal(buttons[1].buttons[1].style, 'link');
-  assert.equal(buttons[2].buttons[0].style, 'success'); assert.equal(buttons[2].buttons[1].style, 'primary');
+  assert.equal(buttons.length, 4); assert.ok(buttons.every(row => row.length === 2));
+  assert.equal(content.blocks.some(block => block.type === 'buttons'), false);
+  assert.equal(buttons[0][0].style, 'success'); assert.equal(buttons[0][1].style, 'danger');
+  assert.equal(buttons[1][0].style, 'danger'); assert.equal(buttons[1][1].style, undefined);
+  assert.equal(buttons[2][0].style, 'success'); assert.equal(buttons[2][1].style, 'primary');
   const callbacks = richOrderCallbacks(native(content));
   assert.equal(new Set(callbacks).size, 8); assert.ok(callbacks.every(value => Buffer.byteLength(value) <= 64));
   assert.equal(content.blocks.at(-1).text, 'Заказ №11037');
   assert.equal(content.blocks.at(-2).text, '🌲 В работе');
+  const probe = orderCardKeyboard(keyboard, '123abc').inline_keyboard.flat().find(button => button.callback_data.includes(':sync:'));
+  assert.equal(probe.callback_data, 'order:37:8:sync:p123abc');
 });
 test('native round trip preserves raw caption formatting and forwarding remains importable', () => {
   const message = native(render()), fields = readRichOrderCard(message);
@@ -52,7 +55,7 @@ test('editing customer, source, technology and quantity excludes protected field
 });
 test('archived rich cards keep all photos and editable content with no embedded actions', () => {
   const content = render({ archived: true });
-  assert.equal(richOrderCallbacks(native(content)).length, 0);
+  assert.equal(richOrderCallbacks({ rich_message: content }).length, 0);
   assert.equal(parseRichOrderEdit(readRichOrderCard(native(content)), row), null);
   assert.match(content.blocks.at(-2).text, /Архив/); assert.equal(content.blocks.at(-1).text, 'Заказ №11037');
 });
