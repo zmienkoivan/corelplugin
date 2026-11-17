@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Web.Script.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -14,6 +17,32 @@ namespace VanyaTools.Native
         internal const string Model="google/nano-banana-2";
         internal string SourcePath, OutputPath, Resolution="4K", ExactText="", Notes="";
         internal Color? KeyColor;
+        internal bool ResumeOnly;
+        internal string RawPath=>Path.Combine(Path.GetDirectoryName(OutputPath),"model-output.png");
+        internal bool CanResume
+        {
+            get
+            {
+                if(File.Exists(RawPath) && new FileInfo(RawPath).Length>0)return true;
+                string state=RawPath+".prediction.json";
+                if(File.Exists(state))
+                {
+                    try
+                    {
+                        var saved=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(state));
+                        string status=saved!=null && saved.TryGetValue("status",out var value)?Convert.ToString(value):"";
+                        return status!="failed" && status!="canceled";
+                    }
+                    catch(Exception error)when(error is IOException || error is ArgumentException || error is InvalidOperationException){return true;}
+                }
+                return File.Exists(RawPath+".submitted");
+            }
+        }
+        internal bool SameInput(PrintRestorationRequest other)
+        {
+            if(other==null || Prompt!=other.Prompt || Resolution!=other.Resolution || WidthMm!=other.WidthMm || HeightMm!=other.HeightMm || !File.Exists(SourcePath) || !File.Exists(other.SourcePath))return false;
+            using(var algorithm=SHA256.Create())using(var a=File.OpenRead(SourcePath))using(var b=File.OpenRead(other.SourcePath))return algorithm.ComputeHash(a).SequenceEqual(algorithm.ComputeHash(b));
+        }
         internal double WidthMm,HeightMm;
         internal string Prompt =>
             "Restore ONLY the existing print from the supplied reference at high image quality. This is faithful restoration, NOT redesign or creative generation. " +

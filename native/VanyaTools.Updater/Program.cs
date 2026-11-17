@@ -163,7 +163,7 @@ namespace VanyaTools.Updater
                 var timer = Stopwatch.StartNew();
                 bool textOutput = Path.GetExtension(outputPath).Equals(".txt", StringComparison.OrdinalIgnoreCase);
                 var localInputFiles = CollectLocalInputFiles(input);
-                string outputUrl = CreatePrediction(token, model, input, serializer, outputPath, cancelPath, textOutput);
+                string outputUrl = CreatePrediction(token, model, input, serializer, outputPath, cancelPath, textOutput, job.ContainsKey("resume_only") && Convert.ToBoolean(job["resume_only"]));
                 if (File.Exists(cancelPath)) throw new OperationCanceledException("Вставка отменена. Модель уже завершилась; результат можно получить повтором без новой генерации.");
                 ReportWorkerProgress("downloading");
                 if (textOutput)
@@ -216,7 +216,7 @@ namespace VanyaTools.Updater
         }
 
         private static string CreatePrediction(string token, string model,
-            Dictionary<string, object> input, JavaScriptSerializer serializer, string outputPath, string cancelPath, bool textOutput)
+            Dictionary<string, object> input, JavaScriptSerializer serializer, string outputPath, string cancelPath, bool textOutput, bool resumeOnly)
         {
             string statePath = outputPath + ".prediction.json";
             Dictionary<string, object> result = File.Exists(statePath)
@@ -231,6 +231,7 @@ namespace VanyaTools.Updater
             string previousStatus = result == null ? "" : Convert.ToString(result["status"]);
             if (!recoveredSubmission && (result == null || previousStatus == "failed" || previousStatus == "canceled"))
             {
+                if(resumeOnly)throw new InvalidOperationException("Прежнее задание не найдено или завершилось ошибкой/отменой. Новая генерация не запускалась. Новый запрос требует отдельного подтверждения.");
                 if (File.Exists(cancelPath)) throw new OperationCanceledException("Операция отменена до отправки в Replicate.");
                 if (result == null && File.Exists(outputPath + ".submitted"))
                     throw new InvalidOperationException("Сервер мог принять запрос, но его номер не получен. Проверьте запрос в Replicate перед новым платным запуском; автоматический дубль заблокирован.");
@@ -715,8 +716,10 @@ namespace VanyaTools.Updater
                         string body = reader.ReadToEnd();
                         if (body.Length > 2000) body = body.Substring(0, 2000) + "…";
                         if (String.IsNullOrWhiteSpace(body)) body = "(пустое тело ответа)";
+                        string route=request.RequestUri.AbsolutePath;
+                        string phase=route=="/v1/files"?"загрузка исходника":route=="/v1/predictions" && request.Method=="POST"?"запуск модели":route.StartsWith("/v1/predictions/",StringComparison.Ordinal)?"проверка задания":"получение данных API";
                         throw new ReplicateApiException((int)response.StatusCode, "Replicate вернул HTTP " +
-                            (int)response.StatusCode + " " + response.StatusDescription + ". Ответ API: " + body);
+                            (int)response.StatusCode + " " + response.StatusDescription + ". Этап: "+phase+". Ответ API: " + body);
                     }
                 }
                 throw;

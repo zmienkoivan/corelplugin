@@ -14,7 +14,7 @@ namespace VanyaTools.Native
     /// </summary>
     internal static class ReplicateWorkerClient
     {
-        public static void Run(string model, string token, Dictionary<string, object> input, string outputPath, Action<string> progress = null, CancellationToken cancellation = default(CancellationToken))
+        public static void Run(string model, string token, Dictionary<string, object> input, string outputPath, Action<string> progress = null, CancellationToken cancellation = default(CancellationToken), bool resumeOnly = false)
         {
             cancellation.ThrowIfCancellationRequested();
             string cancelPath = outputPath + ".cancel";
@@ -25,6 +25,8 @@ namespace VanyaTools.Native
             if (!File.Exists(exe))
                 throw new InvalidOperationException("Не найден сетевой помощник Vanya Tools. Завершите обновление до версии 1.0.52 и перезапустите CorelDRAW.");
 
+            if(resumeOnly && System.Reflection.AssemblyName.GetAssemblyName(exe).Version<new Version(1,2,64,0))throw new InvalidOperationException("Для безопасного продолжения обновите Vanya Tools и перезапустите CorelDRAW. Новая генерация не запускалась.");
+
             var serializer = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue };
             string payload = serializer.Serialize(new Dictionary<string, object>
             {
@@ -32,7 +34,8 @@ namespace VanyaTools.Native
                 ["model"] = model,
                 ["input"] = input,
                 ["output_path"] = outputPath,
-                ["cancel_path"] = cancelPath
+                ["cancel_path"] = cancelPath,
+                ["resume_only"] = resumeOnly
             });
             string encodedPayload = Convert.ToBase64String(Encoding.UTF8.GetBytes(payload));
 

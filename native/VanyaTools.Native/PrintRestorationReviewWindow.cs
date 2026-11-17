@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -16,16 +16,16 @@ namespace VanyaTools.Native
         private readonly int _width,_height;
         private PrintRestorationReviewWindow(string source,string output,PrintRestorationRequest request)
         {
-            bool consent=request!=null;
-            Title=consent?"Подтверждение отправки · Nano Banana 2":"Сверка восстановленного принта";
+            bool consent=request!=null,resume=request?.ResumeOnly==true;
+            Title=consent?(resume?"Продолжение задания · Nano Banana 2":"Подтверждение отправки · Nano Banana 2"):"Сверка восстановленного принта";
             Width=Math.Min(1180,SystemParameters.WorkArea.Width-40);Height=Math.Min(780,SystemParameters.WorkArea.Height-40);MinWidth=760;MinHeight=500;WindowStartupLocation=WindowStartupLocation.CenterOwner;
             DockerTheme.Apply(this);var root=new DockPanel{Margin=new Thickness(12)};Content=root;DockerTheme.UseTheme(root,Panel.BackgroundProperty,DockerTheme.WindowBackground);
             var actions=new DockPanel{LastChildFill=false,Margin=new Thickness(0,9,0,0)};DockPanel.SetDock(actions,Dock.Bottom);root.Children.Add(actions);
             var no=new Button{Content=consent?"Не отправлять":"Вернуться",MinHeight=34,MinWidth=100,IsCancel=true,Margin=new Thickness(7,0,0,0)};
             no.Click+=(_,__)=>DialogResult=false;DockPanel.SetDock(no,Dock.Right);actions.Children.Add(no);
-            var yes=DockerTheme.Primary(new Button{Content=consent?"Отправить · платный запрос":"Рисунок сверен — принять",MinHeight=34,MinWidth=195});
+            var yes=DockerTheme.Primary(new Button{Content=consent?(resume?"Продолжить прежнее задание":"Отправить · платный запрос"):"Рисунок сверен — принять",MinHeight=34,MinWidth=195});
             yes.Click+=(_,__)=>DialogResult=true;DockPanel.SetDock(yes,Dock.Right);actions.Children.Add(yes);
-            var hint=new TextBlock{Text=consent?"Будет отправлено только показанное изображение в Replicate → Nano Banana 2 · "+request.Resolution+". Один платный запрос. Ничего не отправлено до нажатия кнопки.":
+            var hint=new TextBlock{Text=resume?"Продолжится сохранённое задание Nano Banana 2 · "+request.Resolution+". Новая генерация не запускается. Если прежний запрос не удастся однозначно найти, операция остановится.":consent?"Будет отправлено только показанное изображение в Replicate → Nano Banana 2 · "+request.Resolution+". Один платный запрос. Ничего не отправлено до нажатия кнопки.":
                 "Сверьте буквы, снежинки и другие символы, потёртости, мелкие штрихи и расположение. ИИ может менять детали. В Corel пока ничего не вставляется.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,9)};
             DockPanel.SetDock(hint,Dock.Top);root.Children.Add(hint);
             var tools=new StackPanel{Orientation=Orientation.Horizontal,Margin=new Thickness(0,0,0,7)};DockPanel.SetDock(tools,Dock.Top);root.Children.Add(tools);

@@ -16,6 +16,7 @@ namespace VanyaTools.Native
     internal sealed partial class DtfCorrectionWindow
     {
         private PrintRestorationHost _restorationHost;
+        private PrintRestorationRequest _restorePendingRequest;
         private Border _restorationPane;
         private ToggleButton _restoreToggle;
         private Button _restoreAcceptKnockout;
@@ -146,23 +147,26 @@ namespace VanyaTools.Native
                     ExactText=_restoreText.Text,Notes=_restoreNotesInput.Text,WidthMm=_originalPixels.Width*25.4/_originalPixels.DpiX,HeightMm=_originalPixels.Height*25.4/_originalPixels.DpiY};
                 File.Copy(_workingSourcePath??_sourcePath,request.SourcePath);
                 request.OutputPath=Path.Combine(Path.GetDirectoryName(request.SourcePath),"restored.png");
+                if(_restorePendingRequest!=null && _restorePendingRequest.CanResume && _restorePendingRequest.SameInput(request))request=_restorePendingRequest;
+                request.ResumeOnly=ReferenceEquals(request,_restorePendingRequest) && request.CanResume;
                 if(_restorationHost.Confirm?.Invoke(this,request)!=true)return;
+                _restorePendingRequest=request;
                 await BeginRestorationAsync("Восстанавливаю рисунок…","restore:google/nano-banana-2:"+request.Resolution);
                 var runCancellation=_restorationCancellation;var token=runCancellation.Token;
                 var result=await _restorationHost.Generate(request,stage=>Dispatcher.BeginInvoke(new Action(()=> {
                     if(_closed || !_restorationBusy || _restorationCancellation!=runCancellation)return;
                     _restorationStage=stage=="sending"?"Отправляю исходник…":stage=="auto-cancelling"?"Автоотмена · лимит 10 минут":stage=="cancelling"?"Отменяю запрос…":
-                        stage=="downloading"?"Загружаю результат…":stage!=null && stage.StartsWith("retrying",StringComparison.Ordinal)?"Восстанавливаю связь…":"Восстанавливаю рисунок…";
+                        stage=="recovering"?"Ищу прежнее задание без новой генерации…":stage=="creating"?"Запускаю модель…":stage=="downloading"?"Загружаю результат…":stage!=null && stage.StartsWith("retrying",StringComparison.Ordinal)?"Восстанавливаю связь…":"Восстанавливаю рисунок…";
                     UpdateRestorationProgress();
                 })),token);
                 OperationTiming.Record(_restorationTiming,_restorationElapsed.Elapsed);
                 if(_closed)return;
-                _restoreReady=result;_restoreReference=request.SourcePath;_restoreKey=request.KeyColor;
+                _restorePendingRequest=null;_restoreReady=result;_restoreReference=request.SourcePath;_restoreKey=request.KeyColor;
                 _restoreReadyOriginX=_restorationOffsetX;_restoreReadyOriginY=_restorationOffsetY;generated=true;
                 _restorationStage="ИИ завершён";_restoreStatus.Text="Результат сохранён. Сверьте рисунок перед продолжением.";
             }
             catch(OperationCanceledException){_restorationStage="ИИ отменён";if(!_closed)_restoreStatus.Text="Запрос отменён. Исходник сохранён; готовый файл можно открыть через «Последний результат ИИ».";}
-            catch(Exception error){_restorationStage="Ошибка ИИ";if(!_closed){_restoreStatus.Text=error.GetBaseException().Message;ShowMessage(_restoreStatus.Text,true);}}
+            catch(Exception error){Log.Error("Print restoration failed.",error);_restorationStage="Ошибка ИИ";if(!_closed){_restoreStatus.Text=error.GetBaseException().Message;ShowMessage(_restoreStatus.Text,true);}}
             finally{if(_restorationBusy)EndRestoration();}
             if(generated && !_closed && _restoreReady!=null)await ReviewRestorationAsync();
         }

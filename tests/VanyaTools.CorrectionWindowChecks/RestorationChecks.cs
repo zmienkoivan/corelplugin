@@ -113,5 +113,38 @@ internal static partial class Program
             Check(File.ReadAllBytes(path).SequenceEqual(original),"Wizard modified captured source file");
         }
         finally {window.Close();Until(()=>!Field<bool>(window,"_restorationBusy"),"Closing retained wizard work");}
+        RestorationRecoveryChecks(folder,path);
+    }
+    private static void RestorationRecoveryChecks(string folder,string source)
+    {
+        int calls=0,consents=0;PrintRestorationRequest first=null,second=null;
+        var host=new PrintRestorationHost{
+            Validate=()=>{},Confirm=(_,request)=>{consents++;return true;},Review=(_,a,b)=>false,
+            Generate=async(request,progress,cancel)=>{
+                calls++;await Task.Delay(10,cancel);
+                if(calls==1){first=request;File.WriteAllText(request.RawPath+".submitted","sent");throw new InvalidOperationException("Synthetic HTTP 500 after submission");}
+                second=request;File.Copy(request.SourcePath,request.OutputPath);return request.OutputPath;
+            }
+        };
+        var window=new DtfCorrectionWindow(source,new DtfCorrectionOptions(),new DtfOutlineSettings(),RestoreProcessor,restoration:host,startRestoration:true);
+        try
+        {
+            var load=(Task)Call(window,"LoadAsync");Until(()=>load.IsCompleted,"Recovery wizard load stalled");load.GetAwaiter().GetResult();
+            Until(()=>Field<Button>(window,"_apply").IsEnabled,"Recovery wizard preview stalled");
+            RunRestorationStep(window,"RestoreAiAsync");
+            Check(first.CanResume && !first.ResumeOnly && Field<PrintRestorationRequest>(window,"_restorePendingRequest")==first,"Failed restoration lost its unknown submission session.");
+            RunRestorationStep(window,"RestoreAiAsync");
+            Check(ReferenceEquals(first,second) && second.ResumeOnly && calls==2 && consents==2,"Restoration after 500 created another output/session instead of resuming the confirmed request.");
+            Check(Field<PrintRestorationRequest>(window,"_restorePendingRequest")==null && File.Exists(second.OutputPath),"Recovered restoration did not retain its result or clear the pending session.");
+            string alternative=Path.Combine(folder,"restoration-other-source.png");File.Copy(source,alternative);
+            var same=new PrintRestorationRequest{SourcePath=alternative,OutputPath=Path.Combine(folder,"other-restored.png"),Resolution=first.Resolution,KeyColor=first.KeyColor,WidthMm=first.WidthMm,HeightMm=first.HeightMm};
+            Check(first.SameInput(same),"Identical references under different file names did not match.");
+            same.Resolution="2K";Check(!first.SameInput(same),"Changed restoration resolution resumed the wrong request.");same.Resolution=first.Resolution;
+            same.Notes="New direction";Check(!first.SameInput(same),"Changed prompt resumed the wrong request.");same.Notes="";
+            File.AppendAllText(alternative,"different bytes");Check(!first.SameInput(same),"Different reference bytes resumed the wrong request.");
+            File.WriteAllText(first.RawPath+".prediction.json","{\"status\":\"failed\"}");Check(!first.CanResume,"Terminal restoration was described as a free continuation.");
+            File.WriteAllText(first.RawPath+".prediction.json","{invalid");Check(first.CanResume,"Corrupt saved state allowed a fresh paid request.");
+        }
+        finally{window.Close();Until(()=>!Field<bool>(window,"_restorationBusy"),"Recovery fixture kept work running.");}
     }
 }

@@ -21,18 +21,20 @@ internal static class WireChecks
             string file=Path.Combine(root,"wire-input.png");File.WriteAllBytes(file,new byte[]{10,20,30,40,50});
             string hash;using(var stream=File.OpenRead(file))hash=ReplicateSubmissionRecovery.Digest(stream);server.FileHash=hash;
             Dictionary<string,object> Input()=>new Dictionary<string,object>{{"prompt","Синтетическая буква А · золото"},{"image_input",new[]{"replicate-file:"+file}},{"resolution","2K"}};
-            object Invoke(string output)
+            object Invoke(string output,bool resumeOnly=false)
             {
-                try{return method.Invoke(null,new object[]{"synthetic-not-a-real-token",Model,Input(),new JavaScriptSerializer{MaxJsonLength=Int32.MaxValue},output,output+".cancel",false});}
+                try{return method.Invoke(null,new object[]{"synthetic-not-a-real-token",Model,Input(),new JavaScriptSerializer{MaxJsonLength=Int32.MaxValue},output,output+".cancel",false,resumeOnly});}
                 catch(TargetInvocationException e){throw e.InnerException;}
             }
-            server.Reset("recover");string path=Path.Combine(root,"recover.png");
+            server.Reset("recover");bool resumeBlocked=false;try{Invoke(Path.Combine(root,"absent.png"),true);}catch(InvalidOperationException){resumeBlocked=true;}
+            Program.Check(resumeBlocked && server.Posts==0,"Resume-only request without saved state submitted a paid model.");
+            string path=Path.Combine(root,"recover.png");
             string url=(string)Invoke(path);
             Program.Check(server.Posts==1 && server.Lists>=1 && url.EndsWith("/result.png"),"500 did not recover same request without another POST.");
             Program.Check(server.ValidJson && server.InlineImage && server.Uploads==0 && server.AutoCancelHeader=="10m","JSON framing or small-image inline route failed.");
             Program.Check(File.Exists(path+".submission.json") && File.Exists(path+".prediction.json"),"Recovery receipt or model ID missing.");
             string receipt=File.ReadAllText(path+".submission.json");Program.Check(!receipt.Contains("Синтетическая буква А · золото") && !receipt.Contains("synthetic-not-a-real-token") && !receipt.Contains("base64"),"Receipt leaked payload.");
-            Invoke(path);Program.Check(server.Posts==1,"Ready recovered state caused a new POST.");
+            Invoke(path,true);Program.Check(server.Posts==1,"Ready recovered state caused a new POST.");
             server.Reset("missing");path=Path.Combine(root,"unknown.png");bool failed=false;try{Invoke(path);}catch(InvalidOperationException){failed=true;}
             Program.Check(failed && server.Posts==1 && File.Exists(path+".submitted"),"Unmatched 500 was silently retried or unguarded.");
             failed=false;try{Invoke(path);}catch(InvalidOperationException){failed=true;}
@@ -47,6 +49,8 @@ internal static class WireChecks
             Invoke(path);Program.Check(server.Posts==0 && server.MetadataReads>0 && File.Exists(path+".prediction.json"),"Legacy marker did not recover using image checksum without POST/upload.");
             server.Reset("failed");path=Path.Combine(root,"terminal.png");failed=false;try{Invoke(path);}catch(InvalidOperationException){failed=true;}
             Program.Check(failed && server.Posts==1 && File.ReadAllText(path+".prediction.json").Contains("failed"),"Recovered terminal failure auto-started another paid model.");
+            resumeBlocked=false;try{Invoke(path,true);}catch(InvalidOperationException){resumeBlocked=true;}
+            Program.Check(resumeBlocked && server.Posts==1,"Resume-only terminal failure submitted another paid model.");
             server.Mode="recover";server.IncludePrevious=true;Invoke(path);
             Program.Check(server.Posts==2 && File.ReadAllText(path+".prediction.json").Contains("recovered-2"),"Explicit retry attached a previous failed request instead of the new attempt.");
             server.IncludePrevious=false;
