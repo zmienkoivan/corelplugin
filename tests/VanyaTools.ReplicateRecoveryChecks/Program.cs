@@ -48,7 +48,8 @@ internal static class Program
         var reOrdered=new Dictionary<string,object>();foreach(var item in input.Reverse())reOrdered[item.Key]=item.Value;
         Check(ReplicateSubmissionRecovery.Create(stamp.Model,reOrdered,now).ContentHash==stamp.ContentHash,"Dictionary ordering changed fingerprint.");
         int budget=ReplicateInputEncoding.InlineBudget;Check(ReplicateInputEncoding.TryInline(new byte[623669],"image/png",ref budget,out var inline) && inline.StartsWith("data:image/png;base64,"),"Observed preview still requires a file upload.");
-        Check(!ReplicateInputEncoding.TryInline(new byte[623669],"image/png",ref budget,out _),"Multiple images exceeded total inline budget.");
+        Check(!ReplicateInputEncoding.TryInline(new byte[ReplicateInputEncoding.InlineBudget],"image/png",ref budget,out _),"Multiple images exceeded total inline budget.");
+        budget=ReplicateInputEncoding.InlineBudget;Check(ReplicateInputEncoding.TryInline(new byte[2287350],"image/png",ref budget,out _),"Observed restoration reference still requires the failing file-host route.");
         budget=ReplicateInputEncoding.InlineBudget;Check(!ReplicateInputEncoding.TryInline(new byte[budget+1],"image/png",ref budget,out _) && budget==ReplicateInputEncoding.InlineBudget,"Large image strategy changed data/budget.");
     }
 }

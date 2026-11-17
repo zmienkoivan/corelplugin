@@ -106,7 +106,9 @@ namespace VanyaTools.Updater
     }
     internal static class ReplicateInputEncoding
     {
-        internal const int InlineBudget=1024*1024;
+        // Keep the encoded JSON below 10 MB while avoiding the file-host path
+        // for ordinary full-resolution print references (observed: 2,287,350 bytes).
+        internal const int InlineBudget=6*1024*1024;
         internal static bool TryInline(byte[] content,string mime,ref int remaining,out string value)
         {
             value=null;if(content.Length>InlineBudget || content.Length>remaining)return false;

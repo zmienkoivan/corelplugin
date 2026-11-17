@@ -78,6 +78,13 @@ internal static class WireChecks
                 else
                     Program.Check(error is TimeoutException && error.Message.Contains("подтвердил автоматическую отмену") && saved.Contains("canceled") && server.Cancels==(mode=="server-expired"?0:1),"Expired request was not canceled and confirmed: "+mode);
             }
+            // The full-size print must bypass file hosting without resizing or
+            // recompressing the approved source, just like a compact preview.
+            byte[] restoration=new byte[2287350];for(int n=0;n<restoration.Length;n++)restoration[n]=(byte)(n%251);
+            File.WriteAllBytes(file,restoration);using(var stream=File.OpenRead(file))server.FileHash=ReplicateSubmissionRecovery.Digest(stream);
+            server.Reset("recover");path=Path.Combine(root,"print-reference.png");Invoke(path);
+            string full=Convert.ToString(((System.Collections.IList)server.SeedInput["image_input"])[0]);
+            Program.Check(server.Posts==1 && server.Uploads==0 && server.InlineImage && Convert.FromBase64String(full.Substring(full.IndexOf(',')+1)).SequenceEqual(restoration),"Full-size print changed bytes or used file storage.");
             // The compact letter reference must take the same inline path as
             // small previews, without contacting file storage or altering bytes.
             string observed=Environment.GetEnvironmentVariable("VANYA_REPLICATE_COMPACT_REFERENCE");
