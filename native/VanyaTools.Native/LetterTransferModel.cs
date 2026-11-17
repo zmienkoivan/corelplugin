@@ -13,6 +13,7 @@ namespace VanyaTools.Native
         public string Notes { get; set; }="";
         public string Style { get; set; }="По референсу";
         public double HeightMm { get; set; }=20;
+        public List<double> PrintHeightsMm { get; set; }
         public double SheetWidthMm { get; set; }=300;
         public double SheetHeightMm { get; set; }=450;
         public bool AutoLength { get; set; }=true;
@@ -97,6 +98,7 @@ namespace VanyaTools.Native
         {
             if(set==null || set.Schema!=1 || !Guid.TryParseExact(set.Id,"N",out _) || String.IsNullOrWhiteSpace(set.Name) || set.Name.Length>120 || (set.Notes??"").Length>4000 || (set.Style??"").Length>4000)
                 throw new ArgumentException("Некорректный файл набора букв.");
+            LetterTransferPrintSizes.Validate(LetterTransferPrintSizes.For(set));
             if(set.Letters==null || set.Letters.Count!=33 || set.Letters.Any(row=>row==null || !ValidLetter(row.Letter) || row.Copies<0 || row.Copies>5000 || !Finite(row.Weight) || row.Weight<0 || row.Weight>1000) ||
                 set.Letters.Select(row=>row.Letter).Distinct().Count()!=33 || set.Letters.Sum(row=>row.Copies)>5000)
                 throw new ArgumentException("Проверьте таблицу русских заглавных букв и количество копий (до 5000).");
@@ -136,18 +138,19 @@ namespace VanyaTools.Native
     {
         internal LetterTransferGlyph Glyph;
         internal int Page,Column,Row;
-        internal double X,Y,Width,Height,CellX,CellY,CellWidth,CellHeight;
+        internal double X,Y,Width,Height,CellX,CellY,CellWidth,CellHeight,PrintHeightMm;
     }
     internal static class LetterTransferLayout
     {
         internal static double PageLimit(LetterTransferSet set)=>set.AutoLength?7000:set.SheetHeightMm;
         internal static double PageHeight(LetterTransferSet set,IEnumerable<LetterTransferPlacement> page)=>set.AutoLength?Math.Max(20,page.Max(p=>p.CellY+p.CellHeight)+set.MarginMm):set.SheetHeightMm;
-        internal static double GlyphHeight(LetterTransferSet set,LetterTransferGlyph glyph)
+        internal static double GlyphHeight(LetterTransferSet set,LetterTransferGlyph glyph)=>GlyphHeight(set.HeightMm,glyph);
+        internal static double GlyphHeight(double height,LetterTransferGlyph glyph)
         {
-            if(glyph.Letter!="Ё" && glyph.Letter!="Й")return set.HeightMm;
+            if(glyph.Letter!="Ё" && glyph.Letter!="Й")return height;
             // Older sets have no measured cap body. Reserve 20% above the body
             // until an image with detached accents can be measured on load.
-            return glyph.BodyHeight>0?set.HeightMm*glyph.Height/glyph.BodyHeight:set.HeightMm*1.2;
+            return glyph.BodyHeight>0?height*glyph.Height/glyph.BodyHeight:height*1.2;
         }
         internal static List<LetterTransferPlacement> Build(LetterTransferSet set,bool readyOnly)
         {
@@ -159,19 +162,25 @@ namespace VanyaTools.Native
                 if(variants.Length>0)for(int copy=0;copy<row.Copies;copy++)glyphs.Add(variants[copy%variants.Length]);
             }
             var placements=new List<LetterTransferPlacement>();if(glyphs.Count==0)return placements;
-            double cellHeight=glyphs.Max(g=>GlyphHeight(set,g)),cellWidth=glyphs.Max(g=>GlyphHeight(set,g)*g.Width/g.Height);
-            double width=set.SheetWidthMm-2*set.MarginMm,height=PageLimit(set)-2*set.MarginMm;
-            if(cellWidth>width+.00001 || cellHeight>height+.00001)throw new InvalidOperationException("Буквы не помещаются в ячейку при выбранной высоте. Увеличьте лист или уменьшите высоту букв.");
-            int columns=(int)Math.Floor((width+set.GapMm+.00001)/(cellWidth+set.GapMm));
-            int rows=(int)Math.Floor((height+set.GapMm+.00001)/(cellHeight+set.GapMm));
-            columns=Math.Min(columns,glyphs.Count);rows=Math.Min(rows,glyphs.Count);int capacity=columns*rows;
-            if((glyphs.Count+capacity-1)/capacity>200)throw new InvalidOperationException("Больше 200 листов. Уменьшите количество или размер букв либо увеличьте лист.");
-            for(int n=0;n<glyphs.Count;n++)
+            int pageOffset=0;
+            foreach(double printHeight in LetterTransferPrintSizes.For(set))
             {
-                var glyph=glyphs[n];double h=GlyphHeight(set,glyph),w=h*glyph.Width/glyph.Height;
-                int slot=n%capacity,col=slot%columns,row=slot/columns;
-                double x=set.MarginMm+col*(cellWidth+set.GapMm),y=set.MarginMm+row*(cellHeight+set.GapMm);
-                placements.Add(new LetterTransferPlacement{Glyph=glyph,Page=n/capacity,Column=col,Row=row,CellX=x,CellY=y,CellWidth=cellWidth,CellHeight=cellHeight,X=x+(cellWidth-w)/2,Y=y+cellHeight-h,Width=w,Height=h});
+                double cellHeight=glyphs.Max(g=>GlyphHeight(printHeight,g)),cellWidth=glyphs.Max(g=>GlyphHeight(printHeight,g)*g.Width/g.Height);
+                double width=set.SheetWidthMm-2*set.MarginMm,height=PageLimit(set)-2*set.MarginMm;
+                if(cellWidth>width+.00001 || cellHeight>height+.00001)throw new InvalidOperationException("Буквы высотой "+LetterTransferPrintSizes.Label(printHeight)+" мм не помещаются. Увеличьте лист или уменьшите высоту букв.");
+                int columns=(int)Math.Floor((width+set.GapMm+.00001)/(cellWidth+set.GapMm));
+                int rows=(int)Math.Floor((height+set.GapMm+.00001)/(cellHeight+set.GapMm));
+                columns=Math.Min(columns,glyphs.Count);rows=Math.Min(rows,glyphs.Count);int capacity=columns*rows;
+                int pageCount=(glyphs.Count+capacity-1)/capacity;
+                if(pageOffset+pageCount>200)throw new InvalidOperationException("Больше 200 листов. Уменьшите количество или размер букв либо увеличьте лист.");
+                for(int n=0;n<glyphs.Count;n++)
+                {
+                    var glyph=glyphs[n];double h=GlyphHeight(printHeight,glyph),w=h*glyph.Width/glyph.Height;
+                    int slot=n%capacity,col=slot%columns,row=slot/columns;
+                    double x=set.MarginMm+col*(cellWidth+set.GapMm),y=set.MarginMm+row*(cellHeight+set.GapMm);
+                    placements.Add(new LetterTransferPlacement{Glyph=glyph,Page=pageOffset+n/capacity,Column=col,Row=row,PrintHeightMm=printHeight,CellX=x,CellY=y,CellWidth=cellWidth,CellHeight=cellHeight,X=x+(cellWidth-w)/2,Y=y+cellHeight-h,Width=w,Height=h});
+                }
+                pageOffset+=pageCount;
             }
             return placements;
         }

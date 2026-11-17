@@ -31,7 +31,7 @@ namespace VanyaTools.Native
                 foreach(var group in placements.GroupBy(p=>p.Page))
                 {
                     dynamic page=doc.AddPages(1);pages.Add((object)page);page.Activate();page.SetSize(set.SheetWidthMm,LetterTransferLayout.PageHeight(set,group));
-                    page.Name=set.Name+" · буквы · "+(group.Key+1);dynamic layer=page.CreateLayer("Буквы-трансферы"),range=app.CreateShapeRange();
+                    page.Name=set.Name+" · "+LetterTransferPrintSizes.Label(group.First().PrintHeightMm)+" мм · лист "+(group.Key+1);dynamic layer=page.CreateLayer("Буквы-трансферы"),range=app.CreateShapeRange();
                     var sources=new Dictionary<string,object>();
                     foreach(var item in group)
                     {

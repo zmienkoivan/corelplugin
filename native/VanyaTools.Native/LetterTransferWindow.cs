@@ -80,7 +80,7 @@ namespace VanyaTools.Native
             _body.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(285)});_body.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(255)});_body.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(1,GridUnitType.Star)});root.Children.Add(_body);
             var leftTabs=_steps;leftTabs.Margin=new Thickness(0,8,10,0);_body.Children.Add(leftTabs);
             var sizes=new WrapPanel{Margin=new Thickness(0,4,0,0)};_sizesPanel=sizes;DockPanel.SetDock(sizes,Dock.Top);root.Children.Insert(root.Children.IndexOf(_body),sizes);
-            sizes.Children.Add(new TextBlock{Text="Высота основы букв, мм",VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(4)});_height.Width=70;_height.MinHeight=29;sizes.Children.Add(_height);
+            sizes.Children.Add(new TextBlock{Text="Высоты основы букв, мм",VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(4)});_height.Width=160;_height.MinHeight=29;_height.MaxLength=180;_height.ToolTip="Произвольная высота от 1 до 500 мм. Можно несколько через точку с запятой: 20; 80; 35,5. Для каждой высоты — отдельный комплект листов с тем же количеством букв. Ё и Й выше на надстрочные элементы.";sizes.Children.Add(_height);sizes.Children.Add(new TextBlock{Text="например: 20; 80; 35,5",VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(6,0,0,0),FontSize=11});
             sizes.Children.Add(new TextBlock{Text="Ширина полотна, мм",VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(12,0,4,0)});_sheetWidth.Width=80;_sheetWidth.MinHeight=29;sizes.Children.Add(_sheetWidth);
             var fields=new StackPanel{Margin=new Thickness(5)};var printFields=new StackPanel{Margin=new Thickness(5)};var edgeFields=new StackPanel{Margin=new Thickness(5)};var edgeAdvanced=new StackPanel();_edgeExpert.Content=edgeAdvanced;
             leftTabs.Items.Add(new TabItem{Header="1. Стиль",Content=new ScrollViewer{Content=fields,VerticalScrollBarVisibility=ScrollBarVisibility.Auto}});
@@ -167,7 +167,7 @@ namespace VanyaTools.Native
             try
             {
                 _set=set;_directory=directory;_cache.Clear();_name.Text=set.Name;_notes.Text=set.Notes;_style.SelectedItem=set.Style;if(_style.SelectedIndex<0)_style.SelectedIndex=0;
-                _autoLength.IsChecked=set.AutoLength;_sheetHeight.IsEnabled=!set.AutoLength;_alphaThreshold.Text=set.AlphaThreshold.ToString();_edgeTrim.Value=set.EdgeTrimPx;_smoothEdges.IsChecked=set.SmoothEdges;_sharpContour.IsChecked=set.SharpContour;_contourSmooth.Value=set.ContourSmoothPx;_contourSmooth.IsEnabled=set.SharpContour;_model.SelectedIndex=Array.IndexOf(LetterTransferModels.Ids,set.GenerationModel);_height.Text=N(set.HeightMm);_sheetWidth.Text=N(set.SheetWidthMm);_sheetHeight.Text=N(set.SheetHeightMm);_gap.Text=N(set.GapMm);_margin.Text=N(set.MarginMm);_target.Text=set.TargetCopies.ToString();_variants.Text=set.VariantsPerLetter.ToString();
+                _autoLength.IsChecked=set.AutoLength;_sheetHeight.IsEnabled=!set.AutoLength;_alphaThreshold.Text=set.AlphaThreshold.ToString();_edgeTrim.Value=set.EdgeTrimPx;_smoothEdges.IsChecked=set.SmoothEdges;_sharpContour.IsChecked=set.SharpContour;_contourSmooth.Value=set.ContourSmoothPx;_contourSmooth.IsEnabled=set.SharpContour;_model.SelectedIndex=Array.IndexOf(LetterTransferModels.Ids,set.GenerationModel);_height.Text=LetterTransferPrintSizes.Format(set);_sheetWidth.Text=N(set.SheetWidthMm);_sheetHeight.Text=N(set.SheetHeightMm);_gap.Text=N(set.GapMm);_margin.Text=N(set.MarginMm);_target.Text=set.TargetCopies.ToString();_variants.Text=set.VariantsPerLetter.ToString();
                 _table.ItemsSource=set.Letters;_table.SelectedIndex=0;_reference.Source=String.IsNullOrEmpty(set.Reference)?null:Thumb(set.Reference);
                 _edgeQuality.SelectedIndex=LetterTransferWorkflow.EdgeMode(set);_edgeExpert.IsExpanded=false;SelectStep(set.Glyphs.Count>0 || set.Jobs.Any(j=>LetterTransferAi.HasResult(directory,j))?1:0);RefreshAssets();Preview();Report("Набор загружен. Параметры сохраняются автоматически.");
             }
@@ -177,16 +177,18 @@ namespace VanyaTools.Native
         {
             if(_set==null)return;
             if(!_table.CommitEdit(DataGridEditingUnit.Cell,true) || !_table.CommitEdit(DataGridEditingUnit.Row,true))throw new ArgumentException("Завершите правку таблицы: нужны числовые значения.");
+            var heights=LetterTransferPrintSizes.Parse(_height.Text);
             var candidate=new LetterTransferSet{
                 Id=_set.Id,Schema=_set.Schema,Reference=_set.Reference,Letters=_set.Letters,Glyphs=_set.Glyphs,Jobs=_set.Jobs,
                 Name=_name.Text.Trim(),Style=(string)_style.SelectedItem,Notes=_notes.Text,AutoLength=_autoLength.IsChecked==true,
                 AlphaThreshold=Integer(_alphaThreshold),EdgeTrimPx=(int)_edgeTrim.Value,SmoothEdges=_smoothEdges.IsChecked==true,SharpContour=_sharpContour.IsChecked==true,ContourSmoothPx=_contourSmooth.Value,
-                GenerationModel=LetterTransferModels.At(_model.SelectedIndex),HeightMm=Number(_height),SheetWidthMm=Number(_sheetWidth),SheetHeightMm=Number(_sheetHeight),
+                GenerationModel=LetterTransferModels.At(_model.SelectedIndex),HeightMm=heights[0],PrintHeightsMm=heights.ToList(),SheetWidthMm=Number(_sheetWidth),SheetHeightMm=Number(_sheetHeight),
                 GapMm=Number(_gap),MarginMm=Number(_margin),TargetCopies=Integer(_target),VariantsPerLetter=Integer(_variants)};
             LetterTransferRules.Validate(candidate);
             // Preserve list/object identity used by the table and in-flight jobs.
             // Invalid intermediate input must not corrupt the active settings.
             foreach(var property in typeof(LetterTransferSet).GetProperties())if(property.CanWrite && (property.PropertyType.IsValueType || property.PropertyType==typeof(string)))property.SetValue(_set,property.GetValue(candidate));
+            _set.PrintHeightsMm=candidate.PrintHeightsMm;
         }
         private void Save()
         {
@@ -235,12 +237,12 @@ namespace VanyaTools.Native
                         context.DrawImage(image,new Rect(p.X,p.Y,p.Width,p.Height));
                     }
                 }
-                drawing.Freeze();var border=new Border{Child=new Image{Source=new DrawingImage(drawing),Width=_set.SheetWidthMm*2,Height=pageHeight*2},Margin=new Thickness(8)};_pages.Children.Add(border);
+                drawing.Freeze();var pagePanel=new StackPanel();pagePanel.Children.Add(new TextBlock{Text=LetterTransferPrintSizes.Label(group.First().PrintHeightMm)+" мм · лист "+(group.Key+1),Margin=new Thickness(0,0,0,4)});pagePanel.Children.Add(new Image{Source=new DrawingImage(drawing),Width=_set.SheetWidthMm*2,Height=pageHeight*2});var border=new Border{Child=pagePanel,Margin=new Thickness(8)};_pages.Children.Add(border);
             }
-            _pages.LayoutTransform=new ScaleTransform(_zoom,_zoom);int requested=_set.Letters.Sum(r=>r.Copies);int missing=_set.Letters.Count(r=>!_set.Glyphs.Any(g=>g.Letter==r.Letter));
+            _pages.LayoutTransform=new ScaleTransform(_zoom,_zoom);int requested=_set.Letters.Sum(r=>r.Copies)*LetterTransferPrintSizes.For(_set).Length;int missing=_set.Letters.Count(r=>!_set.Glyphs.Any(g=>g.Letter==r.Letter));
             int missingVariants=LetterTransferRules.MissingVariants(_set);
             _complete.Content=missingVariants>0?"К буквам · не хватает "+missingVariants:"Посмотреть буквы";_complete.IsEnabled=true;
-            _summary.Text="На листах: "+placements.Count+" из "+requested+" копий · листов: "+pages+" · нет букв: "+missing+" · длина "+N(placements.GroupBy(p=>p.Page).Sum(g=>LetterTransferLayout.PageHeight(_set,g)))+" мм\nВариантов не хватает: "+missingVariants+" · цель: "+_set.VariantsPerLetter+" на каждую букву.\nПрямая сетка · основа "+N(_set.HeightMm)+" мм; Ё/Й выше · Ctrl+колесо — зум. Исходные PNG сохраняются без масштабирования.";
+            _summary.Text="На листах: "+placements.Count+" из "+requested+" копий · листов: "+pages+" · нет букв: "+missing+" · длина "+N(placements.GroupBy(p=>p.Page).Sum(g=>LetterTransferLayout.PageHeight(_set,g)))+" мм\nВариантов не хватает: "+missingVariants+" · цель: "+_set.VariantsPerLetter+" на каждую букву.\nПрямая сетка · высоты "+LetterTransferPrintSizes.Format(_set)+" мм; Ё/Й выше · Ctrl+колесо — зум. Исходные PNG сохраняются без масштабирования.";
         }
         private void Zoom(double value){_zoom=Math.Max(.1,Math.Min(5,value));_pages.LayoutTransform=new ScaleTransform(_zoom,_zoom);}
         private void Reference(bool corel)

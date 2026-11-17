@@ -326,7 +326,8 @@ namespace VanyaTools.Native
         internal static BitmapSource Physical(LetterTransferSet set,string letter,BitmapSource image)
         {
             int body=BodyHeight(letter,image);
-            double physicalHeight=(letter=="Ё" || letter=="Й")?(body>0?set.HeightMm*image.PixelHeight/body:set.HeightMm*1.2):set.HeightMm;
+            double baseHeight=LetterTransferPrintSizes.For(set).Max();
+            double physicalHeight=(letter=="Ё" || letter=="Й")?(body>0?baseHeight*image.PixelHeight/body:baseHeight*1.2):baseHeight;
             double dpi=image.PixelHeight*25.4/physicalHeight;
             var result=BitmapSource.Create(image.PixelWidth,image.PixelHeight,dpi,dpi,PixelFormats.Bgra32,null,Pixels(image),image.PixelWidth*4);result.Freeze();return result;
         }

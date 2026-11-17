@@ -21,7 +21,8 @@ internal static class Program
         {
             if(Environment.GetEnvironmentVariable("VANYA_LETTER_CHECK_GROUP")=="edge"){GreenMaterialChecks.Run(_root);ContourChecks.Run(_root);Console.WriteLine("Letter edge checks passed: "+_checks);return 0;}
             if(Environment.GetEnvironmentVariable("VANYA_LETTER_CHECK_GROUP")=="workflow"){VariantSequenceChecks.Run(_root);WorkflowChecks.Run(_root);Console.WriteLine("Letter workflow checks passed: "+_checks);return 0;}
-            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();AdaptiveGrid();IrregularAlphabet();Layouts();GridAndLabelChecks.Run(_root);Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();RecognitionChecks.Run(_root);AlternativeAndEdgeChecks.Run(_root);ContentGridChecks.Run(_root);LightGridChecks.Run(_root);VariantSequenceChecks.Run(_root);ContourChecks.Run(_root);GreenMaterialChecks.Run(_root);WorkflowChecks.Run(_root);
+            if(Environment.GetEnvironmentVariable("VANYA_LETTER_CHECK_GROUP")=="sizes"){HeightChecks.Run(_root);Console.WriteLine("Letter height checks passed: "+_checks);return 0;}
+            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();AdaptiveGrid();IrregularAlphabet();Layouts();HeightChecks.Run(_root);GridAndLabelChecks.Run(_root);Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();RecognitionChecks.Run(_root);AlternativeAndEdgeChecks.Run(_root);ContentGridChecks.Run(_root);LightGridChecks.Run(_root);VariantSequenceChecks.Run(_root);ContourChecks.Run(_root);GreenMaterialChecks.Run(_root);WorkflowChecks.Run(_root);
             Console.WriteLine("Letter transfer checks passed: "+_checks+". Offline checks; no Replicate/Corel requests.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}

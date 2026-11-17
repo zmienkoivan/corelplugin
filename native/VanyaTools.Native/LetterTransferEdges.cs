@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -147,7 +148,8 @@ namespace VanyaTools.Native
         {
             var image=Process(source,set.EdgeTrimPx,set.AlphaThreshold,set.SmoothEdges,cancel);if(!set.SharpContour)return image;
             int body=LetterTransferImages.BodyHeight(letter,image);
-            double height=letter=="Ё" || letter=="Й"?(body>0?set.HeightMm*image.PixelHeight/body:set.HeightMm*1.2):set.HeightMm;
+            double baseHeight=LetterTransferPrintSizes.For(set).Max();
+            double height=letter=="Ё" || letter=="Й"?(body>0?baseHeight*image.PixelHeight/body:baseHeight*1.2):baseHeight;
             double scale=Math.Max(1,height*600/25.4/image.PixelHeight);
             return LetterTransferContour.Refine(image,set.ContourSmoothPx,scale,cancel);
         }
