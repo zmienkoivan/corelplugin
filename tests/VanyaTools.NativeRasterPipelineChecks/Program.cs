@@ -137,6 +137,19 @@ internal static class Program
 
         string outlined = PathFor("outlined-" + mode + ".png");
         var outlineResult = NativeRasterCorrection.Process(input, outlined, new DtfCorrectionOptions { Outline = true, Color = Colors.Red }, CancellationToken.None);
+        var exclude = new RasterProtectionMask(new[]{new RasterMaskShape(RasterMaskTool.Rectangle,new[]{new RasterMaskPoint(-10,-10),new RasterMaskPoint(10,10)},0)});
+        string maskedPath = PathFor("outline-mask-"+mode+".png");
+        var maskedOptions = new DtfCorrectionOptions { Outline=true, Color=Colors.Red, OutlineMask=exclude };
+        Check(maskedOptions.HasProtection && maskedOptions.Copy().OutlineMask==exclude,"Outline mask does not route protected geometry through the native processor");
+        var maskedResult = NativeRasterCorrection.Process(input,maskedPath,maskedOptions,CancellationToken.None);var masked=Read(maskedPath);
+        int mx=(int)Math.Round(maskedResult.OffsetMm.Item1*source.DpiX/25.4),my=(int)Math.Round(maskedResult.OffsetMm.Item2*source.DpiY/25.4);
+        Check(masked.Alpha.Count(a=>a!=0)==source.Alpha.Count(a=>a!=0) && masked.Mode==mode,"File pipeline dropped outline protection or changed the native model");
+        for(int y=0;y<source.Height;y++)for(int x=0;x<source.Width;x++)Check(masked.Alpha[(y+my)*masked.Width+x+mx]==source.Alpha[y*source.Width+x],"Outline mask changed file alpha inside the source");
+        if(mode==4) {
+            string plainPath=PathFor("outline-mask-rgb.png");var plainResult=NativeRasterCorrection.ProcessRgb(input,plainPath,maskedOptions,CancellationToken.None);var plain=Read(plainPath);
+            Check(plain.Alpha.SequenceEqual(masked.Alpha) && plain.Colors.SequenceEqual(masked.Colors) && Math.Abs(plainResult.OffsetMm.Item1-maskedResult.OffsetMm.Item1)<.0001 && Math.Abs(plainResult.OffsetMm.Item2-maskedResult.OffsetMm.Item2)<.0001,"RGB fallback failed to forward the outline mask");
+        }
+
         var outline = Read(outlined); int ox = (int)Math.Round(outlineResult.OffsetMm.Item1 * 400 / 25.4), oy = (int)Math.Round(outlineResult.OffsetMm.Item2 * 400 / 25.4);
         Check(outline.Mode == mode && outline.Width > source.Width && outline.Height > source.Height, "Outline grows a raster in its source model");
         for (int p = 0; p < source.Alpha.Length; p++) if (alpha[p] != 0)

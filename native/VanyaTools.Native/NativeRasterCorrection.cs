@@ -97,7 +97,7 @@ namespace VanyaTools.Native
                 OutlineColor = ColorSamples(buffer, options.Color), OutlineOpacity = options.Color.A,
                 WhitenNearWhite = options.WhitenNearWhite, NearWhiteTolerance = options.NearWhiteTolerance,
                 PrintPreparation = options.Preparation(), AlphaMask = options.AlphaMask, WhiteMask = options.WhiteMask,
-                KnockoutMask = options.KnockoutMask, HalftoneMask = options.HalftoneMask
+                KnockoutMask = options.KnockoutMask, HalftoneMask = options.HalftoneMask, OutlineMask = options.OutlineMask
             };
             // Read creates an exclusive managed buffer for this file job. No
             // source-file bytes or live Corel image can be mutated by this path.
@@ -128,7 +128,7 @@ namespace VanyaTools.Native
                 RemoveSemiTransparent=options.RemoveSemiTransparent,Threshold=options.Threshold,SmoothStairs=options.SmoothStairs,StairsScale=options.StairsScale,StairStrength=options.StairStrength,
                 Outline=options.Outline,RadiusMm=options.RadiusMm,ExpansionMm=options.ExpansionMm,OutlineColor=ColorSamples(buffer,options.Color),OutlineOpacity=options.Color.A,
                 WhitenNearWhite=options.WhitenNearWhite,NearWhiteTolerance=options.NearWhiteTolerance,PrintPreparation=options.Preparation(),
-                AlphaMask=options.AlphaMask,WhiteMask=options.WhiteMask,KnockoutMask=options.KnockoutMask,HalftoneMask=options.HalftoneMask };
+                AlphaMask=options.AlphaMask,WhiteMask=options.WhiteMask,KnockoutMask=options.KnockoutMask,HalftoneMask=options.HalftoneMask,OutlineMask=options.OutlineMask };
             var result=NativeRasterFilters.ProcessOwned(buffer,filters,cancellation);Save(output,result.Buffer,cancellation);
             return new DtfCorrectionResult {OutputPath=output,OffsetMm=result.OffsetMm};
         }

@@ -16,7 +16,7 @@ namespace VanyaTools.Native
         // Pure managed decoder supplied for CMYK. Never call Corel from here.
         internal Func<NativeRasterBuffer, byte[]> NearWhitePreviewBgra = null;
         internal DtfPrintPreparationOptions PrintPreparation;
-        internal RasterProtectionMask AlphaMask, WhiteMask, KnockoutMask, HalftoneMask;
+        internal RasterProtectionMask AlphaMask, WhiteMask, KnockoutMask, HalftoneMask, OutlineMask;
     }
 
     internal sealed class NativeRasterFilterResult
@@ -97,7 +97,8 @@ namespace VanyaTools.Native
                 int expansionX = Pixels(options.ExpansionMm, current.DpiX, 100), expansionY = Pixels(options.ExpansionMm, current.DpiY, 100);
                 int paddingX = checked(expansionX + radiusX + 2), paddingY = checked(expansionY + radiusY + 2);
                 current = Outline(current, paddingX, paddingY, radiusX, radiusY, expansionX, expansionY,
-                    options.OutlineColor, screen ? (byte)255 : options.OutlineOpacity, options.MaximumOutputPixels, cancellation);
+                    options.OutlineColor, screen ? (byte)255 : options.OutlineOpacity, options.MaximumOutputPixels, cancellation,
+                    options.OutlineMask, (options.PrintPreparation?.OriginXmm ?? 0) - offsetX, (options.PrintPreparation?.OriginYmm ?? 0) - offsetY);
                 current = Trim(current, 2, out int left, out int top, cancellation);
                 offsetX += (paddingX - left) * 25.4 / current.DpiX;
                 offsetY += (paddingY - top) * 25.4 / current.DpiY;
@@ -253,7 +254,8 @@ namespace VanyaTools.Native
         }
 
         private static NativeRasterBuffer Outline(NativeRasterBuffer source, int paddingX, int paddingY,
-            int radiusX, int radiusY, int expansionX, int expansionY, byte[] fill, byte opacity, int maximumPixels, CancellationToken cancellation)
+            int radiusX, int radiusY, int expansionX, int expansionY, byte[] fill, byte opacity, int maximumPixels, CancellationToken cancellation,
+            RasterProtectionMask protection = null, double originX = 0, double originY = 0)
         {
             if (fill != null && fill.Length != source.Channels) throw new ArgumentException("Цвет обводки не соответствует модели растра.", nameof(fill));
             if (fill == null)
@@ -271,7 +273,13 @@ namespace VanyaTools.Native
                 Buffer.BlockCopy(source.Colors, y * source.Width * channels, colors, ((y + paddingY) * width + paddingX) * channels, source.Width * channels);
                 Buffer.BlockCopy(source.Alpha, y * source.Width, alpha, (y + paddingY) * width + paddingX, source.Width);
             }
+            var excluded = protection?.Rasterize(width, height, source.DpiX, source.DpiY,
+                originX - paddingX * 25.4 / source.DpiX, originY - paddingY * 25.4 / source.DpiY, cancellation);
             byte[] mask = (byte[])alpha.Clone(), work = new byte[count];
+            // Protected ink neither emits a new rim nor receives one. Original
+            // samples remain in alpha/colors, including their partial opacity.
+            if (excluded != null) for (int pixel = 0; pixel < count; pixel++)
+            { if ((pixel & 4095) == 0) cancellation.ThrowIfCancellationRequested(); if (excluded[pixel]) mask[pixel] = 0; }
             if (expansionX > 0 || expansionY > 0)
             {
                 MaxAlpha(mask, work, width, height, expansionX, false, cancellation);
@@ -285,7 +293,7 @@ namespace VanyaTools.Native
             for (int pixel = 0; pixel < count; pixel++)
             {
                 if ((pixel & 4095) == 0) cancellation.ThrowIfCancellationRequested();
-                if (alpha[pixel] != 0) continue;
+                if (alpha[pixel] != 0 || excluded?[pixel] == true) continue;
                 byte added = (byte)((mask[pixel] * opacity + 127) / 255);
                 if (added == 0) continue;
                 alpha[pixel] = added;

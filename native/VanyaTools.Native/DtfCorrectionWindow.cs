@@ -147,6 +147,7 @@ namespace VanyaTools.Native
 
             controls.Children.Add(new Separator { Margin = new Thickness(0, 9, 0, 8) });
             _outline = Check("Обводка и сглаживание края", Options.Outline);
+            _outline.ToolTip = "Для выбранных участков отключите обводку во вкладке масок «Обводка»: закрасьте их кистью. Ластик снимает защиту.";
             _metrics=Text("Загружаю исходник…",10);controls.Children.Add(WithHelp(_outline,_metrics));
             var presetRow = new UniformGrid { Columns = 3, Margin = new Thickness(0, 3, 0, 6) };
             presetRow.Children.Add(Preset(false, presets.ThinMm)); presetRow.Children.Add(Preset(true, presets.ThickMm));
@@ -214,7 +215,7 @@ namespace VanyaTools.Native
                 double x = 25.4 / _originalPixels.DpiX, y = 25.4 / _originalPixels.DpiY;
                 return new Rect(_previewScene.X * x, _previewScene.Y * y, _previewScene.Width * x, _previewScene.Height * y);
             }, () => _loaded && !_closed && !_applying && !_normalizing && !_insertingThinMask,
-                RestorationMaskChanged, "Просмотр", "Нокаут", "Халфтон", "Белое", "Полупрозрачность");
+                RestorationMaskChanged, "Просмотр", "Нокаут", "Халфтон", "Белое", "Полупрозрачность", "Обводка");
             ConfigurePreviewNavigation(_beforeScroll, _before);
             ConfigurePreviewNavigation(_afterScroll, _after);
             Grid.SetRow(pair, 1); previews.Children.Add(pair);
@@ -355,7 +356,7 @@ namespace VanyaTools.Native
                 Outline = outline, Color = color, WhitenNearWhite = _whiten.IsChecked == true,
                 NearWhiteTolerance = (int)_nearWhiteTolerance.Value,
                 KnockoutMask = _maskEditor.Snapshot(0), HalftoneMask = _maskEditor.Snapshot(1),
-                WhiteMask = _maskEditor.Snapshot(2), AlphaMask = _maskEditor.Snapshot(3) };
+                WhiteMask = _maskEditor.Snapshot(2), AlphaMask = _maskEditor.Snapshot(3), OutlineMask = _maskEditor.Snapshot(4) };
             if (!ReadPrintPreparation(options)) return false;
             ValidateRestorationAudit(options);
             long pixels = (long)_originalPixels.Width * _originalPixels.Height;

@@ -160,6 +160,7 @@ internal static partial class Program
         byte[] originalFile=File.ReadAllBytes(path); DtfCorrectionWindow window=null;
         try
         {
+            MaskEditorChecks(root);
             RestorationChecks(root);
             window=new DtfCorrectionWindow(path,new DtfCorrectionOptions(),new DtfOutlineSettings(),Process,true,(_,__,___)=>throw new Exception("COM callback forbidden"));
             Check(Field<CheckBox>(window,"_thinEnabled").IsChecked==true,"Quick entry did not enable audit in shared window");
@@ -178,8 +179,13 @@ internal static partial class Program
             Check(Field<TextBox>(window,"_knockoutHex").IsEnabled,"Knockout controls unavailable");
             var editor = Field<RasterMaskEditor>(window, "_maskEditor");
             var tabs = Field<TabControl>(editor, "_tabs");
-            Check(tabs.Items.Count == 5 && tabs.SelectedIndex == 0, "Correction has four independent mask tabs");
+            Check(tabs.Items.Count == 6 && tabs.SelectedIndex == 0 && (string)((TabItem)tabs.Items[5]).Header == "Обводка", "Correction has five independent mask tabs including outline");
             var masks = Field<System.Collections.Generic.List<RasterMaskShape>[]>(editor, "_layers");
+            masks[4].Add(new RasterMaskShape(RasterMaskTool.Brush, new[] { new RasterMaskPoint(2, 3) }, .4));
+            object[] outlineArgs = { null }; Check((bool)Call(window, "ReadOptions", outlineArgs), "Outline mask options were rejected");
+            var outlineOptions = (DtfCorrectionOptions)outlineArgs[0]; outlineOptions.Outline = true;
+            Check(outlineOptions.OutlineMask != null && outlineOptions.AlphaMask == null && outlineOptions.HasProtection, "Outline mask was lost or shared with another effect");
+            masks[4].Clear();
             tabs.SelectedIndex = 1;
             masks[0].Add(new RasterMaskShape(RasterMaskTool.Rectangle,
                 new[] { new RasterMaskPoint(9, 0), new RasterMaskPoint(11, 4) }, 0));

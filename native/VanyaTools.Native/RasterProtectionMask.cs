@@ -4,7 +4,7 @@ using System.Threading;
 
 namespace VanyaTools.Native
 {
-    internal enum RasterMaskTool { Brush, Rectangle, Ellipse }
+    internal enum RasterMaskTool { Brush, Rectangle, Ellipse, Eraser }
 
     internal readonly struct RasterMaskPoint
     {
@@ -35,11 +35,14 @@ namespace VanyaTools.Native
         {
             BitArray mask = null;
             double stepX = 25.4 / dpiX, stepY = 25.4 / dpiY;
+            bool value = true;
             foreach (var shape in _shapes)
             {
                 cancellation.ThrowIfCancellationRequested();
+                value = shape.Tool != RasterMaskTool.Eraser;
+                if (!value && mask == null) continue;
                 var points = shape.Points;
-                if (shape.Tool == RasterMaskTool.Brush)
+                if (shape.Tool == RasterMaskTool.Brush || shape.Tool == RasterMaskTool.Eraser)
                 {
                     for (int i = 0; i < points.Length; i++)
                         Stroke(points[Math.Max(0, i - 1)], points[i], shape.Radius);
@@ -100,8 +103,12 @@ namespace VanyaTools.Native
                     for (int x = x0; x <= x1; x++)
                         if (inside == null || inside(originX + (x + .5) * stepX, yy))
                         {
-                            if (mask == null) mask = new BitArray(checked(width * height));
-                            mask[y * width + x] = true;
+                            if (mask == null)
+                            {
+                                if (!value) continue;
+                                mask = new BitArray(checked(width * height));
+                            }
+                            mask[y * width + x] = value;
                         }
                 }
             }

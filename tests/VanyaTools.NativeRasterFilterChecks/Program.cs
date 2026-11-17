@@ -34,7 +34,7 @@ internal static class Program
     {
         try
         {
-            NoOpAndThreshold(); OwnedBuffers(); Whitening(); WhiteningEquivalence(); Smoothing(); OutlineAndCrop(); Validation();
+            NoOpAndThreshold(); OwnedBuffers(); Whitening(); WhiteningEquivalence(); Smoothing(); OutlineAndCrop(); OutlineMaskChecks.Run(Check); Validation();
             Console.WriteLine("Passed " + _checks + " native raster filter checks. Raw RGB/CMYK/gray arrays; no Corel or UI.");
             return 0;
         }
