@@ -101,6 +101,25 @@ namespace VanyaTools.Native
             navigation.Children.Add(Button("Вписать", (_, __) => _preview.Fit()));
             navigation.ToolTip = "Колесо — зум; средняя/правая кнопка или пробел + перетаскивание — перемещение. Shift + колесо — по горизонтали.";
             DockPanel.SetDock(navigation, Dock.Top); previewPanel.Children.Add(navigation);
+            var motifTools=new WrapPanel { Margin=new Thickness(0,0,0,5),Visibility=Visibility.Collapsed };
+            var motifTool=new ComboBox { ItemsSource=new[]{"Выбор / поворот","Основная галька","Заполнитель","Ластик"},SelectedIndex=0,MinWidth=150,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,6,0) };
+            motifTool.SelectionChanged+=(_,__)=>_preview.SetMotifTool(motifTool.SelectedIndex);motifTools.Children.Add(motifTool);
+            motifTools.Children.Add(new TextBlock {Text="Основные",Foreground=Brushes.RoyalBlue,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(3)});
+            motifTools.Children.Add(new TextBlock {Text="Заполнители ≤ ¼",Foreground=Brushes.ForestGreen,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(3)});
+            motifTools.Children.Add(Button("Очистить",(_,__)=>_preview.ClearMotifs()));
+            motifTools.Children.Add(Button("Вернуть авто",(_,__)=>_preview.RestoreAutomaticMotifs()));
+            motifTools.ToolTip="Клики размещают рисунки из готового набора без ИИ. Основные гальки — синий контур; упрощённые заполнители — зелёный, не больше четверти основного принта. Ластик удаляет рисунок под курсором. В рапорте вместе меняются соответствующие повторения. Цветные контуры видны только в редакторе.";
+            DockPanel.SetDock(motifTools,Dock.Top);previewPanel.Children.Add(motifTools);
+            _preview.MotifNotice+=text=>ShowMessage(text,false);
+            var selectedTools = new DockPanel { Margin = new Thickness(0,0,0,5), Visibility = Visibility.Collapsed };
+            var resetSelected = Button("Вернуть автоповорот", (_,__) => _preview.ResetSelectedMotif());
+            DockPanel.SetDock(resetSelected,Dock.Right);selectedTools.Children.Add(resetSelected);
+            var clearSelected = Button("Снять выбор", (_,__) => _preview.ClearMotifSelection());
+            DockPanel.SetDock(clearSelected,Dock.Right);selectedTools.Children.Add(clearSelected);
+            var selectedText = new TextBlock { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+            selectedTools.Children.Add(selectedText);DockPanel.SetDock(selectedTools,Dock.Top);previewPanel.Children.Add(selectedTools);
+            selectedTools.ToolTip = "Оранжевый кружок поворачивает выбранный принт внутри его ячейки. При необходимости рисунок уменьшается, чтобы сохранить зазор. В рапорте меняются соответствующие повторения. Escape отменяет текущее перетаскивание. При смене параметров раскладки или состава набора ручные правки сбрасываются.";
+            _preview.MotifSelectionChanged += () => { motifTools.Visibility = _preview.SupportsMotifEditing ? Visibility.Visible : Visibility.Collapsed; selectedTools.Visibility = _preview.HasSelectedMotif ? Visibility.Visible : Visibility.Collapsed; selectedText.Text = _preview.SelectedMotifDescription; if (!_rendering && Draft != null) _apply.IsEnabled = Draft.Items.Count > 0 || Draft.Hero != null; };
             previewPanel.Children.Add(_preview);
             _preview.ViewChanged += () =>
             {
@@ -350,8 +369,8 @@ namespace VanyaTools.Native
                 var mirrors = new HashSet<int>(_mirroredIds);
                 PatternDraft draft = await Task.Run(() => BuildDraft(frame, next, useHero, mirrors, cancellation), cancellation);
                 if (!_ready) return;
-                _preview.Update(frame, draft, next.HeroAngle);
                 if (revision != _revision) return;
+                _preview.Update(frame, draft, next.HeroAngle);
                 Settings = next;
                 Draft = draft;
                 int fallback = draft.Motifs.Count(asset => asset.OutlineFallback);
@@ -361,14 +380,14 @@ namespace VanyaTools.Native
                 if (fallback > 0) message += " · по габаритам: " + fallback;
                 if (draft.Motifs.Any(motif => motif.IsFiller))
                 {
-                    if (frame.Bottle == null && options.Repeat) message += " · мини-фигуры доступны без рапорта";
+                    if (frame.Bottle == null && options.Repeat) message += " · мини-фигуры в рапорте — кликом";
                     else message += " · мини-фигур: " + draft.Items.Count(item => draft.Motifs[item.Motif].IsFiller);
                 }
                 if (frame.Bottle != null)
                     message += " · обхват сверху " + frame.Bottle.CircumferenceAt(frame.Bottle.Slant).ToString("0.#") +
                         " мм · снизу " + frame.Bottle.CircumferenceAt(0).ToString("0.#") + " мм";
                 ShowMessage(message, false);
-                _apply.IsEnabled = true;
+                _apply.IsEnabled = draft.Items.Count > 0 || draft.Hero != null;
             }
             catch (OperationCanceledException) when (!_ready) { }
             catch (Exception error)
@@ -404,7 +423,9 @@ namespace VanyaTools.Native
                 var motifs = variants.ToArray();
                 PatternLayoutGuides guides;
                 List<PatternPlacement> items;
-                if (frame.Bottle != null)
+                if (motifs.Length == 0 && options.Texture && frame.Bottle == null)
+                { items=new List<PatternPlacement>();guides=null; }
+                else if (frame.Bottle != null)
                 {
                     items = PatternBottleLayout.Build(frame, motifs, options, settings.BottleWhole, cancellation, out guides);
                 }

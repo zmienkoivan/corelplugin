@@ -94,7 +94,7 @@ namespace VanyaTools.Native
             preview.Children.Add(_count);
             _small = new CheckBox { Content = "Мелкие заполнители", IsChecked = initial.SmallFillers,
                 Margin = new Thickness(0, 9, 0, 9),
-                ToolTip = "Выключено — самостоятельные рисунки основного паттерна. Включено — небольшие акценты для пустот." };
+                ToolTip = "Выключено — самостоятельные рисунки основного паттерна. Включено — только миниатюрки для пустот: простые детали и значки по теме, без основных сюжетов, размером не больше четверти основного принта." };
             preview.Children.Add(_small);
             _review = Button("Готовый результат…", (_, __) => Review());
             _review.IsEnabled = Generation != null;
@@ -238,7 +238,7 @@ namespace VanyaTools.Native
             if (dialog.ShowDialog(this) != true) return;
             try
             {
-                Generation = PatternFillerExtraction.Extract(AiPrintTab.Bitmap(dialog.FileName), Plan, CancellationToken.None);
+                Generation = PatternFillerExtraction.LoadSheet(dialog.FileName, Plan, CancellationToken.None);
                 _review.IsEnabled = true;
                 Report("Лист открыт локально · выделено " + Generation.Count + " из " + Generation.Cells.Length + ".", false);
                 Review();

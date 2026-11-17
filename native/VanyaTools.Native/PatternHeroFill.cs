@@ -29,7 +29,7 @@ namespace VanyaTools.Native
             int[] fillers = Enumerable.Range(0, draft.Motifs.Length).Where(index => draft.Motifs[index].IsFiller).ToArray();
             if (fillers.Length == 0 || baseline.Count == 0) return;
 
-            double maximumSize = Math.Min(12, options.SizeMm * .45);
+            double maximumSize = Math.Min(12, options.SizeMm * .25);
             if (maximumSize < .5) return;
             int limit = Math.Min(PatternFillLayout.MaximumElements,
                 draft.Items.Count + Math.Max(1, Math.Min(32, baseline.Count / 3)));
@@ -40,7 +40,7 @@ namespace VanyaTools.Native
             var groups = fillers.GroupBy(index => draft.Motifs[index].Footprint.Family)
                 .Select(group => group.ToArray()).ToArray();
             var candidates = baseline.Where(item => item.Cell != null).OrderBy(_ => random.Next()).Take(160)
-                .Select((item, i) => new PatternPlacement { Cell = item.Cell, Size = maximumSize,
+                .Select((item, i) => new PatternPlacement { Cell = item.Cell, Size = Math.Min(maximumSize,Longest(draft.Motifs[item.Motif],item)*.25),
                     Angle = item.Angle, Motif = PatternFillLayout.PickVariant(groups[i % groups.Length], variantRandom) }).ToArray();
             var placed = new List<PatternPlacement>(draft.Items);
             Geometry clip = frame.BottleClip;
@@ -54,6 +54,7 @@ namespace VanyaTools.Native
             Refit(placed, candidates, draft.Motifs, options, draft.Reserve ?? Geometry.Empty, cancellation,
                 Fits, fillers, maximumSize, limit);
             draft.Items = placed;
+            LimitFillerSizes(draft);
 
             bool Fits(PatternPlacement placement)
             {
@@ -62,6 +63,27 @@ namespace VanyaTools.Native
                     return PatternBottleLayout.FitsOnRing(frame, draft.Motifs, placement, placed, options.GapMm, true);
                 return clip.FillContainsWithDetail(PatternSilhouette.At(asset, placement), Tolerance,
                     ToleranceType.Absolute) == IntersectionDetail.FullyContains;
+            }
+        }
+
+        internal static double Longest(PatternAsset asset,PatternPlacement item) =>
+            PatternTransform.Fit(asset.Size,item).Scale*Math.Max(asset.Size.X,asset.Size.Y);
+
+        internal static double FillerSizeAt(PatternDraft draft,PatternPoint point)
+        {
+            var nearest=draft.Items.Where(p=>!draft.Motifs[p.Motif].IsFiller)
+                .OrderBy(p=>Math.Pow(p.Center.X-point.X,2)+Math.Pow(p.Center.Y-point.Y,2)).FirstOrDefault();
+            double main=nearest==null?(draft.Hero?.Size??draft.Options.SizeMm):Longest(draft.Motifs[nearest.Motif],nearest);
+            return Math.Min(12,main*.25);
+        }
+
+        internal static void LimitFillerSizes(PatternDraft draft)
+        {
+            for(int i=0;i<draft.Items.Count;i++)
+            {
+                var item=draft.Items[i];var asset=draft.Motifs[item.Motif];if(!asset.IsFiller)continue;
+                double size=Longest(asset,item),cap=FillerSizeAt(draft,item.Center);
+                if(size>cap && cap>0)draft.Items[i]=PatternMotifRotation.Resize(item,asset.Footprint,cap/Math.Max(asset.Size.X,asset.Size.Y));
             }
         }
 
@@ -171,8 +193,8 @@ namespace VanyaTools.Native
                 PatternPlacement Fit(int index)
                 {
                     var asset = motifs[index];
-                    double minimumSize = PatternTransform.Fit(original.Size, item).Scale *
-                        Math.Max(original.Size.X, original.Size.Y) * .35;
+                    double minimumSize = original.IsFiller ? Math.Min(maximumSize,item.Size)*.15 :
+                        PatternTransform.Fit(original.Size, item).Scale*Math.Max(original.Size.X, original.Size.Y)*.35;
                     double bestScale = minimumSize / Math.Max(asset.Size.X, asset.Size.Y);
                     PatternPlacement choice = null;
                     foreach (var polygon in candidates)
@@ -181,7 +203,10 @@ namespace VanyaTools.Native
                         var fitted = PatternFillLayout.PlaceInCells(new List<PatternPoint[]> { polygon },
                             new[] { asset.Footprint }, fit, allowEmpty: true, fixedAngle: !options.Texture).SingleOrDefault();
                         if (fitted == null) continue;
-                        if (fitted.Size > maximumSize)
+                        double cap=asset.IsFiller?Math.Min(maximumSize,item.Size):maximumSize;
+                        double longest=Longest(asset,fitted);
+                        if (asset.IsFiller && longest>cap)fitted=PatternMotifRotation.Resize(fitted,asset.Footprint,cap/Math.Max(asset.Size.X,asset.Size.Y));
+                        if (!asset.IsFiller && fitted.Size > maximumSize)
                         {
                             fitted.Size = maximumSize;
                             if (!asset.Footprint.At(fitted).All(point => Inside(point, polygon))) continue;

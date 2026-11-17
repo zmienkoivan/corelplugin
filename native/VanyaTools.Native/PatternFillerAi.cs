@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -87,7 +87,7 @@ namespace VanyaTools.Native
                     ["resolution"] = PatternFillerBrief.Resolution(plan.Elements.Length)
                 }, path, cancellation: cancellation);
                 cancellation.ThrowIfCancellationRequested();
-                return PatternFillerExtraction.Extract(AiPrintTab.Bitmap(path), plan, cancellation);
+                return PatternFillerExtraction.LoadSheet(path, plan, cancellation);
             }
             finally { Cleanup(path, input); }
         }

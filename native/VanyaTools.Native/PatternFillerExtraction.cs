@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Windows.Media;
@@ -10,6 +11,20 @@ namespace VanyaTools.Native
     internal sealed class PatternFillerResult
     {
         internal BitmapSource Sheet;
+        internal byte[] OriginalPng;
+        internal void SaveSheet(string path)
+        {
+            byte[] png = OriginalPng;
+            if (png == null)
+            {
+                // Sheet is a frozen pixel snapshot, with no decoder owned by
+                // the generation thread. Encode before opening the destination.
+                var encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(Sheet));
+                using (var stream = new MemoryStream()) { encoder.Save(stream); png = stream.ToArray(); }
+            }
+            File.WriteAllBytes(path, png);
+        }
         internal BitmapSource[] Cells;
         internal bool[] Representative;
         internal bool SmallFillers;
@@ -25,6 +40,24 @@ namespace VanyaTools.Native
             internal bool Cut(int width, int height) => Left == 0 || Top == 0 || Right == width - 1 || Bottom == height - 1;
         }
 
+        internal static PatternFillerResult LoadSheet(string path, PatternFillerPlan plan, CancellationToken cancellation)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            byte[] original = File.ReadAllBytes(path);
+            cancellation.ThrowIfCancellationRequested();
+            PatternFillerResult result;
+            using (var stream = new MemoryStream(original, false))
+            {
+                var image = BitmapFrame.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+                image.Freeze(); result = Extract(image, plan, cancellation);
+            }
+            // Keep the paid sheet byte-for-byte, including its DPI, colour
+            // profile and bit depth. A misnamed non-PNG is encoded as PNG.
+            if (original.Length >= 8 && original[0] == 137 && original[1] == 80 && original[2] == 78 && original[3] == 71 &&
+                original[4] == 13 && original[5] == 10 && original[6] == 26 && original[7] == 10) result.OriginalPng = original;
+            return result;
+        }
+
         internal static PatternFillerResult Extract(BitmapSource sheet, PatternFillerPlan plan, CancellationToken cancellation)
         {
             int width = sheet.PixelWidth, height = sheet.PixelHeight;
@@ -33,10 +66,15 @@ namespace VanyaTools.Native
             var converted = new FormatConvertedBitmap(sheet, PixelFormats.Bgra32, null, 0);
             var pixels = new byte[checked(width * height * 4)];
             converted.CopyPixels(pixels, width * 4, 0);
+            // A frozen BitmapFrame can still refer to thread-bound decoder
+            // metadata. Copy pixels before cleanup so previews and fallback
+            // exports never need that decoder on the UI thread.
+            var original = BitmapSource.Create(width, height, sheet.DpiX, sheet.DpiY, PixelFormats.Bgra32, null, pixels, width * 4);
+            original.Freeze();
             PatternFillerMatte.Remove(pixels, width, height, cancellation);
             int count = plan?.Elements.Length ?? 4;
             int columns = PatternFillerBrief.Columns(count), rows = (count + columns - 1) / columns;
-            var result = new PatternFillerResult { Sheet = sheet, Cells = new BitmapSource[count],
+            var result = new PatternFillerResult { Sheet = original, Cells = new BitmapSource[count],
                 Representative = new bool[count], Names = new string[count], SmallFillers = plan?.SmallFillers ?? true };
             for (int index = 0; index < count; index++)
             {

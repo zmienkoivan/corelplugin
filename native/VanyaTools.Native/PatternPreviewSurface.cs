@@ -7,7 +7,7 @@ using System.Windows.Media;
 
 namespace VanyaTools.Native
 {
-    internal sealed class PatternPreviewSurface : FrameworkElement
+    internal sealed partial class PatternPreviewSurface : FrameworkElement
     {
         private readonly PatternEditorSession _session;
         private PatternFrame _frame;
@@ -37,12 +37,13 @@ namespace VanyaTools.Native
             _session = session; _frame = initialFrame;
             ClipToBounds = true; Focusable = true;
             RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.HighQuality);
-            ToolTip = "Колесо — масштаб; средняя/правая кнопка или пробел + перетаскивание — перемещение. У главного принта: углы — размер, кружок — поворот.";
+            ToolTip = "Колесо — масштаб; средняя/правая кнопка или пробел + перетаскивание — перемещение. У главного принта: углы — размер, кружок — поворот. В гальке и крокодиле щёлкните рисунок и тяните оранжевый кружок для поворота внутри ячейки.";
         }
 
         internal void Update(PatternFrame frame, PatternDraft draft, double heroAngle)
         {
             _frame = frame; _draft = draft; _heroAngle = heroAngle;
+            UpdateMotifEdits();
             if (draft?.Hero == null) Cursor = Cursors.Arrow;
             InvalidateVisual();
             ViewChanged?.Invoke();
@@ -72,14 +73,15 @@ namespace VanyaTools.Native
             drawing.DrawGeometry(Brushes.White, new Pen(Brushes.SlateGray, hairline), outline);
             if (_draft != null)
             {
-                var lightOutline = new Pen(new SolidColorBrush(Color.FromArgb(100, 55, 75, 86)), hairline * .75);
+                var mainOutline = new Pen(new SolidColorBrush(Color.FromRgb(25,95,220)),hairline*1.5);
+                var fillerOutline = new Pen(new SolidColorBrush(Color.FromRgb(25,175,65)),hairline*1.5);
                 drawing.PushClip(outline);
                 foreach (var item in _draft.Items)
                 {
                     var motif = _draft.Motifs[item.Motif];
                     if (!DrawArea(motif, item).IntersectsWith(visible)) continue;
                     DrawMotif(drawing, motif, item, Brushes.SteelBlue);
-                    if (_draft.Options.Texture) DrawGuide(drawing, PatternSilhouette.At(motif, item), lightOutline);
+                    if (_draft.Options.Texture) DrawGuide(drawing, PatternSilhouette.At(motif, item), motif.IsFiller ? fillerOutline : mainOutline);
                 }
                 if (_showCells && _draft.CellGuides != null)
                     DrawGuide(drawing, _draft.CellGuides, new Pen(Brushes.MediumPurple, hairline) { DashStyle = DashStyles.Dot },
@@ -110,6 +112,7 @@ namespace VanyaTools.Native
             }
             drawing.Pop();
             if (_draft?.Hero != null) DrawHeroHandles(drawing);
+            DrawMotifHandle(drawing);
         }
 
         internal void Zoom(double factor)
@@ -134,7 +137,7 @@ namespace VanyaTools.Native
 
         protected override void OnMouseWheel(MouseWheelEventArgs e)
         {
-            if (_drag != DragMode.None || _panning) return;
+            if (_drag != DragMode.None || _panning || _rotatingMotif) return;
             if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0) _viewport.Pan(new Vector(e.Delta, 0));
             else _viewport.ZoomAt(Math.Pow(1.2, e.Delta / 120d), e.GetPosition(this));
             Changed(); e.Handled = true;
@@ -148,7 +151,7 @@ namespace VanyaTools.Native
 
         private void StartPan(MouseButtonEventArgs e)
         {
-            if (_drag != DragMode.None || _scale <= 0 || !CaptureMouse()) return;
+            if (_drag != DragMode.None || _rotatingMotif || _scale <= 0 || !CaptureMouse()) return;
             Focus(); _panning = true; _panPoint = e.GetPosition(this); Cursor = Cursors.Hand; e.Handled = true;
         }
 
@@ -171,7 +174,7 @@ namespace VanyaTools.Native
         // after navigation settles. Rendering itself never calls Corel.
         internal bool RefineVisible(Func<PatternAsset, int, System.Windows.Media.Imaging.BitmapSource> capture)
         {
-            if (_draft == null || _scale <= 0 || _panning || _drag != DragMode.None) return false;
+            if (_draft == null || _scale <= 0 || _panning || _drag != DragMode.None || _rotatingMotif) return false;
             var visible = new Rect(_viewport.World(new Point(0, 0)),
                 _viewport.World(new Point(RenderSize.Width, RenderSize.Height)));
             var requests = new Dictionary<int, Tuple<PatternAsset, int>>();
@@ -311,8 +314,20 @@ namespace VanyaTools.Native
             base.OnMouseLeftButtonDown(e);
             Focus();
             if (Keyboard.IsKeyDown(Key.Space)) { StartPan(e); return; }
-            if (_draft?.Hero == null || _scale <= 0) return;
+            if (_draft == null || _scale <= 0) return;
             Point point = e.GetPosition(this);
+            if (CanEditMotifs && _motifTool > 0) { PaintMotif(point); e.Handled = true; return; }
+            if (StartMotifTurn(point)) { e.Handled = true; return; }
+            bool heroHit = false;
+            if (_draft.Hero != null)
+            {
+                var heroMode = HitHandle(point);
+                var local = _viewport.World(point);
+                heroHit = heroMode != DragMode.Move || PatternSilhouette.At(_session.Hero,_draft.Hero).FillContains(new Point(local.X,_frame.Height-local.Y));
+            }
+            if (!heroHit && SelectMotif(point)) { e.Handled = true; return; }
+            if (_draft.Hero == null || CanEditMotifs && !heroHit) return;
+            ClearMotifSelection();
             var mode = HitHandle(point);
             if (mode == DragMode.Move &&
                 !new Rect(_origin.X, _origin.Y, _frame.Width * _scale, _frame.Height * _scale).Contains(point)) return;
@@ -339,8 +354,15 @@ namespace VanyaTools.Native
                 var next = e.GetPosition(this); _viewport.Pan(next - _panPoint); _panPoint = next;
                 Changed(); e.Handled = true; return;
             }
-            if (_draft?.Hero == null || _scale <= 0) return;
             var point = e.GetPosition(this);
+            if (_rotatingMotif)
+            {
+                if (e.LeftButton == MouseButtonState.Pressed) TurnMotifTo(point); else ReleaseMouseCapture();
+                e.Handled = true; return;
+            }
+            if (CanEditMotifs && _motifTool > 0) { Cursor = Cursors.Cross; return; }
+            if (HitMotifHandle(point)) { Cursor = Cursors.Hand; return; }
+            if (_draft?.Hero == null || _scale <= 0) { Cursor = Cursors.Arrow; return; }
             if (_drag != DragMode.None && e.LeftButton == MouseButtonState.Pressed) DragTo(point);
             var mode = _drag == DragMode.None ? HitHandle(point) : _drag;
             Cursor = mode == DragMode.Rotate ? Cursors.Hand : mode == DragMode.Scale ? Cursors.SizeNWSE : Cursors.SizeAll;
@@ -350,6 +372,7 @@ namespace VanyaTools.Native
         {
             base.OnMouseLeftButtonUp(e);
             if (_panning) { ReleaseMouseCapture(); e.Handled = true; return; }
+            if (_rotatingMotif) { TurnMotifTo(e.GetPosition(this)); _rotatingMotif = false; ReleaseMouseCapture(); e.Handled = true; return; }
             if (_drag == DragMode.None) return;
             DragTo(e.GetPosition(this));
             ReleaseMouseCapture();
@@ -359,7 +382,7 @@ namespace VanyaTools.Native
         protected override void OnLostMouseCapture(MouseEventArgs e)
         {
             base.OnLostMouseCapture(e);
-            _drag = DragMode.None; _panning = false; Cursor = Cursors.Arrow;
+            _drag = DragMode.None; _panning = false; _rotatingMotif = false; Cursor = Cursors.Arrow;
         }
 
         private void DragTo(Point point)

@@ -19,7 +19,7 @@ internal static class Program
     {
         try
         {
-            Plans(); Pipeline(); Extraction(); Counts(); Viewport(); ReferenceSources();
+            Plans(); Pipeline(); Extraction(); Counts(); Viewport(); ReferenceSources(); PatternSheetSaveChecks.Run(Check); PatternMotifEditorChecks.Run(Check); PatternMotifPaintingChecks.Run(Check);
             Console.WriteLine("Pattern filler analysis checks passed: " + _checks + ". Synthetic images and stub worker only; no network or Corel.");
             return 0;
         }
@@ -162,7 +162,7 @@ internal static class Program
         Check(result.Cells[1] != null, "Small colored matte residue discarded a whole figure.");
         Check(result.Representative[2] && result.Cells[2].PixelWidth < 60 && result.Cells[2].PixelHeight < 60,
             "A repeating cell was returned as several copies or lost entirely.");
-        Check(result.Names.SequenceEqual(plan.Elements) && ReferenceEquals(result.Sheet, image),
+        Check(result.Names.SequenceEqual(plan.Elements) && result.Sheet.IsFrozen && result.Sheet.PixelWidth == image.PixelWidth && result.Sheet.PixelHeight == image.PixelHeight,
             "Cell identities or the full original sheet were lost.");
         var after = new byte[pixels.Length]; image.CopyPixels(after, width * 4, 0);
         Check(after.SequenceEqual(pixels), "Extraction mutated the original paid sheet.");
@@ -340,13 +340,20 @@ namespace VanyaTools.Native
         internal static string Model, Output;
         internal static Dictionary<string, object> Input;
         internal static Exception Failure;
+        internal static byte[] LastImage;
         internal static void Run(string model, string token, Dictionary<string, object> input, string outputPath,
             Action<string> progress = null, CancellationToken cancellation = default)
         {
             Calls++; Model = model; Input = input; Output = outputPath;
             cancellation.ThrowIfCancellationRequested();
             if (Failure != null) throw Failure;
-            File.WriteAllText(outputPath, outputPath.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) ? Program.Json : "synthetic image");
+            if (outputPath.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)) File.WriteAllText(outputPath, Program.Json);
+            else
+            {
+                var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(AiPrintTab.Bitmap(outputPath)));
+                using (var stream = new MemoryStream()) { encoder.Save(stream); LastImage = stream.ToArray(); }
+                File.WriteAllBytes(outputPath, LastImage);
+            }
         }
     }
 }

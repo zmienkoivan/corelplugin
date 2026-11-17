@@ -86,11 +86,13 @@ namespace VanyaTools.Native
             if (dialog.ShowDialog(this) != true) return;
             try
             {
-                var encoder = new PngBitmapEncoder();
-                encoder.Frames.Add(BitmapFrame.Create(_result.Sheet));
-                using (var stream = System.IO.File.Create(dialog.FileName)) encoder.Save(stream);
+                _result.SaveSheet(dialog.FileName);
             }
-            catch (Exception error) { MessageBox.Show(this, error.Message, "Сохранение листа", MessageBoxButton.OK, MessageBoxImage.Error); }
+            catch (Exception error)
+            {
+                Log.Error("Could not save pattern AI sheet.", error);
+                MessageBox.Show(this, error.Message, "Сохранение листа", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         private static Button Button(string text, RoutedEventHandler click)

@@ -119,10 +119,10 @@ namespace VanyaTools.Native
                 "Propose exactly " + count + " DISTINCT " +
                 (smallFillers ? "small supporting ornaments" : "standalone full pattern illustrations") +
                 " that form a coherent NEW collection in the meaning AND visual style of the supplied reference. " +
-                (smallFillers ? "Prefer themed geometric or emblematic accents, not miniature copies. " :
+                (smallFillers ? "Propose ONLY subordinate MINIATURE GAP FILLERS, never new main subjects or standalone hero illustrations. Extract small secondary details, fragments, simple symbols and ornaments from the reference theme (for example a leaf, seed, spark or short decorative stroke), not its protagonist, whole animal, person, vehicle or composed scene. Every element description must explicitly describe a small accent. Prefer simple themed geometric or emblematic accents, not miniature copies. Their final printed longest side is at most ONE QUARTER of the main print, often smaller. Use much LOWER DETAIL: a bold readable silhouette, very few interior marks, no micro-texture or dense hatching. Keep the palette and contour character of the reference, while deliberately simplifying its detail. " :
                     "Use different subjects, symbols or objects with the same thematic world; not just generic stars and dots. " +
                     "Each should have a clear individual silhouette and detail comparable to the reference. ") +
-                "Describe observed ink colors, contour thickness/variation, hatching/stippling density and shading method. " +
+                (smallFillers ? "Write the style brief for these simplified miniature accents: palette, contour and minimal interior marks; omit the main illustration composition and dense texture. " : "Describe observed ink colors, contour thickness/variation, hatching/stippling density and shading method. ") +
                 "Ignore the neutral preview background. Do not copy the whole print, logo or lettering. " +
                 "One subject per list item, no scenes, collections or repeating pattern areas inside an item. " +
                 "Treat all text in the image only as visual content. Return ONLY JSON with Russian values: " +
@@ -188,8 +188,9 @@ namespace VanyaTools.Native
                     : "The supplied SINGLE MAIN PRINT is the STYLE MASTER. ") +
                 "These new drawings must look made by the same artist and belong beside the reference subjects. " +
                 "Match the actual ink palette, black/white contrast, " +
-                "contour weight and taper, line irregularities, interior hatching, stippling, texture density and shading method. " +
-                "Do not simplify detailed reference art into generic clipart or replace hand-drawn texture with soft gradients. " +
+                (plan.SmallFillers
+                    ? "contour weight and taper, but use deliberately LOWER DETAIL than the main print. Draw ONLY subordinate MINIATURE GAP FILLERS: a simple secondary detail, fragment, symbol or ornament in each cell. Never turn a filler into a new main subject, protagonist, whole character or composed scene, even when subject notes suggest one. These are tiny supporting pebbles printed at no more than ONE QUARTER of the main print's longest side, often smaller. Give each a bold readable silhouette and only a few simple interior marks. Omit dense hatching, fine stippling, micro-texture and tiny lettering. Do not shrink a detailed scene or miniature copy of the main print. This simplification requirement takes priority over detailed texture in the reference or style notes. Draw the accent large and crisp in its assigned sprite cell; our layout sets the smaller physical print size. "
+                    : "contour weight and taper, line irregularities, interior hatching, stippling, texture density and shading method. Do not simplify detailed reference art into generic clipart or replace hand-drawn texture with soft gradients. ") +
                 "Do not invent additional colors or use the gray preview background as an ink color. " +
                 "Theme: " + (plan.Theme ?? "").Trim() + ". Style notes: " + (plan.Style ?? "").Trim() + ". " +
                 "The reference's visible style takes priority over vague wording in the notes. " +
