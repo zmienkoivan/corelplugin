@@ -64,6 +64,7 @@ namespace VanyaTools.Native
         internal PatternAsset Hero;
         internal int[] MirroredIds = Array.Empty<int>();
         internal bool Replace;
+        internal double VariantOffset;
         internal double ExistingAllowance;
     }
 
@@ -331,7 +332,7 @@ namespace VanyaTools.Native
             });
         }
 
-        internal int Apply(PatternEditorSession session, PatternDraft draft)
+        internal int Apply(PatternEditorSession session, PatternDraft draft, bool keepEditor = false)
         {
             dynamic app = session.Application, doc = session.Document, target = session.Target;
             if (!SameObject((object)app.ActiveDocument, session.Document))
@@ -393,12 +394,14 @@ namespace VanyaTools.Native
                     markedGroup.Name = "Vanya · развёртка бутылки с рисками";
                 }
                 dynamic result = markedGroup ?? frame;
-                result.CreateSelection();
-                if (session.Replace) target.Delete();
+                if(keepEditor && session.VariantOffset>0)result.Move(session.VariantOffset,0d);
+                if(keepEditor && !session.BottleMode)target.CreateSelection();else result.CreateSelection();
+                if (session.Replace && !keepEditor) target.Delete();
                 _result = (object)result; _resultDocument = (object)doc; _lastAllowance = draft.Allowance;
                 _bottleResultFrame = session.BottleMode ? (object)frame : null;
                 _resultWasBottle = session.BottleMode;
                 foreach (var source in _motifs) source.IncludeMirror = draft.MirroredIds.Contains(source.Id);
+                if(keepEditor)session.VariantOffset+=draft.Frame.Width+10;
                 return motifCount;
 
                 void AddMotif(PatternAsset asset, PatternPlacement item)

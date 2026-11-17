@@ -23,7 +23,9 @@ namespace VanyaTools.Native
         private readonly CheckBox _small;
         private readonly StackPanel _elementRows = new StackPanel();
         private readonly StackPanel _fields;
-        private readonly Button _analyze, _generate, _cancel, _review, _openSheet;
+        private readonly Button _analyze, _generate, _cancel, _review, _openSheet, _resume;
+        private readonly string _requestRoot;
+        private PatternFillerRequest _pending;
         private readonly TextBlock _message;
         private readonly Stopwatch _elapsed = new Stopwatch();
         private readonly DispatcherTimer _clock = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
@@ -40,10 +42,12 @@ namespace VanyaTools.Native
             Elements = Array.ConvertAll(_elements, input => input.Text.Trim()), SmallFillers = _small.IsChecked == true
         };
 
-        internal PatternFillerWindow(BitmapSource reference, string token, PatternFillerPlan initial, string analysisModel = null, PatternFillerResult generation = null)
+        internal PatternFillerWindow(BitmapSource reference, string token, PatternFillerPlan initial, string analysisModel = null, PatternFillerResult generation = null, string requestRoot = null)
         {
             _reference = reference; _token = token; Generation = generation;
             initial = initial ?? new PatternFillerPlan();
+            _requestRoot=requestRoot;_pending=PatternFillerRequests.Find(reference,initial.Source,requestRoot);
+            if(_pending!=null){initial=_pending.Plan;if(_pending.Analysis)analysisModel=_pending.Model;}
             _referenceSource = initial.Source;
             Title = "ИИ · рисунки паттерна · Vanya Tools";
             Width = Math.Min(880, SystemParameters.WorkArea.Width - 28);
@@ -59,6 +63,9 @@ namespace VanyaTools.Native
             _message = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12,
                 Margin = new Thickness(0, 8, 0, 8) };
             footer.Children.Add(_message);
+            _resume=DockerTheme.Primary(Button("Продолжить запрос",async (_,__)=>await Execute(_pending?.Analysis??false,true)));
+            _resume.ToolTip="Получить статус и результат сохранённого задания. Новая генерация и повторная оплата не запускаются.";
+            footer.Children.Add(_resume);
             var buttons = new Grid();
             buttons.ColumnDefinitions.Add(new ColumnDefinition());
             buttons.ColumnDefinitions.Add(new ColumnDefinition());
@@ -120,6 +127,8 @@ namespace VanyaTools.Native
             Report(String.IsNullOrWhiteSpace(initial.Elements[0])
                 ? "Подберите 4–10 рисунков по показанному источнику или укажите их вручную."
                 : "Комплект можно редактировать. Анализ не запускается автоматически.", false);
+            SetBusy(false,false);
+            if(_pending!=null)Report("Есть сохранённый запрос "+_pending.State("id")+". Нажмите «Продолжить запрос» — новый запуск не нужен.",false);
             _clock.Tick += (_, __) => _message.Text = OperationTiming.Display(_stage, _elapsed.Elapsed, _timingKey);
             PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) { e.Handled = true; CancelOrClose(); } };
             Closing += (_, __) => { _closed = true; _clock.Stop(); _request?.Cancel(); };
@@ -156,39 +165,45 @@ namespace VanyaTools.Native
             return input;
         }
 
-        private async Task Execute(bool analysis)
+        private async Task Execute(bool analysis,bool resume=false)
         {
             if (_request != null || _closed) return;
             PatternFillerPlan plan = null;
             try
             {
-                plan = Plan;
+                if(resume && _pending==null)return;
+                if(!resume && _pending!=null){Report("Сначала нажмите «Продолжить запрос». Повторный платный запуск заблокирован.",true);return;}
+                plan = resume?_pending.Plan:Plan;
                 if (!analysis) plan.Validate();
-                string model = AnalysisModel;
+                string model = resume?_pending.Model:AnalysisModel;
                 string question = analysis
                     ? "Отправить показанное превью («" + PatternFillerBrief.ReferenceLabel(_referenceSource) + "») в " + PatternFillerBrief.FindAnalysisModel(model).Name + " через Replicate для подбора " + plan.Elements.Length + " рисунков по теме и стилю? Это отдельный платный запрос."
                     : "Отправить показанное превью («" + PatternFillerBrief.ReferenceLabel(_referenceSource) + "») и комплект из " + plan.Elements.Length + " рисунков в Nano Banana 2 через Replicate? Один платный запрос, лист " + PatternFillerBrief.Resolution(plan.Elements.Length) + ". Для 5–10 рисунков используется 4K: запрос может стоить дороже и выполняться дольше.";
-                if (MessageBox.Show(this, question, analysis ? "Анализ источника стиля" : "Генерация рисунков",
+                if (!resume && MessageBox.Show(this, question, analysis ? "Анализ источника стиля" : "Генерация рисунков",
                     MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
 
+                if(!resume)_pending=PatternFillerRequests.Create(_reference,plan,model,analysis,_requestRoot);
+                var saved=_pending;
                 using (var request = new CancellationTokenSource())
                 {
                     _request = request;
                     SetBusy(true, analysis);
+                    await Task.Run(()=>saved.Run(_token,resume,request.Token),request.Token);
                     if (analysis)
                     {
-                        var proposed = await Task.Run(() => PatternFillerAi.Analyze(_reference, _token, model, request.Token, plan.Elements.Length, plan.SmallFillers, plan.Source), request.Token);
+                        var proposed = await Task.Run(saved.ReadAnalysis,request.Token);
                         if (_closed) return;
                         _theme.Text = proposed.Theme; _style.Text = proposed.Style;
                         for (int i = 0; i < _elements.Length; i++) _elements[i].Text = proposed.Elements[i];
                     }
                     else
                     {
-                        var result = await Task.Run(() => PatternFillerAi.Generate(_reference, _token, plan, request.Token), request.Token);
+                        var result = await Task.Run(() => saved.ReadGeneration(request.Token), request.Token);
                         if (_closed) return;
                         Generation = result;
                         _review.IsEnabled = true;
                     }
+                    saved.Finish();_pending=null;
                     OperationTiming.Record(_timingKey, _elapsed.Elapsed);
                 }
                 _request = null; _clock.Stop(); _elapsed.Stop();
@@ -206,21 +221,30 @@ namespace VanyaTools.Native
                 Log.Error(analysis ? "Pattern set analysis failed." : "Pattern filler generation failed.", error);
                 if (!_closed)
                 {
-                    Report(PatternFillerBrief.FailureMessage(error, analysis), true);
+                    string message=PatternFillerBrief.FailureMessage(error,analysis).Replace("Повторить запрос","Продолжить запрос").Replace("«Продолжить»","«Продолжить запрос»");
+                    if(_pending!=null && error is System.IO.InvalidDataException && System.IO.File.Exists(_pending.OutputPath))
+                    {message+=" Полученный ответ сохранён: "+_pending.OutputPath;_pending.Finish();_pending=null;}
+                    if(_pending?.CanResume==true)message+=" Номер "+_pending.State("id")+" сохранён. Кнопка «Продолжить запрос» ниже; новая генерация не отправится.";
+                    else if(_pending!=null){_pending.Finish();_pending=null;}
+                    Report(message, true);
                     _message.ToolTip = error.GetBaseException().Message;
                 }
             }
             finally
             {
                 _request = null; _clock.Stop(); _elapsed.Stop();
+                if(_pending!=null && !_pending.CanResume){_pending.Finish();_pending=null;}
                 if (!_closed) SetBusy(false, analysis);
             }
         }
 
         private void SetBusy(bool busy, bool analysis)
         {
-            _fields.IsEnabled = _analysisModel.IsEnabled = _analyze.IsEnabled = _generate.IsEnabled = _openSheet.IsEnabled = !busy;
-            _count.IsEnabled = _small.IsEnabled = !busy;
+            bool editable=!busy && _pending==null;
+            _fields.IsEnabled = _analysisModel.IsEnabled = _analyze.IsEnabled = _generate.IsEnabled = editable;
+            _openSheet.IsEnabled=!busy;
+            _count.IsEnabled = _small.IsEnabled = editable;
+            _resume.Visibility=_pending!=null?Visibility.Visible:Visibility.Collapsed;_resume.IsEnabled=!busy && _pending!=null;
             _review.IsEnabled = !busy && Generation != null;
             _cancel.Content = busy ? "Отменить" : "Закрыть";
             _cancel.IsEnabled = true;

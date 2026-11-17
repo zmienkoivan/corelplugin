@@ -73,24 +73,23 @@ namespace VanyaTools.Native
         // Called only after the user confirms sending the reference in PatternFillerWindow.
         internal static PatternFillerResult Generate(BitmapSource reference, string token, PatternFillerPlan plan, CancellationToken cancellation)
         {
-            string prompt = PatternFillerBrief.GenerationPrompt(plan);
+            plan.Validate();
             string path = Path.Combine(Path.GetTempPath(), "Vanya-Pattern-Fillers-" + Guid.NewGuid().ToString("N") + ".png");
             string input = AiPrintTab.DataUri(reference);
             try
             {
-                ReplicateWorkerClient.Run(SublimationModels.Nano2, token, new Dictionary<string, object>
-                {
-                    ["image_input"] = new[] { input },
-                    ["prompt"] = prompt,
-                    ["output_format"] = "png",
-                    ["aspect_ratio"] = PatternFillerBrief.AspectRatio(plan.Elements.Length),
-                    ["resolution"] = PatternFillerBrief.Resolution(plan.Elements.Length)
-                }, path, cancellation: cancellation);
+                ReplicateWorkerClient.Run(SublimationModels.Nano2, token, GenerationInput(plan,input), path, cancellation: cancellation);
                 cancellation.ThrowIfCancellationRequested();
                 return PatternFillerExtraction.LoadSheet(path, plan, cancellation);
             }
             finally { Cleanup(path, input); }
         }
+
+        internal static Dictionary<string,object> GenerationInput(PatternFillerPlan plan,string input) => new Dictionary<string,object>
+        {
+            ["image_input"]=new[]{input},["prompt"]=PatternFillerBrief.GenerationPrompt(plan),["output_format"]="png",
+            ["aspect_ratio"]=PatternFillerBrief.AspectRatio(plan.Elements.Length),["resolution"]=PatternFillerBrief.Resolution(plan.Elements.Length)
+        };
 
         private static void Cleanup(string path, string input)
         {

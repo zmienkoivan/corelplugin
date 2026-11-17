@@ -25,7 +25,7 @@ namespace VanyaTools.Native
         private readonly TextBlock _motifs, _hero, _message;
         private readonly ListBox _motifList;
         private readonly Button _forgetHero, _removeMotifs;
-        private PatternEditorSettings _settings = new PatternEditorSettings();
+        private PatternEditorSettings _settings = new PatternEditorSettings { Layout=new PatternFillOptions { Mode=PatternFillMode.Pebbles } };
         private PatternEditorSettings _bottleSettings = new PatternEditorSettings
         {
             Layout = new PatternFillOptions { Mode = PatternFillMode.Staggered }
@@ -187,11 +187,13 @@ namespace VanyaTools.Native
             var window = new PatternFillWindow(session, bottle ? _bottleSettings : _settings);
             var owner = PresentationSource.FromVisual(this) as HwndSource;
             if (owner != null) new WindowInteropHelper(window).Owner = owner.Handle;
-            if (window.ShowDialog() != true) return;
-            using (DockerUiWatchdog.Trace(Dispatcher, "Pattern insertion"))
-                Report("Паттерн готов · объектов: " + _service.Apply(session, window.Draft), false);
-            if (bottle) _bottleSettings = window.Settings;
-            else _settings = window.Settings;
+            window.ApplyRequested += draft =>
+            {
+                using (DockerUiWatchdog.Trace(Dispatcher, "Pattern insertion"))
+                    Report("Вариант вставлен · объектов: " + _service.Apply(session,draft,keepEditor:true),false);
+            };
+            window.ShowDialog();
+            if(window.Settings!=null){if (bottle) _bottleSettings = window.Settings;else _settings = window.Settings;}
         }
 
         private void Run(Action action)

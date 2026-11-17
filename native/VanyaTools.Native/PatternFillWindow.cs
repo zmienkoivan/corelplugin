@@ -55,6 +55,8 @@ namespace VanyaTools.Native
         private Geometry _reserve;
         private double _reserveSize, _reserveAngle, _reserveGap;
 
+        internal event Action<PatternDraft> ApplyRequested;
+        private int _insertedVariants;
         internal PatternDraft Draft { get; private set; }
         internal PatternEditorSettings Settings { get; private set; }
 
@@ -77,10 +79,7 @@ namespace VanyaTools.Native
             DockPanel.SetDock(footer, Dock.Bottom); root.Children.Add(footer);
             var cancel = Button("Закрыть", (_, __) => Close()); cancel.IsCancel = true;
             cancel.MinWidth = 84; DockPanel.SetDock(cancel, Dock.Right); footer.Children.Add(cancel);
-            _apply = DockerTheme.Primary(Button("Применить в Corel", (_, __) =>
-            {
-                if (Draft != null) DialogResult = true;
-            }));
+            _apply = DockerTheme.Primary(Button("Применить в Corel", (_, __) => ApplyCurrent()));
             _apply.IsEnabled = false; _apply.Margin = new Thickness(0, 0, 6, 0);
             DockPanel.SetDock(_apply, Dock.Right); footer.Children.Add(_apply);
             _message = new TextBlock { FontSize = 11, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center,
@@ -102,10 +101,16 @@ namespace VanyaTools.Native
             navigation.ToolTip = "Колесо — зум; средняя/правая кнопка или пробел + перетаскивание — перемещение. Shift + колесо — по горизонтали.";
             DockPanel.SetDock(navigation, Dock.Top); previewPanel.Children.Add(navigation);
             var motifTools=new WrapPanel { Margin=new Thickness(0,0,0,5),Visibility=Visibility.Collapsed };
-            var motifTool=new ComboBox { ItemsSource=new[]{"Выбор / поворот","Основная галька","Заполнитель","Ластик"},SelectedIndex=0,MinWidth=150,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,6,0) };
-            motifTool.SelectionChanged+=(_,__)=>_preview.SetMotifTool(motifTool.SelectedIndex);motifTools.Children.Add(motifTool);
-            motifTools.Children.Add(new TextBlock {Text="Основные",Foreground=Brushes.RoyalBlue,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(3)});
-            motifTools.Children.Add(new TextBlock {Text="Заполнители ≤ ¼",Foreground=Brushes.ForestGreen,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(3)});
+            int initialTool=session.Motifs.Any(a=>a.IsFiller)?2:0;
+            var toolButtons=new List<RadioButton>();
+            string[] labels={"Выбор / поворот","Основная галька","+ Заполнитель ≤ ¼","Ластик"};
+            for(int i=0;i<labels.Length;i++)
+            {
+                int tool=i;var button=new RadioButton {Content=labels[i],GroupName="PatternClickTool",Margin=new Thickness(3,5,9,5),VerticalContentAlignment=VerticalAlignment.Center};
+                if(i==1)button.Foreground=Brushes.RoyalBlue;if(i==2)button.Foreground=Brushes.ForestGreen;
+                button.Checked+=(_,__)=>_preview.SetMotifTool(tool);toolButtons.Add(button);motifTools.Children.Add(button);
+            }
+            toolButtons[initialTool].IsChecked=true;
             motifTools.Children.Add(Button("Очистить",(_,__)=>_preview.ClearMotifs()));
             motifTools.Children.Add(Button("Вернуть авто",(_,__)=>_preview.RestoreAutomaticMotifs()));
             motifTools.ToolTip="Клики размещают рисунки из готового набора без ИИ. Основные гальки — синий контур; упрощённые заполнители — зелёный, не больше четверти основного принта. Ластик удаляет рисунок под курсором. В рапорте вместе меняются соответствующие повторения. Цветные контуры видны только в редакторе.";
@@ -252,6 +257,20 @@ namespace VanyaTools.Native
             _ready = true;
             ShowMessage("Готовлю предпросмотр…", false);
             QueuePreview();
+        }
+
+        private void ApplyCurrent()
+        {
+            if(_rendering || Draft==null || Draft.Items.Count==0 && Draft.Hero==null)return;
+            _apply.IsEnabled=false;
+            try
+            {
+                if(ApplyRequested==null)throw new InvalidOperationException("Не подключена вставка паттерна в Corel.");
+                ApplyRequested(Draft);_insertedVariants++;
+                ShowMessage("Вариант "+_insertedVariants+" вставлен в Corel. Меняйте раскладку и применяйте следующий; окно остаётся открытым.",false);
+            }
+            catch(Exception error){Log.Error("Could not insert pattern variant.",error);ShowMessage(error.GetBaseException().Message,true);}
+            finally{_apply.IsEnabled=!_rendering && Draft!=null && (Draft.Items.Count>0 || Draft.Hero!=null);}
         }
 
         private Expander MirroringControls()

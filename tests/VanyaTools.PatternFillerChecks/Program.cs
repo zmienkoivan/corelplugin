@@ -19,7 +19,7 @@ internal static class Program
     {
         try
         {
-            Plans(); Pipeline(); Extraction(); Counts(); Viewport(); ReferenceSources(); PatternSheetSaveChecks.Run(Check); PatternMotifEditorChecks.Run(Check); PatternMotifPaintingChecks.Run(Check);
+            Plans(); Pipeline(); Extraction(); Counts(); Viewport(); ReferenceSources(); PatternSheetSaveChecks.Run(Check); PatternMotifEditorChecks.Run(Check); PatternMotifPaintingChecks.Run(Check); PatternRequestChecks.Run(Check);
             Console.WriteLine("Pattern filler analysis checks passed: " + _checks + ". Synthetic images and stub worker only; no network or Corel.");
             return 0;
         }
@@ -341,13 +341,16 @@ namespace VanyaTools.Native
         internal static Dictionary<string, object> Input;
         internal static Exception Failure;
         internal static byte[] LastImage;
+        internal static Action<string,bool> BeforeRun;
+        internal static bool ResumeOnly;
+        internal static string TextOutput;
         internal static void Run(string model, string token, Dictionary<string, object> input, string outputPath,
-            Action<string> progress = null, CancellationToken cancellation = default)
+            Action<string> progress = null, CancellationToken cancellation = default, bool resumeOnly = false)
         {
-            Calls++; Model = model; Input = input; Output = outputPath;
+            Calls++; Model = model; Input = input; Output = outputPath;ResumeOnly=resumeOnly;BeforeRun?.Invoke(outputPath,resumeOnly);
             cancellation.ThrowIfCancellationRequested();
             if (Failure != null) throw Failure;
-            if (outputPath.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)) File.WriteAllText(outputPath, Program.Json);
+            if (outputPath.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)) File.WriteAllText(outputPath, TextOutput??Program.Json);
             else
             {
                 var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(AiPrintTab.Bitmap(outputPath)));

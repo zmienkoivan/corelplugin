@@ -81,7 +81,8 @@ namespace VanyaTools.Native
                     var motif = _draft.Motifs[item.Motif];
                     if (!DrawArea(motif, item).IntersectsWith(visible)) continue;
                     DrawMotif(drawing, motif, item, Brushes.SteelBlue);
-                    if (_draft.Options.Texture) DrawGuide(drawing, PatternSilhouette.At(motif, item), motif.IsFiller ? fillerOutline : mainOutline);
+                    if (_draft.Options.Texture && item.Cell != null)
+                        for(int n=0;n<item.Cell.Length;n++)drawing.DrawLine(motif.IsFiller ? fillerOutline : mainOutline,ToView(item.Cell[n]),ToView(item.Cell[(n+1)%item.Cell.Length]));
                 }
                 if (_showCells && _draft.CellGuides != null)
                     DrawGuide(drawing, _draft.CellGuides, new Pen(Brushes.MediumPurple, hairline) { DashStyle = DashStyles.Dot },
@@ -309,6 +310,14 @@ namespace VanyaTools.Native
 
         private Point ToView(PatternPoint point) => new Point(point.X, _frame.Height - point.Y);
 
+        private bool HitHero(Point point)
+        {
+            if(_draft?.Hero==null || _scale<=0)return false;
+            if(HitHandle(point)!=DragMode.Move)return true;
+            var local=_viewport.World(point);
+            return PatternSilhouette.At(_session.Hero,_draft.Hero).FillContains(new Point(local.X,_frame.Height-local.Y));
+        }
+
         protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
         {
             base.OnMouseLeftButtonDown(e);
@@ -318,15 +327,9 @@ namespace VanyaTools.Native
             Point point = e.GetPosition(this);
             if (CanEditMotifs && _motifTool > 0) { PaintMotif(point); e.Handled = true; return; }
             if (StartMotifTurn(point)) { e.Handled = true; return; }
-            bool heroHit = false;
-            if (_draft.Hero != null)
-            {
-                var heroMode = HitHandle(point);
-                var local = _viewport.World(point);
-                heroHit = heroMode != DragMode.Move || PatternSilhouette.At(_session.Hero,_draft.Hero).FillContains(new Point(local.X,_frame.Height-local.Y));
-            }
+            bool heroHit = HitHero(point);
             if (!heroHit && SelectMotif(point)) { e.Handled = true; return; }
-            if (_draft.Hero == null || CanEditMotifs && !heroHit) return;
+            if (!heroHit) return;
             ClearMotifSelection();
             var mode = HitHandle(point);
             if (mode == DragMode.Move &&
@@ -365,7 +368,7 @@ namespace VanyaTools.Native
             if (_draft?.Hero == null || _scale <= 0) { Cursor = Cursors.Arrow; return; }
             if (_drag != DragMode.None && e.LeftButton == MouseButtonState.Pressed) DragTo(point);
             var mode = _drag == DragMode.None ? HitHandle(point) : _drag;
-            Cursor = mode == DragMode.Rotate ? Cursors.Hand : mode == DragMode.Scale ? Cursors.SizeNWSE : Cursors.SizeAll;
+            Cursor = !HitHero(point) && _drag == DragMode.None ? Cursors.Arrow : mode == DragMode.Rotate ? Cursors.Hand : mode == DragMode.Scale ? Cursors.SizeNWSE : Cursors.SizeAll;
         }
 
         protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
