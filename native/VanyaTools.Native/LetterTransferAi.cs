@@ -53,12 +53,23 @@ namespace VanyaTools.Native
             string output=LetterTransferStore.Resolve(directory,job.Output);
             return File.Exists(output+".submitted") && !File.Exists(output+".prediction.json") && !HasResult(directory,job);
         }
+        internal static bool InFlight(string directory,LetterTransferJob job)
+        {
+            if(HasResult(directory,job))return false;string output=LetterTransferStore.Resolve(directory,job.Output),state=output+".prediction.json";
+            if(!File.Exists(state))return File.Exists(output+".submitted");
+            try
+            {
+                var saved=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(state));
+                string status=saved!=null && saved.TryGetValue("status",out var value)?Convert.ToString(value):"";return status!="failed" && status!="canceled";
+            }
+            catch(Exception error)when(error is IOException || error is ArgumentException || error is InvalidOperationException){return true;}
+        }
         internal static bool HasResult(string directory,LetterTransferJob job)
         {
             try{LetterTransferImages.Load(LetterTransferStore.Resolve(directory,job.Output));return true;}
             catch(Exception error)when(error is IOException || error is InvalidDataException || error is NotSupportedException || error is System.IO.FileFormatException || error is ArgumentException){return false;}
         }
-        internal static void Generate(string directory,LetterTransferJob job,string token,Action<string> progress,CancellationToken cancel)
+        internal static void Generate(string directory,LetterTransferJob job,string token,Action<string> progress,CancellationToken cancel,bool resumeOnly=false)
         {
             if(String.IsNullOrWhiteSpace(token))throw new InvalidOperationException("Укажите ключ Replicate в настройках ИИ.");
             string output=LetterTransferStore.Resolve(directory,job.Output);
@@ -70,7 +81,7 @@ namespace VanyaTools.Native
             try
             {
                 File.Copy(LetterTransferStore.Resolve(directory,job.Reference),upload);
-                ReplicateWorkerClient.Run(job.Model,token,LetterTransferModels.Input(job,"replicate-file:"+upload),output,progress,cancel);
+                ReplicateWorkerClient.Run(job.Model,token,LetterTransferModels.Input(job,"replicate-file:"+upload),output,progress,cancel,resumeOnly);
             }
             finally{try{File.Delete(upload);}catch(Exception error){Log.Error("Could not clean letter reference upload.",error);}}
         }

@@ -12,10 +12,10 @@ namespace VanyaTools.Native
     internal static class CorelApp{internal static object Get()=>throw new Exception("No real Corel allowed.");}
     internal static class ReplicateWorkerClient
     {
-        internal static int Calls,Recoveries;internal static Dictionary<string,object> Input;internal static string LastUpload,LastModel;internal static bool Fail;internal static string RecognitionResponse;internal static Action<string> GenerationOutput;
-        internal static void Run(string model,string token,Dictionary<string,object> input,string output,Action<string> progress,CancellationToken cancel)
+        internal static int Calls,Recoveries,ResumeCalls;internal static Dictionary<string,object> Input;internal static string LastUpload,LastModel;internal static bool Fail;internal static string RecognitionResponse;internal static Action<string> GenerationOutput;
+        internal static void Run(string model,string token,Dictionary<string,object> input,string output,Action<string> progress,CancellationToken cancel,bool resumeOnly=false)
         {
-            cancel.ThrowIfCancellationRequested();if(File.Exists(output+".submitted") && !File.Exists(output+".prediction.json")){Recoveries++;throw new InvalidOperationException("Synthetic recovery: повтор заблокирован");}Calls++;LastModel=model;Input=input;LastUpload=((string[])input["image_input"])[0].Substring("replicate-file:".Length);
+            cancel.ThrowIfCancellationRequested();if(File.Exists(output+".submitted") && !File.Exists(output+".prediction.json")){Recoveries++;throw new InvalidOperationException("Synthetic recovery: повтор заблокирован");}if(resumeOnly){ResumeCalls++;if(!File.Exists(output+".prediction.json"))throw new InvalidOperationException("Resume-only without a saved job");}else Calls++;LastModel=model;Input=input;LastUpload=((string[])input["image_input"])[0].Substring("replicate-file:".Length);
             if(!File.Exists(LastUpload))throw new Exception("Missing upload snapshot.");
             if(Fail)throw new IOException("Synthetic provider failure.");
             if(model==LetterTransferRecognition.Model)File.WriteAllText(output,RecognitionResponse??"{}");else if(GenerationOutput!=null)GenerationOutput(output);else File.Copy(LastUpload,output,true);File.Delete(LastUpload); // real worker cleans uploaded local files

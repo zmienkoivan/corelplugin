@@ -16,44 +16,47 @@ internal static class VariantSequenceChecks
     private static T Field<T>(object value,string name)=>(T)value.GetType().GetField(name,Flags).GetValue(value);
     internal static void Run(string root)
     {
-        Sequence(root,false,0,false);Sequence(root,false,3,false);Sequence(root,false,0,true);Sequence(root,true,0,false);Fringe();
+        Sequence(root,false,0,false);Sequence(root,false,1,false);Sequence(root,false,0,true);Sequence(root,true,0,false);Fringe();
     }
     private static void Sequence(string root,bool selected,int decline,bool cancelReview)
     {
         string library=Path.Combine(root,"sequence-"+Guid.NewGuid().ToString("N"));
         var set=new LetterTransferSet{VariantsPerLetter=4,Reference="reference.png"};string directory=LetterTransferStore.Create(library,set);
         LetterTransferImages.Save(Sheet(1),LetterTransferStore.Resolve(directory,set.Reference));LetterTransferStore.Save(directory,set);
-        int confirmations=0,reviews=0,calls=ReplicateWorkerClient.Calls;string[] targets=null;string status=null;
+        int confirmations=0,reviews=0,recognitionConsents=0,calls=ReplicateWorkerClient.Calls,generations=0;string status=null,reviewNotice=null;
         var window=new LetterTransferWindow(()=>"synthetic-key",()=>null,(text,error)=>status=text,library,
-            confirm:(reference,letters,model,resolution,prompt,retry)=>{confirmations++;targets=letters;return confirmations!=decline;},
-            confirmRecognition:(preview,count,prompt,retry)=>false,
+            confirm:(reference,letters,model,resolution,prompt,retry)=>{confirmations++;return decline==0;},
+            confirmRecognition:(preview,count,prompt,retry)=>{recognitionConsents++;return false;},
             review:(reference,image,sheet)=>{
-                reviews++;if(cancelReview && reviews==2)return new List<LetterTransferApproved>();
-                return sheet.Cells.Select((cell,index)=>new LetterTransferApproved{Letter=!selected && reviews==2 && targets[index]=="Ш"?"О":targets[index],Image=cell.Image,Original=cell.Original}).ToList();});
-        ReplicateWorkerClient.GenerationOutput=output=>LetterTransferImages.Save(Sheet(targets.Length),output);
+                reviews++;reviewNotice=sheet.Notice;if(cancelReview)return new List<LetterTransferApproved>();
+                return sheet.Cells.Select(cell=>new LetterTransferApproved{Letter=cell.Letter,Image=cell.Image,Original=cell.Original,Bounds=cell.Bounds,SourceJobId=cell.SourceJobId}).ToList();});
+        ReplicateWorkerClient.GenerationOutput=output=>{
+            generations++;var current=LetterTransferStore.Load(directory).Jobs.Last(j=>LetterTransferStore.Resolve(directory,j.Output)==output);var targets=current.Letters;
+            var labels=targets.Select((letter,index)=>new{id=index+1,letter=!selected && generations==2 && letter=="Ш"?"О":letter,uncertain=false}).ToArray();
+            ReplicateWorkerClient.RecognitionResponse=new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(new{cells=labels});
+            LetterTransferImages.Save(Sheet(targets.Length),output);
+        };
         var previous=SynchronizationContext.Current;SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(window.Dispatcher));
         void Generate()
         {
-            window.GetType().GetMethod("Generate",Flags).Invoke(window,new object[]{selected});
-            var deadline=DateTime.UtcNow.AddSeconds(15);
+            window.GetType().GetMethod("Generate",Flags).Invoke(window,new object[]{selected});var deadline=DateTime.UtcNow.AddSeconds(30);
             while(Field<bool>(window,"_sequenceBusy") && DateTime.UtcNow<deadline){var frame=new DispatcherFrame();window.Dispatcher.BeginInvoke(DispatcherPriority.Background,new Action(()=>frame.Continue=false));Dispatcher.PushFrame(frame);Thread.Sleep(5);}
             Program.Check(!Field<bool>(window,"_sequenceBusy"),"Variant generation sequence did not finish.");
         }
         try
         {
             Generate();var saved=LetterTransferStore.Load(directory);
-            if(decline>0){Program.Check(confirmations==3 && reviews==2 && ReplicateWorkerClient.Calls==calls+2 && saved.Jobs.Count==2,"Declining the next variant created an unconfirmed request.");return;}
-            if(cancelReview){Program.Check(confirmations==2 && reviews==2 && ReplicateWorkerClient.Calls==calls+2,"Closing review without accepting letters still charged for another variant.");return;}
-            if(selected){Program.Check(confirmations==4 && reviews==4 && saved.Glyphs.Count==4 && saved.Glyphs.All(g=>g.Letter=="А"),"Selected-letter generation ignored the target of four variants.");return;}
-            Program.Check(confirmations==4 && reviews==4 && ReplicateWorkerClient.Calls==calls+4,"A single missing Ш stopped the remaining variant sheets.");
-            Program.Check(saved.Glyphs.Count(g=>g.Letter=="О")==4 && saved.Glyphs.Count(g=>g.Letter=="Ш")==3 && saved.Glyphs.Count==131,"Sequence discarded a duplicate, over-generated a finished letter or fabricated the missing variant.");
-            Program.Check(status.Contains("не хватает") && status.Contains("1"),"Partial sequence incorrectly reported all four variants as complete.");
-            Program.Check(Field<Button>(window,"_complete").IsEnabled && Field<Button>(window,"_complete").Content.ToString().Contains("4"),"Completion button ignored missing variants after all 33 letter names were present.");
-            Program.Check(saved.Letters.Single(r=>r.Letter=="А").Ready.Contains("4"),"Table omitted ready/target variant counts.");
+            if(decline>0){Program.Check(confirmations==1 && reviews==0 && ReplicateWorkerClient.Calls==calls && saved.Jobs.Count==0,"Declining the series still created a job.");return;}
+            if(cancelReview){Program.Check(confirmations==1 && reviews==1 && ReplicateWorkerClient.Calls==calls+8 && saved.Glyphs.Count==0 && saved.Jobs.Count==4,"Closing the combined review lost results, added glyphs or exceeded the approved series.");return;}
+            if(selected){Program.Check(confirmations==1 && reviews==1 && recognitionConsents==0 && saved.Glyphs.Count==4 && saved.Glyphs.All(g=>g.Letter=="А"),"Selected-letter series did not use one approval/review for four variants.");return;}
+            Program.Check(confirmations==1 && reviews==1 && recognitionConsents==0 && ReplicateWorkerClient.Calls==calls+8,"Series repeated approval/review or exceeded budget: approvals="+confirmations+", reviews="+reviews+", recognition approvals="+recognitionConsents+", calls="+(ReplicateWorkerClient.Calls-calls)+", generation="+generations+", status="+status+", notice="+reviewNotice);
+            Program.Check(saved.Glyphs.Count(g=>g.Letter=="О")==5 && saved.Glyphs.Count(g=>g.Letter=="Ш")==3 && saved.Glyphs.Count==132,"Combined review lost a duplicate or fabricated missing variants.");
+            Program.Check(saved.Glyphs.All(g=>!String.IsNullOrEmpty(g.SourceJobId) && g.SourceCell!=null),"Combined review lost original job/cell ownership.");
+            Program.Check(Field<TextBlock>(window,"_workflowNote").Text.Contains("1") && Field<System.Windows.Controls.TabControl>(window,"_steps").SelectedIndex==1,"Partial series did not return to the letters step with missing variants.");
             Generate();saved=LetterTransferStore.Load(directory);
-            Program.Check(confirmations==5 && targets.SequenceEqual(new[]{"Ш"}) && saved.Glyphs.Count==132 && saved.Glyphs.GroupBy(g=>g.Letter).All(g=>g.Count()==4),"Resume did not generate only the missing fourth Ш.");
+            Program.Check(confirmations==2 && reviews==2 && recognitionConsents==0 && ReplicateWorkerClient.Calls==calls+10 && saved.Jobs.Last().Letters.SequenceEqual(new[]{"Ш"}) && saved.Glyphs.Count==133 && saved.Glyphs.GroupBy(g=>g.Letter).All(g=>g.Count()>=4),"New series did not generate only the missing fourth Ш.");
         }
-        finally{ReplicateWorkerClient.GenerationOutput=null;window.Close();SynchronizationContext.SetSynchronizationContext(previous);}
+        finally{ReplicateWorkerClient.GenerationOutput=null;ReplicateWorkerClient.RecognitionResponse=null;window.Close();SynchronizationContext.SetSynchronizationContext(previous);}
     }
     private static BitmapSource Sheet(int count)
     {

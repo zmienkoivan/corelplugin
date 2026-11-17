@@ -12,7 +12,7 @@ namespace VanyaTools.Native
     {
         internal BitmapSource Image,Preview,Original;
         internal Int32Rect Bounds;
-        internal string Letter,Warning;
+        internal string Letter,Warning,SourceJobId;
         internal bool Safe,Recognized,RecognitionUncertain,Manual,Excluded;
     }
     internal sealed class LetterTransferSheet
@@ -23,8 +23,9 @@ namespace VanyaTools.Native
         internal bool LayoutChanged,ContentLayout;
         private struct Band{internal int Start,End;internal Band(int start,int end){Start=start;End=end;}}
         internal static LetterTransferSheet Read(BitmapSource source,string[] letters,string key,int threshold,CancellationToken cancel)=>ReadCore(source,letters,key,threshold,cancel,true);
-        internal static LetterTransferSheet ReadLegacy(BitmapSource source,string[] letters,string key,int threshold,CancellationToken cancel)=>ReadCore(source,letters,key,threshold,cancel,false);
-        private static LetterTransferSheet ReadCore(BitmapSource source,string[] letters,string key,int threshold,CancellationToken cancel,bool protectArtwork)
+        internal static LetterTransferSheet ReadLegacy(BitmapSource source,string[] letters,string key,int threshold,CancellationToken cancel)=>ReadCore(source,letters,key,threshold,cancel,false,false);
+        internal static LetterTransferSheet ReadBeforeSpill(BitmapSource source,string[] letters,string key,int threshold,CancellationToken cancel)=>ReadCore(source,letters,key,threshold,cancel,true,false);
+        private static LetterTransferSheet ReadCore(BitmapSource source,string[] letters,string key,int threshold,CancellationToken cancel,bool protectArtwork,bool cleanSpill=true)
         {
             int w=source.PixelWidth,h=source.PixelHeight;
             if(w<32 || h<32 || (long)w*h>25000000)throw new ArgumentException("Некорректный размер листа.");
@@ -71,7 +72,7 @@ namespace VanyaTools.Native
             foreach(var box in boxes)
             {
                 cancel.ThrowIfCancellationRequested();var raw=Crop(pixels,w,box);
-                var image=Clean(raw,color,threshold,cancel,protectArtwork,out bool safe,out string warning);
+                var image=Clean(raw,color,threshold,cancel,protectArtwork,cleanSpill,out bool safe,out string warning);
                 // Empty trailing slots do not shift labels of a complete sheet.
                 if(image==null)continue;
                 cells.Add(new LetterTransferCell{Image=image,Preview=image,Safe=safe,Warning=warning,Bounds=box});
@@ -204,7 +205,7 @@ namespace VanyaTools.Native
                 }
             }
         }
-        private static void ShadowEdges(byte[] pixels,int width,int height,byte[] matte,CancellationToken cancel,bool[] protection)
+        private static void ShadowEdges(byte[] pixels,int width,int height,byte[] matte,CancellationToken cancel,bool[] protection,bool unmatteProtected=false)
         {
             var distance=new byte[width*height];
             for(int y=0;y<height;y++)for(int x=0;x<width;x++)
@@ -227,7 +228,7 @@ namespace VanyaTools.Native
                 cancel.ThrowIfCancellationRequested();
                 for(int x=0;x<width;x++)
                 {
-                    int at=y*width+x,p=at*4;if(protection!=null && protection[at] || distance[at]==0 || distance[at]>=4 || original[p+3]<250)continue;
+                    int at=y*width+x,p=at*4;if(protection!=null && protection[at] && !unmatteProtected || distance[at]==0 || distance[at]>=4 || original[p+3]<250)continue;
                     int core=-1,best=Int32.MaxValue;
                     for(int dy=-6;dy<=6;dy++)for(int dx=-6;dx<=6;dx++)
                     {
@@ -237,6 +238,10 @@ namespace VanyaTools.Native
                     if(core<0)continue;
                     double ff=0,fm=0,mm=0,cf=0,cm=0;
                     for(int c=0;c<3;c++){ff+=original[core+c]*original[core+c];fm+=original[core+c]*matte[c];mm+=matte[c]*matte[c];cf+=original[p+c]*original[core+c];cm+=original[p+c]*matte[c];}
+                    // A protected edge may still contain a reflected technical hue.
+                    // Refit it only when the nearest opaque core has a different
+                    // hue; actual green/magenta fabric remains protected.
+                    if(unmatteProtected && protection!=null && protection[at] && fm*fm>=ff*mm*.81)continue;
                     double determinant=ff*mm-fm*fm;if(determinant<1000000)continue;
                     double ink=(cf*mm-cm*fm)/determinant,backdrop=(cm*ff-cf*fm)/determinant;
                     if(ink<0 || ink>1 || backdrop<.03 || backdrop>1.1 || ink+backdrop>1.2)continue;
@@ -251,7 +256,7 @@ namespace VanyaTools.Native
                 }
             }
         }
-        private static BitmapSource Clean(BitmapSource source,Color key,int threshold,CancellationToken cancel,bool protectArtwork,out bool safe,out string warning)
+        private static BitmapSource Clean(BitmapSource source,Color key,int threshold,CancellationToken cancel,bool protectArtwork,bool cleanSpill,out bool safe,out string warning)
         {
             int w=source.PixelWidth,h=source.PixelHeight;var data=LetterTransferImages.Pixels(source);var matte=Background(data,w,h);
             // Use the observed local background, preserving genuine artwork in
@@ -259,23 +264,42 @@ namespace VanyaTools.Native
             int Reflect(byte value,byte expected,int channel)=>channel==1?(expected==255?255-value:value):(expected==0?255-value:value);
             int mb=Reflect(matte[0],key.B,0),mg=Reflect(matte[1],key.G,1),mr=Reflect(matte[2],key.R,2);
             bool pureMatte=mg<=70 && Math.Min(mb,mr)-mg>=100;
-            var protection=protectArtwork && pureMatte?LetterTransferMatteProtection.Create(data,w,h,matte,key,cancel):null;
+            var protection=protectArtwork && pureMatte?LetterTransferMatteProtection.Create(data,w,h,matte,key,cancel,nearTolerance:cleanSpill?36:18):null;
             if(pureMatte)RemoveShadows(data,w,h,matte,cancel,protection);
             PatternFillerMatte.Remove(data,w,h,cancel,matte,false,45,protection);
             if(pureMatte)ShadowEdges(data,w,h,matte,cancel,protection);
-            data=DtfRasterOperations.Correct(data,true,threshold,false,0,cancel);int visible=0;bool edge=false;
+            data=DtfRasterOperations.Correct(data,true,threshold,false,0,cancel);
             for(int y=0;y<h;y++)for(int x=0;x<w;x++)
             {
-                int p=(y*w+x)*4;
-                if(pureMatte && (protection==null || !protection[p/4]))
+                int p=(y*w+x)*4;if(!pureMatte || protection!=null && protection[p/4])continue;
+                int b=Reflect(data[p],key.B,0),g=Reflect(data[p+1],key.G,1),r=Reflect(data[p+2],key.R,2);
+                if(b>=mb-75 && r>=mr-75 && g<=mg+60 && Math.Min(b,r)-g>=60)data[p+3]=0;
+            }
+            if(protectArtwork && cleanSpill && pureMatte)
+            {
+                // The protection mask separates actual enclosed fabric from
+                // the reserved backdrop and its tinted fringe, including counters.
+                // Remove that fringe before contour fitting so smoothing cannot
+                // stretch the key color into the preserved border.
+                double norm=matte.Sum(c=>(int)c*c);
+                for(int y=0;y<h;y++)
                 {
-                    int b=Reflect(data[p],key.B,0),g=Reflect(data[p+1],key.G,1),r=Reflect(data[p+2],key.R,2);
-                    // Remove shaded remnants of a pure technical key only. A
-                    // real green/purple fabric has other color channels and must
-                    // not be erased just because its hue resembles the backdrop.
-                    if(b>=mb-75 && r>=mr-75 && g<=mg+60 && Math.Min(b,r)-g>=60)data[p+3]=0;
+                    cancel.ThrowIfCancellationRequested();
+                    for(int x=0;x<w;x++)
+                    {
+                        int at=y*w+x,p=at*4;if(data[p+3]==0 || protection[at])continue;
+                        int b=Reflect(data[p],key.B,0),g=Reflect(data[p+1],key.G,1),r=Reflect(data[p+2],key.R,2);if(g>90 || Math.Min(b,r)-g<90)continue;
+                        double brightness=0;for(int c=0;c<3;c++)brightness+=data[p+c]*matte[c];if(brightness<norm*.8)continue;
+                        data[p+3]=0;
+                    }
                 }
-                if(data[p+3]==0){data[p]=data[p+1]=data[p+2]=0;continue;}
+                ShadowEdges(data,w,h,matte,cancel,protection,true);
+                data=DtfRasterOperations.Correct(data,true,threshold,false,0,cancel);
+            }
+            int visible=0;bool edge=false;
+            for(int y=0;y<h;y++)for(int x=0;x<w;x++)
+            {
+                int p=(y*w+x)*4;if(data[p+3]==0){data[p]=data[p+1]=data[p+2]=0;continue;}
                 visible++;if(x==0 || y==0 || x==w-1 || y==h-1)edge=true;
             }
             if(visible<16){safe=false;warning=null;return null;}

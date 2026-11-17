@@ -59,7 +59,11 @@ namespace VanyaTools.Native
                 }
                 writer.Flush();fingerprint=BitConverter.ToString(hash.ComputeHash(stream.ToArray())).Replace("-","").ToLowerInvariant();
             }
-            string prefix=LetterTransferStore.Resolve(directory,job.Output)+".labels-"+fingerprint.Substring(0,24);
+            string output=LetterTransferStore.Resolve(directory,job.Output),legacy=output+".labels-"+fingerprint.Substring(0,24);
+            // Keep existing receipts (including unknown submissions), but avoid
+            // overlong upload paths for new analyses in nested project folders.
+            bool existing=File.Exists(legacy+".json") || File.Exists(legacy+".txt") || File.Exists(legacy+".txt.submitted") || File.Exists(legacy+".txt.prediction.json");
+            string prefix=existing?legacy:Path.Combine(Path.GetDirectoryName(output),"labels-"+job.Id.Substring(0,12)+"-"+fingerprint.Substring(0,16));
             var plan=new LetterTransferRecognitionPlan{Count=selected.Length,CellIndices=indices,Prompt=prompt,Fingerprint=fingerprint,Prefix=prefix,Output=prefix+".txt",PreviewFile=prefix+".png"};
             if(File.Exists(prefix+".json"))
             {

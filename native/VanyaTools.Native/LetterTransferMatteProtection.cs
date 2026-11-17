@@ -6,7 +6,7 @@ namespace VanyaTools.Native
 {
     internal static class LetterTransferMatteProtection
     {
-        internal static bool[] Create(byte[] pixels,int width,int height,byte[] matte,Color key,CancellationToken cancel,bool wideReservedHue=false)
+        internal static bool[] Create(byte[] pixels,int width,int height,byte[] matte,Color key,CancellationToken cancel,bool wideReservedHue=false,int nearTolerance=18)
         {
             int count=width*height;var candidate=new bool[count];var near=new bool[count];var protectedInk=new bool[count];var outside=new bool[count];var seen=new bool[count];var queue=new int[count];
             double norm=0;for(int c=0;c<3;c++)norm+=matte[c]*matte[c];
@@ -25,7 +25,7 @@ namespace VanyaTools.Native
                 {
                     int at=y*width+x,p=at*4;if(pixels[p+3]<130)continue;int distance=0;for(int c=0;c<3;c++){int d=pixels[p+c]-matte[c];distance+=d*d;}
                     int b=Reflect(pixels[p],key.B,0),g=Reflect(pixels[p+1],key.G,1),r=Reflect(pixels[p+2],key.R,2);
-                    near[at]=distance<=18*18;
+                    near[at]=distance<=nearTolerance*nearTolerance;
                     candidate[at]=distance<=45*45 || Residual(p)<=24*24 || b>=mb-75 && r>=mr-75 && g<=mg+60 && Math.Min(b,r)-g>=60 || g<=90 && Math.Min(b,r)-g>=90 || wideReservedHue && Math.Min(b,r)-g>=50;
                 }
             }

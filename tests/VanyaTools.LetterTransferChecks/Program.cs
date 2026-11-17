@@ -19,7 +19,9 @@ internal static class Program
         _root=Path.Combine(Path.GetTempPath(),"Vanya-Letter-Checks-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(_root);
         try
         {
-            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();AdaptiveGrid();IrregularAlphabet();Layouts();GridAndLabelChecks.Run(_root);Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();RecognitionChecks.Run(_root);AlternativeAndEdgeChecks.Run(_root);ContentGridChecks.Run(_root);LightGridChecks.Run(_root);VariantSequenceChecks.Run(_root);ContourChecks.Run(_root);GreenMaterialChecks.Run(_root);
+            if(Environment.GetEnvironmentVariable("VANYA_LETTER_CHECK_GROUP")=="edge"){GreenMaterialChecks.Run(_root);ContourChecks.Run(_root);Console.WriteLine("Letter edge checks passed: "+_checks);return 0;}
+            if(Environment.GetEnvironmentVariable("VANYA_LETTER_CHECK_GROUP")=="workflow"){VariantSequenceChecks.Run(_root);WorkflowChecks.Run(_root);Console.WriteLine("Letter workflow checks passed: "+_checks);return 0;}
+            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();AdaptiveGrid();IrregularAlphabet();Layouts();GridAndLabelChecks.Run(_root);Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();RecognitionChecks.Run(_root);AlternativeAndEdgeChecks.Run(_root);ContentGridChecks.Run(_root);LightGridChecks.Run(_root);VariantSequenceChecks.Run(_root);ContourChecks.Run(_root);GreenMaterialChecks.Run(_root);WorkflowChecks.Run(_root);
             Console.WriteLine("Letter transfer checks passed: "+_checks+". Offline checks; no Replicate/Corel requests.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
@@ -376,6 +378,7 @@ internal static class Program
         try
         {
             var root=(FrameworkElement)window.Content;var size=new Size(900,650);root.Measure(size);root.Arrange(new Rect(size));root.UpdateLayout();
+            var expander=Descendants(root).OfType<Expander>().Single();Check(!expander.IsExpanded,"Technical prompt was not collapsed by default.");expander.IsExpanded=true;root.UpdateLayout();
             var controls=Descendants(root).ToArray();Check(controls.OfType<TextBlock>().Any(t=>t.Text.Contains("Ё, Й, Я, Ъ") && t.Text.Contains("платный запрос")),"Consent omitted targets or paid notice.");
             Check(controls.OfType<Image>().Single().Source!=null && controls.OfType<TextBox>().Single().Text=="Synthetic prompt","Consent did not show exact reference and prompt.");
             Check(controls.OfType<Button>().Any(b=>b.IsCancel) && !controls.OfType<Button>().Any(b=>b.IsDefault),"Paid consent uses unsafe default or lacks escape.");

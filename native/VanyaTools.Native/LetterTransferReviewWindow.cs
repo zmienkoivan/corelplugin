@@ -12,7 +12,7 @@ namespace VanyaTools.Native
 {
     internal sealed class LetterTransferApproved
     {
-        internal string Letter;
+        internal string Letter,SourceJobId;
         internal BitmapSource Image,Original;
         internal Int32Rect Bounds;
     }
@@ -23,6 +23,9 @@ namespace VanyaTools.Native
             var window=new Window{Owner=owner,Title=title+" · Vanya Tools",Width=Math.Min(950,SystemParameters.WorkArea.Width-30),Height=Math.Min(760,SystemParameters.WorkArea.Height-30),MinWidth=650,MinHeight=450,WindowStartupLocation=WindowStartupLocation.CenterOwner};
             DockerTheme.Apply(window);return window;
         }
+        internal static bool ConfirmBatch(Window owner,BitmapSource reference,LetterTransferBatchPlan plan)=>BatchConfirmation(owner,reference,plan).ShowDialog()==true;
+        internal static Window BatchConfirmation(Window owner,BitmapSource reference,LetterTransferBatchPlan plan)
+            =>ConfirmationDialog(owner,"Создать серию букв",reference,plan.Description+"\nЛистов: "+plan.Generations+" · "+String.Join(", ",plan.Resolutions)+".\nПревью референса: "+reference.PixelWidth+" × "+reference.PixelHeight+" px.",String.Join("\n\n",plan.Prompts.Select((p,i)=>"Лист "+(i+1)+":\n"+p)));
         internal static bool Confirm(Window owner,BitmapSource reference,string[] letters,string model,string resolution,string prompt,bool retry=false,string sequenceNote=null)
         {
             return Confirmation(owner,reference,letters,model,resolution,prompt,retry,sequenceNote).ShowDialog()==true;
@@ -33,6 +36,8 @@ namespace VanyaTools.Native
                 (retry?"\nСохранённый запрос будет продолжен. Если предыдущая генерация завершилась ошибкой или была отменена, повтор создаст новый платный запрос.":"");
             return ConfirmationDialog(owner,"Отправка референса в ИИ",reference,note,prompt);
         }
+        internal static bool ConfirmRecognitionBatch(Window owner,BitmapSource preview,int sheets,int cells,string prompt)
+            =>ConfirmationDialog(owner,"Распознать сохранённые буквы",preview,"Листов: "+sheets+" · ячеек: "+cells+". До "+sheets+" платных распознаваний GPT mini. Новые картинки не создаются. Затем — одна общая проверка обозначений и края.",prompt).ShowDialog()==true;
         internal static bool ConfirmRecognition(Window owner,BitmapSource preview,int count,string prompt,bool retry,string sourceNote=null)
             =>RecognitionConfirmation(owner,preview,count,prompt,retry,sourceNote).ShowDialog()==true;
         internal static Window RecognitionConfirmation(Window owner,BitmapSource preview,int count,string prompt,bool retry=false,string sourceNote=null)
@@ -49,7 +54,7 @@ namespace VanyaTools.Native
             var footer=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};DockPanel.SetDock(footer,Dock.Bottom);root.Children.Add(footer);
             var cancel=Button("Отмена",()=>window.DialogResult=false);cancel.IsCancel=true;footer.Children.Add(cancel);footer.Children.Add(DockerTheme.Primary(Button("Подтвердить отправку",()=>window.DialogResult=true)));
             var preview=new Image{Source=reference,Stretch=Stretch.Uniform,Width=330,Margin=new Thickness(0,0,12,0)};DockPanel.SetDock(preview,Dock.Left);root.Children.Add(preview);
-            root.Children.Add(new TextBox{Text=prompt,IsReadOnly=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto});return window;
+            root.Children.Add(new Expander{Header="Показать задание ИИ",IsExpanded=false,Content=new TextBox{Text=prompt,IsReadOnly=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto}});return window;
         }
         internal static List<LetterTransferApproved> Review(Window owner,BitmapSource reference,BitmapSource sheet,LetterTransferSheet result)
         {
@@ -71,10 +76,10 @@ namespace VanyaTools.Native
                 note.Text=message;
             }));
             footer.Children.Add(DockerTheme.Primary(Button("Добавить отмеченные",()=>{
-                for(int i=0;i<cells.Length;i++)if(checks[i].IsChecked==true && cells[i].Image!=null && LetterTransferRules.ValidLetter(choices[i].SelectedItem as string))approved.Add(new LetterTransferApproved{Letter=(string)choices[i].SelectedItem,Image=cells[i].Image,Original=cells[i].Original,Bounds=cells[i].Bounds});
-                if(approved.Count==0){MessageBox.Show(window,"Назначьте обозначения и отметьте хотя бы одну проверенную букву.");return;}window.DialogResult=true;
+                for(int i=0;i<cells.Length;i++)if(checks[i].IsChecked==true && cells[i].Image!=null && LetterTransferRules.ValidLetter(choices[i].SelectedItem as string))approved.Add(new LetterTransferApproved{Letter=(string)choices[i].SelectedItem,Image=cells[i].Image,Original=cells[i].Original,Bounds=cells[i].Bounds,SourceJobId=cells[i].SourceJobId});
+                if(approved.Count==0){note.Text="Отметьте хотя бы одну проверенную букву. Обозначение можно исправить прямо в карточке.";return;}window.DialogResult=true;
             })));
-            var palette=new StackPanel();DockPanel.SetDock(palette,Dock.Top);root.Children.Add(palette);
+            var palette=new StackPanel();var palettePanel=new Expander{Header="Исправить обозначения",IsExpanded=cells.Any(c=>c.Image!=null && ((!c.Recognized && !c.Manual) || c.RecognitionUncertain || !LetterTransferRules.ValidLetter(c.Letter))),Content=palette};DockPanel.SetDock(palettePanel,Dock.Top);root.Children.Add(palettePanel);
             var selection=new TextBlock{Text="Щёлкните ячейку, затем букву ниже или введите её с клавиатуры. Следующая ячейка выберется сама.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(3)};palette.Children.Add(selection);
             var keys=new WrapPanel();palette.Children.Add(keys);
             void Select(int index)
@@ -95,7 +100,7 @@ namespace VanyaTools.Native
             {
                 string value=letter.ToString();var key=Button(value,()=>Assign(value));key.Tag="assign-"+value;key.Padding=new Thickness(7,3,7,3);key.MinWidth=32;keys.Children.Add(key);
             }
-            var tabs=new TabControl();root.Children.Add(tabs);var grid=new UniformGrid{Columns=LetterTransferRules.Columns(cells.Length)};tabs.Items.Add(new TabItem{Header="Буквы",Content=new ScrollViewer{Content=grid,VerticalScrollBarVisibility=ScrollBarVisibility.Auto}});
+            var tabs=new TabControl();root.Children.Add(tabs);var grid=new UniformGrid{Columns=Math.Min(6,LetterTransferRules.Columns(cells.Length))};tabs.Items.Add(new TabItem{Header="Буквы",Content=new ScrollViewer{Content=grid,VerticalScrollBarVisibility=ScrollBarVisibility.Auto}});
             tabs.Items.Add(new TabItem{Header="Исходный лист ИИ",Content=new Image{Source=sheet,Stretch=Stretch.Uniform}});
             tabs.Items.Add(new TabItem{Header="Референс",Content=new Image{Source=reference,Stretch=Stretch.Uniform}});
             for(int i=0;i<cells.Length;i++)

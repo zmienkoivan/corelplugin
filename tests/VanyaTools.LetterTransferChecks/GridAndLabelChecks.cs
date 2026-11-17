@@ -59,13 +59,15 @@ internal static class GridAndLabelChecks
         for(int n=0;n<8;n++)LetterTransferImages.Add(directory,set,job.Letters[n],sheet.Cells[n].Image,"ИИ · "+job.Id.Substring(0,8));job.Reviewed=true;LetterTransferStore.Save(directory,set);
         int calls=ReplicateWorkerClient.Calls,reviews=0;
         var window=new LetterTransferWindow(()=>"synthetic-key",()=>null,(_,__)=>{},library,confirmRecognition:(preview,count,prompt,retry)=>false,review:(reference,source,cells)=>{reviews++;return cells.Cells.Select(c=>new LetterTransferApproved{Letter=c.Letter,Image=c.Image,Original=c.Original}).ToList();});
+        var context=System.Threading.SynchronizationContext.Current;System.Threading.SynchronizationContext.SetSynchronizationContext(new System.Windows.Threading.DispatcherSynchronizationContext(window.Dispatcher));
         try
         {
             typeof(LetterTransferWindow).GetMethod("CompleteAlphabet",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).Invoke(window,null);
+            var deadline=DateTime.UtcNow.AddSeconds(20);while(reviews==0 && DateTime.UtcNow<deadline){var frame=new System.Windows.Threading.DispatcherFrame();window.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,new Action(()=>frame.Continue=false));System.Windows.Threading.Dispatcher.PushFrame(frame);System.Threading.Thread.Sleep(5);}
             var saved=LetterTransferStore.Load(directory);
             Program.Check(reviews==1 && ReplicateWorkerClient.Calls==calls && saved.Glyphs.Count==33 && saved.Glyphs.Select(g=>g.Letter).Distinct().Count()==33,"Getting all letters failed to reopen a partial reviewed sheet, duplicated first eight, or sent another model.");
         }
-        finally{window.Close();}
+        finally{window.Close();System.Threading.SynchronizationContext.SetSynchronizationContext(context);}
     }
     private static void Order()
     {
