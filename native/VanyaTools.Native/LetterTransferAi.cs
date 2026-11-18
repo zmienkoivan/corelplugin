@@ -11,8 +11,8 @@ namespace VanyaTools.Native
     {
         internal static string Prompt(LetterTransferSet set,string[] letters,string key,string model=null)
         {
-            if(letters==null || letters.Length<1 || letters.Length>33 || letters.Any(l=>!LetterTransferRules.ValidLetter(l)) || letters.Distinct().Count()!=letters.Length || !LetterTransferImages.ValidKey(key))
-                throw new ArgumentException("Выберите от 1 до 33 разных русских заглавных букв.");
+            if(letters==null || letters.Length<1 || letters.Length>LetterTransferRules.Characters.Length || letters.Any(l=>!LetterTransferRules.ValidLetter(l)) || letters.Distinct().Count()!=letters.Length || !LetterTransferImages.ValidKey(key))
+                throw new ArgumentException("Выберите русские заглавные буквы и знаки ! ? - : (до 37 разных символов).");
             int columns=LetterTransferRules.Columns(letters.Length),rows=(letters.Length+columns-1)/columns;
             if(model==LetterTransferModels.Seedream)
             {
@@ -24,9 +24,9 @@ namespace VanyaTools.Native
                     "NO grid lines, frames, labels, numbers, rulers, dimensions, captions, words, mockups, products or cast shadows. "+
                     "Use one flat technical background "+key+" in empty areas and letter holes; reserve this hue exclusively for background. Keep white ink, intentional letter backings and sharp edges without a colored fringe. "+
                     "Style: "+(set.Style??"")+". User direction: "+(set.Notes??"");
-                LetterTransferModels.ValidatePrompt(model,compact);return compact;
+                compact=WithPunctuation(compact,letters);LetterTransferModels.ValidatePrompt(model,compact);return compact;
             }
-            return "Create a print-ready collection of EXACTLY "+letters.Length+" separate RUSSIAN CYRILLIC UPPERCASE LETTER designs from the supplied visual style reference. "+
+            string prompt="Create a print-ready collection of EXACTLY "+letters.Length+" separate RUSSIAN CYRILLIC UPPERCASE LETTER designs from the supplied visual style reference. "+
                 "This is not a font file and not a product size chart. Keep the reference's letter construction, texture, line quality, palette, outlines and intentional collage/paper backings. "+
                 "If the reference is a uniform alphabet, keep a consistent alphabet family; if it is an eclectic collage, use its coherent eclectic language. Do not copy whole words or the reference sheet. "+
                 "Required Cyrillic characters: "+String.Join(", ",letters.Select(l=>"«"+l+"» (U+"+((int)l[0]).ToString("X4")+")"))+". Correct letter anatomy is essential; retain Ё dots and Й breve. Ё must have the same body cap height as Е, and Й as И, with extra room above for their accents; never shrink their bodies to fit the accent. Do not substitute a Latin lookalike or invent letters. "+
@@ -35,6 +35,15 @@ namespace VanyaTools.Native
                 "Never tile, repeat, combine two letters, crop or touch a cell border. NO rulers, dimensions, arrows, captions, labels, numbers, grid lines, frames, cast shadows, mockups or products. "+
                 "Use an absolutely flat solid technical background "+key+" in all empty space and letter holes. Reserve that exact color for background only; do not use it in the artwork. White ink is artwork and must remain white. Sharp print edges, no colored matte fringe. "+
                 "Style choice: "+(set.Style??"По референсу")+". Additional user direction: "+(set.Notes??"");
+            return WithPunctuation(prompt,letters);
+        }
+        private static string WithPunctuation(string prompt,string[] letters)
+        {
+            if(!letters.Any(l=>LetterTransferRules.Punctuation.Contains(l)))return prompt;
+            return prompt.Replace("RUSSIAN CYRILLIC UPPERCASE LETTER designs","RUSSIAN CYRILLIC UPPERCASE LETTER AND PUNCTUATION designs")
+                .Replace("RUSSIAN CYRILLIC UPPERCASE letter designs","RUSSIAN CYRILLIC UPPERCASE letter and punctuation designs")
+                .Replace("Required Cyrillic characters:","Required characters:")+
+                " Requested punctuation is artwork, not a label: ! is one exclamation mark, ? is one question mark, - is a single horizontal hyphen, : is exactly two vertically aligned dots. Render only the requested symbols. Keep both parts of !, ? and : together in their own cell. Match the reference texture and border. ! and ? match cap height; - and : have normal typographic proportions and sit around the middle of the cap height, never stretched to full letter height.";
         }
         internal static LetterTransferJob Create(string directory,LetterTransferSet set,string[] letters,string model,string resolution,BitmapSource approvedReference=null)
         {

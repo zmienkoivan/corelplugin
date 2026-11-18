@@ -26,14 +26,17 @@ namespace VanyaTools.Native
         {
             var sheet=ReadCore(source,letters,key,threshold,cancel,true);
             int ready=sheet.Cells.Count(c=>c.Safe && c.Image!=null);
-            if(ready>=letters.Length)return sheet;
+            bool punctuation=letters.Any(l=>LetterTransferRules.Punctuation.Contains(l));
+            if(ready>=letters.Length && (!punctuation || sheet.Cells.Length==letters.Length))return sheet;
             // A model can omit dividers, move rows or let a descender overlap
             // the next row. Recover separate silhouettes before guessing cuts.
             var color=(Color)ColorConverter.ConvertFromString(key);
             var clean=Clean(source,color,threshold,cancel,true,true,out _,out _,false);
             if(clean==null)return sheet;
             var recovered=LetterTransferComponentGrid.Read(clean,letters,cancel);
-            if(recovered==null || recovered.Cells.Count(c=>c.Safe && c.Image!=null)<=ready)return sheet;
+            if(recovered==null)return sheet;
+            int recoveredReady=recovered.Cells.Count(c=>c.Safe && c.Image!=null);
+            if(recoveredReady<=ready && !(punctuation && recoveredReady>=letters.Length && recovered.Cells.Length<sheet.Cells.Length))return sheet;
             Log.Info("Letter sheet silhouette recovery: "+ready+" -> "+recovered.Cells.Count(c=>c.Safe && c.Image!=null)+" complete drawings; candidates="+recovered.Cells.Length+"; requested="+letters.Length+".");
             return recovered;
         }

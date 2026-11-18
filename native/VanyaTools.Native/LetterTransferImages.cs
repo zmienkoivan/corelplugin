@@ -151,7 +151,7 @@ namespace VanyaTools.Native
         }
         internal static BitmapSource[] Extract(BitmapSource sheet,int count,string key,CancellationToken cancel,int alphaThreshold=130,bool protectArtwork=false)
         {
-            if(count<1 || count>33 || !ValidKey(key))throw new ArgumentException("Некорректная сетка букв.");
+            if(count<1 || count>LetterTransferRules.Characters.Length || !ValidKey(key))throw new ArgumentException("Некорректная сетка букв.");
             int width=sheet.PixelWidth,height=sheet.PixelHeight;
             if(width<32 || height<32 || (long)width*height>25000000)throw new InvalidDataException("Лист ИИ слишком мал.");
             byte[] pixels=Pixels(sheet);int columns=LetterTransferRules.Columns(count),rows=(count+columns-1)/columns;var bounds=RemoveSeparators(pixels,width,height,columns,rows,cancel);var color=(Color)ColorConverter.ConvertFromString(key);
@@ -327,14 +327,14 @@ namespace VanyaTools.Native
         {
             int body=BodyHeight(letter,image);
             double baseHeight=LetterTransferPrintSizes.For(set).Max();
-            double physicalHeight=(letter=="Ё" || letter=="Й")?(body>0?baseHeight*image.PixelHeight/body:baseHeight*1.2):baseHeight;
+            double physicalHeight=(letter=="Ё" || letter=="Й")?(body>0?baseHeight*image.PixelHeight/body:baseHeight*1.2):baseHeight*LetterTransferRules.HeightFactor(letter);
             double dpi=image.PixelHeight*25.4/physicalHeight;
             var result=BitmapSource.Create(image.PixelWidth,image.PixelHeight,dpi,dpi,PixelFormats.Bgra32,null,Pixels(image),image.PixelWidth*4);result.Freeze();return result;
         }
         internal static LetterTransferGlyph Add(string directory,LetterTransferSet set,string letter,BitmapSource image,string source)
         {
-            if(!LetterTransferRules.ValidLetter(letter))throw new ArgumentException("Выберите русскую заглавную букву.");
-            if(set.Glyphs.Count>=264 || set.Glyphs.Count(g=>g.Letter==letter)>=8)throw new InvalidOperationException("До 8 сохранённых вариантов на букву. Удалите ненужный вариант.");
+            if(!LetterTransferRules.ValidLetter(letter))throw new ArgumentException("Выберите русскую заглавную букву или знак ! ? - :.");
+            if(set.Glyphs.Count>=LetterTransferRules.Characters.Length*8 || set.Glyphs.Count(g=>g.Letter==letter)>=8)throw new InvalidOperationException("До 8 сохранённых вариантов на букву. Удалите ненужный вариант.");
             var original=Prepare(image,set.AlphaThreshold,CancellationToken.None);
             if(original==null)throw new InvalidDataException("После удаления полупрозрачности в букве не осталось видимого рисунка.");
             image=Physical(set,letter,LetterTransferEdges.Finish(original,set,letter,CancellationToken.None));

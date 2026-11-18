@@ -99,7 +99,7 @@ internal static class GridAndLabelChecks
         try
         {
             var content=(FrameworkElement)window.Content;content.Measure(new Size(950,760));content.Arrange(new Rect(0,0,950,760));content.UpdateLayout();var controls=Descendants(content).ToArray();
-            var keys=controls.OfType<Button>().Where(b=>(b.Tag as string)?.StartsWith("assign-")==true).ToArray();Program.Check(keys.Length==33,"Fast alphabet palette is incomplete.");
+            var keys=controls.OfType<Button>().Where(b=>(b.Tag as string)?.StartsWith("assign-")==true).ToArray();Program.Check(keys.Length==LetterTransferRules.Characters.Length,"Fast alphabet palette is incomplete.");
             foreach(string key in new[]{"А","А","Б"})keys.Single(b=>(string)b.Tag=="assign-"+key).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Program.Check(sheet.Cells.Select(c=>c.Letter).SequenceEqual(new[]{"А","А","Б"}) && controls.OfType<CheckBox>().Where(c=>(string)c.Tag=="accept").All(c=>c.IsChecked==true),"Fast entry did not advance or lost duplicate variants.");
         }

@@ -84,6 +84,7 @@ namespace VanyaTools.Native
                     previous.Parts.Add(part);
                 }
             }
+            bool punctuation=requested.Any(l=>LetterTransferRules.Punctuation.Contains(l));
             var mainIds=new HashSet<int>(bodies.Select(p=>p.Id));
             foreach(var part in parts.Where(p=>!mainIds.Contains(p.Id)))
             {
@@ -93,10 +94,25 @@ namespace VanyaTools.Native
                     int dx=Math.Max(0,Math.Max(glyph.Left-part.Right-1,part.Left-glyph.Right-1));
                     int dy=Math.Max(0,Math.Max(glyph.Top-part.Bottom-1,part.Top-glyph.Bottom-1));
                     bool accent=part.Bottom<glyph.Top && dx==0 && dy<typical*.45;
-                    if(!accent && (dx>typical*.1 || dy>typical*.12))continue;
+                    bool lowerDot=punctuation && dx==0 && part.Top>glyph.Bottom && glyph.Right-glyph.Left<typical*.8 && dy<typical*.45;
+                    if(!accent && !lowerDot && (dx>typical*.1 || dy>typical*.12))continue;
                     double distance=dx*dx+dy*dy;if(distance>=score)continue;score=distance;best=glyph;
                 }
-                best?.Parts.Add(part);
+                if(best!=null){best.Parts.Add(part);mainIds.Add(part.Id);}
+            }
+            if(punctuation)
+            {
+                AddPunctuation(glyphs,parts.Where(p=>!mainIds.Contains(p.Id)).ToArray(),typical);
+                // A final row may contain only the short hyphen and colon.
+                // Sort by visual rows without enlarging those marks to cap height.
+                var ordered=glyphs.OrderBy(g=>(g.Top+g.Bottom)*.5).ToArray();var orderedRows=new List<List<Glyph>>();
+                foreach(var glyph in ordered)
+                {
+                    var row=orderedRows.LastOrDefault();double center=(glyph.Top+glyph.Bottom)*.5;
+                    if(row==null || Math.Abs(center-row.Average(g=>(g.Top+g.Bottom)*.5))>typical*.5){row=new List<Glyph>();orderedRows.Add(row);}
+                    row.Add(glyph);
+                }
+                glyphs=orderedRows.SelectMany(row=>row.OrderBy(g=>g.Left)).ToList();
             }
             if(glyphs.Count<1 || glyphs.Count>64 || requested.Length>1 && glyphs.Count<2)return null;
             var cells=new List<LetterTransferCell>();
@@ -118,6 +134,22 @@ namespace VanyaTools.Native
             // Recognition/manual review supplies labels, including duplicates.
             return new LetterTransferSheet{Cells=cells.ToArray(),Requested=requested.ToArray(),ContentLayout=true,LayoutChanged=true,
                 Notice="Лист разделён по силуэтам. Найдено рисунков: "+cells.Count+", целых: "+cells.Count(c=>c.Safe)+". Проверьте обозначения; повторы сохраняются как варианты."};
+        }
+        private static void AddPunctuation(List<Glyph> glyphs,Part[] parts,double typical)
+        {
+            var used=new HashSet<int>();
+            foreach(var upper in parts.OrderBy(p=>p.Top))
+            {
+                if(used.Contains(upper.Id) || upper.Width>typical*.4 || upper.Height>typical*.4)continue;
+                var lower=parts.Where(p=>!used.Contains(p.Id) && p.Top>upper.Bottom && p.Width<=typical*.4 && p.Height<=typical*.4 &&
+                    p.Width>=upper.Width*.5 && p.Width<=upper.Width*2 && p.Height>=upper.Height*.5 && p.Height<=upper.Height*2 &&
+                    Math.Abs((p.Left+p.Right-upper.Left-upper.Right)*.5)<=Math.Max(3,Math.Max(p.Width,upper.Width)*.3) &&
+                    p.Top-upper.Bottom<=typical*.6 && p.Bottom-upper.Top<typical).OrderBy(p=>p.Top).FirstOrDefault();
+                if(lower==null)continue;
+                var glyph=new Glyph();glyph.Parts.Add(upper);glyph.Parts.Add(lower);glyphs.Add(glyph);used.Add(upper.Id);used.Add(lower.Id);
+            }
+            foreach(var part in parts.Where(p=>!used.Contains(p.Id) && p.Width>=typical*.3 && p.Height<=typical*.3 && p.Width>=p.Height*2.5))
+            {var glyph=new Glyph();glyph.Parts.Add(part);glyphs.Add(glyph);}
         }
     }
 }

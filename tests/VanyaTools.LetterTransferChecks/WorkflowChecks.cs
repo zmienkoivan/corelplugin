@@ -105,7 +105,7 @@ internal static class WorkflowChecks
         {
             Call(window,"Generate",false);Pump(()=>!Field<bool>(window,"_sequenceBusy") && Field<CancellationTokenSource>(window,"_request")==null);var saved=LetterTransferStore.Load(directory);
             Program.Check(approvals==1 && generations==(cancel?1:2) && ReplicateWorkerClient.Calls==calls+(cancel?1:3),"Stopping a series still submitted remaining jobs.");
-            Program.Check(cancel?saved.Jobs.Count==1 && saved.Glyphs.Count==0 && reviews==0:saved.Jobs.Count==2 && saved.Glyphs.Count==33 && reviews==1,"Interrupting a series lost a completed sheet or imported an unreviewed one.");
+            Program.Check(cancel?saved.Jobs.Count==1 && saved.Glyphs.Count==0 && reviews==0:saved.Jobs.Count==2 && saved.Glyphs.Count==37 && reviews==1,"Interrupting a series lost a completed sheet or imported an unreviewed one.");
         }
         finally{ReplicateWorkerClient.GenerationOutput=null;ReplicateWorkerClient.RecognitionResponse=null;window.Close();SynchronizationContext.SetSynchronizationContext(context);}
     }

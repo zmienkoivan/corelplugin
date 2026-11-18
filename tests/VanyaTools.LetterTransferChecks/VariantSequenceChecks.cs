@@ -50,11 +50,11 @@ internal static class VariantSequenceChecks
             if(cancelReview){Program.Check(confirmations==1 && reviews==1 && ReplicateWorkerClient.Calls==calls+8 && saved.Glyphs.Count==0 && saved.Jobs.Count==4,"Closing the combined review lost results, added glyphs or exceeded the approved series.");return;}
             if(selected){Program.Check(confirmations==1 && reviews==1 && recognitionConsents==0 && saved.Glyphs.Count==4 && saved.Glyphs.All(g=>g.Letter=="А"),"Selected-letter series did not use one approval/review for four variants.");return;}
             Program.Check(confirmations==1 && reviews==1 && recognitionConsents==0 && ReplicateWorkerClient.Calls==calls+8,"Series repeated approval/review or exceeded budget: approvals="+confirmations+", reviews="+reviews+", recognition approvals="+recognitionConsents+", calls="+(ReplicateWorkerClient.Calls-calls)+", generation="+generations+", status="+status+", notice="+reviewNotice);
-            Program.Check(saved.Glyphs.Count(g=>g.Letter=="О")==5 && saved.Glyphs.Count(g=>g.Letter=="Ш")==3 && saved.Glyphs.Count==132,"Combined review lost a duplicate or fabricated missing variants.");
+            Program.Check(saved.Glyphs.Count(g=>g.Letter=="О")==5 && saved.Glyphs.Count(g=>g.Letter=="Ш")==3 && saved.Glyphs.Count==148,"Combined review lost a duplicate or fabricated missing variants.");
             Program.Check(saved.Glyphs.All(g=>!String.IsNullOrEmpty(g.SourceJobId) && g.SourceCell!=null),"Combined review lost original job/cell ownership.");
             Program.Check(Field<TextBlock>(window,"_workflowNote").Text.Contains("1") && Field<System.Windows.Controls.TabControl>(window,"_steps").SelectedIndex==1,"Partial series did not return to the letters step with missing variants.");
             Generate();saved=LetterTransferStore.Load(directory);
-            Program.Check(confirmations==2 && reviews==2 && recognitionConsents==0 && ReplicateWorkerClient.Calls==calls+10 && saved.Jobs.Last().Letters.SequenceEqual(new[]{"Ш"}) && saved.Glyphs.Count==133 && saved.Glyphs.GroupBy(g=>g.Letter).All(g=>g.Count()>=4),"New series did not generate only the missing fourth Ш.");
+            Program.Check(confirmations==2 && reviews==2 && recognitionConsents==0 && ReplicateWorkerClient.Calls==calls+10 && saved.Jobs.Last().Letters.SequenceEqual(new[]{"Ш"}) && saved.Glyphs.Count==149 && saved.Glyphs.GroupBy(g=>g.Letter).All(g=>g.Count()>=4),"New series did not generate only the missing fourth Ш.");
         }
         finally{ReplicateWorkerClient.GenerationOutput=null;ReplicateWorkerClient.RecognitionResponse=null;window.Close();SynchronizationContext.SetSynchronizationContext(previous);}
     }

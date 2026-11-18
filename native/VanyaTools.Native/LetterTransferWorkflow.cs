@@ -58,7 +58,7 @@ namespace VanyaTools.Native
         }
         internal static LetterTransferSheet Combine(IReadOnlyList<LetterTransferPrepared> sheets)
         {
-            var cells=sheets.SelectMany(p=>p.Sheet.Cells).OrderBy(c=>LetterTransferRules.ValidLetter(c.Letter)?LetterTransferRules.Alphabet.IndexOf(c.Letter,StringComparison.Ordinal):Int32.MaxValue).ToArray();
+            var cells=sheets.SelectMany(p=>p.Sheet.Cells).OrderBy(c=>LetterTransferRules.ValidLetter(c.Letter)?LetterTransferRules.Characters.IndexOf(c.Letter,StringComparison.Ordinal):Int32.MaxValue).ToArray();
             return new LetterTransferSheet{Cells=cells,Requested=cells.Select(c=>c.Letter).ToArray(),LayoutChanged=sheets.Any(s=>s.Sheet.LayoutChanged),Notice="Листов: "+sheets.Count+". Варианты одной буквы стоят рядом. Проверьте край и обозначения; сомнительные буквы не отмечены автоматически. "+String.Join(" ",sheets.Select(s=>s.Sheet.Notice).Where(n=>!String.IsNullOrWhiteSpace(n)).Distinct())};
         }
     }

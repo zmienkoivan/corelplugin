@@ -91,7 +91,7 @@ namespace VanyaTools.Native
             _style.ItemsSource=new[]{"По референсу","Единый алфавит и фактура","Коллаж · разные оформления"};Field(fields,"Оформление",_style);
             _notes.MaxLength=4000;_notes.TextWrapping=TextWrapping.Wrap;_notes.AcceptsReturn=true;_notes.Height=55;_notes.VerticalScrollBarVisibility=ScrollBarVisibility.Auto;Field(fields,"Уточнения для генерации",_notes);
             fields.Children.Add(new TextBlock{Text="Референс → буквы → полотно. Создание, удаление фона, распознавание и край идут одной серией.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,7,0,7)});
-            printFields.Children.Add(new TextBlock{Text="Количество распределяется по частоте русских букв. Любое число копий можно исправить в таблице.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,8,0,6)});
+            printFields.Children.Add(new TextBlock{Text="33 русские буквы и знаки ! ? - :. Количество можно исправить в таблице; 0 исключает символ из печати.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,8,0,6)});
             Field(printFields,"Всего копий (33–5000)",_target);var frequencyAdvanced=new StackPanel();frequencyAdvanced.Children.Add(Button("Восстановить распределение по частотности",()=>Safe(()=>{Read();LetterTransferRules.Allocate(_set.Letters,_set.TargetCopies);_table.Items.Refresh();Save();Preview();})));var weights=new CheckBox{Content="Показать частотные веса",Margin=new Thickness(4)};weights.Checked+=(_,__)=>_table.Columns[1].Visibility=Visibility.Visible;weights.Unchecked+=(_,__)=>_table.Columns[1].Visibility=Visibility.Collapsed;frequencyAdvanced.Children.Add(weights);printFields.Children.Add(new Expander{Header="Частотность",Content=frequencyAdvanced});
             Field(fields,"Оформлений на букву (1–4)",_variants);
             var aiAdvanced=new StackPanel();_model.ItemsSource=LetterTransferModels.Names;_model.SelectedIndex=0;Field(aiAdvanced,"Модель",_model);_resolution.ItemsSource=new[]{"2K","4K"};_resolution.SelectedIndex=1;Field(aiAdvanced,"Размер отдельных букв",_resolution);fields.Children.Add(new Expander{Header="Модель и размер ответа",Content=aiAdvanced});
@@ -129,7 +129,7 @@ namespace VanyaTools.Native
             DockPanel.SetDock(_summary,Dock.Bottom);print.Children.Add(_summary);_scroll.Content=_pages;print.Children.Add(_scroll);tabs.Items.Add(new TabItem{Header="Полотно",Content=print});
             _scroll.PreviewMouseWheel+=(_,e)=>{if((Keyboard.Modifiers&ModifierKeys.Control)==0)return;Zoom(_zoom*(e.Delta>0?1.15:1/1.15));e.Handled=true;};
             var variantsPanel=new DockPanel();var variantTools=new WrapPanel();DockPanel.SetDock(variantTools,Dock.Top);variantsPanel.Children.Add(variantTools);
-            _letter.ItemsSource=LetterTransferRules.Alphabet.Select(c=>c.ToString()).ToArray();_letter.SelectedIndex=0;_letter.Width=60;variantTools.Children.Add(_letter);
+            _letter.ItemsSource=LetterTransferRules.Characters.Select(c=>c.ToString()).ToArray();_letter.SelectedIndex=0;_letter.Width=60;variantTools.Children.Add(_letter);
             variantTools.Children.Add(Button("PNG / изображение…",()=>Safe(()=>Import(false))));variantTools.Children.Add(Button("Из Corel",()=>Safe(()=>Import(true))));variantTools.Children.Add(Button("Удалить вариант",()=>Safe(Remove)));variantTools.Children.Add(Button("Ещё вариант этой буквы",()=>Generate(true)));variantTools.Children.Add(Button("Предпросмотр края…",()=>PreviewEdge()));variantsPanel.Children.Add(_glyphs);tabs.Items.Add(new TabItem{Header="Буквы",Content=variantsPanel});
             var jobsPanel=new DockPanel();var jobTools=new WrapPanel();DockPanel.SetDock(jobTools,Dock.Top);jobsPanel.Children.Add(jobTools);
             jobTools.Children.Add(Button("История Replicate",()=>Safe(()=>Process.Start(new ProcessStartInfo("https://replicate.com/predictions"){UseShellExecute=true}))));jobTools.Children.Add(Button("Проверить готовый ответ",()=>ReviewJob()));jobTools.Children.Add(Button("Распознать буквы заново…",()=>ReviewJob(true)));jobTools.Children.Add(Button("Продолжить / повторить…",()=>Retry()));jobsPanel.Children.Add(_jobs);tabs.Items.Add(new TabItem{Header="История ИИ",Content=jobsPanel});
@@ -200,7 +200,7 @@ namespace VanyaTools.Native
         private void RefreshAssets()
         {
             RefreshCounts();_glyphs.Items.Clear();
-            foreach(var glyph in _set.Glyphs.OrderBy(g=>LetterTransferRules.Alphabet.IndexOf(g.Letter,StringComparison.Ordinal)))
+            foreach(var glyph in _set.Glyphs.OrderBy(g=>LetterTransferRules.Characters.IndexOf(g.Letter,StringComparison.Ordinal)))
             {
                 var panel=new StackPanel{Background=Brushes.LightGray,Width=150,Margin=new Thickness(3)};panel.Children.Add(new Image{Source=Thumb(glyph.File),Width=140,Height=130,Stretch=Stretch.Uniform,Margin=new Thickness(5)});
                 panel.Children.Add(new TextBlock{Text=glyph.Letter+" · вариант "+(_set.Glyphs.Where(g=>g.Letter==glyph.Letter).ToList().IndexOf(glyph)+1),VerticalAlignment=VerticalAlignment.Center,TextWrapping=TextWrapping.Wrap});_glyphs.Items.Add(new ListBoxItem{Content=panel,Tag=glyph});

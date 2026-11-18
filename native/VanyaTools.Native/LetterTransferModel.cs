@@ -6,7 +6,7 @@ namespace VanyaTools.Native
 {
     internal sealed class LetterTransferSet
     {
-        public int Schema { get; set; }=1;
+        public int Schema { get; set; }=2;
         public string Id { get; set; }=Guid.NewGuid().ToString("N");
         public string Name { get; set; }="Новый набор букв";
         public string Reference { get; set; }="";
@@ -70,45 +70,53 @@ namespace VanyaTools.Native
     internal static class LetterTransferRules
     {
         internal const string Alphabet="АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ";
+        internal const string Punctuation="!?-:";
+        internal const string Characters=Alphabet+Punctuation;
+        internal static double HeightFactor(string symbol)=>symbol=="-"?.15:symbol==":"?.6:1;
+        internal static double BaselineInset(double height,string symbol)=>height*(1-HeightFactor(symbol))*.5;
         // Editable starting weights for ordinary Russian text, not a measured
         // forecast for a customer's names or a particular transfer collection.
         private static readonly double[] Weights={8,1.6,4.5,1.7,3,8.5,.1,.9,1.6,7.4,1.2,3.5,4.4,3.2,6.7,11,2.8,4.7,5.5,6.3,2.6,.3,1,.5,1.4,.7,.4,.05,1.9,1.7,.3,.6,2};
         internal static List<LetterTransferRow> DefaultRows()
         {
             var rows=Alphabet.Select((letter,index)=>new LetterTransferRow{Letter=letter.ToString(),Weight=Weights[index]}).ToList();
+            rows.AddRange(Punctuation.Select(c=>new LetterTransferRow{Letter=c.ToString(),Weight=.35}));
             Allocate(rows,100);return rows;
         }
-        internal static bool ValidLetter(string letter)=>letter!=null && letter.Length==1 && Alphabet.Contains(letter);
+        internal static bool ValidLetter(string letter)=>letter!=null && letter.Length==1 && Characters.Contains(letter);
         internal static void Allocate(IList<LetterTransferRow> rows,int total)
         {
-            if(total<rows.Count || total>5000)throw new ArgumentException("Для полного алфавита нужно от "+rows.Count+" до 5000 копий.");
-            if(rows.Any(row=>!ValidLetter(row.Letter) || !Finite(row.Weight) || row.Weight<0 || row.Weight>1000) || rows.Select(row=>row.Letter).Distinct().Count()!=rows.Count)
+            if(rows==null || rows.Count==0)throw new ArgumentException("Нет символов для распределения.");
+            int alphabetCount=rows.Count(row=>row!=null && row.Letter!=null && Alphabet.Contains(row.Letter));
+            if(total<Math.Max(1,alphabetCount) || total>5000)throw new ArgumentException("Для полного алфавита нужно от "+Math.Max(1,alphabetCount)+" до 5000 копий.");
+            if(rows.Any(row=>row==null || !ValidLetter(row.Letter) || !Finite(row.Weight) || row.Weight<0 || row.Weight>1000) || rows.Select(row=>row.Letter).Distinct().Count()!=rows.Count)
                 throw new ArgumentException("Проверьте буквы и частотные веса.");
             double sum=rows.Sum(row=>row.Weight);if(sum<=0)throw new ArgumentException("Укажите хотя бы один положительный вес.");
-            int remaining=total-rows.Count;var fractions=new List<Tuple<int,double>>();
+            int remaining=Math.Max(0,total-rows.Count),marks=Math.Max(0,total-alphabetCount);var fractions=new List<Tuple<int,double>>();
             for(int i=0;i<rows.Count;i++)
             {
                 double ideal=remaining*rows[i].Weight/sum;int whole=(int)Math.Floor(ideal);
-                rows[i].Copies=1+whole;fractions.Add(Tuple.Create(i,ideal-whole));
+                rows[i].Copies=(Alphabet.Contains(rows[i].Letter) || marks-->0?1:0)+whole;fractions.Add(Tuple.Create(i,ideal-whole));
             }
             int missing=total-rows.Sum(row=>row.Copies);
             foreach(var fraction in fractions.OrderByDescending(value=>value.Item2).ThenBy(value=>value.Item1).Take(missing))rows[fraction.Item1].Copies++;
         }
         internal static void Validate(LetterTransferSet set)
         {
-            if(set==null || set.Schema!=1 || !Guid.TryParseExact(set.Id,"N",out _) || String.IsNullOrWhiteSpace(set.Name) || set.Name.Length>120 || (set.Notes??"").Length>4000 || (set.Style??"").Length>4000)
+            if(set==null || (set.Schema!=1 && set.Schema!=2) || !Guid.TryParseExact(set.Id,"N",out _) || String.IsNullOrWhiteSpace(set.Name) || set.Name.Length>120 || (set.Notes??"").Length>4000 || (set.Style??"").Length>4000)
                 throw new ArgumentException("Некорректный файл набора букв.");
             LetterTransferPrintSizes.Validate(LetterTransferPrintSizes.For(set));
-            if(set.Letters==null || set.Letters.Count!=33 || set.Letters.Any(row=>row==null || !ValidLetter(row.Letter) || row.Copies<0 || row.Copies>5000 || !Finite(row.Weight) || row.Weight<0 || row.Weight>1000) ||
-                set.Letters.Select(row=>row.Letter).Distinct().Count()!=33 || set.Letters.Sum(row=>row.Copies)>5000)
-                throw new ArgumentException("Проверьте таблицу русских заглавных букв и количество копий (до 5000).");
+            int characterCount=set.Schema==1?Alphabet.Length:Characters.Length;
+            if(set.Letters==null || set.Letters.Count!=characterCount || set.Letters.Any(row=>row==null || !ValidLetter(row.Letter) || row.Copies<0 || row.Copies>5000 || !Finite(row.Weight) || row.Weight<0 || row.Weight>1000) ||
+                set.Letters.Select(row=>row.Letter).Distinct().Count()!=characterCount || (set.Schema==1 && set.Letters.Any(row=>!Alphabet.Contains(row.Letter))) || set.Letters.Sum(row=>row.Copies)>5000)
+                throw new ArgumentException("Проверьте таблицу букв и знаков и количество копий (до 5000).");
             if(!In(set.HeightMm,1,500) || !In(set.SheetWidthMm,20,2000) || !In(set.SheetHeightMm,20,7000) || !In(set.GapMm,0,50) || !In(set.MarginMm,0,100) ||
                 set.SheetWidthMm<=2*set.MarginMm || (!set.AutoLength && set.SheetHeightMm<=2*set.MarginMm) || set.VariantsPerLetter<1 || set.VariantsPerLetter>4 || set.TargetCopies<33 || set.TargetCopies>5000 || set.AlphaThreshold<1 || set.AlphaThreshold>255 || set.EdgeTrimPx<0 || set.EdgeTrimPx>6 || !In(set.ContourSmoothPx,.25,3) || !LetterTransferModels.Supports(set.GenerationModel))
                 throw new ArgumentException("Проверьте размер букв, листа, поля и количество вариантов.");
-            if(set.Glyphs==null || set.Glyphs.Count>264 || set.Glyphs.Any(g=>g==null || !Guid.TryParseExact(g.Id,"N",out _) || !ValidLetter(g.Letter) || g.Width<1 || g.Height<1 || g.Width>10000 || g.Height>10000 || g.BodyHeight<0 || g.BodyHeight>g.Height || g.EdgeTrimPx<0 || g.EdgeTrimPx>6 || !ValidSource(g) || g.SharpContour && !In(g.ContourSmoothPx,.25,3) || (long)g.Width*g.Height>25000000) ||
+            if(set.Glyphs==null || set.Glyphs.Count>Characters.Length*8 || set.Glyphs.Any(g=>g==null || !Guid.TryParseExact(g.Id,"N",out _) || !ValidLetter(g.Letter) || g.Width<1 || g.Height<1 || g.Width>10000 || g.Height>10000 || g.BodyHeight<0 || g.BodyHeight>g.Height || g.EdgeTrimPx<0 || g.EdgeTrimPx>6 || !ValidSource(g) || g.SharpContour && !In(g.ContourSmoothPx,.25,3) || (long)g.Width*g.Height>25000000) ||
                 set.Glyphs.Select(g=>g.Id).Distinct().Count()!=set.Glyphs.Count || set.Jobs==null || set.Jobs.Count>200 || set.Jobs.Select(j=>j?.Id).Distinct().Count()!=set.Jobs.Count)
                 throw new ArgumentException("Некорректные рисунки или история генераций набора.");
-            foreach(var job in set.Jobs)if(job==null || !Guid.TryParseExact(job.Id,"N",out _) || job.Letters==null || job.Letters.Length<1 || job.Letters.Length>33 || job.Letters.Any(letter=>!ValidLetter(letter)) ||
+            foreach(var job in set.Jobs)if(job==null || !Guid.TryParseExact(job.Id,"N",out _) || job.Letters==null || job.Letters.Length<1 || job.Letters.Length>Characters.Length || job.Letters.Any(letter=>!ValidLetter(letter)) ||
                 job.Letters.Distinct().Count()!=job.Letters.Length || !LetterTransferModels.Supports(job.Model) || (job.Resolution!="2K" && job.Resolution!="4K") || (job.Letters.Length>4 && job.Resolution!="4K") || String.IsNullOrWhiteSpace(job.Prompt) || job.Prompt.Length>16000 || job.Model==LetterTransferModels.Seedream && job.Prompt.Length>4000 || !LetterTransferImages.ValidKey(job.Key))
                 throw new ArgumentException("Некорректное сохранённое задание ИИ.");
         }
@@ -117,13 +125,13 @@ namespace VanyaTools.Native
             if(String.IsNullOrEmpty(glyph.SourceJobId))return glyph.SourceCell==null;
             return Guid.TryParseExact(glyph.SourceJobId,"N",out _) && glyph.SourceCell!=null && glyph.SourceCell.Length==4 && glyph.SourceCell[0]>=0 && glyph.SourceCell[1]>=0 && glyph.SourceCell[2]>0 && glyph.SourceCell[3]>0 && glyph.SourceCell.All(n=>n<=10000) && (long)glyph.SourceCell[0]+glyph.SourceCell[2]<=10000 && (long)glyph.SourceCell[1]+glyph.SourceCell[3]<=10000;
         }
-        internal static int MissingVariants(LetterTransferSet set)=>Alphabet.Sum(letter=>Math.Max(0,set.VariantsPerLetter-set.Glyphs.Count(g=>g.Letter==letter.ToString())));
+        internal static int MissingVariants(LetterTransferSet set)=>Characters.Sum(letter=>Math.Max(0,set.VariantsPerLetter-set.Glyphs.Count(g=>g.Letter==letter.ToString())));
         internal static List<string[]> MissingPasses(LetterTransferSet set,IEnumerable<string> scope=null)
         {
-            Validate(set);var allowed=scope==null?new HashSet<string>(Alphabet.Select(c=>c.ToString())):new HashSet<string>(scope);var passes=new List<string[]>();
+            Validate(set);var allowed=scope==null?new HashSet<string>(Characters.Select(c=>c.ToString())):new HashSet<string>(scope);var passes=new List<string[]>();
             for(int variant=1;variant<=set.VariantsPerLetter;variant++)
             {
-                var letters=Alphabet.Select(c=>c.ToString()).Where(letter=>allowed.Contains(letter) && set.Glyphs.Count(g=>g.Letter==letter)<variant).ToArray();
+                var letters=Characters.Select(c=>c.ToString()).Where(letter=>allowed.Contains(letter) && set.Glyphs.Count(g=>g.Letter==letter)<variant).ToArray();
                 if(letters.Length>0)passes.Add(letters);
             }
             return passes;
@@ -147,6 +155,7 @@ namespace VanyaTools.Native
         internal static double GlyphHeight(LetterTransferSet set,LetterTransferGlyph glyph)=>GlyphHeight(set.HeightMm,glyph);
         internal static double GlyphHeight(double height,LetterTransferGlyph glyph)
         {
+            height*=LetterTransferRules.HeightFactor(glyph.Letter);
             if(glyph.Letter!="Ё" && glyph.Letter!="Й")return height;
             // Older sets have no measured cap body. Reserve 20% above the body
             // until an image with detached accents can be measured on load.
@@ -155,7 +164,7 @@ namespace VanyaTools.Native
         internal static List<LetterTransferPlacement> Build(LetterTransferSet set,bool readyOnly)
         {
             LetterTransferRules.Validate(set);var glyphs=new List<LetterTransferGlyph>();
-            foreach(var row in set.Letters.OrderBy(row=>LetterTransferRules.Alphabet.IndexOf(row.Letter,StringComparison.Ordinal)))
+            foreach(var row in set.Letters.OrderBy(row=>LetterTransferRules.Characters.IndexOf(row.Letter,StringComparison.Ordinal)))
             {
                 var variants=set.Glyphs.Where(g=>g.Letter==row.Letter).ToArray();
                 if(row.Copies>0 && variants.Length==0 && !readyOnly)throw new InvalidOperationException("Нет готовой буквы «"+row.Letter+"». Догенерируйте её, установите количество 0 или включите «Только готовые».");
@@ -165,7 +174,7 @@ namespace VanyaTools.Native
             int pageOffset=0;
             foreach(double printHeight in LetterTransferPrintSizes.For(set))
             {
-                double cellHeight=glyphs.Max(g=>GlyphHeight(printHeight,g)),cellWidth=glyphs.Max(g=>GlyphHeight(printHeight,g)*g.Width/g.Height);
+                double cellHeight=Math.Max(printHeight,glyphs.Max(g=>GlyphHeight(printHeight,g))),cellWidth=glyphs.Max(g=>GlyphHeight(printHeight,g)*g.Width/g.Height);
                 double width=set.SheetWidthMm-2*set.MarginMm,height=PageLimit(set)-2*set.MarginMm;
                 if(cellWidth>width+.00001 || cellHeight>height+.00001)throw new InvalidOperationException("Буквы высотой "+LetterTransferPrintSizes.Label(printHeight)+" мм не помещаются. Увеличьте лист или уменьшите высоту букв.");
                 int columns=(int)Math.Floor((width+set.GapMm+.00001)/(cellWidth+set.GapMm));
@@ -178,7 +187,7 @@ namespace VanyaTools.Native
                     var glyph=glyphs[n];double h=GlyphHeight(printHeight,glyph),w=h*glyph.Width/glyph.Height;
                     int slot=n%capacity,col=slot%columns,row=slot/columns;
                     double x=set.MarginMm+col*(cellWidth+set.GapMm),y=set.MarginMm+row*(cellHeight+set.GapMm);
-                    placements.Add(new LetterTransferPlacement{Glyph=glyph,Page=pageOffset+n/capacity,Column=col,Row=row,PrintHeightMm=printHeight,CellX=x,CellY=y,CellWidth=cellWidth,CellHeight=cellHeight,X=x+(cellWidth-w)/2,Y=y+cellHeight-h,Width=w,Height=h});
+                    placements.Add(new LetterTransferPlacement{Glyph=glyph,Page=pageOffset+n/capacity,Column=col,Row=row,PrintHeightMm=printHeight,CellX=x,CellY=y,CellWidth=cellWidth,CellHeight=cellHeight,X=x+(cellWidth-w)/2,Y=y+cellHeight-h-LetterTransferRules.BaselineInset(printHeight,glyph.Letter),Width=w,Height=h});
                 }
                 pageOffset+=pageCount;
             }

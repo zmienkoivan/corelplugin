@@ -26,7 +26,7 @@ namespace VanyaTools.Native
         }
         internal static void Save(string directory,LetterTransferSet set)
         {
-            LetterTransferRules.Validate(set);ValidateFiles(directory,set);
+            LetterTransferRules.Validate(set);Upgrade(set);LetterTransferRules.Validate(set);ValidateFiles(directory,set);
             Directory.CreateDirectory(directory);string destination=Path.Combine(directory,"set.json"),temporary=destination+"."+Guid.NewGuid().ToString("N")+".tmp";
             string json=new JavaScriptSerializer{MaxJsonLength=1024*1024}.Serialize(set);
             try
@@ -44,7 +44,7 @@ namespace VanyaTools.Native
             if(fields==null || !fields.ContainsKey("Schema") || !fields.ContainsKey("Id") || !fields.ContainsKey("Name") || !fields.ContainsKey("Letters") || !fields.ContainsKey("Glyphs"))
                 throw new InvalidDataException("Это не файл сохранённого набора букв.");
             var set=serializer.Deserialize<LetterTransferSet>(json);
-            LetterTransferRules.Validate(set);ValidateFiles(directory,set);
+            LetterTransferRules.Validate(set);Upgrade(set);LetterTransferRules.Validate(set);ValidateFiles(directory,set);
             foreach(var glyph in set.Glyphs.Where(g=>g.BodyHeight==0 && (g.Letter=="Ё" || g.Letter=="Й")))
             {
                 string image=Resolve(directory,glyph.File);if(!File.Exists(image))continue;
@@ -52,6 +52,14 @@ namespace VanyaTools.Native
                 catch(Exception error)when(error is IOException || error is NotSupportedException || error is ArgumentException){ }
             }
             return set;
+        }
+        private static void Upgrade(LetterTransferSet set)
+        {
+            if(set.Schema!=1)return;
+            // Keep the original print quantities and saved glyphs. Newly
+            // supported marks are available for generation, with zero copies.
+            set.Letters.AddRange(LetterTransferRules.Punctuation.Select(c=>new LetterTransferRow{Letter=c.ToString(),Weight=.35}));
+            set.Schema=2;
         }
         private static void ValidateFiles(string directory,LetterTransferSet set)
         {

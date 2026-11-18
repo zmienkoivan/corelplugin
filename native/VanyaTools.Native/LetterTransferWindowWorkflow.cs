@@ -30,7 +30,7 @@ namespace VanyaTools.Native
             try
             {
                 Save();string token=_token();if(String.IsNullOrWhiteSpace(token))throw new InvalidOperationException("Укажите ключ Replicate в настройках ИИ.");
-                var targets=selected?_table.SelectedItems.Cast<LetterTransferRow>().Select(r=>r.Letter).Distinct().ToArray():LetterTransferRules.Alphabet.Select(c=>c.ToString()).ToArray();
+                var targets=selected?_table.SelectedItems.Cast<LetterTransferRow>().Select(r=>r.Letter).Distinct().ToArray():LetterTransferRules.Characters.Select(c=>c.ToString()).ToArray();
                 if(targets.Length==0)throw new InvalidOperationException("Выберите букву.");
                 var passes=LetterTransferRules.MissingPasses(_set,targets);if(selected && passes.Count==0)passes.Add(targets);
                 if(passes.Count==0)throw new InvalidOperationException("Все выбранные варианты уже готовы. Переходите к печати.");
@@ -67,7 +67,7 @@ namespace VanyaTools.Native
             }
             if(prepared.Count>0)
             {
-                try{SelectStep(1);ApprovePrepared(prepared);if(!String.IsNullOrEmpty(stopReason))Report("Серия остановлена. Полученные варианты сохранены. "+stopReason,true);else if(canceled)Report("Серия остановлена. Проверенные варианты сохранены.");else Report("Проверка завершена. Готовых букв: "+_set.Glyphs.Select(g=>g.Letter).Distinct().Count()+" из 33. Недостающие можно получить отдельным запуском.");}
+                try{SelectStep(1);ApprovePrepared(prepared);if(!String.IsNullOrEmpty(stopReason))Report("Серия остановлена. Полученные варианты сохранены. "+stopReason,true);else if(canceled)Report("Серия остановлена. Проверенные варианты сохранены.");else Report("Проверка завершена. Готовых символов: "+_set.Glyphs.Select(g=>g.Letter).Distinct().Count()+" из "+LetterTransferRules.Characters.Length+". Недостающие можно получить отдельным запуском.");}
                 catch(Exception error){Failure(error);}
             }
             if(_set.Jobs.Any(j=>!j.Reviewed && LetterTransferAi.HasResult(_directory,j)))SelectStep(1);RefreshAssets();
@@ -189,7 +189,7 @@ namespace VanyaTools.Native
         private void RefreshWorkflow()
         {
             if(_set==null)return;int ready=_set.Glyphs.Select(g=>g.Letter).Distinct().Count(),missing=LetterTransferRules.MissingVariants(_set);
-            _workflowNote.Text="Готово букв: "+ready+" из 33 · вариантов: "+_set.Glyphs.Count+".\n"+(missing==0?"Выбранное число оформлений готово.":"До цели не хватает вариантов: "+missing+".");
+            _workflowNote.Text="Готово символов: "+ready+" из "+LetterTransferRules.Characters.Length+" · вариантов: "+_set.Glyphs.Count+".\n"+(missing==0?"Выбранное число оформлений готово.":"До цели не хватает вариантов: "+missing+".");
             if(_insert!=null)_insert.IsEnabled=_set.Glyphs.Count>0;
             if(!_loading && _edgeQuality.SelectedIndex!=LetterTransferWorkflow.EdgeMode(_set))
             {bool was=_loading;_loading=true;try{_edgeQuality.SelectedIndex=LetterTransferWorkflow.EdgeMode(_set);}finally{_loading=was;}}

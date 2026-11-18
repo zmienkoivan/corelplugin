@@ -96,7 +96,7 @@ namespace VanyaTools.Native
                 int next=Enumerable.Range(1,cells.Length).Select(d=>(active+d)%cells.Length).Where(i=>!excluded[i] && cells[i].Image!=null && !LetterTransferRules.ValidLetter(choices[i].SelectedItem as string)).DefaultIfEmpty(-1).First();
                 if(next>=0){Select(next);borders[next].BringIntoView();}
             }
-            foreach(char letter in LetterTransferRules.Alphabet)
+            foreach(char letter in LetterTransferRules.Characters)
             {
                 string value=letter.ToString();var key=Button(value,()=>Assign(value));key.Tag="assign-"+value;key.Padding=new Thickness(7,3,7,3);key.MinWidth=32;keys.Children.Add(key);
             }
@@ -108,7 +108,7 @@ namespace VanyaTools.Native
                 int index=i;var cell=cells[i];var card=new DockPanel{Margin=new Thickness(9)};var header=new WrapPanel{Orientation=Orientation.Horizontal};DockPanel.SetDock(header,Dock.Top);card.Children.Add(header);
                 header.Children.Add(new TextBlock{Text=(i+1)+" · ",VerticalAlignment=VerticalAlignment.Center});
                 checks[i]=new CheckBox{Content="Принять",Tag="accept",IsEnabled=!excluded[i] && cell.Image!=null && LetterTransferRules.ValidLetter(cell.Letter),IsChecked=!excluded[i] && (cell.Manual || cell.Recognized) && !cell.RecognitionUncertain && cell.Safe && cell.Image!=null && LetterTransferRules.ValidLetter(cell.Letter),VerticalAlignment=VerticalAlignment.Center};header.Children.Add(checks[i]);
-                choices[i]=new ComboBox{ItemsSource=new[]{"—"}.Concat(LetterTransferRules.Alphabet.Select(c=>c.ToString())).ToArray(),SelectedItem=cell.Letter??"—",IsEnabled=!excluded[i],Width=65,Margin=new Thickness(8,0,0,0)};
+                choices[i]=new ComboBox{ItemsSource=new[]{"—"}.Concat(LetterTransferRules.Characters.Select(c=>c.ToString())).ToArray(),SelectedItem=cell.Letter??"—",IsEnabled=!excluded[i],Width=65,Margin=new Thickness(8,0,0,0)};
                 choices[i].SelectionChanged+=(_,__)=>{cells[index].Manual=true;cells[index].Letter=LetterTransferRules.ValidLetter(choices[index].SelectedItem as string)?(string)choices[index].SelectedItem:null;checks[index].IsEnabled=!excluded[index] && cells[index].Image!=null && LetterTransferRules.ValidLetter(choices[index].SelectedItem as string);if(!checks[index].IsEnabled)checks[index].IsChecked=false;};header.Children.Add(choices[i]);
                 if(manualLayout)
                 {

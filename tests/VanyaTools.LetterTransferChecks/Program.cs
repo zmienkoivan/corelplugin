@@ -24,7 +24,8 @@ internal static class Program
             if(Environment.GetEnvironmentVariable("VANYA_LETTER_CHECK_GROUP")=="sizes"){HeightChecks.Run(_root);Console.WriteLine("Letter height checks passed: "+_checks);return 0;}
             if(Environment.GetEnvironmentVariable("VANYA_LETTER_CHECK_GROUP")=="page-names"){PageNameChecks.Run(_root);Console.WriteLine("Letter page-name checks passed: "+_checks);return 0;}
             if(Environment.GetEnvironmentVariable("VANYA_LETTER_CHECK_GROUP")=="cells"){ComponentGridChecks.Run(_root);Console.WriteLine("Letter cell checks passed: "+_checks);return 0;}
-            Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();AdaptiveGrid();IrregularAlphabet();Layouts();HeightChecks.Run(_root);PageNameChecks.Run(_root);GridAndLabelChecks.Run(_root);Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();RecognitionChecks.Run(_root);AlternativeAndEdgeChecks.Run(_root);ContentGridChecks.Run(_root);ComponentGridChecks.Run(_root);LightGridChecks.Run(_root);VariantSequenceChecks.Run(_root);ContourChecks.Run(_root);GreenMaterialChecks.Run(_root);WorkflowChecks.Run(_root);
+            if(Environment.GetEnvironmentVariable("VANYA_LETTER_CHECK_GROUP")=="punctuation"){PunctuationChecks.Run(_root);Console.WriteLine("Punctuation checks passed: "+_checks);return 0;}
+            PunctuationChecks.Run(_root);Frequencies();WholeAlphabet();FramedAlphabet();SavedAlphabet();AdaptiveGrid();IrregularAlphabet();Layouts();HeightChecks.Run(_root);PageNameChecks.Run(_root);GridAndLabelChecks.Run(_root);Preparation();LargeReference();RequestReference();Images();PersistenceAndAi();InsertionChecks.Run(_root);Window();ConsentWindow();RecognitionChecks.Run(_root);AlternativeAndEdgeChecks.Run(_root);ContentGridChecks.Run(_root);ComponentGridChecks.Run(_root);LightGridChecks.Run(_root);VariantSequenceChecks.Run(_root);ContourChecks.Run(_root);GreenMaterialChecks.Run(_root);WorkflowChecks.Run(_root);
             Console.WriteLine("Letter transfer checks passed: "+_checks+". Offline checks; no Replicate/Corel requests.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
@@ -38,11 +39,11 @@ internal static class Program
     private static void Reject(Action action,string text){bool failed=false;try{action();}catch(Exception){failed=true;}Check(failed,text);}
     private static void Frequencies()
     {
-        var set=new LetterTransferSet();Check(set.Letters.Count==33 && set.Letters.Any(r=>r.Letter=="Ё"),"Alphabet lost Ё.");
+        var set=new LetterTransferSet();Check(set.Letters.Count==LetterTransferRules.Characters.Length && set.Letters.Any(r=>r.Letter=="Ё"),"Alphabet lost Ё.");
         Check(!LetterTransferRules.ValidLetter("A") && !LetterTransferRules.ValidLetter("а"),"Accepted Latin or lowercase.");
         foreach(int n in new[]{33,34,95,100,999,5000})
         {
-            LetterTransferRules.Allocate(set.Letters,n);Check(set.Letters.Sum(r=>r.Copies)==n && set.Letters.All(r=>r.Copies>=1),"Frequency allocation total/minimum wrong.");
+            LetterTransferRules.Allocate(set.Letters,n);Check(set.Letters.Sum(r=>r.Copies)==n && set.Letters.Where(r=>LetterTransferRules.Alphabet.Contains(r.Letter)).All(r=>r.Copies>=1),"Frequency allocation total/minimum wrong.");
             Check(n==33 || set.Letters.First(r=>r.Letter=="О").Copies>=set.Letters.First(r=>r.Letter=="Ъ").Copies,"Frequent letters not weighted.");
         }
         Reject(()=>LetterTransferRules.Allocate(set.Letters,32),"Accepted insufficient alphabet total.");set.Letters[0].Weight=Double.NaN;Reject(()=>LetterTransferRules.Validate(set),"Accepted NaN.");
@@ -51,9 +52,9 @@ internal static class Program
     private static void WholeAlphabet()
     {
         var set=new LetterTransferSet();foreach(var row in set.Letters)row.Copies=0;
-        var passes=LetterTransferRules.MissingPasses(set);Check(passes.Count==1 && passes[0].Length==33 && passes[0].Contains("Ё"),"Whole alphabet was split or dependent on print quantities.");
-        set.VariantsPerLetter=2;passes=LetterTransferRules.MissingPasses(set);Check(passes.Count==2 && passes.All(p=>p.Length==33),"Two styles should require two full sheets.");
-        string prompt=LetterTransferAi.Prompt(set,passes[0],"#FF00FF");Check(prompt.Contains("EXACTLY 33") && prompt.Contains("6 columns by 6 rows") && prompt.Contains("Cell 33: only «Я»"),"Full alphabet prompt lost ordered Cyrillic/grid.");
+        var passes=LetterTransferRules.MissingPasses(set);Check(passes.Count==1 && passes[0].Length==37 && passes[0].Contains("Ё"),"Whole alphabet was split or dependent on print quantities.");
+        set.VariantsPerLetter=2;passes=LetterTransferRules.MissingPasses(set);Check(passes.Count==2 && passes.All(p=>p.Length==37),"Two styles should require two full sheets.");
+        string prompt=LetterTransferAi.Prompt(set,passes[0],"#FF00FF");Check(prompt.Contains("EXACTLY 37") && prompt.Contains("7 columns by 6 rows") && prompt.Contains("Cell 37: only «:»"),"Full alphabet prompt lost ordered Cyrillic/grid.");
         Check(LetterTransferRules.Columns(33)==6 && LetterTransferRules.Aspect(33)=="1:1","Full-sheet geometry is wrong.");
         var data=LetterTransferImages.Pixels(Solid(600,600,Colors.Magenta));
         for(int n=0;n<33;n++)for(int y=20;y<80;y++)for(int x=20;x<80;x++)
@@ -62,7 +63,7 @@ internal static class Program
         var cells=LetterTransferImages.Extract(sheet,33,"#FF00FF",CancellationToken.None);Check(cells.Length==33 && cells.All(i=>i!=null),"Could not extract all 33 glyphs.");
         for(int n=0;n<33;n++){var pixels=LetterTransferImages.Pixels(cells[n]);int center=(cells[n].PixelHeight/2*cells[n].PixelWidth+cells[n].PixelWidth/2)*4;Check(pixels[center]==200+n,"Full-sheet cell assignment changed.");}
         set.Glyphs.Add(new LetterTransferGlyph{Letter="А",File="glyphs/a.png",Width=20,Height=20});
-        passes=LetterTransferRules.MissingPasses(set);Check(passes.Count==2 && passes[0].Length==32 && !passes[0].Contains("А") && passes[1].Length==33,"Missing-only generation repeats completed variants or omits second style.");
+        passes=LetterTransferRules.MissingPasses(set);Check(passes.Count==2 && passes[0].Length==36 && !passes[0].Contains("А") && passes[1].Length==37,"Missing-only generation repeats completed variants or omits second style.");
     }
     private static void FramedAlphabet()
     {
@@ -403,9 +404,9 @@ internal static class Program
         try
         {
             Call(window,"Reference",true);Check(referenceCaptures==1 && artworkCaptures==0,"Reference path used the full artwork capture.");
-            Call(window,"Generate",false);Check(confirms==1 && lastCount==31 && lastResolution=="4K" && ReplicateWorkerClient.Calls==calls,"Whole-alphabet button did not prepare one 4K missing-letter sheet.");
+            Call(window,"Generate",false);Check(confirms==1 && lastCount==35 && lastResolution=="4K" && ReplicateWorkerClient.Calls==calls,"Whole-alphabet button did not prepare one 4K missing-letter sheet.");
             Call(window,"Generate",true);Check(confirms==2 && ReplicateWorkerClient.Calls==calls && Field<LetterTransferSet>(window,"_set").Jobs.Count==0,"Declined preview still sent or created a job.");
-            Check(Field<DataGrid>(window,"_table").Items.Count==33,"UI alphabet missing.");Check(Field<StackPanel>(window,"_pages").Children.Count>0,"No print preview.");
+            Check(Field<DataGrid>(window,"_table").Items.Count==LetterTransferRules.Characters.Length,"UI alphabet missing.");Check(Field<StackPanel>(window,"_pages").Children.Count>0,"No print preview.");
             Field<TextBox>(window,"_height").Text="19,5";Call(window,"Save");Check(LetterTransferStore.Load(directory).HeightMm==19.5,"Comma decimal not saved.");
             var selected=Field<LetterTransferSet>(window,"_set");Check(selected.Letters[0].Copies==11,"Manual quantity overwritten during auto-save.");
             Call(window,"Zoom",2.0);Check(((ScaleTransform)Field<StackPanel>(window,"_pages").LayoutTransform).ScaleX==2,"Preview zoom missing.");

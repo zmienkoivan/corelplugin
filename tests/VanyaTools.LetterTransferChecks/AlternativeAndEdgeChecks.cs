@@ -120,7 +120,7 @@ internal static class AlternativeAndEdgeChecks
         {
             var choice=(ComboBox)window.GetType().GetField("_model",flags).GetValue(window);choice.SelectedIndex=2;
             window.GetType().GetMethod("Generate",flags).Invoke(window,new object[]{false});
-            Program.Check(confirmations==1 && model==LetterTransferModels.Seedream && count==33 && resolution=="4K" && prompt.Length<=4000 && ReplicateWorkerClient.Calls==calls,"Alternative bypassed exact preview consent, split alphabet or sent declined request.");
+            Program.Check(confirmations==1 && model==LetterTransferModels.Seedream && count==37 && resolution=="4K" && prompt.Length<=4000 && ReplicateWorkerClient.Calls==calls,"Alternative bypassed exact preview consent, split alphabet or sent declined request.");
             ((Slider)window.GetType().GetField("_edgeTrim",flags).GetValue(window)).Value=2;
             window.GetType().GetMethod("Save",flags).Invoke(window,null);
             var saved=LetterTransferStore.Load(directory);Program.Check(saved.GenerationModel==LetterTransferModels.Seedream && saved.EdgeTrimPx==2 && saved.SmoothEdges,"Selected model or edge inset was not saved.");
