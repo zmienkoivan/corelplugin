@@ -259,6 +259,7 @@ namespace VanyaTools.Native
                     new TabItem { Header = "Буквы", Content = new LetterTransferTab(SetStatus, () => aiTools.GetToken()) },
                     new TabItem { Header = "GAVRILABAGS", Content = new FrameBagTab(SetStatus) },
                     new TabItem { Header = "Дутый чехол", Content = new PuffySleeveTab(SetStatus) },
+                    new TabItem { Header = "Акриловый лоток", Content = new AcrylicTrayTab(SetStatus) },
                     new TabItem { Header = "3D-примерка", Content = new Apparel3DTab(SetStatus) },
                     new TabItem { Header = "3D-гибка", Content = new LaserBendTab(SetStatus) },
                     new TabItem { Header = "Шум ДТФ", Content = new DtfNoiseTab(ImportDtfResult, SetStatus) },
