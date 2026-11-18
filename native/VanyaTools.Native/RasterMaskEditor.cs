@@ -15,6 +15,9 @@ namespace VanyaTools.Native
         private readonly StackPanel _tools = new StackPanel();
         private readonly ComboBox _tool = new ComboBox { ItemsSource = new[] { "Кисть", "Ластик", "Прямоугольник", "Овал" }, SelectedIndex = 0 };
         private readonly Slider _size = new Slider { Minimum = 4, Maximum = 160, Value = 32, Width = 96, VerticalAlignment = VerticalAlignment.Center };
+        private readonly TextBlock _sizeValue = new TextBlock { MinWidth = 42, Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
+        private readonly Path _brushOutline = new Path { IsHitTestVisible = false, Stroke = Brushes.Black, StrokeThickness = 3, Visibility = Visibility.Collapsed };
+        private readonly Path _brushCursor = new Path { IsHitTestVisible = false, Stroke = Brushes.White, StrokeThickness = 1, Visibility = Visibility.Collapsed };
         private readonly Button _undo = new Button { Content = "Отменить" }, _clear = new Button { Content = "Очистить" };
         private readonly Path _overlay = new Path { IsHitTestVisible = false, Fill = Brushes.MediumPurple, Opacity = .52 };
         private readonly Canvas _canvas = new Canvas { ClipToBounds = true, IsHitTestVisible = false,
@@ -52,9 +55,11 @@ namespace VanyaTools.Native
             toolbar.Children.Add(_tool);
             _size.ToolTip = "Диаметр кисти или ластика на экране";
             _size.Margin = new Thickness(8, 0, 8, 0);
-            toolbar.Children.Add(_size); toolbar.Children.Add(_undo); toolbar.Children.Add(_clear);
+            toolbar.Children.Add(_size); toolbar.Children.Add(_sizeValue); toolbar.Children.Add(_undo);
+            _size.ValueChanged += (_, __) => { UpdateSizeValue(); RefreshBrushCursor(); };
+            UpdateSizeValue(); toolbar.Children.Add(_clear);
             host.Children.Add(_tools);
-            _tool.SelectionChanged += (_, __) => { EndStroke(false); _size.IsEnabled = Freehand(SelectedTool); };
+            _tool.SelectionChanged += (_, __) => { EndStroke(false); _size.IsEnabled = _sizeValue.IsEnabled = Freehand(SelectedTool); RefreshBrushCursor(); };
             _tabs.SelectionChanged += (_, __) => { EndStroke(false); Refresh(); };
             _undo.Click += (_, __) =>
             {
@@ -73,17 +78,18 @@ namespace VanyaTools.Native
             // The overview is clipped underneath non-interactive detail tiles.
             // Give that same drawing surface a hit target in the clipped area.
             if (layers.Background == null) layers.Background = Brushes.Transparent;
-            _canvas.Children.Add(_overlay); layers.Children.Add(_canvas);
+            _canvas.Children.Add(_overlay); _canvas.Children.Add(_brushOutline); _canvas.Children.Add(_brushCursor); layers.Children.Add(_canvas);
             scroll.PreviewMouseDown += (_, e) =>
             {
                 bool pan = Keyboard.IsKeyDown(Key.Space) || e.ChangedButton == MouseButton.Middle || e.ChangedButton == MouseButton.Right;
-                if (pan) { EndStroke(true); return; }
+                if (pan) { EndStroke(true); HideBrushCursor(); return; }
                 if (e.ChangedButton != MouseButton.Left || !BeginStroke(e.OriginalSource, e.GetPosition(image))) return;
                 if (!scroll.CaptureMouse()) { EndStroke(false); return; }
                 e.Handled = true;
             };
             scroll.PreviewMouseMove += (_, e) =>
             {
+                UpdateBrushCursor(e.OriginalSource, e.GetPosition(image), Navigating());
                 if (_drawingLayer < 0) return;
                 if (e.LeftButton != MouseButtonState.Pressed || Keyboard.IsKeyDown(Key.Space) ||
                     e.MiddleButton == MouseButtonState.Pressed || e.RightButton == MouseButtonState.Pressed || !MoveStroke(e.GetPosition(image)))
@@ -92,19 +98,22 @@ namespace VanyaTools.Native
             };
             scroll.PreviewMouseUp += (_, e) =>
             {
-                if (_drawingLayer < 0 || e.ChangedButton != MouseButton.Left) return;
+                if (_drawingLayer < 0 || e.ChangedButton != MouseButton.Left) { RefreshBrushCursor(); return; }
                 MoveStroke(e.GetPosition(image)); EndStroke(true); e.Handled = true;
             };
             // Navigation ends a stroke at its last valid point. A later mouse
             // event cannot join the pre-scroll point to the shifted image.
-            scroll.PreviewMouseWheel += (_, __) => EndStroke(true);
-            scroll.PreviewKeyDown += (_, e) => { if (e.Key == Key.Space) EndStroke(true); };
+            scroll.PreviewMouseWheel += (_, __) => { EndStroke(true); HideBrushCursor(); };
+            scroll.PreviewKeyDown += (_, e) => { if (e.Key == Key.Space) { EndStroke(true); HideBrushCursor(); } };
+            scroll.PreviewKeyUp += (_, e) => { if (e.Key == Key.Space) RefreshBrushCursor(); };
+            scroll.MouseLeave += (_, __) => HideBrushCursor();
+            scroll.IsEnabledChanged += (_, __) => RefreshBrushCursor();
             scroll.ScrollChanged += (_, e) =>
             {
                 if (e.HorizontalChange != 0 || e.VerticalChange != 0 || e.ViewportWidthChange != 0 ||
-                    e.ViewportHeightChange != 0 || e.ExtentWidthChange != 0 || e.ExtentHeightChange != 0) EndStroke(true);
+                    e.ViewportHeightChange != 0 || e.ExtentWidthChange != 0 || e.ExtentHeightChange != 0) { EndStroke(true); RefreshBrushCursor(); }
             };
-            scroll.LostMouseCapture += (_, __) => EndStroke(true);
+            scroll.LostMouseCapture += (_, __) => { EndStroke(true); RefreshBrushCursor(); };
             Refresh();
         }
 
@@ -132,12 +141,12 @@ namespace VanyaTools.Native
         {
             _tools.Visibility = Active ? Visibility.Visible : Visibility.Collapsed;
             _canvas.Visibility = Active ? Visibility.Visible : Visibility.Collapsed;
-            if (!Active) return;
+            if (!Active) { HideBrushCursor(); return; }
             var layer = _layers[_tabs.SelectedIndex - 1];
             _undo.IsEnabled = _clear.IsEnabled = layer.Count > 0;
             Rect world = _world();
             if (world.IsEmpty || _image.Source == null || Double.IsNaN(_image.Width) || Double.IsNaN(_image.Height))
-            { _overlay.Data = null; return; }
+            { _overlay.Data = null; HideBrushCursor(); return; }
             _canvas.Width = _image.Width; _canvas.Height = _image.Height; _canvas.Margin = _image.Margin;
             Geometry geometry = new GeometryGroup { FillRule = FillRule.Nonzero };
             void Apply(RasterMaskShape shape)
@@ -152,7 +161,30 @@ namespace VanyaTools.Native
                 Apply(new RasterMaskShape(_drawingTool, _stroke.ToArray(), _radius));
             double sx = _image.Width / world.Width, sy = _image.Height / world.Height;
             geometry.Transform = new MatrixTransform(sx, 0, 0, sy, -world.X * sx, -world.Y * sy);
-            _overlay.Data = geometry;
+            _overlay.Data = geometry; RefreshBrushCursor();
+        }
+
+        private void UpdateSizeValue() => _sizeValue.Text = "Ø " + _size.Value.ToString("0.#", System.Globalization.CultureInfo.CurrentCulture);
+        private bool Navigating() => Keyboard.IsKeyDown(Key.Space) || Mouse.MiddleButton == MouseButtonState.Pressed ||
+            Mouse.RightButton == MouseButtonState.Pressed || (_scroll.IsMouseCaptured && _drawingLayer < 0);
+        private void HideBrushCursor() { _brushOutline.Visibility = _brushCursor.Visibility = Visibility.Collapsed; }
+        private void RefreshBrushCursor()
+        {
+            if (!_scroll.IsMouseOver) { HideBrushCursor(); return; }
+            UpdateBrushCursor(_scroll.InputHitTest(Mouse.GetPosition(_scroll)), Mouse.GetPosition(_image), Navigating());
+        }
+        private void UpdateBrushCursor(object source, Point at, bool navigating)
+        {
+            if (!Active || !_scroll.IsEnabled || !_image.IsEnabled || !Freehand(SelectedTool) || navigating || !TryPoint(at, out _) ||
+                (!IsImageTarget(source) && !(_drawingLayer >= 0 && _scroll.IsMouseCaptured)))
+            { HideBrushCursor(); return; }
+            Rect world = _world();
+            double radius = _drawingLayer >= 0 ? _radius : _size.Value * .5 * world.Width / _image.ActualWidth;
+            // Use the same world-to-preview scale as the actual stroke. This
+            // also handles non-square source DPI, crop origins and exact tiles.
+            var geometry = new EllipseGeometry(at, radius * _image.ActualWidth / world.Width, radius * _image.ActualHeight / world.Height);
+            _brushOutline.Data = _brushCursor.Data = geometry;
+            _brushOutline.Visibility = _brushCursor.Visibility = Visibility.Visible;
         }
 
         // Exact-detail tiles are non-interactive and may clip the overview
@@ -163,7 +195,7 @@ namespace VanyaTools.Native
         private bool TryPoint(Point at, out RasterMaskPoint point)
         {
             point = default(RasterMaskPoint); Rect world = _world();
-            if (!_enabled() || world.IsEmpty || _image.Source == null || _image.ActualWidth <= 0 || _image.ActualHeight <= 0 ||
+            if (!_enabled() || world.IsEmpty || world.Width <= 0 || world.Height <= 0 || _image.Source == null || _image.ActualWidth <= 0 || _image.ActualHeight <= 0 ||
                 at.X < 0 || at.Y < 0 || at.X >= _image.ActualWidth || at.Y >= _image.ActualHeight) return false;
             // The image can be larger than the viewport and extend underneath
             // its scrollbars. Image bounds alone do not exclude those controls.
