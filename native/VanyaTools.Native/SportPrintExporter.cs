@@ -140,9 +140,7 @@ namespace VanyaTools.Native
                     Set(settings, value.Key, value.Value);
                     applied++;
                 }
-                if (Convert.ToInt32(Get(settings, "OutputSpotColorsAs")) != 0 ||
-                    !Convert.ToBoolean(Get(settings, "Overprints")))
-                    throw new InvalidOperationException("Corel не применил сохранение плашечных цветов и наложений для PDF.");
+                PrintPdfSpotSettings.Require(settings);
                 PrintPdfText.RequireCurves(settings);
 
                 string documentName = System.IO.Path.GetFileNameWithoutExtension(Convert.ToString(document.FileName));

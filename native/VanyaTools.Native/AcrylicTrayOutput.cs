@@ -91,8 +91,8 @@ namespace VanyaTools.Native
             }
             foreach (var cross in p.Crosses)
                 side.Add(new XElement(Svg + "rect", new XAttribute("x", N(cross.Y - t / 2)),
-                    new XAttribute("y", N(-cross.Bottom - h)), new XAttribute("width", N(t)),
-                    new XAttribute("height", N(h)), new XAttribute("fill", "#20c878")));
+                    new XAttribute("y", N(-cross.Bottom - cross.Height)), new XAttribute("width", N(t)),
+                    new XAttribute("height", N(cross.Height)), new XAttribute("fill", "#20c878")));
             Text(root, Margin, planY - 4, "План · размеры ячеек в горизонтальной проекции");
             var plan = new XElement(Svg + "g", new XAttribute("transform", "translate(" + N(Margin + t) + " " + N(planY - p.Floors[0].StartY) + ")"));
             root.Add(plan);
@@ -125,6 +125,14 @@ namespace VanyaTools.Native
                 cellDimensions = "internal-horizontal-projection-mm", widthMm = p.OverallWidth,
                 depthMm = p.OverallDepth, heightMm = p.Height, crossFloorSlotMm = p.CrossSlotWidth,
                 cutLayout = new { gapMm = AcrylicTrayCutLayout.Gap, widthMm = layout.Width, heightMm = layout.Height },
+                fixing = p.Options.UseWedges ? "same-acrylic-mushroom-keys" : "glue",
+                sideLug = p.Options.UseWedges ? new { projectionMm = p.SideLugProjection, widthMm = p.SideLugWidth,
+                    radiusMm = p.SideLugRadius, materialWebMm = p.Options.Thickness,
+                    windowThicknessMm = p.Options.Thickness + p.Options.RetainerThicknessClearance, windowLengthMm = p.Options.RetainerWindowLength } : null,
+                wedges = p.Wedges.Select(w => new { id = w.Id, parent = w.ParentId, floor = w.FloorIndex + 1, tab = w.TabIndex + 1, side = w.Side,
+                    headWidthMm = w.HeadWidth, heightMm = w.Shape.Bounds.Width, thicknessMm = p.Options.Thickness,
+                    headHeightMm = w.HeadLength, gripWindowWidthMm = w.GripWidth, gripWindowHeightMm = w.GripHeight,
+                    tipWidthMm = w.TipWidth, neckWidthMm = w.NeckWidth }).ToArray(),
                 parts = p.Parts.Select((v, i) => new { number = i + 1, id = v.Id, name = v.Name, widthMm = v.Width, heightMm = v.Height }).ToArray()
             }), new UTF8Encoding(false));
             File.WriteAllText(Path.Combine(folder, "СБОРКА.txt"), Instructions(p), new UTF8Encoding(true));
@@ -142,9 +150,21 @@ namespace VanyaTools.Native
             b.AppendLine(o.Columns + " столбцов × " + o.Rows + " рядов; ячейка внутри " + N(o.CellWidth) + " × " + N(o.CellDepth) + " мм.");
             b.AppendLine("Глубина ячейки измеряется по горизонтали; на наклонном дне её длина больше в 1/cos(угла) раз.");
             b.AppendLine("Высота борта по вертикали: " + N(o.BoardHeight) + " мм; толщина акрила: " + N(o.Thickness) + " мм.");
+            b.AppendLine("Последняя задняя стенка: " + N(o.RearWallHeight) + " мм от её нижней кромки. Высота остальных бортов сохраняется.");
             b.AppendLine("Боковины: " + (o.DecorativeSides ? "витринные, с плавными уступами и скруглениями" : "прямой профиль"));
             b.AppendLine("Габариты с боковинами: " + N(p.OverallWidth) + " × " + N(p.OverallDepth) + " × " + N(p.Height) + " мм.");
             b.AppendLine("Зазор пазов (полный): " + N(o.SlotClearance) + " мм; это не компенсация ширины лазерного реза.");
+            if (o.UseWedges) b.AppendLine("Разборная сборка: " + p.Wedges.Count + " фиксаторов-грибочков из того же акрила. Шаг " + o.WedgeEvery + " шипа, первый и последний шипы фиксируются всегда.");
+            if (o.UseWedges)
+            {
+                var sideKey = p.Wedges.FirstOrDefault(key => key.Side);
+                if (sideKey != null) b.AppendLine("Боковой грибочек: шляпка " + N(sideKey.HeadWidth) + " мм, полная высота " + N(sideKey.Shape.Bounds.Width) + " мм. Цельная жёсткая деталь; удержание самого грибочка — посадкой в окошке.");
+                if (sideKey != null) b.AppendLine("В шляпке грибочка сквозное окошко для захвата " + N(sideKey.GripWidth) + " × " + N(sideKey.GripHeight) + " мм со скруглёнными концами. Перемычки вокруг окошка не тоньше листа.");
+            }
+            if (o.UseWedges) b.AppendLine("Ушко дна: выступ за боковину " + N(p.SideLugProjection) + " мм, ширина " + N(p.SideLugWidth) +
+                " мм, скругление " + N(p.SideLugRadius) + " мм. Перемычки у свободных краёв не тоньше " + N(o.Thickness) + " мм. Ушко вырезается вместе с дном.");
+            if (o.UseWedges) b.AppendLine("Окно в ушке под широкую ножку грибочка: " + N(o.Thickness + o.RetainerThicknessClearance) + " × " + N(o.RetainerWindowLength) +
+                " мм. На поперечных перегородках наклонный проход по толщине увеличивается по углу дна. Это отдельное окно от паза под сам шип в дне.");
             b.AppendLine("Паз поперечной полоски в дне: " + N(p.CrossSlotWidth) + " мм вдоль наклона.");
             b.AppendLine("Расчёт учитывает t/cos(угла) + t·tan(угла), толщину дна и смещение центра отверстия.");
             b.AppendLine();
@@ -157,7 +177,14 @@ namespace VanyaTools.Native
             b.AppendLine("2. Совместите верхние пазы продольных перегородок с нижними пазами поперечных полосок.");
             b.AppendLine("3. Вставьте нижние шипы всех внутренних полосок в ответные отверстия дна. Наклонное дно одно, перегородки вертикальны.");
             b.AppendLine("4. Добавьте боковины: в них входят боковые шипы дна и торцевые шипы поперечных полосок. Нижняя грань боковин стоит на столе.");
-            b.AppendLine("5. Проверьте геометрию без клея, затем зафиксируйте клеем для выбранного акрила. При наклоне прямые поперечные шипы немного выступают снизу.");
+            if (o.UseWedges)
+            {
+                b.AppendLine("5. В окошки нижних шипов вставьте цельные грибочки ножкой вперёд вдоль дна. Их широкая плоскость параллельна дну; толщина грибочка удерживает дно на шипе. Короткая ножка слегка расширяется к шляпке. Сам грибочек удерживается посадкой в окошке.");
+                b.AppendLine("6. В окошки боковых шипов дна вставьте оставшиеся грибочки сверху. Плоскость шляпки параллельна боковине, толщина фиксатора упирается в наружную грань стенки и удерживает её от раздвижения. Клей не нужен.");
+                b.AppendLine("Толщина грибочков равна толщине акрила лотка. Устанавливайте рукой, без ударов. Сначала вырежьте пробный стык под свой лист и ширину реза; акрил не должен изгибаться.");
+                foreach (var wedge in p.Wedges) b.AppendLine("Грибочек " + wedge.Number + " → " + wedge.ParentId + ", шип " + (wedge.TabIndex + 1) + (wedge.Side ? " (боковой)" : " (под дном)"));
+            }
+            else b.AppendLine("5. Проверьте геометрию без клея, затем зафиксируйте клеем для выбранного акрила. При наклоне прямые поперечные шипы немного выступают снизу.");
             b.AppendLine();
             for (int i = 0; i < p.Parts.Count; i++)
                 b.AppendLine((i + 1) + ". " + p.Parts[i].Name + ": " + N(p.Parts[i].Width) + " × " + N(p.Parts[i].Height) + " мм");

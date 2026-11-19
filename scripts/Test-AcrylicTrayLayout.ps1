@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = (Join-Path $env:TEMP 'VanyaTrayLayoutChecks'))
+param([string]$OutputDirectory = (Join-Path $env:TEMP 'VanyaTrayLayoutChecks'),[Alias('SteepLocksOnly')][switch]$LocksOnly,[ValidateRange(0,60)][double]$LockAngle=60)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName PresentationFramework,PresentationCore,WindowsBase,System.Xml.Linq
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -21,6 +21,15 @@ using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Media;
 public static class TrayCutDistances {
+    static Geometry Enlarged(Geometry g){var scaled=new GeometryGroup{Transform=new ScaleTransform(100,100)};scaled.Children.Add(g);return scaled;}
+    // WPF can report zero fill area for a healthy small rounded part after
+    // translation far from the origin. Measure at enlarged coordinates, as
+    // with the fit checks, instead of relying on device-scale tessellation.
+    public static double Area(Geometry g){return Enlarged(g).GetArea()/10000;}
+    public static double OverlapArea(Geometry a,Geometry b){
+        if(!a.Bounds.IntersectsWith(b.Bounds))return 0;
+        return Geometry.Combine(Enlarged(a),Enlarged(b),GeometryCombineMode.Intersect,null,.001,ToleranceType.Absolute).GetArea()/10000;
+    }
     static List<Point[]> Edges(Geometry geometry) {
         var result=new List<Point[]>();var flat=geometry.GetFlattenedPathGeometry(.0001,ToleranceType.Absolute);
         foreach(var f in flat.Figures){var points=new List<Point>{f.StartPoint};
@@ -52,14 +61,13 @@ function Verify($p,$layout){
     for($i=0;$i-lt $layout.Parts.Count;$i++){
         $place=$layout.Parts[$i];$part=$place.Part
         Check (-not $seen.ContainsKey($part.Id)) 'Duplicated part';$seen[$part.Id]=$true
-        Near $place.Geometry.GetArea() $part.Geometry.GetArea() ([Math]::Max(0.05,$part.Geometry.GetArea()*0.000002))
+        Near ([TrayCutDistances]::Area($place.Geometry)) $part.Geometry.GetArea() ([Math]::Max(0.05,$part.Geometry.GetArea()*0.000002))
         Check ($place.Bounds.Left-ge 2.999 -and $place.Bounds.Top-ge 2.999) 'Cut geometry outside page margin'
         Check ($place.Bounds.Right-le $layout.Width -and $place.Bounds.Bottom-le $layout.Height) 'Page clips cut geometry'
         if($part.Kind-eq 'long' -or $part.Kind-eq 'side'){Near $place.Bounds.Top 3;Check ($place.Rotation-eq 90 -or $place.Rotation-eq 270) 'Sloping part was not turned upright'}
         for($j=0;$j-lt $i;$j++){
             $other=$layout.Parts[$j]
-            $intersection=[Windows.Media.Geometry]::Combine($place.Geometry,$other.Geometry,[Windows.Media.GeometryCombineMode]::Intersect,$null)
-            Check ($intersection.GetArea()-lt 0.0001) "Parts overlap: $($part.Id) and $($other.Part.Id)"
+            Check ([TrayCutDistances]::OverlapArea($place.Geometry,$other.Geometry)-lt 0.0001) "Parts overlap: $($part.Id) and $($other.Part.Id)"
             $distance=[TrayCutDistances]::Between($place.Geometry,$other.Geometry)
             Check ($distance-ge 2.998) "Clearance below 3 mm: $($part.Id) / $($other.Part.Id): $distance"
         }
@@ -69,17 +77,23 @@ function Verify($p,$layout){
     Check ($floors[0].Bounds.Top-gt $crosses[-1].Bounds.Bottom) 'Floor not below the strip stack'
     for($i=1;$i-lt $crosses.Count;$i++){Near ($crosses[$i].Bounds.Top-$crosses[$i-1].Bounds.Bottom) 3;Near $crosses[$i].Bounds.Left $crosses[0].Bounds.Left}
 }
+if(-not $LocksOnly){
 foreach($angle in @(0,20,60)){
     $o=Options;$o.AngleDegrees=$angle;$p=Pattern $o;$layout=Layout $p;Verify $p $layout
 }
 $o=Options;$o.Columns=1;$o.Rows=1;$p=Pattern $o;Verify $p (Layout $p)
 $o=Options;$o.FloorMode=[Enum]::Parse($modeType,'Steps');$p=Pattern $o;Verify $p (Layout $p)
+$o=Options;$o.UseWedges=$true;$p=Pattern $o;Verify $p (Layout $p)
+}
+$o=Options;$o.UseWedges=$true;$o.AngleDegrees=$LockAngle;$p=Pattern $o;$layout=Layout $p;Verify $p $layout
+if(-not $LocksOnly){
 $o=Options;$o.Columns=18;$o.Rows=8;$o.BoardHeight=30;$o.Thickness=2
 $p=Pattern $o;$layout=Layout $p;Verify $p $layout
 $top=@($layout.Parts|Where-Object {$_.Part.Kind-eq 'side' -or $_.Part.Kind-eq 'long'})
 $boxRowWidth=0;foreach($piece in $top){$boxRowWidth+=$piece.Bounds.Width}
 $actualWidth=($top|ForEach-Object {$_.Bounds.Right}|Measure-Object -Maximum).Maximum-3
 Check ($actualWidth-lt $boxRowWidth*0.8) 'Contour packing did not remove the triangular waste'
+}
 New-Item -ItemType Directory -Path $OutputDirectory -Force|Out-Null
 $cut=$outputType.GetMethod('Layout',[type[]]@($patternType,[bool])).Invoke($null,@($p,$false))
 $map=$outputType.GetMethod('Layout',[type[]]@($patternType,[bool])).Invoke($null,@($p,$true))

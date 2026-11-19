@@ -381,7 +381,13 @@ namespace VanyaTools.Native
             _smoothSelectedSimplificationMm = AddStickerField(smoothingSettings, "Упрощение, мм", "0.2",
                 "Допуск упрощения выбранного готового контура, мм");
 
-            var tabTools = DockerLayout.ToolGroup("3. Язычки", "Выделите контур и добавьте маркеры — их можно двигать. " +
+            root.Children.Add(new StickerPrintPlateControls((kind,trapping) => RunSafe(() =>
+            {
+                var result = StickerPrintPlateService.Create(kind,trapping);
+                SetStatus(result + ". Плашка добавлена к выделению для печати.",false);
+            })));
+
+            var tabTools = DockerLayout.ToolGroup("4. Язычки", "Выделите контур и добавьте маркеры — их можно двигать. " +
                 "«Переприкрепить» заново привязывает маркеры к контуру. Для применения выделите контур или маркер. " +
                 "Ширина, длина и радиус общие для добавления, переприкрепления и применения язычков.");
             root.Children.Add(tabTools);

@@ -18,10 +18,16 @@ namespace VanyaTools.Native
         public double CellWidth { get; set; } = 40;
         public double CellDepth { get; set; } = 20;
         public double BoardHeight { get; set; } = 15;
+        public double RearWallHeight { get; set; } = 30;
         public double AngleDegrees { get; set; } = 20;
         public double RowRise { get; set; } = 15;
         public double Thickness { get; set; } = 3;
         public bool DecorativeSides { get; set; } = true;
+        public bool UseWedges { get; set; }
+        public int WedgeEvery { get; set; } = 3;
+        public double RetainerTabWidth { get; set; } = 20;
+        public double RetainerWindowLength { get; set; } = 10;
+        public double RetainerThicknessClearance { get; set; } = 0.2;
         // Total extra opening, not a laser kerf offset.
         public double SlotClearance { get; set; } = 0.1;
         public AcrylicTrayOptions Copy() { return (AcrylicTrayOptions)MemberwiseClone(); }
@@ -38,7 +44,7 @@ namespace VanyaTools.Native
 
     internal sealed class AcrylicTrayCross
     {
-        public double Y, Bottom, JointZ;
+        public double Y, Bottom, JointZ, Height;
         public int FloorIndex;
     }
 
@@ -64,7 +70,7 @@ namespace VanyaTools.Native
         }
     }
 
-    internal sealed class AcrylicTrayPattern
+    internal sealed partial class AcrylicTrayPattern
     {
         public AcrylicTrayOptions Options { get; private set; }
         public double InnerWidth, OverallWidth, Depth, OverallDepth, Height, Margin, Angle;
@@ -95,12 +101,14 @@ namespace VanyaTools.Native
             if (o.FloorMode == AcrylicTrayFloorMode.Steps) Range(o.RowRise, 0, 150, "Подъём ряда");
             double a = p.Angle * Math.PI / 180, t = o.Thickness;
             Range(o.BoardHeight, 2 * t + t * Math.Tan(a) + o.SlotClearance + 1, 200, "Высота борта");
+            Range(o.RearWallHeight, o.BoardHeight, 200, "Высота задней стенки");
             p.Margin = 2 * t;
             p.InnerWidth = o.Columns * o.CellWidth + (o.Columns - 1) * t;
             p.OverallWidth = p.InnerWidth + 2 * t;
             p._longTabWidth = Math.Min(16, o.CellDepth * 0.45);
             p._crossTabWidth = Math.Min(16, o.CellWidth * 0.45);
             p._sideTabHeight = Math.Min(8, o.BoardHeight * 0.2);
+            p.ConfigureWedges(a);
             // A perpendicular laser slot must clear the swept intersection across
             // the ENTIRE floor thickness, not just t / cos(a) on one face.
             p.CrossTabDepth = t / Math.Cos(a) + t * Math.Tan(a);
@@ -112,7 +120,8 @@ namespace VanyaTools.Native
             {
                 double gridDepth = o.Rows * o.CellDepth + (o.Rows + 1) * t;
                 p.Floors.Add(new AcrylicTrayFloor { StartY = -p.Margin, EndY = gridDepth + p.Margin,
-                    FrontZ = 2 * t + t / Math.Cos(a), Slope = Math.Tan(a), Cosine = Math.Cos(a), Sine = Math.Sin(a) });
+                    FrontZ = o.UseWedges ? p._keyClearanceNormal / Math.Cos(a) + 2 * t : 2 * t + t / Math.Cos(a),
+                    Slope = Math.Tan(a), Cosine = Math.Cos(a), Sine = Math.Sin(a) });
                 for (int r = 0; r <= o.Rows; r++) p.AddCross(0, t / 2 + r * (o.CellDepth + t));
                 for (int r = 0; r < o.Rows; r++)
                     p._tabs.Add(Tuple.Create(0, t + o.CellDepth / 2 + r * (o.CellDepth + t)));
@@ -124,18 +133,23 @@ namespace VanyaTools.Native
                 {
                     double start = r * (length + 2 * t);
                     p.Floors.Add(new AcrylicTrayFloor { StartY = start, EndY = start + length,
-                        FrontZ = 3 * t + r * o.RowRise, Cosine = 1 });
+                        FrontZ = (o.UseWedges ? p._keyClearanceNormal + 2 * t : 3 * t) + r * o.RowRise, Cosine = 1 });
                     p.AddCross(r, start + p.Margin + t / 2);
                     p.AddCross(r, start + p.Margin + 1.5 * t + o.CellDepth);
                     p._tabs.Add(Tuple.Create(r, start + p.Margin + t + o.CellDepth / 2));
                 }
             }
+            // Only the final outer wall is taller. Keep the interlocking lap
+            // and side tenons at the common board height.
+            p.Crosses.Last().Height = o.RearWallHeight;
             p.Depth = p.Floors.Last().EndY - p.Floors[0].StartY;
             p.OverallDepth = p.Depth + t * Math.Sin(a);
-            p.Height = p.Floors.Last().Top(p.Floors.Last().EndY) + o.BoardHeight;
+            p.Height = Math.Max(p.Floors.Last().Top(p.Floors.Last().EndY) + o.BoardHeight,
+                p.Crosses.Last().Bottom + o.RearWallHeight);
             if (Math.Max(p.Depth, p.OverallWidth) > 3000 || p.Height > 3000)
                 throw new InvalidOperationException("Габарит детали превышает 3000 мм. Уменьшите размер или число ячеек.");
             p.CreateParts();
+            p.IncludeWedgeBounds();
             return p;
         }
 
@@ -144,7 +158,7 @@ namespace VanyaTools.Native
             var f = Floors[floorIndex];
             double bottom = f.Top(y + Options.Thickness / 2);
             Crosses.Add(new AcrylicTrayCross { FloorIndex = floorIndex, Y = y,
-                Bottom = bottom, JointZ = bottom + Options.BoardHeight / 2 });
+                Bottom = bottom, JointZ = bottom + Options.BoardHeight / 2, Height = Options.BoardHeight });
         }
 
         private void CreateParts()
@@ -170,20 +184,25 @@ namespace VanyaTools.Native
                 }
             }
             if (Options.DecorativeSides) sideShape = DisplaySide();
-            foreach (var tab in _tabs)
+            for (int tabIndex = 0; tabIndex < _tabs.Count; tabIndex++)
             {
+                var tab = _tabs[tabIndex];
                 var f = Floors[tab.Item1]; double y = tab.Item2;
-                longShape = Union(longShape, Band(y - _longTabWidth / 2, y + _longTabWidth / 2,
-                    f.Top(y - _longTabWidth / 2) - t / f.Cosine,
-                    f.Top(y + _longTabWidth / 2) - t / f.Cosine, t / f.Cosine + overlap));
+                bool locked = IsLock(tabIndex, _tabs.Count);
+                double depth = locked ? _lockingTabNormal : t;
+                longShape = Union(longShape, locked ? LongLug(f, y, depth) : Band(y - _longTabWidth / 2, y + _longTabWidth / 2,
+                    f.Top(y - _longTabWidth / 2) - depth / f.Cosine,
+                    f.Top(y + _longTabWidth / 2) - depth / f.Cosine, depth / f.Cosine + overlap));
+                if (locked) longShape = Difference(longShape, BottomEyelet(f, y, 0, false));
                 // Floor edge tenons engage the full supporting side cheeks.
-                Geometry edgeTab = FloorEdgeSection(f, y, _longTabWidth, gap);
+                Geometry edgeTab = FloorEdgeSection(f, y, Options.UseWedges ? SideLugWidth * f.Cosine : _longTabWidth, gap);
                 sideShape = Difference(sideShape, edgeTab);
             }
+            double dividerTop = Floors.Last().Top(Floors.Last().EndY) + h;
             foreach (var cross in Crosses)
             {
-                longShape = Difference(longShape, Box(cross.Y - (t + gap) / 2, -Height - 1,
-                    t + gap, Height + 1 - cross.JointZ + gap / 2));
+                longShape = Difference(longShape, Box(cross.Y - (t + gap) / 2, -dividerTop - 1,
+                    t + gap, dividerTop + 1 - cross.JointZ + gap / 2));
                 double z = SideTabBottom(cross);
                 sideShape = Difference(sideShape, Box(cross.Y - (t + gap) / 2,
                     -z - _sideTabHeight - gap / 2, t + gap, _sideTabHeight + gap));
@@ -191,26 +210,38 @@ namespace VanyaTools.Native
             Parts.Add(new AcrylicTrayPart("side-left", "Боковина левая", "side", sideShape));
             Parts.Add(new AcrylicTrayPart("side-right", "Боковина правая", "side", sideShape));
             for (int c = 0; c < Longitudinals.Count; c++)
-                Parts.Add(new AcrylicTrayPart("divider-" + (c + 1), "Продольная перегородка " + (c + 1), "long", longShape));
+            {
+                string id = "divider-" + (c + 1);
+                Parts.Add(new AcrylicTrayPart(id, "Продольная перегородка " + (c + 1), "long", longShape));
+                for (int r = 0; r < _tabs.Count; r++) if (IsLock(r, _tabs.Count))
+                    AddBottomWedge(id, _tabs[r].Item1, r, Longitudinals[c], _tabs[r].Item2, false);
+            }
 
             for (int i = 0; i < Crosses.Count; i++)
             {
                 var cross = Crosses[i]; var f = Floors[cross.FloorIndex];
-                Geometry shape = Box(0, -cross.Bottom - h, InnerWidth, h);
+                Geometry shape = Box(0, -cross.Bottom - cross.Height, InnerWidth, cross.Height);
                 double sideZ = SideTabBottom(cross);
                 shape = Union(shape, Box(-t, -sideZ - _sideTabHeight, t + overlap, _sideTabHeight));
                 shape = Union(shape, Box(InnerWidth - overlap, -sideZ - _sideTabHeight, t + overlap, _sideTabHeight));
                 for (int c = 0; c < Options.Columns; c++)
                 {
                     double x = CellCenter(c);
-                    shape = Union(shape, Box(x - _crossTabWidth / 2,
-                        -cross.Bottom - overlap, _crossTabWidth, CrossTabDepth + overlap));
+                    bool locked = IsLock(c, Options.Columns);
+                    double depth = locked ? _lockingTabNormal / f.Cosine + t * f.Slope : CrossTabDepth;
+                    shape = Union(shape, locked ? CrossLug(x, cross.Bottom, depth) : Box(x - _crossTabWidth / 2,
+                        -cross.Bottom - overlap, _crossTabWidth, depth + overlap));
+                    if (locked)
+                    {
+                        shape = Difference(shape, BottomEyelet(f, cross.Y, x, true));
+                        AddBottomWedge("cross-" + (i + 1), cross.FloorIndex, c, x, cross.Y, true);
+                    }
                     AddFloorSlot(f, x, cross.Y, _crossTabWidth, t);
                 }
                 foreach (double x in Longitudinals)
                     shape = Difference(shape, Box(x - (t + gap) / 2, -cross.JointZ - gap / 2,
-                        t + gap, h + CrossTabDepth + 1));
-                Parts.Add(new AcrylicTrayPart("cross-" + (i + 1), "Поперечная полоска " + (i + 1), "cross", shape));
+                        t + gap, h + Math.Max(CrossTabDepth, _lockingTabNormal / f.Cosine + t * f.Slope) + 1));
+                Parts.Add(new AcrylicTrayPart("cross-" + (i + 1), i == Crosses.Count - 1 ? "Задняя стенка" : "Поперечная полоска " + (i + 1), "cross", shape));
             }
             foreach (var tab in _tabs)
                 foreach (double x in Longitudinals)
@@ -221,11 +252,23 @@ namespace VanyaTools.Native
                 var f = Floors[i];
                 Geometry floor = Box(0, 0, InnerWidth, f.Length);
                 var openings = new GeometryGroup { FillRule = FillRule.Nonzero };
-                foreach (var tab in _tabs.Where(q => q.Item1 == i))
+                for (int r = 0; r < _tabs.Count; r++)
                 {
-                    double s = f.SurfacePosition(tab.Item2), width = _longTabWidth / f.Cosine;
-                    floor = Union(floor, Box(-t, s - width / 2, t + overlap, width));
-                    floor = Union(floor, Box(InnerWidth - overlap, s - width / 2, t + overlap, width));
+                    var tab = _tabs[r]; if (tab.Item1 != i) continue;
+                    double s = f.SurfacePosition(tab.Item2), width = Options.UseWedges ? SideLugWidth : _longTabWidth / f.Cosine;
+                    bool locked = IsLock(r, _tabs.Count);
+                    double length = t;
+                    floor = Union(floor, locked ? SideLug(s, -1) : Box(-length, s - width / 2, length + overlap, width));
+                    floor = Union(floor, locked ? SideLug(s, 1) : Box(InnerWidth - overlap, s - width / 2, length + overlap, width));
+                    if (locked)
+                    {
+                        foreach (int side in new[] { -1, 1 })
+                        {
+                            Geometry eyelet = SideEyelet(s, side);
+                            floor = Difference(floor, eyelet);
+                            AddSideWedge("floor-" + (i + 1), i, r, s, side, eyelet);
+                        }
+                    }
                 }
                 for (int j = 0; j < f.Slots.Count; j++)
                 {
@@ -243,6 +286,8 @@ namespace VanyaTools.Native
                 if (openings.Children.Count > 0) floor = Difference(floor, openings);
                 Parts.Add(new AcrylicTrayPart("floor-" + (i + 1), "Дно " + (i + 1), "floor", floor));
             }
+            foreach (var wedge in Wedges)
+                Parts.Add(new AcrylicTrayPart(wedge.Id, "Грибочек " + wedge.Number + " · " + wedge.ParentId, "wedge", wedge.Shape));
         }
 
         public double CellCenter(int c) { return c * (Options.CellWidth + Options.Thickness) + Options.CellWidth / 2; }

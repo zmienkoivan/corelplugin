@@ -54,8 +54,27 @@ namespace VanyaTools.Native
             }
             y += rowHeight + Gap;
             // The horizontal strips form one tight stack, followed by the floor.
-            foreach (var part in pattern.Parts.Where(p => p.Kind == "cross")
-                .Concat(pattern.Parts.Where(p => p.Kind == "floor")))
+            foreach (var part in pattern.Parts.Where(p => p.Kind == "cross"))
+            {
+                var next = Orient(part, pattern.Parts.IndexOf(part) + 1, 0);
+                Place(next, Margin, y); result.Parts.Add(next); y += next.Bounds.Height + Gap;
+            }
+            var keys = pattern.Parts.Where(p => p.Kind == "wedge").ToArray();
+            if (keys.Length > 0)
+            {
+                double target = Math.Max(result.Parts.Max(p => p.Bounds.Right), pattern.Parts.Where(p => p.Kind == "floor").Max(p => p.Width) + Margin);
+                double keyX = Margin, keyHeight = 0;
+                foreach (var part in keys)
+                {
+                    var next = Orient(part, pattern.Parts.IndexOf(part) + 1, 0);
+                    if (keyX > Margin && keyX + next.Bounds.Width > target)
+                    { keyX = Margin; y += keyHeight + Gap; keyHeight = 0; }
+                    Place(next, keyX, y); result.Parts.Add(next);
+                    keyX += next.Bounds.Width + Gap; keyHeight = Math.Max(keyHeight, next.Bounds.Height);
+                }
+                y += keyHeight + Gap;
+            }
+            foreach (var part in pattern.Parts.Where(p => p.Kind == "floor"))
             {
                 var next = Orient(part, pattern.Parts.IndexOf(part) + 1, 0);
                 Place(next, Margin, y); result.Parts.Add(next); y += next.Bounds.Height + Gap;

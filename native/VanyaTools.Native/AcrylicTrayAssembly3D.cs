@@ -50,7 +50,13 @@ namespace VanyaTools.Native
                     position = p => new Point3D(u0 + p.X, y - p.Z, p.Y - v0);
                     normal = n => new Vector3D(n.X, -n.Z, n.Y);
                 }
-                else
+                else if (part.Kind == "wedge")
+                {
+                    var key = pattern.Wedges.First(w => w.Id == part.Id);
+                    position = p => key.Point(u0 + p.X, v0 - p.Y, p.Z);
+                    normal = n => key.U * n.X - key.V * n.Y + key.W * n.Z;
+                }
+                else if (part.Kind == "floor")
                 {
                     var f = pattern.Floors[floor++];
                     // Native mesh z=-t/2 is the TOP floor face. This is a
@@ -61,6 +67,7 @@ namespace VanyaTools.Native
                     normal = n => new Vector3D(n.X, -n.Y * f.Cosine + n.Z * f.Sine,
                         -n.Y * f.Sine - n.Z * f.Cosine);
                 }
+                else throw new InvalidOperationException("Неизвестная деталь лотка: " + part.Id);
                 var faces = new MeshGeometry3D(); var edges = new MeshGeometry3D();
                 for (int i = 0; i < source.TriangleIndices.Count; i += 3)
                 {

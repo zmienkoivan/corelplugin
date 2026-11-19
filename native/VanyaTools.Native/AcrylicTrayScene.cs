@@ -46,12 +46,20 @@ namespace VanyaTools.Native
             _models.Children.Add(new DirectionalLight(Color.FromRgb(160, 175, 185), new Vector3D(0.6, -0.3, -0.4)));
             var faces = Material(Color.FromArgb(94, 174, 225, 232), true);
             var edges = Material(Color.FromArgb(205, 76, 139, 151), false);
+            var keyFaces = Material(Color.FromArgb(230, 229, 176, 77), true);
+            var keyEdges = Material(Color.FromRgb(153, 105, 35), false);
             // Draw opaque cut edges first; sort translucent sheets back to front
             // in Camera() after rotations, avoiding a fixed transparency order.
             foreach (var part in Assembly.Parts)
-                _models.Children.Add(new GeometryModel3D(part.Edges, edges) { BackMaterial = edges });
+            {
+                var material = part.Id.StartsWith("wedge-", StringComparison.Ordinal) ? keyEdges : edges;
+                _models.Children.Add(new GeometryModel3D(part.Edges, material) { BackMaterial = material });
+            }
             foreach (var part in Assembly.Parts)
-                _faces.Add(new GeometryModel3D(part.Faces, faces) { BackMaterial = faces });
+            {
+                var material = part.Id.StartsWith("wedge-", StringComparison.Ordinal) ? keyFaces : faces;
+                _faces.Add(new GeometryModel3D(part.Faces, material) { BackMaterial = material });
+            }
             AddSamples(pattern); _models.Children.Add(_samples); ShowSamples = _showSamples;
             _solidCount = _models.Children.Count;
             var b = Assembly.Bounds;
@@ -127,18 +135,15 @@ namespace VanyaTools.Native
         }
         private void AddSamples(AcrylicTrayPattern p)
         {
-            if (p.Options.CellWidth < 31 || p.Options.CellDepth < 8) return;
             for (int r = 0; r < p.Options.Rows; r++)
             {
-                var f = p.Floors[p.Options.FloorMode == AcrylicTrayFloorMode.Plane ? 0 : r];
-                var rear = p.Crosses[p.Options.FloorMode == AcrylicTrayFloorMode.Plane ? r + 1 : r * 2 + 1];
-                double y = rear.Y - p.Options.Thickness / 2 - 5, z = f.Top(y) + 0.2;
                 for (int c = 0; c < p.Options.Columns; c++)
                 {
-                    double x = p.CellCenter(c);
+                    var pose = AcrylicTrayCards.Place(p, r, c); if (pose == null) continue;
+                    var b = pose.Bottom; var top = pose.Top;
                     var mesh = new MeshGeometry3D { Positions = new Point3DCollection {
-                        new Point3D(x-15,y,z), new Point3D(x+15,y,z),
-                        new Point3D(x+15,y+3,z+30), new Point3D(x-15,y+3,z+30) },
+                        new Point3D(b.X-15,b.Y,b.Z), new Point3D(b.X+15,b.Y,b.Z),
+                        new Point3D(top.X+15,top.Y,top.Z), new Point3D(top.X-15,top.Y,top.Z) },
                         TextureCoordinates = new PointCollection { new Point(0,1),new Point(1,1),new Point(1,0),new Point(0,0) },
                         TriangleIndices = new Int32Collection { 0,1,2,0,2,3 } };
                     mesh.Freeze(); var artwork = SampleArtwork((r + c) % 3);

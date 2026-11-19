@@ -6,6 +6,8 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using PdfSharp.Pdf.IO;
+using PdfSharp.Pdf;
+using PdfSharp.Pdf.Advanced;
 using VanyaTools.FilmPdf;
 using VanyaTools.Native;
 
@@ -86,6 +88,43 @@ internal static class Checks
         try { PrintPdfText.RequireCurves(new UnreadableSettings()); } catch (InvalidOperationException) { failed = true; }
         Check(failed, "Publisher accepted unreadable TextAsCurves value");
     }
+    private static PdfItem Value(PdfItem item) => item is PdfReference reference ? reference.Value : item;
+    private static void SpotOutput(string root, string profile)
+    {
+        const string resources = "/ColorSpace << /W [/Separation /WHITE /DeviceRGB 6 0 R] /C [/Separation /CLEAR /DeviceRGB 7 0 R] /Both [/DeviceN [/WHITE /CLEAR] /DeviceRGB 8 0 R] >> /ExtGState << /GS << /Type /ExtGState /op true /OP true /OPM 1 >> >>";
+        const string content = "q 0 1 0 rg 10 10 20 20 re f /GS gs /W cs 1 scn 10.1 10.1 19.8 19.8 re f /C cs 1 scn 9.9 9.9 20.2 20.2 re f Q\n";
+        string input = Pdf(root, "spot-plates", content, resources, "",
+            "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [1 1 1] /N 1 >>",
+            "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0.4 1 1] /N 1 >>",
+            Stream("{ pop 1 exch dup }", "/FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1]"));
+        string originalOperators;
+        using (var document = PdfReader.Open(input, PdfDocumentOpenMode.Modify))
+            originalOperators = Encoding.ASCII.GetString(document.Pages[0].Contents.CreateSingleContent().Stream.UnfilteredValue);
+        foreach (string mode in new[] { "preserve", "remove", "assign" })
+        {
+            string output = Path.Combine(root, "spots-" + mode + ".pdf");
+            Check(Helper(input, output, "100", "50", mode, profile) == 0, "Spot PDF rejected by " + mode);
+            using (var document = PdfReader.Open(output, PdfDocumentOpenMode.Modify))
+            {
+                var page = document.Pages[0];
+                var spaces = (PdfDictionary)Value(page.Resources.Elements["/ColorSpace"]);
+                foreach (var ink in new[] { Tuple.Create("/W", "/WHITE"), Tuple.Create("/C", "/CLEAR") })
+                {
+                    var color = (PdfArray)Value(spaces.Elements[ink.Item1]);
+                    Check(((PdfName)Value(color.Elements[0])).Value == "/Separation" && ((PdfName)Value(color.Elements[1])).Value == ink.Item2, "Spot name lost by " + mode);
+                    var tint = (PdfDictionary)Value(color.Elements[3]);
+                    Check(tint.Elements.GetInteger("/FunctionType") == 2 && tint.Elements.GetInteger("/N") == 1, "Spot tint transform changed by " + mode);
+                }
+                var deviceN = (PdfArray)Value(spaces.Elements["/Both"]);
+                var names = (PdfArray)Value(deviceN.Elements[1]);
+                Check(((PdfName)Value(deviceN.Elements[0])).Value == "/DeviceN" && names.Elements.Cast<PdfItem>().Select(v => ((PdfName)Value(v)).Value).SequenceEqual(new[] { "/WHITE", "/CLEAR" }), "DeviceN names lost by " + mode);
+                var states = (PdfDictionary)Value(page.Resources.Elements["/ExtGState"]);
+                var state = (PdfDictionary)Value(states.Elements["/GS"]);
+                Check(state.Elements.GetBoolean("/op") && state.Elements.GetBoolean("/OP") && state.Elements.GetInteger("/OPM") == 1, "Spot overprint lost by " + mode);
+                Check(Encoding.ASCII.GetString(page.Contents.CreateSingleContent().Stream.UnfilteredValue) == originalOperators, "Plate painting operators changed by " + mode);
+            }
+        }
+    }
     private static int Main()
     {
         string root = Path.Combine(Path.GetTempPath(), "Vanya-PdfTextChecks-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
@@ -114,6 +153,7 @@ internal static class Checks
             Accept(Pdf(root, "image", "/Im Do\n", "/XObject << /Im 6 0 R >>", "",
                 Stream("TjX", "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8")), "RGB image with text-like sample bytes");
             string profile = Icc(root);
+            SpotOutput(root, profile);
             foreach (string mode in new[] { "preserve", "remove", "assign", "film" })
             {
                 string output = Path.Combine(root, mode + "-ready.pdf");
