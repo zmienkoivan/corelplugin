@@ -15,7 +15,7 @@ internal static class Program
     private static void Reject(Action work,string text){bool failed=false;try{work();}catch(Exception){failed=true;}Check(failed,text);}
     [STAThread]private static int Main()
     {
-        try{Model();Geometry();Ui();Pdf();Service();Console.WriteLine("Sticker printing-plate checks passed: "+checks+". Synthetic alpha and fake Corel; no customer files.");return 0;}
+        try{Model();Geometry();Ui();Palette();Pdf();Service();Console.WriteLine("Sticker printing-plate checks passed: "+checks+". Synthetic alpha and fake Corel; no customer files.");return 0;}
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }
     private static void Model()
@@ -56,13 +56,45 @@ internal static class Program
     {yield return root;for(int i=0;i<VisualTreeHelper.GetChildrenCount(root);i++)foreach(var c in Descendants(VisualTreeHelper.GetChild(root,i)))yield return c;}
     private static void Ui()
     {
-        var called=new List<Tuple<StickerPrintPlateKind,double>>();var ui=new StickerPrintPlateControls((k,t)=>called.Add(Tuple.Create(k,t)));
+        int paletteShows = 0;
+        var called=new List<Tuple<StickerPrintPlateKind,double>>();var ui=new StickerPrintPlateControls((k,t)=>called.Add(Tuple.Create(k,t)), () => paletteShows++);
         ui.Measure(new Size(360,400));ui.Arrange(new Rect(0,0,360,400));ui.UpdateLayout();var all=Descendants(ui).ToArray();
         var combos=all.OfType<ComboBox>().ToArray();var buttons=all.OfType<Button>().ToArray();
         Check(combos.Length==2 && combos.All(c=>c.Items.Count==21),"Trapping controls do not provide all 0.05 mm steps");
+        ui.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+        Check(paletteShows == 1 && called.Count == 0, "Opening the sticker tab did not show the palette independently of creating artwork");
+        buttons.Single(b=>(string)b.Content=="Палитра WHITE/CLEAR").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Check(paletteShows == 2 && called.Count == 0, "Palette button changed artwork instead of reopening swatches");
         buttons.Single(b=>(string)b.Content=="Создать подложку").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         buttons.Single(b=>(string)b.Content=="Создать лак").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Check(called[0].Item1==StickerPrintPlateKind.White && called[1].Item1==StickerPrintPlateKind.Clear,"Buttons created the wrong ink");Equal(called[0].Item2,-.1,"Default white choke");Equal(called[1].Item2,.1,"Default clear spread");
+    }
+    private static void Palette()
+    {
+        var fresh = new PlateApp();
+        fresh.Palettes.Registered = false;
+        var selection = fresh.Selected.ToArray();
+        StickerPrintSpotColor.Show(fresh);
+        Check(fresh.Palettes.FileOpens == 1 && System.IO.Path.GetFileName(fresh.Palettes.LastPath) == "VanyaTools.PrintPalette.xml", "First use did not load the installed named-spot palette");
+        Check(fresh.Palettes.Palette.IsOpen && fresh.RequestedColors.SequenceEqual(new[] { "WHITE", "CLEAR" }), "First use did not show and validate both spot inks");
+        Check(!fresh.Document.Dirty && fresh.Outputs.Count == 0 && fresh.Selected.SequenceEqual(selection), "Showing swatches changed the document or selection");
+
+        var cached = new PlateApp();
+        StickerPrintSpotColor.Show(cached);
+        Check(cached.Palettes.FileOpens == 0 && cached.Palettes.Palette.OpenCalls == 1 && cached.Palettes.Palette.IsOpen, "An already registered but hidden palette stayed invisible");
+        StickerPrintSpotColor.Show(cached);
+        Check(cached.Palettes.FileOpens == 0 && cached.Palettes.Palette.OpenCalls == 1, "Repeated use duplicated or reopened an already visible palette");
+        cached.Palettes.Palette.IsOpen = false;
+        StickerPrintSpotColor.Create(cached, StickerPrintPlateKind.Clear);
+        Check(cached.Palettes.Palette.OpenCalls == 2 && cached.Palettes.Palette.IsOpen, "Creating a plate did not restore swatches closed by the user");
+
+        var ignored = new PlateApp(); ignored.Palettes.Palette.IgnoreOpen = true;
+        Reject(() => StickerPrintSpotColor.Show(ignored), "A palette that Corel refused to show was reported as open");
+        Check(ignored.RequestedColors.Count == 0 && !ignored.Document.Dirty, "Failed palette opening continued with artwork changes");
+        var wrong = new PlateApp(); wrong.Palettes.Registered = false; wrong.Palettes.Palette.Identifier = "foreign-palette";
+        Reject(() => StickerPrintSpotColor.Show(wrong), "An unrelated palette was accepted as WHITE/CLEAR");
+        var process = new PlateApp { Failure = "spot" };
+        Reject(() => StickerPrintSpotColor.Show(process), "Ordinary process colors were accepted as named WHITE/CLEAR spots");
     }
     private static void Pdf()
     {

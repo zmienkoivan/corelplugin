@@ -8,10 +8,12 @@ public sealed class PlateApp
     public string Failure;public PlateDocument Document;public object ActiveDocument=>Document;
     public List<PlateShape> Selected=new List<PlateShape>(),Temporary=new List<PlateShape>(),Outputs=new List<PlateShape>();
     public List<string> CapturedNames=new List<string>();public List<int> InputCounts=new List<int>();public bool Optimization;public PlateWindow ActiveWindow=new PlateWindow();public PlatePalettes Palettes=new PlatePalettes();
+    public List<string> RequestedColors = new List<string>();
     public PlateRange ActiveSelectionRange=>new PlateRange(this,Selected.ToList());
     public PlateApp(){Document=new PlateDocument(this);Selected.Add(new PlateShape(this,Document.BaseLayer){Name="Artwork"});}
     public PlateRange CreateShapeRange()=>new PlateRange(this,new List<PlateShape>());
-    public PlateColor CreateSpotColorByName(string id,string name,int tint)=>new PlateColor{IsSpot=Failure!="spot",SpotColorName=name,Tint=tint};
+    public PlateColor CreateSpotColorByName(string id,string name,int tint)
+    { RequestedColors.Add(name); return new PlateColor{IsSpot=Failure!="spot",SpotColorName=name,Tint=tint}; }
 }
 public sealed class PlateDocument
 {
@@ -107,5 +109,20 @@ public sealed class PlateTile
 }
 public sealed class PlateWindow{public PlateView ActiveView=new PlateView();public void Refresh(){}}
 public sealed class PlateView{public bool SimulateOverprints;}
-public sealed class PlatePalette{public string Identifier="50af2116-63b7-4f63-8baa-b6bdd41010eb";}
-public sealed class PlatePalettes{public int Count=1;public PlatePalette this[int i]=>new PlatePalette();public PlatePalette Open(string path)=>new PlatePalette();}
+public sealed class PlatePalette
+{
+    public string Identifier="50af2116-63b7-4f63-8baa-b6bdd41010eb";
+    public bool IsOpen, IgnoreOpen;
+    public int OpenCalls;
+    public void Open() { OpenCalls++; if (!IgnoreOpen) IsOpen = true; }
+}
+public sealed class PlatePalettes
+{
+    public bool Registered = true;
+    public int FileOpens;
+    public string LastPath;
+    public PlatePalette Palette = new PlatePalette();
+    public int Count => Registered ? 1 : 0;
+    public PlatePalette this[int i] => Palette;
+    public PlatePalette Open(string path) { FileOpens++; LastPath = path; Registered = true; return Palette; }
+}

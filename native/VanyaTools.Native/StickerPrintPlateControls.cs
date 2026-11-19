@@ -8,9 +8,21 @@ namespace VanyaTools.Native
 {
     internal sealed class StickerPrintPlateControls:StackPanel
     {
-        internal StickerPrintPlateControls(Action<StickerPrintPlateKind,double> create)
+        internal StickerPrintPlateControls(Action<StickerPrintPlateKind,double> create, Action showPalette)
         {
             var group=DockerLayout.ToolGroup("3. Подложка и лак","Выделите рисунок. Минус ужимает плашку, плюс расширяет. Треппинг — от −0,50 до +0,50 мм, шаг 0,05 мм.");Children.Add(group);
+            var paletteButton = new Button { Content = "Палитра WHITE/CLEAR", MinHeight = 27,
+                Margin = new Thickness(2, 0, 2, 5), FontSize = 11,
+                ToolTip = "Показать плашечные цвета WHITE и CLEAR в палитре CorelDRAW, как CUT. Выделение не требуется." };
+            paletteButton.Click += (_, __) => showPalette();
+            group.Children.Add(paletteButton);
+            bool showing = false;
+            Loaded += (_, __) => {
+                if (showing) return;
+                showing = true;
+                try { showPalette(); }
+                finally { showing = false; }
+            };
             var columns=new UniformGrid{Columns=2};group.Children.Add(columns);
             foreach(var kind in new[]{StickerPrintPlateKind.White,StickerPrintPlateKind.Clear})
             {

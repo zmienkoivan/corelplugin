@@ -385,6 +385,10 @@ namespace VanyaTools.Native
             {
                 var result = StickerPrintPlateService.Create(kind,trapping);
                 SetStatus(result + ". Плашка добавлена к выделению для печати.",false);
+            }), () => RunSafe(() =>
+            {
+                StickerPrintSpotColor.Show();
+                SetStatus("Палитра WHITE/CLEAR открыта. Цвета доступны для ручной заливки и обводки.", false);
             })));
 
             var tabTools = DockerLayout.ToolGroup("4. Язычки", "Выделите контур и добавьте маркеры — их можно двигать. " +
