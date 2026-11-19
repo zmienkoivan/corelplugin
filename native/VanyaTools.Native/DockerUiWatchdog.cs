@@ -12,7 +12,8 @@ using System.Windows.Threading;
 
 namespace VanyaTools.Native
 {
-    // Diagnostics only. Never enable controls, abort a thread or retry native work.
+    // Never enable controls, abort a thread or retry native work. Render recovery
+    // only drains WPF's existing completion notifications on the owning thread.
     internal sealed class DockerUiWatchdog
     {
         private sealed class TraceState
@@ -42,6 +43,7 @@ namespace VanyaTools.Native
         private static int _nextInstance;
         private readonly Dispatcher _dispatcher;
         private readonly WeakReference<FrameworkElement> _owner;
+        private readonly DockerRenderRecovery _renderRecovery;
         private readonly string _prefix;
         private readonly int _intervalMs, _delayMs;
         private readonly object _lifecycle = new object();
@@ -56,6 +58,7 @@ namespace VanyaTools.Native
         {
             _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
             _owner = owner == null ? null : new WeakReference<FrameworkElement>(owner);
+            if (owner != null) _renderRecovery = new DockerRenderRecovery(dispatcher, owner, HasActiveOperation);
             _intervalMs = Math.Max(10, intervalMs); _delayMs = Math.Max(_intervalMs, delayMs);
             _prefix = "Docker UI [" + name + "#" + Interlocked.Increment(ref _nextInstance) +
                 ", version=" + typeof(DockerUiWatchdog).Assembly.GetName().Version.ToString(3) +
@@ -88,6 +91,7 @@ namespace VanyaTools.Native
         }
         internal void Stop(string reason = "stop")
         {
+            _renderRecovery?.Stop();
             Timer timer;
             lock (_lifecycle)
             {
@@ -133,6 +137,7 @@ namespace VanyaTools.Native
             }
             if (!queueBackground || !Current(generation)) return;
             if (!Queue(generation, DispatcherPriority.Background, () => {
+                _renderRecovery?.Check();
                 string input = ReadInputState(out bool disabled);
                 bool resumed, changed;
                 double delay;
@@ -170,6 +175,11 @@ namespace VanyaTools.Native
                 foreach (Scope scope in state.Stack) parts.Add(scope.Name + " (" + F(Seconds(now - scope.Started)) + "s)");
                 return "active operation=" + String.Join(" > ", parts);
             }
+        }
+        private bool HasActiveOperation()
+        {
+            TraceState state = Traces.GetValue(_dispatcher, _ => new TraceState());
+            lock (state) return state.Stack.Count != 0;
         }
         private string ReadInputState(out bool disabled)
         {

@@ -14,6 +14,7 @@ namespace VanyaTools.Native
         private static readonly object Gate = new object();
         private static readonly List<string> Lines = new List<string>();
         public static void Info(string message) { lock (Gate) Lines.Add(message); }
+        public static void Error(string message, Exception error) { Info(message + " " + error); }
         internal static void Clear() { lock (Gate) Lines.Clear(); }
         internal static string[] Snapshot() { lock (Gate) return Lines.ToArray(); }
     }
@@ -23,6 +24,7 @@ internal static class Program
 {
     private static int _checks;
     private static void Check(bool value, string message) { _checks++; if (!value) throw new Exception(message); }
+    [STAThread]
     private static int Main()
     {
         try
@@ -30,6 +32,7 @@ internal static class Program
             BlockingOperation(); BackgroundStarvation(); StaleCallbacks();
             Check(DockerUiWatchdog.DelayEvidence(62900, 15).Contains("monitor-also-paused"), "A silent monitor must not prove a continuous UI hang");
             Check(DockerUiWatchdog.DelayEvidence(2, 15).Contains("monitor-active"), "An active monitor must distinguish dispatcher delay");
+            Check(DockerRenderRegression.Run() == 0, "Real WPF render notification regression failed");
             Console.WriteLine("Docker watchdog checks passed: " + _checks + ". Isolated WPF dispatchers; no windows or Corel.");
             return 0;
         }
