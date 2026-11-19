@@ -29,12 +29,16 @@ namespace VanyaTools.Native
         private Window _previewWindow;
         private readonly CheckBox _samples;
         private readonly TextBlock _sampleInfo;
+        private readonly TextBlock _previewMessage;
+        private TextBlock _largeMessage;
         private readonly TextBlock _summary;
         private readonly Button _create, _assembly, _save, _open;
         private readonly DispatcherTimer _timer;
         private AcrylicTrayPattern _pattern;
+        private AcrylicTrayPattern _displayedPattern;
+        private string _lastPreviewError;
         private string _folder;
-        private bool _ready, _busy;
+        private bool _ready, _busy, _previewError;
 
         public AcrylicTrayTab(Action<string, bool> status)
         {
@@ -49,6 +53,8 @@ namespace VanyaTools.Native
             DockPanel.SetDock(preview, Dock.Top); root.Children.Add(preview);
             preview.Children.Add(new TextBlock { Text = "Акриловый лоток · 3D", FontSize = 14,
                 FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 5) });
+            _previewMessage = Note(""); _previewMessage.Visibility = Visibility.Collapsed;
+            preview.Children.Add(_previewMessage);
             _scene = new AcrylicTrayScene { Height = 210 }; preview.Children.Add(_scene);
             var views = new WrapPanel { Margin = new Thickness(0, 3, 0, 0) }; preview.Children.Add(views);
             views.Children.Add(Button("¾", (_, __) => _scene.View(0)));
@@ -128,6 +134,7 @@ namespace VanyaTools.Native
             if (!_ready) return;
             // Never export the previous valid geometry while a new value is pending.
             _pattern = null; Actions(false); _timer.Stop(); _timer.Start();
+            PreviewMessage("Обновляю 3D…", false);
         }
         private void Update()
         {
@@ -136,12 +143,18 @@ namespace VanyaTools.Native
             _riseRow.Visibility = _mode.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
             _wedgeRow.Visibility = _wedges.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
             _retainerRows.Visibility = _wedgeRow.Visibility;
+            bool parametersReady = false;
             try
             {
-                _pattern = AcrylicTrayPattern.Build(Options()); var p = _pattern;
-                _scene.Set(p); Samples();
-                _largeScene?.Set(p, _scene.Assembly);
-                _side.Source = SidePreview(p); _plan.Source = PlanPreview(p);
+                var p = AcrylicTrayPattern.Build(Options()); parametersReady = true;
+                // Finish geometry before replacing either visible preview. A
+                // rejected lock size must not erase the last assembled tray.
+                var assembly = AcrylicTrayAssembly3D.Build(p);
+                var side = SidePreview(p); var plan = PlanPreview(p);
+                _scene.Set(p, assembly); _largeScene?.Set(p, assembly);
+                _pattern = _displayedPattern = p; Samples();
+                _side.Source = side; _plan.Source = plan;
+                _lastPreviewError = null; PreviewMessage(null, false);
                 DockerTheme.UseTheme(_summary, TextBlock.ForegroundProperty, DockerTheme.TextBrush);
                 _summary.Text = "Габариты: " + F(p.OverallWidth) + " × " + F(p.OverallDepth) + " × " + F(p.Height) + " мм\n" +
                     p.Options.Columns * p.Options.Rows + " ячеек · " + p.Parts.Count + " деталей · дно: " + p.Floors.Count + " шт.\n" +
@@ -158,11 +171,29 @@ namespace VanyaTools.Native
             }
             catch (Exception ex)
             {
-                _pattern = null; _side.Source = _plan.Source = null;
-                _scene.Clear(); _largeScene?.Clear();
-                _sampleInfo.Visibility = Visibility.Collapsed;
-                _summary.Text = ex.GetBaseException().Message;
+                _pattern = null;
+                string message = ex.GetBaseException().Message;
+                PreviewMessage("3D не обновлён: " + message + (_displayedPattern != null ?
+                    "\nПоказан последний корректный вариант. Исправьте параметры для обновления." : ""), true);
+                if (_lastPreviewError != message)
+                {
+                    if (parametersReady) Log.Error("Acrylic tray 3D preview could not be rebuilt.", ex);
+                    else Log.Info("Acrylic tray preview parameters rejected: " + message);
+                    _lastPreviewError = message;
+                }
+                _summary.Text = message;
                 DockerTheme.UseTheme(_summary, TextBlock.ForegroundProperty, DockerTheme.ErrorTextBrush); Actions(false);
+            }
+        }
+        private void PreviewMessage(string message, bool error)
+        {
+            _previewError = error;
+            foreach (var notice in new[] { _previewMessage, _largeMessage })
+            {
+                if (notice == null) continue;
+                notice.Text = message ?? "";
+                notice.Visibility = String.IsNullOrEmpty(message) ? Visibility.Collapsed : Visibility.Visible;
+                DockerTheme.UseTheme(notice, TextBlock.ForegroundProperty, error ? DockerTheme.ErrorTextBrush : DockerTheme.MutedTextBrush);
             }
         }
         private void Samples()
@@ -171,10 +202,10 @@ namespace VanyaTools.Native
             if (_largeScene != null) _largeScene.ShowSamples = _samples.IsChecked == true;
             if (_sampleInfo != null)
             {
-                _sampleInfo.Visibility = _samples.IsChecked == true && _pattern != null ? Visibility.Visible : Visibility.Collapsed;
-                if (_pattern != null)
+                _sampleInfo.Visibility = _samples.IsChecked == true && _displayedPattern != null ? Visibility.Visible : Visibility.Collapsed;
+                if (_displayedPattern != null)
                 {
-                    var pose = AcrylicTrayCards.Place(_pattern, 0, 0);
+                    var pose = AcrylicTrayCards.Place(_displayedPattern, 0, 0);
                     _sampleInfo.Text = pose == null ? "Карточка 30 мм не помещается по ширине ячейки." :
                         pose.Rest == AcrylicTrayCardRest.RearTop ? "Карточка упирается в передний нижний угол и верх задней стенки." :
                         pose.Rest == AcrylicTrayCardRest.RearFace ? "Карточка 30 мм не достаёт до верхушки: край опирается на заднюю стенку." :
@@ -185,14 +216,16 @@ namespace VanyaTools.Native
         private void OpenPreview()
         {
             if (_previewWindow != null) { _previewWindow.Activate(); return; }
-            if (_pattern == null) return;
-            var scene = new AcrylicTrayScene(); scene.Set(_pattern, _scene.Assembly);
+            if (_displayedPattern == null) return;
+            var scene = new AcrylicTrayScene(); scene.Set(_displayedPattern, _scene.Assembly);
             scene.ShowSamples = _samples.IsChecked == true;
             var root = new DockPanel { Margin = new Thickness(10) };
             var bar = new WrapPanel(); DockPanel.SetDock(bar, Dock.Top); root.Children.Add(bar);
             string[] names = { "¾", "Спереди", "Сбоку", "Сверху" };
             for (int i = 0; i < names.Length; i++)
             { int view = i; bar.Children.Add(Button(names[i], (_, __) => scene.View(view))); }
+            _largeMessage = Note(""); DockPanel.SetDock(_largeMessage, Dock.Top); root.Children.Add(_largeMessage);
+            PreviewMessage(_previewMessage.Text, _previewError);
             var help = Note("Размеры меняются в панели лотка — модель обновляется сразу. Мышь — вращение, колесо — масштаб.");
             DockPanel.SetDock(help, Dock.Bottom); root.Children.Add(help); root.Children.Add(scene);
             var window = new Window { Title = "Акриловый лоток · собранная конструкция 3D", Content = root,
@@ -202,7 +235,7 @@ namespace VanyaTools.Native
             var owner = PresentationSource.FromVisual(this) as HwndSource;
             if (owner != null) new WindowInteropHelper(window).Owner = owner.Handle;
             _largeScene = scene; _previewWindow = window;
-            window.Closed += (_, __) => { _previewWindow = null; _largeScene = null; };
+            window.Closed += (_, __) => { _previewWindow = null; _largeScene = null; _largeMessage = null; };
             window.Show();
         }
         private void Actions(bool valid)

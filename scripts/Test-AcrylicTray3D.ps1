@@ -109,8 +109,10 @@ $scene.View(2)
 Near $scene.GetType().GetField('_yaw',$flags).GetValue($scene) 0
 (Field '_samples').IsChecked=$false
 Check (-not $scene.ShowSamples) 'Samples toggle ignored'
+$lastValid=$scene.Assembly
 (Field '_angle').Text='invalid'; Pump
-Check ($null -eq $scene.Assembly) 'Invalid input leaves stale 3D geometry'
+Check ([Object]::ReferenceEquals($lastValid,$scene.Assembly)) 'Invalid input erased the last assembled preview'
+Check ((Field '_previewMessage').Visibility -eq [Windows.Visibility]::Visible -and (Field '_previewMessage').Text.Contains('3D')) 'Invalid input is not explained beside the preview'
 Check (-not (Field '_create').IsEnabled) 'Invalid model remains exportable'
 (Field '_mode').SelectedIndex=1; Pump
 Check ($null -ne $scene.Assembly) 'Stepped mode blocked by inactive angle field'
