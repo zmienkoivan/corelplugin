@@ -1138,6 +1138,7 @@ namespace VanyaTools.Native
                 {
                     string shared = SnapshotPath(storeId, frame.SnapshotId, documentPath);
                     Directory.CreateDirectory(Path.GetDirectoryName(shared));
+                    VanyaToolsDataFolder.HideForPath(Path.GetDirectoryName(shared));
                     if (!preserveSnapshotId || !File.Exists(shared)) File.Copy(local, shared, true);
                 }
                 catch (Exception error)
@@ -1164,7 +1165,11 @@ namespace VanyaTools.Native
             if (!String.IsNullOrWhiteSpace(documentPath))
             {
                 string shared = SnapshotPath(storeId, frame.SnapshotId, documentPath);
-                if (File.Exists(shared)) return File.ReadAllBytes(shared);
+                if (File.Exists(shared))
+                {
+                    VanyaToolsDataFolder.HideForPath(Path.GetDirectoryName(shared));
+                    return File.ReadAllBytes(shared);
+                }
             }
             return null;
         }
@@ -1174,12 +1179,14 @@ namespace VanyaTools.Native
             if (String.IsNullOrWhiteSpace(documentPath) ||
                 String.IsNullOrWhiteSpace(_data.FrameStoreId)) return true;
             bool complete = true;
+            string sharedDirectory = null;
             foreach (var frame in _data.Frames)
             {
                 if (String.IsNullOrWhiteSpace(frame.SnapshotId)) continue;
                 try
                 {
                     string shared = SnapshotPath(_data.FrameStoreId, frame.SnapshotId, documentPath);
+                    sharedDirectory = Path.GetDirectoryName(shared);
                     if (File.Exists(shared)) continue;
                     string local = SnapshotPath(_data.FrameStoreId, frame.SnapshotId, null);
                     if (!File.Exists(local)) { complete = false; continue; }
@@ -1192,6 +1199,7 @@ namespace VanyaTools.Native
                     complete = false;
                 }
             }
+            VanyaToolsDataFolder.HideForPath(sharedDirectory);
             return complete;
         }
 

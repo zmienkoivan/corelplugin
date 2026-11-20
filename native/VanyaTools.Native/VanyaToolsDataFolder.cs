@@ -15,7 +15,8 @@ namespace VanyaTools.Native
             {
                 for (var folder = new DirectoryInfo(directory); folder != null; folder = folder.Parent)
                 {
-                    if (!String.Equals(folder.Name, ".VanyaTools", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!String.Equals(folder.Name, ".VanyaTools", StringComparison.OrdinalIgnoreCase) &&
+                        !String.Equals(folder.Name, ".vanya-frames", StringComparison.OrdinalIgnoreCase)) continue;
                     if (!folder.Exists) return;
                     var attributes = File.GetAttributes(folder.FullName);
                     if ((attributes & FileAttributes.Hidden) == 0)
@@ -26,7 +27,7 @@ namespace VanyaTools.Native
             catch (Exception error) when (error is IOException || error is UnauthorizedAccessException || error is SecurityException)
             {
                 // Shares may deny attribute changes while still allowing data writes.
-                Log.Error("Could not hide the VanyaTools data folder", error);
+                Log.Error("Could not hide a VanyaTools service folder", error);
             }
         }
     }
