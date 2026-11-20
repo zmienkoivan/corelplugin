@@ -13,7 +13,7 @@ internal static class Program
     { try {work();} catch(InvalidOperationException) {_checks++;return;} throw new Exception(message); }
     private static int Main()
     {
-        try { Geometry();NativeAdapter();FontTransfer();Console.WriteLine("Print selection checks passed: "+_checks+". Fake transfer only; no Corel or customer files.");return 0; }
+        try { Geometry();NativeAdapter();FontTransfer();SpotOrderChecks.Run();Console.WriteLine("Print selection checks passed: "+_checks+". Fake transfer only; no Corel or customer files.");return 0; }
         catch(Exception error) {Console.Error.WriteLine(error);return 1;}
     }
     private static void Geometry()

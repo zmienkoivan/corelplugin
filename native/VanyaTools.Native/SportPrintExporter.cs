@@ -120,6 +120,9 @@ namespace VanyaTools.Native
                     result.WidthMm = selectionWorkspace.PageWidthMm;
                     result.HeightMm = selectionWorkspace.PageHeightMm;
                     result.SortedCutContours = selectionWorkspace.SortedCutContours;
+                    // PasteEx merges source layers. Keep technical inks after
+                    // knockout artwork even when editable WHITE sits underneath.
+                    PrintSpotPlateOrder.Prepare((object)app, selectionWorkspace.Page);
                 }
                 else
                 {
