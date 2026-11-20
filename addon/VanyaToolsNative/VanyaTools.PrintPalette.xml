@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <palette name="Vanya Tools Print Colors" guid="50af2116-63b7-4f63-8baa-b6bdd41010eb" locked="true">
   <colorspaces>
-    <cs name="WHITE" fixedID="1" version="1500"><color cs="CMYK" tints="0,0,0,0"/></cs>
+    <cs name="WHITE" fixedID="1" version="1500"><color cs="RGB" tints="0,1,0"/></cs>
     <cs name="CLEAR" fixedID="2" version="1500"><color cs="CMYK" tints="0.6,0,0,0"/></cs>
   </colorspaces>
   <colors><page><color name="WHITE" cs="WHITE" tints="1"/><color name="CLEAR" cs="CLEAR" tints="1"/></page></colors>

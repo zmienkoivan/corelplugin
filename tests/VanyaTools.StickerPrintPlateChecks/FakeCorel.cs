@@ -13,7 +13,7 @@ public sealed class PlateApp
     public PlateApp(){Document=new PlateDocument(this);Selected.Add(new PlateShape(this,Document.BaseLayer){Name="Artwork"});}
     public PlateRange CreateShapeRange()=>new PlateRange(this,new List<PlateShape>());
     public PlateColor CreateSpotColorByName(string id,string name,int tint)
-    { RequestedColors.Add(name); return new PlateColor{IsSpot=Failure!="spot",SpotColorName=name,Tint=tint}; }
+    { RequestedColors.Add(name); return new PlateColor{IsSpot=Failure!="spot",SpotColorName=name,Tint=tint,RGBRed=Palettes.LegacyWhite&&name=="WHITE"?255:0,RGBBlue=Palettes.LegacyWhite&&name=="WHITE"?255:0}; }
 }
 public sealed class PlateDocument
 {
@@ -25,12 +25,15 @@ public sealed class PlateDocument
 public sealed class PlatePage
 {
     public PlateDocument Document;public List<PlateLayer> Layers=new List<PlateLayer>();
-    public PlatePage(PlateDocument doc){Document=doc;}
+    public PlatePage(PlateDocument doc){Document=doc;Layers.Add(doc.BaseLayer);}
     public PlateLayer CreateLayer(string name){var layer=new PlateLayer(Document){Name=name};Layers.Add(layer);Document.ActiveLayer=layer;Document.Dirty=true;return layer;}
 }
 public sealed class PlateLayer
 {
     public PlateDocument Document;public string Name="Artwork";public bool Printable=true,Visible=true,Editable=true,Deleted;
+    public bool IsSpecialLayer,Master;
+    public PlateLayer Below {get{var layers=Document.ActivePage.Layers;int index=layers.IndexOf(this);return index>0?layers[index-1]:null;}}
+    public void MoveBelow(PlateLayer other){if(Document.App.Failure=="layer-order")throw new InvalidOperationException("Synthetic layer order failure");var layers=Document.ActivePage.Layers;layers.Remove(this);layers.Insert(layers.IndexOf(other),this);}
     public PlateLayer(PlateDocument doc){Document=doc;}
     public void Activate(){Document.ActiveLayer=this;}
     public void Delete(){Deleted=true;foreach(var shape in Document.App.Outputs.Where(s=>s.Layer==this))shape.Delete();}
@@ -68,7 +71,13 @@ public sealed class PlateFill
     public PlateFill(PlateApp a){app=a;}public void ApplyUniformFill(PlateColor color){if(app.Failure!="fill"){Type=1;UniformColor=color;}}
 }
 public sealed class PlateOutline{public int Type;public PlateColor Color=new PlateColor();public void SetNoOutline(){Type=0;}}
-public sealed class PlateColor{public bool IsSpot;public string SpotColorName="";public int Tint=100;}
+public sealed class PlateColor
+{
+    public bool IsSpot;public string SpotColorName="";public int Tint=100;
+    public int RGBRed,RGBGreen=255,RGBBlue;
+    public PlateColor GetCopy() => (PlateColor)MemberwiseClone();
+    public void ConvertToRGB(){IsSpot=false;}
+}
 public sealed class PlateCollection:IEnumerable
 {
     public List<PlateShape> Values;public int Count=>Values.Count;public PlateShape this[int index]=>Values[index-1];
@@ -113,16 +122,18 @@ public sealed class PlatePalette
 {
     public string Identifier="50af2116-63b7-4f63-8baa-b6bdd41010eb";
     public bool IsOpen, IgnoreOpen;
-    public int OpenCalls;
+    public int OpenCalls,CloseCalls;
     public void Open() { OpenCalls++; if (!IgnoreOpen) IsOpen = true; }
+    public void Close(){CloseCalls++;IsOpen=false;}
 }
 public sealed class PlatePalettes
 {
     public bool Registered = true;
+    public bool LegacyWhite,IgnoreRefresh;
     public int FileOpens;
     public string LastPath;
     public PlatePalette Palette = new PlatePalette();
     public int Count => Registered ? 1 : 0;
     public PlatePalette this[int i] => Palette;
-    public PlatePalette Open(string path) { FileOpens++; LastPath = path; Registered = true; return Palette; }
+    public PlatePalette Open(string path) { FileOpens++; LastPath = path; Registered = true;if(!IgnoreRefresh)LegacyWhite=false;return Palette; }
 }

@@ -381,9 +381,9 @@ namespace VanyaTools.Native
             _smoothSelectedSimplificationMm = AddStickerField(smoothingSettings, "Упрощение, мм", "0.2",
                 "Допуск упрощения выбранного готового контура, мм");
 
-            root.Children.Add(new StickerPrintPlateControls((kind,trapping) => RunSafe(() =>
+            root.Children.Add(new StickerPrintPlateControls((kind,trapping,tint) => RunSafe(() =>
             {
-                var result = StickerPrintPlateService.Create(kind,trapping);
+                var result = StickerPrintPlateService.Create(kind,trapping,tint);
                 SetStatus(result + ". Плашка добавлена к выделению для печати.",false);
             }), () => RunSafe(() =>
             {

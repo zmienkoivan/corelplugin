@@ -6,6 +6,11 @@ namespace VanyaTools.Native
     {
         internal const int MaxPixels=64000000;
         internal static string Ink(StickerPrintPlateKind kind)=>kind==StickerPrintPlateKind.White?"WHITE":"CLEAR";
+        internal static int ValidateTint(int tint)
+        {
+            if(tint<10 || tint>100)throw new ArgumentException("Плотность заливки: целое число от 10 до 100%.");
+            return tint;
+        }
         internal static double Validate(StickerPrintPlateKind kind,double trapping)
         {
             if(kind!=StickerPrintPlateKind.White && kind!=StickerPrintPlateKind.Clear)throw new ArgumentException("Неизвестная печатная плашка.");

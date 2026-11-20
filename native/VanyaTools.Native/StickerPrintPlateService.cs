@@ -6,17 +6,17 @@ namespace VanyaTools.Native
 {
     internal static class StickerPrintPlateService
     {
-        internal static string Create(StickerPrintPlateKind kind,double trapping)=>Create((object)CorelApp.Get(),kind,trapping);
-        internal static string Create(object application,StickerPrintPlateKind kind,double trapping)
+        internal static string Create(StickerPrintPlateKind kind,double trapping,int tint=100)=>Create((object)CorelApp.Get(),kind,trapping,tint);
+        internal static string Create(object application,StickerPrintPlateKind kind,double trapping,int tint=100)
         {
-            trapping=StickerPrintPlateModel.Validate(kind,trapping);dynamic app=application,doc=app.ActiveDocument;
+            trapping=StickerPrintPlateModel.Validate(kind,trapping);StickerPrintPlateModel.ValidateTint(tint);dynamic app=application,doc=app.ActiveDocument;
             if(doc==null)throw new InvalidOperationException("Откройте документ и выделите рисунок.");
             dynamic selected=app.ActiveSelectionRange;
             if(selected==null || Convert.ToInt32(selected.Count)==0)throw new InvalidOperationException("Выделите рисунок для подложки или лака.");
             var originals=Items((object)selected.Shapes);dynamic input=app.CreateShapeRange();
             foreach(dynamic shape in originals)if(Convert.ToBoolean(shape.Layer.Printable) && !Technical((object)shape))input.Add(shape);
             if(Convert.ToInt32(input.Count)==0)throw new InvalidOperationException("Выделите сам рисунок. Контуры CUT и плашки WHITE/CLEAR не используются как исходник.");
-            object color=StickerPrintSpotColor.Create(application,kind),page=(object)doc.ActivePage,oldLayer=(object)doc.ActiveLayer;
+            object color=StickerPrintSpotColor.Create(application,kind,tint),page=(object)doc.ActivePage,oldLayer=(object)doc.ActiveLayer;
             int oldUnit=Convert.ToInt32(doc.Unit),oldRef=Convert.ToInt32(doc.ReferencePoint);bool optimized=Convert.ToBoolean(app.Optimization),dirty=Convert.ToBoolean(doc.Dirty);
             var temporary=new List<object>();object layer=null,plate=null;bool started=false,success=false;
             try
@@ -39,22 +39,21 @@ namespace VanyaTools.Native
                 raster.Delete();temporary.Clear();
                 var geometry=StickerPrintPlateGeometry.Build(bitmap,width,height,trapping);
                 object curve=StickerPrintPlateGeometry.Curve((object)doc,geometry,left,top);
-                // Named printing planes sit above artwork with overprint. This
-                // preserves their independent PDF separations without changing
-                // the original artwork's knockout/overprint attributes. The RIP
-                // maps WHITE to the underbase and CLEAR to the varnish pass.
+                // The editable WHITE plane sits below page artwork; CLEAR stays
+                // above it. Both retain named spot inks and explicit overprint.
                 layer=(object)((dynamic)page).CreateLayer(StickerPrintPlateModel.Ink(kind)+(kind==StickerPrintPlateKind.White?" · подложка":" · лак"));
                 dynamic target=layer;target.Printable=true;target.Visible=true;target.Editable=true;
                 if(!Convert.ToBoolean(target.Printable))throw new InvalidOperationException("Corel не включил печать слоя плашки.");
+                if(kind==StickerPrintPlateKind.White)PlaceUnderArtwork(layer);
                 plate=(object)target.CreateCurve((dynamic)curve);dynamic output=plate;
                 output.Fill.ApplyUniformFill((dynamic)color);output.Outline.SetNoOutline();output.OverprintFill=true;
-                StickerPrintSpotColor.Validate((object)output.Fill.UniformColor,kind);
+                StickerPrintSpotColor.Validate((object)output.Fill.UniformColor,kind,tint);
                 if(!Convert.ToBoolean(output.OverprintFill))throw new InvalidOperationException("Corel не включил наложение плашечной заливки.");
-                output.Name=StickerPrintPlateModel.Ink(kind)+" · "+trapping.ToString("+0.00;-0.00;0.00",CultureInfo.CurrentCulture)+" мм";
+                output.Name=StickerPrintPlateModel.Ink(kind)+" · "+tint+"% · "+trapping.ToString("+0.00;-0.00;0.00",CultureInfo.CurrentCulture)+" мм";
                 RestoreSelection(originals);output.AddToSelection();
                 try{app.ActiveWindow.ActiveView.SimulateOverprints=true;}catch(Exception error){Log.Error("Could not enable overprint preview for WHITE/CLEAR.",error);}
                 success=true;Log.Info("Created "+StickerPrintPlateModel.Ink(kind)+" printing plate; trapping="+trapping.ToString(CultureInfo.InvariantCulture)+" mm; capture="+dpi+" DPI; nodes="+geometry.Figures.Count+" loops.");
-                return "Создана "+StickerPrintPlateModel.Ink(kind)+" · треппинг "+trapping.ToString("+0.00;-0.00;0.00",CultureInfo.CurrentCulture)+" мм";
+                return "Создана "+StickerPrintPlateModel.Ink(kind)+" · заливка "+tint+"% · треппинг "+trapping.ToString("+0.00;-0.00;0.00",CultureInfo.CurrentCulture)+" мм";
             }
             finally
             {
@@ -76,6 +75,19 @@ namespace VanyaTools.Native
         }
         private static List<object> Items(object collection)
         {var result=new List<object>();foreach(object item in (System.Collections.IEnumerable)collection)result.Add(item);return result;}
+        private static void PlaceUnderArtwork(object layer)
+        {
+            object lowest=null,current=(object)((dynamic)layer).Below;
+            int count=0;
+            while(current!=null)
+            {
+                if(++count>10000)throw new InvalidOperationException("Не удалось определить нижний слой страницы.");
+                dynamic candidate=current;
+                if(!Convert.ToBoolean(candidate.IsSpecialLayer) && !Convert.ToBoolean(candidate.Master))lowest=current;
+                current=(object)candidate.Below;
+            }
+            if(lowest!=null)((dynamic)layer).MoveBelow((dynamic)lowest);
+        }
         private static void RestoreSelection(List<object> shapes)
         {for(int i=0;i<shapes.Count;i++)if(i==0)((dynamic)shapes[i]).CreateSelection();else ((dynamic)shapes[i]).AddToSelection();}
         private static bool Technical(object value)

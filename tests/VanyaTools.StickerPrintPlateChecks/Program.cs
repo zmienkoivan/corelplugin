@@ -57,7 +57,11 @@ internal static class Program
     private static void Ui()
     {
         int paletteShows = 0;
-        var called=new List<Tuple<StickerPrintPlateKind,double>>();var ui=new StickerPrintPlateControls((k,t)=>called.Add(Tuple.Create(k,t)), () => paletteShows++);
+        string folder=System.IO.Path.Combine(System.IO.Path.GetTempPath(),"Vanya-plate-settings-"+Guid.NewGuid().ToString("N"));
+        string path=System.IO.Path.Combine(folder,"settings.json");
+        try{
+        var settings=new StickerPrintPlateSettings(path);
+        var called=new List<Tuple<StickerPrintPlateKind,double,int>>();var ui=new StickerPrintPlateControls((k,t,d)=>called.Add(Tuple.Create(k,t,d)), () => paletteShows++,settings);
         ui.Measure(new Size(360,400));ui.Arrange(new Rect(0,0,360,400));ui.UpdateLayout();var all=Descendants(ui).ToArray();
         var combos=all.OfType<ComboBox>().ToArray();var buttons=all.OfType<Button>().ToArray();
         Check(combos.Length==2 && combos.All(c=>c.Items.Count==21),"Trapping controls do not provide all 0.05 mm steps");
@@ -68,6 +72,24 @@ internal static class Program
         buttons.Single(b=>(string)b.Content=="Создать подложку").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         buttons.Single(b=>(string)b.Content=="Создать лак").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Check(called[0].Item1==StickerPrintPlateKind.White && called[1].Item1==StickerPrintPlateKind.Clear,"Buttons created the wrong ink");Equal(called[0].Item2,-.1,"Default white choke");Equal(called[1].Item2,.1,"Default clear spread");
+        Check(called.All(c=>c.Item3==100),"New fill density did not default to 100%");
+        var densities=all.OfType<TextBox>().ToArray();
+        Check(densities.Length==2,"Independent WHITE/CLEAR fill density controls missing");
+        densities[0].Text="10";densities[1].Text="37";
+        var saved=new StickerPrintPlateSettings(path);
+        Check(saved.WhiteTint==10 && saved.ClearTint==37,"Fill densities were not independently saved before creation");
+        buttons.Single(b=>(string)b.Content=="Создать лак").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Check(called.Last().Item3==37,"Entered spot density was not passed to creation");
+        foreach(string invalid in new[]{"","9","101","35.5","abc"}){
+            densities[0].Text=invalid;
+            Check(!buttons.Single(b=>(string)b.Content=="Создать подложку").IsEnabled && new StickerPrintPlateSettings(path).WhiteTint==10,"Invalid density changed a saved default or enabled creation");
+        }
+        densities[0].Text="100";
+        Check(buttons.Single(b=>(string)b.Content=="Создать подложку").IsEnabled && new StickerPrintPlateSettings(path).WhiteTint==100,"Maximum density did not restore creation/persist");
+        var reopened=new StickerPrintPlateControls((k,t,d)=>{},()=>{},new StickerPrintPlateSettings(path));
+        reopened.Measure(new Size(360,500));reopened.Arrange(new Rect(0,0,360,500));reopened.UpdateLayout();
+        Check(Descendants(reopened).OfType<TextBox>().Select(t=>t.Text).SequenceEqual(new[]{"100","37"}),"Reopened controls forgot per-ink density defaults");
+        }finally{if(System.IO.Directory.Exists(folder))System.IO.Directory.Delete(folder,true);}
     }
     private static void Palette()
     {
@@ -76,7 +98,7 @@ internal static class Program
         var selection = fresh.Selected.ToArray();
         StickerPrintSpotColor.Show(fresh);
         Check(fresh.Palettes.FileOpens == 1 && System.IO.Path.GetFileName(fresh.Palettes.LastPath) == "VanyaTools.PrintPalette.xml", "First use did not load the installed named-spot palette");
-        Check(fresh.Palettes.Palette.IsOpen && fresh.RequestedColors.SequenceEqual(new[] { "WHITE", "CLEAR" }), "First use did not show and validate both spot inks");
+        Check(fresh.Palettes.Palette.IsOpen && fresh.RequestedColors.Distinct().SequenceEqual(new[] { "WHITE", "CLEAR" }), "First use did not show and validate both spot inks");
         Check(!fresh.Document.Dirty && fresh.Outputs.Count == 0 && fresh.Selected.SequenceEqual(selection), "Showing swatches changed the document or selection");
 
         var cached = new PlateApp();
@@ -90,11 +112,16 @@ internal static class Program
 
         var ignored = new PlateApp(); ignored.Palettes.Palette.IgnoreOpen = true;
         Reject(() => StickerPrintSpotColor.Show(ignored), "A palette that Corel refused to show was reported as open");
-        Check(ignored.RequestedColors.Count == 0 && !ignored.Document.Dirty, "Failed palette opening continued with artwork changes");
+        Check(ignored.Outputs.Count == 0 && !ignored.Document.Dirty, "Failed palette opening continued with artwork changes");
         var wrong = new PlateApp(); wrong.Palettes.Registered = false; wrong.Palettes.Palette.Identifier = "foreign-palette";
         Reject(() => StickerPrintSpotColor.Show(wrong), "An unrelated palette was accepted as WHITE/CLEAR");
         var process = new PlateApp { Failure = "spot" };
         Reject(() => StickerPrintSpotColor.Show(process), "Ordinary process colors were accepted as named WHITE/CLEAR spots");
+        var legacy = new PlateApp();legacy.Palettes.LegacyWhite=true;legacy.Palettes.Palette.IsOpen=true;
+        var refreshed=(PlateColor)StickerPrintSpotColor.Create(legacy,StickerPrintPlateKind.White);
+        Check(legacy.Palettes.FileOpens==1 && legacy.Palettes.Palette.CloseCalls==1 && refreshed.IsSpot && refreshed.SpotColorName=="WHITE" && refreshed.RGBRed==0 && refreshed.RGBGreen==255 && refreshed.RGBBlue==0,"Old white preview was not refreshed to green while retaining the named spot ink");
+        var stale=new PlateApp();stale.Palettes.LegacyWhite=true;stale.Palettes.IgnoreRefresh=true;
+        Reject(()=>StickerPrintSpotColor.Show(stale),"A stale paper-white preview was reported as updated");
     }
     private static void Pdf()
     {
@@ -108,6 +135,7 @@ internal static class Program
             var app=new PlateApp();var originals=app.Selected.ToArray();StickerPrintPlateService.Create(app,kind,trap);
             var plate=app.Outputs.Single();Check(plate.Fill.UniformColor.IsSpot && plate.Fill.UniformColor.SpotColorName==StickerPrintPlateModel.Ink(kind),"Wrong spot ink");
             Check(plate.OverprintFill && plate.Outline.Type==0 && plate.Layer.Printable,"Plate is not printable, overprinted fill-only artwork");
+            Check(kind==StickerPrintPlateKind.White?app.Document.ActivePage.Layers.First()==plate.Layer:app.Document.ActivePage.Layers.Last()==plate.Layer,"White underbase or clear top layer was placed on the wrong side of artwork");
             Check(originals.All(s=>app.Selected.Contains(s)) && app.Selected.Contains(plate),"Printer selection lost artwork or the new plate");
             Check(app.Document.Unit==1 && app.Document.ReferencePoint==9 && !app.Optimization && app.Document.Groups==0,"Corel state was not restored");
             Check(app.Temporary.All(s=>s.Deleted) && originals.All(s=>!s.Deleted),"Temporary capture leaked or source was deleted");
@@ -115,6 +143,16 @@ internal static class Program
         }
         var pair=new PlateApp();StickerPrintPlateService.Create(pair,StickerPrintPlateKind.White,-.1);StickerPrintPlateService.Create(pair,StickerPrintPlateKind.Clear,.1);
         Check(pair.Outputs.Count==2 && pair.Selected.Count==3 && pair.InputCounts.All(n=>n==1),"Second button used the old plate as artwork or lost it from print selection");
+        Check(pair.Document.ActivePage.Layers.First()==pair.Outputs[0].Layer && pair.Document.ActivePage.Layers.Last()==pair.Outputs[1].Layer,"Combined order is not WHITE / artwork / CLEAR");
+        foreach(var kind in new[]{StickerPrintPlateKind.White,StickerPrintPlateKind.Clear})foreach(int tint in new[]{10,37,100}){
+            var tinted=new PlateApp();StickerPrintPlateService.Create(tinted,kind,0,tint);
+            var plate=tinted.Outputs.Single();
+            Check(plate.Fill.UniformColor.IsSpot && plate.Fill.UniformColor.SpotColorName==StickerPrintPlateModel.Ink(kind) && plate.Fill.UniformColor.Tint==tint && plate.OverprintFill,"Density changed ink identity or lost the requested spot tint/overprint");
+        }
+        foreach(int tint in new[]{0,9,101}){
+            var invalid=new PlateApp();Reject(()=>StickerPrintPlateService.Create(invalid,StickerPrintPlateKind.White,0,tint),"Invalid density accepted");
+            Check(invalid.Outputs.Count==0 && invalid.Temporary.Count==0 && !invalid.Document.Dirty,"Invalid density modified the document");
+        }
         var grouped=new PlateApp();var main=grouped.Selected.Single();var baseLayer=grouped.Document.BaseLayer;
         var cut=new PlateShape(grouped,baseLayer){Name="Cut",Type=3};cut.Outline.Type=1;cut.Outline.Color=new PlateColor{IsSpot=true,SpotColorName="CUT"};
         var white=new PlateShape(grouped,baseLayer){Name="Prior white",Type=3};white.Fill.Type=1;white.Fill.UniformColor=new PlateColor{IsSpot=true,SpotColorName="WHITE"};
@@ -127,7 +165,7 @@ internal static class Program
         Check(!main.Deleted && !cut.Deleted && !white.Deleted && !technicalGroup.Deleted && !root.Deleted,"Nested source pruning changed originals");
         Check(grouped.Selected.Contains(root) && grouped.Selected.Contains(ignored) && grouped.Selected.Count==3,"Group creation did not restore the whole original selection");
         Check(grouped.Temporary.All(s=>s.Deleted),"Nested capture cleanup leaked a duplicate");
-        foreach(string failure in new[]{"spot","alpha","fill","overprint","duplicate"})
+        foreach(string failure in new[]{"spot","alpha","fill","overprint","duplicate","layer-order"})
         {
             var app=new PlateApp{Failure=failure};var originals=app.Selected.ToArray();Reject(()=>StickerPrintPlateService.Create(app,StickerPrintPlateKind.White,-.1),"Controlled failure accepted: "+failure);
             Check(originals.All(s=>!s.Deleted) && app.Selected.SequenceEqual(originals) && app.Document.Groups==0 && app.Document.Unit==1 && !app.Optimization,"Failure damaged source or Corel state: "+failure);
