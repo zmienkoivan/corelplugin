@@ -27,6 +27,7 @@ namespace VanyaTools.Native
         private readonly PatternPreviewSurface _preview;
         private readonly HashSet<int> _mirroredIds;
         private readonly ComboBox _mode;
+        private readonly CheckBox _loose;
         private readonly ValueField _size, _gap, _allowance, _angle, _min, _max, _variation;
         private readonly ValueField _heroX, _heroY, _heroSize, _heroAngle, _heroGap;
         private readonly CheckBox _useHero, _repeat, _showCells, _showRepeatBorders;
@@ -199,6 +200,9 @@ namespace VanyaTools.Native
                 SelectedIndex = (int)initial.Layout.Mode,
                 MinHeight = 27, Margin = new Thickness(0, 0, 0, 6) };
             pattern.Children.Add(_mode);
+            _loose=new CheckBox{Content="Свободная композиция",IsChecked=initial.Layout.Loose,Margin=new Thickness(0,0,0,6),
+                ToolTip="Больше воздуха: рисунки разного размера и поворота, без увеличения до границ ячеек. Миниатюры — отдельные акценты. Снимите галочку для плотной гальки."};
+            pattern.Children.Add(_loose);
             if (session.Motifs.Length > 0) pattern.Children.Add(MirroringControls());
             _size = AddField(pattern, "Размер элементов / ячейки, мм", .5, 2000, initial.Layout.SizeMm);
             _gap = AddField(pattern, "Зазор между повторами, мм", 0, 1000, initial.Layout.GapMm);
@@ -254,6 +258,7 @@ namespace VanyaTools.Native
             _preview.HeroPositionChanged += SetPosition;
             _preview.HeroTransformChanged += SetHeroTransform;
             _mode.SelectionChanged += (_, __) => { UpdateGuideControls(); QueuePreview(); };
+            _loose.Checked+=(_,__)=>QueuePreview();_loose.Unchecked+=(_,__)=>QueuePreview();
             _repeat.Checked += (_, __) => { UpdateGuideControls(); QueuePreview(); };
             _repeat.Unchecked += (_, __) => { UpdateGuideControls(); QueuePreview(); };
             _showCells.Checked += (_, __) => UpdateGuideControls();
@@ -288,6 +293,7 @@ namespace VanyaTools.Native
             var preset=PatternBottlePresets.Bic();
             _bottleTop.Set(preset.BottleTop);_bottleBottom.Set(preset.BottleBottom);_bottleHeight.Set(preset.BottleHeight);_bottleTaper.IsChecked=false;
             _mode.SelectedIndex=(int)preset.Layout.Mode;_size.Set(preset.Layout.SizeMm);_gap.Set(preset.Layout.GapMm);
+            _loose.IsChecked=preset.Layout.Loose;_bottleWhole.IsChecked=preset.BottleWhole;
             _heroSize.Set(preset.HeroSize);_heroAngle.Set(_session.Hero==null?0:PatternBottlePresets.VerticalAngle(_session.Hero.Size));_heroGap.Set(preset.HeroGap);
             _heroX.Set(50);_heroY.Set(50);_useHero.IsChecked=_session.Hero!=null;QueuePreview();
         }
@@ -334,6 +340,7 @@ namespace VanyaTools.Native
 
         private void UpdateGuideControls()
         {
+            _loose.Visibility=(PatternFillMode)_mode.SelectedIndex==PatternFillMode.Pebbles?Visibility.Visible:Visibility.Collapsed;
             var mode = (PatternFillMode)_mode.SelectedIndex;
             bool texture = mode == PatternFillMode.Pebbles || mode == PatternFillMode.Crocodile;
             bool repeat = !_session.BottleMode && _repeat.IsChecked == true;
@@ -383,7 +390,7 @@ namespace VanyaTools.Native
                 if (!_variation.TryRead(out double variation))
                     variation = mode == PatternFillMode.Pebbles || mode == PatternFillMode.Crocodile ? 0 : _variation.Read();
                 var options = new PatternFillOptions { Mode = mode,
-                    SizeMm = _size.Read(), GapMm = _gap.Read(), Angle = _angle.Read(), AngleVariation = variation, Seed = _seed };
+                    SizeMm = _size.Read(), GapMm = _gap.Read(), Angle = _angle.Read(), AngleVariation = variation, Seed = _seed, Loose=_loose.IsChecked==true };
                 if (!_session.BottleMode && _repeat.IsChecked == true)
                 {
                     options.RepeatWidthMm = _repeatWidth.Read();
@@ -562,7 +569,7 @@ namespace VanyaTools.Native
         }
 
         private static bool SameLayout(PatternFillOptions previous, PatternFillOptions next) =>
-            previous != null && previous.Mode == next.Mode && previous.SizeMm == next.SizeMm && previous.GapMm == next.GapMm &&
+            previous != null && previous.Mode == next.Mode && previous.Loose==next.Loose && previous.SizeMm == next.SizeMm && previous.GapMm == next.GapMm &&
             previous.MinScale == next.MinScale && previous.MaxScale == next.MaxScale && previous.Angle == next.Angle &&
             previous.AngleVariation == next.AngleVariation && previous.Seed == next.Seed &&
             previous.RepeatWidthMm == next.RepeatWidthMm && previous.RepeatHeightMm == next.RepeatHeightMm;

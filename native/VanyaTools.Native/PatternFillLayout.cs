@@ -12,6 +12,8 @@ namespace VanyaTools.Native
         internal double SizeMm = 30, GapMm = 3, MinScale = 1, MaxScale = 1;
         internal double Angle, AngleVariation;
         internal int Seed;
+        internal bool Loose;
+        internal bool Airy => Loose && Mode == PatternFillMode.Pebbles;
         internal double RepeatWidthMm, RepeatHeightMm;
         internal bool Repeat => RepeatWidthMm > 0;
         internal bool Texture => Mode == PatternFillMode.Crocodile || Mode == PatternFillMode.Pebbles;
@@ -147,7 +149,7 @@ namespace VanyaTools.Native
                 if (options.Repeat) return RepeatPattern(width, height, motifs, options, out guides);
                 var cells = TextureCells(width, height, options);
                 var items = PlaceInCells(cells, motifs, options);
-                if (options.Mode == PatternFillMode.Pebbles) PatternPebbleSpacing.Balance(items, motifs, options.GapMm);
+                if (options.Mode == PatternFillMode.Pebbles && !options.Airy) PatternPebbleSpacing.Balance(items, motifs, options.GapMm);
                 guides = new PatternLayoutGuides { Cells = cells };
                 return items;
             }
@@ -237,7 +239,7 @@ namespace VanyaTools.Native
             CheckCount(colCount, rowCount);
             int cols = (int)colCount, rows = (int)rowCount;
             var seeds = ScatterSeeds(cols, rows, options.Seed);
-            if (!scales) seeds = RelaxSeeds(seeds);
+            if (!scales && !options.Airy) seeds = RelaxSeeds(seeds);
             double middleX = cols / 2d, middleY = rows / 2d;
             var result = new List<PatternPoint[]>();
             var polygon = new List<PatternPoint>(16);
@@ -367,7 +369,7 @@ namespace VanyaTools.Native
             buckets[col, row].Add(point);
         }
 
-        private static List<PatternPoint>[,] ScatterSeeds(int cols, int rows, int seed, bool periodic = false)
+        private static List<PatternPoint>[,] ScatterSeeds(int cols, int rows, int seed, bool periodic = false, bool wrapHeight = true)
         {
             var random = new Random(seed);
             var buckets = new List<PatternPoint>[cols, rows];
@@ -377,14 +379,14 @@ namespace VanyaTools.Native
                 var point = new PatternPoint(random.NextDouble() * cols, random.NextDouble() * rows);
                 int col = (int)point.X, row = (int)point.Y;
                 bool tooClose = false;
-                int firstY = periodic ? row - 1 : Math.Max(0, row - 1);
-                int lastY = periodic ? row + 1 : Math.Min(rows - 1, row + 1);
+                int firstY = periodic && wrapHeight ? row - 1 : Math.Max(0, row - 1);
+                int lastY = periodic && wrapHeight ? row + 1 : Math.Min(rows - 1, row + 1);
                 int firstX = periodic ? col - 1 : Math.Max(0, col - 1);
                 int lastX = periodic ? col + 1 : Math.Min(cols - 1, col + 1);
                 for (int y = firstY; y <= lastY && !tooClose; y++)
                 for (int x = firstX; x <= lastX && !tooClose; x++)
                 {
-                    int bucketX = periodic ? WrapIndex(x, cols) : x, bucketY = periodic ? WrapIndex(y, rows) : y;
+                    int bucketX = periodic ? WrapIndex(x, cols) : x, bucketY = periodic && wrapHeight ? WrapIndex(y, rows) : y;
                     var bucket = buckets[bucketX, bucketY];
                     if (bucket == null) continue;
                     foreach (var neighbor in bucket)
@@ -455,8 +457,9 @@ namespace VanyaTools.Native
                     fitBounds.Add(new PatternPoint(target.X - drift, target.Y + drift));
                 }
                 else fitBounds.AddRange(cell);
-                TryAngle(baseAngle);
-                if (!fixedAngle)
+                double preferred = options.Airy && !fixedAngle ? baseAngle + random.NextDouble() * 360 : baseAngle;
+                TryAngle(preferred);
+                if (!fixedAngle && !options.Airy)
                 {
                     for (int turn = 30; turn <= 180; turn += 30)
                     {
@@ -471,6 +474,7 @@ namespace VanyaTools.Native
                     }
                 }
                 if (scale <= 0) continue;
+                if(options.Airy)scale*=.70+random.NextDouble()*.12;
 
                 double radians = angle * Math.PI / 180, cos = Math.Cos(radians), sin = Math.Sin(radians);
                 double x = center.X - scale * (motif.Center.X * cos - motif.Center.Y * sin);

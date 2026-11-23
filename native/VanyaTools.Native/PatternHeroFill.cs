@@ -15,7 +15,7 @@ namespace VanyaTools.Native
             PatternAsset[] motifs, PatternFillOptions options, Geometry reserve, CancellationToken cancellation)
         {
             var kept = PatternSilhouette.LeaveRoom(items, silhouettes, reserve, cancellation);
-            if (kept.Count == items.Count) return kept;
+            if (kept.Count == items.Count || options.Airy) return kept;
             var retained = new HashSet<PatternPlacement>(kept);
             Refit(kept, items.Where(item => !retained.Contains(item)).ToArray(), motifs, options, reserve, cancellation);
             return kept;
@@ -28,6 +28,7 @@ namespace VanyaTools.Native
             if (frame.Bottle == null && options.Repeat) return;
             int[] fillers = Enumerable.Range(0, draft.Motifs.Length).Where(index => draft.Motifs[index].IsFiller).ToArray();
             if (fillers.Length == 0 || baseline.Count == 0) return;
+            if(options.Airy){FillAccents(draft,fillers,cancellation);return;}
 
             double maximumSize = Math.Min(12, options.SizeMm * .25);
             if (maximumSize < .5) return;
@@ -68,6 +69,64 @@ namespace VanyaTools.Native
 
         internal static double Longest(PatternAsset asset,PatternPlacement item) =>
             PatternTransform.Fit(asset.Size,item).Scale*Math.Max(asset.Size.X,asset.Size.Y);
+
+        private static void FillAccents(PatternDraft draft,int[] fillers,CancellationToken cancellation)
+        {
+            int main=draft.Items.Count(p=>!draft.Motifs[p.Motif].IsFiller);
+            if(main==0)return;
+            var placed=draft.Items.ToList();var options=draft.Options;var frame=draft.Frame;
+            int count=Math.Min(32,Math.Max(1,(int)Math.Round(main*.45)));
+            var random=new Random(unchecked(options.Seed^0x41495259));
+            var groups=fillers.GroupBy(i=>draft.Motifs[i].Footprint.Family).Select(g=>g.ToArray()).ToArray();
+            Geometry clip=frame.BottleClip;
+            if(clip==null){clip=frame.Geometry.Clone();clip.Transform=new MatrixTransform(clip.Transform.Value*new Matrix(1,0,0,-1,0,frame.Height));clip.Freeze();}
+            var obstacles=new List<PatternPoint[]>();
+            foreach(var pose in placed)Obstacle(pose);
+            for(int n=0;n<count && placed.Count<PatternFillLayout.MaximumElements;n++)
+            {
+                var family=groups[n%groups.Length];int index=family[random.Next(family.Length)];var asset=draft.Motifs[index];
+                PatternPlacement best=null;double bestScore=0;
+                for(int attempt=0;attempt<160;attempt++)
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    var center=new PatternPoint(random.NextDouble()*frame.Width,random.NextDouble()*frame.Height);
+                    double cap=FillerSizeAt(draft,center),longest=cap*(.82+random.NextDouble()*.16);
+                    if(longest<.6)continue;
+                    double angle=random.NextDouble()*360;
+                    var rotated=PatternTransform.RotatedSize(asset.Size.X,asset.Size.Y,angle);
+                    var pose=new PatternPlacement{Motif=index,Center=center,Angle=angle,Size=longest*Math.Max(rotated.X,rotated.Y)/Math.Max(asset.Size.X,asset.Size.Y)};
+                    var hull=asset.Footprint.At(pose);
+                    double score=obstacles.Min(p=>Distance(center,p));
+                    if(score<=bestScore || score<Math.Pow(longest*.6+options.GapMm,2))continue;
+                    var silhouette=PatternSilhouette.At(asset,pose);
+                    if(draft.Reserve!=null && draft.Reserve.Bounds.IntersectsWith(silhouette.Bounds) && draft.Reserve.FillContainsWithDetail(silhouette,Tolerance,ToleranceType.Absolute)!=IntersectionDetail.Empty)continue;
+                    bool fits=frame.Bottle!=null ? PatternBottleLayout.FitsOnRing(frame,draft.Motifs,pose,placed,options.GapMm,true) :
+                        clip.FillContainsWithDetail(silhouette,Tolerance,ToleranceType.Absolute)==IntersectionDetail.FullyContains && obstacles.All(p=>PatternMotifRotation.Separated(hull,p,options.GapMm));
+                    if(!fits)continue;
+                    // Own a small, regular cell. Never squeeze a miniature into
+                    // a residual sliver or scale it down until it becomes dirt.
+                    double radius=longest*.72+options.GapMm/2;
+                    pose.Cell=Enumerable.Range(0,6).Select(i=>new PatternPoint(center.X+radius*Math.Cos(i*Math.PI/3),center.Y+radius*Math.Sin(i*Math.PI/3))).ToArray();
+                    best=pose;bestScore=score;
+                }
+                if(best==null)continue;placed.Add(best);Obstacle(best);
+            }
+            draft.Items=placed;LimitFillerSizes(draft);
+            void Obstacle(PatternPlacement pose)
+            {
+                var asset=draft.Motifs[pose.Motif];obstacles.Add(asset.Footprint.At(pose));
+                if(frame.Bottle!=null)foreach(int turn in new[]{-1,1})
+                {var copy=PatternMotifRotation.Copy(pose);copy.Center=PatternBottleLayout.TurnPoint(frame,copy.Center,turn);copy.Angle+=frame.Bottle.RotationAt(turn*frame.Bottle.Width)-frame.Bottle.RotationAt(0);obstacles.Add(asset.Footprint.At(copy));}
+            }
+            double Distance(PatternPoint point,PatternPoint[] polygon)
+            {
+                if(PatternMotifRotation.Contains(polygon,point))return 0;
+                double best=Double.PositiveInfinity;
+                for(int i=0;i<polygon.Length;i++)
+                {var a=polygon[i];var b=polygon[(i+1)%polygon.Length];double x=b.X-a.X,y=b.Y-a.Y,length=x*x+y*y,t=length<1e-15?0:Math.Max(0,Math.Min(1,((point.X-a.X)*x+(point.Y-a.Y)*y)/length));best=Math.Min(best,Math.Pow(point.X-a.X-t*x,2)+Math.Pow(point.Y-a.Y-t*y,2));}
+                return best;
+            }
+        }
 
         internal static double FillerSizeAt(PatternDraft draft,PatternPoint point)
         {

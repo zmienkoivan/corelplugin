@@ -25,7 +25,7 @@ namespace VanyaTools.Native
         private readonly TextBlock _motifs, _hero, _message;
         private readonly ListBox _motifList;
         private readonly Button _forgetHero, _removeMotifs;
-        private PatternEditorSettings _settings = new PatternEditorSettings { Layout=new PatternFillOptions { Mode=PatternFillMode.Pebbles } };
+        private PatternEditorSettings _settings = new PatternEditorSettings { Layout=new PatternFillOptions { Mode=PatternFillMode.Pebbles,Loose=true } };
         private PatternEditorSettings _bottleSettings = PatternBottlePresets.Bic();
 
         internal PatternFillTab(Action<string, bool> status, Func<string> token)

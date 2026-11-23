@@ -121,6 +121,12 @@ namespace VanyaTools.Native
                     double angle=original.Angle+bottle.RotationAt(s.X)-bottle.RotationAt(oldUv.X);
                     fitted=PatternMotifRotation.Fit(original,asset.Footprint,_draft.Options,angle);
                     if(fitted==null){if(site.Added)return false;continue;}
+                    if(_draft.Options.Airy)
+                    {
+                        double maximum=PatternHeroFill.Longest(asset,site.Original);
+                        if(PatternHeroFill.Longest(asset,fitted)>maximum)
+                            fitted=PatternMotifRotation.Resize(fitted,asset.Footprint,maximum/Math.Max(asset.Size.X,asset.Size.Y));
+                    }
                 }
                 bool Fits(PatternPlacement pose)=>PatternBottleLayout.FitsOnRing(_frame,_draft.Motifs,pose,rows.Select(r=>r.Item2).ToList(),gap,asset.IsFiller || _draft.BottleWhole) &&
                     (_draft.Reserve==null || _draft.Reserve.FillContainsWithDetail(PatternSilhouette.At(asset,pose),.05,ToleranceType.Absolute)==IntersectionDetail.Empty);
@@ -132,7 +138,8 @@ namespace VanyaTools.Native
                     for(int n=0;n<14;n++){double mid=(low+high)/2;if(Fits(PatternMotifRotation.Resize(fitted,asset.Footprint,mid)))low=mid;else high=mid;}
                     fitted=PatternMotifRotation.Resize(fitted,asset.Footprint,low);
                 }
-                if(PatternHeroFill.Longest(asset,fitted)<.1){if(site.Added)return false;continue;}
+                if(PatternHeroFill.Longest(asset,fitted)<.1 || _draft.Options.Airy && !site.Fixed && PatternHeroFill.Longest(asset,fitted)<PatternHeroFill.Longest(asset,site.Original)*.65)
+                {if(site.Added)return false;continue;}
                 rows.Add(Tuple.Create(site.Key,fitted));
             }
             var keys=rows.Select(r=>r.Item1).ToArray();

@@ -31,7 +31,7 @@ namespace VanyaTools.Native
             if(_rotatingMotif){_rotatingMotif=false;ReleaseMouseCapture();}
             if(!CanEditMotifs){_baseMotifs=Array.Empty<PatternPlacement>();_motifKeys=Array.Empty<string>();_selectedMotif=null;MotifSelectionChanged?.Invoke();return;}
             var o=_draft.Options;
-            string signature=String.Join("/",new[]{(double)o.Mode,o.Seed,o.SizeMm,o.GapMm,o.Angle,o.RepeatWidthMm,o.RepeatHeightMm,o.MinScale,o.MaxScale,o.AngleVariation,_frame.Width,_frame.Height}.Select(v=>v.ToString("R",CultureInfo.InvariantCulture)))+"/"+(_draft.Hero!=null)+"/"+String.Join(";",_draft.Motifs.Select(a=>a.Id+":"+a.Mirrored+":"+a.IsFiller))+"/"+(_frame.Bottle==null?"flat":_frame.Bottle.TopDiameter+":"+_frame.Bottle.BottomDiameter+":"+_frame.Bottle.Height+":"+_draft.BottleWhole);
+            string signature=String.Join("/",new[]{(double)o.Mode,o.Seed,o.SizeMm,o.GapMm,o.Angle,o.RepeatWidthMm,o.RepeatHeightMm,o.MinScale,o.MaxScale,o.AngleVariation,_frame.Width,_frame.Height}.Select(v=>v.ToString("R",CultureInfo.InvariantCulture)))+"/"+o.Loose+"/"+(_draft.Hero!=null)+"/"+String.Join(";",_draft.Motifs.Select(a=>a.Id+":"+a.Mirrored+":"+a.IsFiller))+"/"+(_frame.Bottle==null?"flat":_frame.Bottle.TopDiameter+":"+_frame.Bottle.BottomDiameter+":"+_frame.Bottle.Height+":"+_draft.BottleWhole);
             string scope=_frame.Width+"/"+_frame.Height+"/"+(_frame.Bottle==null?"flat":_frame.Bottle.TopDiameter+":"+_frame.Bottle.BottomDiameter+":"+_frame.Bottle.Height)+"/"+String.Join(";",_draft.Motifs.Select(a=>a.Id+":"+a.Mirrored+":"+a.IsFiller+":"+a.Size.X+":"+a.Size.Y));
             if(scope!=_anchorScope){_anchorScope=scope;_anchors.Clear();_addedMotifs.Clear();}
             if(signature!=_motifLayout){_motifLayout=signature;_motifTurns.Clear();_selectedMotif=null;_removedMotifs.Clear();_addedMotifs.RemoveAll(p=>!_anchors.Contains(p.Key));}
@@ -109,6 +109,12 @@ namespace VanyaTools.Native
                 var original=_baseMotifs[i];var asset=_draft.Motifs[original.Motif];
                 var fit=PatternMotifRotation.Fit(original,asset.Footprint,_draft.Options,original.Angle+delta);if(fit==null)return false;
                 candidates.Add(fit);scale=Math.Min(scale,PatternTransform.Fit(asset.Size,fit).Scale);
+                if(_draft.Options.Airy)
+                {
+                    var before=refit?_draft.Items[i]:original;
+                    double longest=PatternHeroFill.Longest(_draft.Motifs[before.Motif],before);
+                    scale=Math.Min(scale,longest/Math.Max(asset.Size.X,asset.Size.Y));
+                }
             }
             Rect Bounds(PatternPoint[] hull)=>new Rect(new Point(hull.Min(p=>p.X),hull.Min(p=>p.Y)),new Point(hull.Max(p=>p.X),hull.Max(p=>p.Y)));
             var cells=candidates.Select(p=>{var box=Bounds(p.Cell);box.Inflate(_draft.Options.GapMm+.001,_draft.Options.GapMm+.001);return box;}).ToArray();

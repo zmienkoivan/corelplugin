@@ -58,7 +58,7 @@ namespace VanyaTools.Native
                 throw new ArgumentException("Уменьшите зазор или размер фигур для этого диаметра.");
 
             var settings = new PatternFillOptions { Mode = options.Mode, Seed = options.Seed, SizeMm = size,
-                GapMm = options.GapMm, MinScale = options.MinScale, MaxScale = options.MaxScale,
+                GapMm = options.GapMm, MinScale = options.MinScale, MaxScale = options.MaxScale, Loose=options.Loose,
                 AngleVariation = options.AngleVariation, RepeatWidthMm = bottle.Width,
                 RepeatHeightMm = Math.Max(bottle.Slant, size * maxScale + options.GapMm) };
             var module = PatternFillLayout.RepeatModule(motifs.Select(asset => asset.Footprint).ToArray(),
@@ -109,7 +109,7 @@ namespace VanyaTools.Native
                 else if (placement.Cell != null) lost.Add(placement);
             }
 
-            Recover(draft.Frame, draft.Motifs, draft.Options, keep, lost, draft.Reserve, settings.BottleWhole, cancellation);
+            if(!draft.Options.Airy)Recover(draft.Frame, draft.Motifs, draft.Options, keep, lost, draft.Reserve, settings.BottleWhole, cancellation);
             draft.Items = keep;
 
             bool IntersectsReserve(PatternPlacement placement)

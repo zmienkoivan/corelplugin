@@ -104,7 +104,7 @@ namespace VanyaTools.Native
             cells = options.Texture ? RepeatCells(width, height, options, wrapHeight) : null;
             var module = cells == null ? Motifs(width, height, motifs, options, motifAngle, wrapHeight) :
                 PlaceInCells(cells, motifs, options, motifAngle: motifAngle);
-            if (options.Mode == PatternFillMode.Pebbles)
+            if (options.Mode == PatternFillMode.Pebbles && !options.Airy)
                 PatternPebbleSpacing.Balance(module, motifs, options.GapMm, width, height, wrapHeight);
             return module;
         }
@@ -113,11 +113,11 @@ namespace VanyaTools.Native
         {
             bool scales = options.Mode == PatternFillMode.Crocodile;
             double cols = Math.Max(1, Math.Round(repeatWidth / (options.SizeMm * (scales ? 1.28 : 1))));
-            double rows = Math.Max(1, Math.Round(repeatHeight / (options.SizeMm * (scales ? .74 : wrapHeight ? 1 : .87))));
+            double rows = Math.Max(1, Math.Round(repeatHeight / (options.SizeMm * (scales ? .74 : wrapHeight || options.Airy ? 1 : .87))));
             CheckCount(cols, rows);
-            var seeds = wrapHeight ? ScatterSeeds((int)cols, (int)rows, options.Seed, true) :
+            var seeds = wrapHeight || options.Airy ? ScatterSeeds((int)cols, (int)rows, options.Seed, true, wrapHeight) :
                 BrickSeeds((int)cols, (int)rows, options.Seed);
-            if (!scales && wrapHeight) seeds = RelaxSeeds(seeds, true);
+            if (!scales && wrapHeight && !options.Airy) seeds = RelaxSeeds(seeds, true);
             var scratch = new List<PatternPoint>(16);
             var buffer = new List<PatternPoint>(16);
             var cells = new List<PatternPoint[]>();
