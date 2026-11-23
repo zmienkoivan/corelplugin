@@ -25,7 +25,7 @@ internal static class Program
     [STAThread] private static int Main()
     {
         string previous=Environment.GetEnvironmentVariable("TEMP"),temporary=System.IO.Path.Combine(System.IO.Path.GetTempPath(),"Vanya-pattern-ui-"+Guid.NewGuid().ToString("N"));System.IO.Directory.CreateDirectory(temporary);Environment.SetEnvironmentVariable("TEMP",temporary);
-        try{WindowActions();RetryButton();ClicksAndCellColors();MultipleInsertion();BottleEditorChecks.Run(Check);Console.WriteLine("Pattern window checks passed: "+_checks+". Synthetic WPF and managed Corel stand-in only; no network or live document.");return 0;}
+        try{WindowActions();RetryButton();ClicksAndCellColors();MultipleInsertion();BottleEditorChecks.Run(Check);MotifReplacementChecks.Run(Check);Console.WriteLine("Pattern window checks passed: "+_checks+". Synthetic WPF and managed Corel stand-in only; no network or live document.");return 0;}
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
         finally{Environment.SetEnvironmentVariable("TEMP",previous);System.IO.Directory.Delete(temporary,true);}
     }
@@ -39,7 +39,7 @@ internal static class Program
             var root=(FrameworkElement)window.Content;source.RootVisual=root;DateTime deadline=DateTime.UtcNow.AddSeconds(15);
             do{Render(root);Thread.Sleep(10);}while(window.Draft==null && DateTime.UtcNow<deadline);
             Check(window.Draft!=null,"Actual editor failed to produce a draft");var preview=Field<PatternPreviewSurface>(window,"_preview");
-            Check(Field<int>(preview,"_motifTool")==2,"An available filler set did not default to adding fillers");
+            Check(Field<int>(preview,"_motifTool")==0,"The editor did not default to click replacement / rotation");
             int applied=0;window.ApplyRequested+=draft=>{Check(ReferenceEquals(draft,window.Draft),"Apply exported a stale variant");applied++;};
             var button=Field<Button>(window,"_apply");button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(applied==2 && window.DialogResult==null && button.IsEnabled && ReferenceEquals(window.Content,root),"Apply closed the editor or prevented a second variant");

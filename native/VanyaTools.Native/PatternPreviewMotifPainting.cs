@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media;
 
 namespace VanyaTools.Native
@@ -50,9 +51,68 @@ namespace VanyaTools.Native
         {
             if(!CanEditMotifs)return false;
             if(_motifTool!=3 && HitMotifHandle(screen)){StartMotifTurn(screen);return true;}
+            if(_motifTool==0 && !HitHero(screen) && ReplaceMotifAt(screen))return true;
             if(_motifTool==0)return false;
             PaintMotif(screen);
             return true;
+        }
+
+        private bool ReplaceMotifAt(Point screen)
+        {
+            if(_scale<=0)return false;
+            var world=_viewport.World(screen);
+            if(!(_draft.BottleCutView??_frame.Geometry).FillContains(world))return false;
+            int found=FindMotif(new PatternPoint(world.X,_frame.Height-world.Y),_motifTool==0);
+            if(found<0)return false;
+            string key=_motifKeys[found];_selectedMotif=key;
+            if((Keyboard.Modifiers&ModifierKeys.Control)!=0)
+            {InvalidateVisual();MotifSelectionChanged?.Invoke();return true;}
+            var current=_draft.Motifs[_draft.Items[found].Motif];
+            var indices=Enumerable.Range(0,_motifKeys.Length).Where(i=>_motifKeys[i]==key).ToArray();
+            var originals=indices.Select(i=>_baseMotifs[i]).ToArray();
+            double turn=_motifTurns.TryGetValue(key,out var delta)?delta:0;
+            bool changed=false;
+            try
+            {
+                for(int step=1;step<_draft.Motifs.Length;step++)
+                {
+                    int next=(_draft.Items[found].Motif+step)%_draft.Motifs.Length;
+                    var asset=_draft.Motifs[next];
+                    if(asset.IsFiller!=current.IsFiller || asset.Id==current.Id)continue;
+                    bool fits=true;
+                    for(int n=0;n<indices.Length;n++)
+                    {
+                        var pose=PatternMotifRotation.Copy(originals[n]);pose.Motif=next;
+                        var fit=PatternMotifRotation.Fit(pose,asset.Footprint,_draft.Options,pose.Angle);
+                        if(fit==null){fits=false;break;}
+                        _baseMotifs[indices[n]]=fit;
+                    }
+                    if(!fits || !FitMotifGroup(key,turn,true))
+                    {for(int n=0;n<indices.Length;n++)_baseMotifs[indices[n]]=originals[n];continue;}
+                    // Keep this cell's replacement across preview refreshes just
+                    // like a hand-placed motif. No grid generation is run here.
+                    bool anchored=_anchors.Remove(key);string replacement="manual/"+(++_manualMotifId);
+                    _removedMotifs.Add(key);_addedMotifs.RemoveAll(p=>p.Key==key);_motifTurns.Remove(key);
+                    for(int n=0;n<indices.Length;n++)
+                    {
+                        int i=indices[n];
+                        if(anchored)_baseMotifs[i]=PatternMotifRotation.Copy(_draft.Items[i]);
+                        _addedMotifs.Add(new AddedMotif{Key=replacement,Pose=PatternMotifRotation.Copy(_baseMotifs[i])});
+                        _motifKeys[i]=replacement;
+                    }
+                    if(anchored)_anchors.Add(replacement);else if(Math.Abs(turn)>1e-6)_motifTurns[replacement]=turn;
+                    _selectedMotif=replacement;changed=true;
+                    MotifNotice?.Invoke("Рисунок заменён. Ячейка, её назначение и опора сохранены.");
+                    return true;
+                }
+                MotifNotice?.Invoke(current.IsFiller?"Нет другого заполнителя, который помещается в этой ячейке.":"Нет другого основного рисунка, который помещается в этой ячейке.");
+                return true;
+            }
+            finally
+            {
+                if(!changed)for(int n=0;n<indices.Length;n++)_baseMotifs[indices[n]]=originals[n];
+                InvalidateVisual();MotifSelectionChanged?.Invoke();
+            }
         }
 
         private bool PaintMotif(Point screen)

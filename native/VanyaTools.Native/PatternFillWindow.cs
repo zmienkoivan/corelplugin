@@ -101,9 +101,9 @@ namespace VanyaTools.Native
             navigation.ToolTip = "Колесо — зум; средняя/правая кнопка или пробел + перетаскивание — перемещение. Shift + колесо — по горизонтали.";
             DockPanel.SetDock(navigation, Dock.Top); previewPanel.Children.Add(navigation);
             var motifTools=new WrapPanel { Margin=new Thickness(0,0,0,5),Visibility=Visibility.Collapsed };
-            int initialTool=session.Motifs.Any(a=>a.IsFiller)?2:0;
+            int initialTool=0;
             var toolButtons=new List<RadioButton>();
-            string[] labels={"Выбор / поворот","Основная галька","+ Заполнитель ≤ ¼","Ластик"};
+            string[] labels={"Замена / поворот","Основная галька","+ Заполнитель ≤ ¼","Ластик"};
             for(int i=0;i<labels.Length;i++)
             {
                 int tool=i;var button=new RadioButton {Content=labels[i],GroupName="PatternClickTool",Margin=new Thickness(3,5,9,5),VerticalContentAlignment=VerticalAlignment.Center};
@@ -113,9 +113,9 @@ namespace VanyaTools.Native
             toolButtons[initialTool].IsChecked=true;
             motifTools.Children.Add(Button("Очистить",(_,__)=>_preview.ClearMotifs()));
             var restoreAuto=Button("Вернуть авто",(_,__)=>_preview.RestoreAutomaticMotifs());restoreAuto.ToolTip="Сбросить ручные гальки и опоры; вернуть автоматическую раскладку.";motifTools.Children.Add(restoreAuto);
-            motifTools.ToolTip="Клики размещают рисунки из готового набора без ИИ. Основные гальки — синий контур; упрощённые заполнители — зелёный, не больше четверти основного принта. Ластик удаляет рисунок под курсором. В рапорте вместе меняются соответствующие повторения. Цветные контуры видны только в редакторе.";
+            motifTools.ToolTip="В режиме «Замена / поворот» клик по гальке заменяет рисунок следующим подходящим из готового набора без ИИ. Ctrl+клик — только выбрать. Для добавления выберите основную гальку или заполнитель. Основные гальки — синий контур; заполнители — зелёный, не больше четверти основного принта. Ластик удаляет рисунок под курсором. В рапорте вместе меняются соответствующие повторения. Цветные контуры видны только в редакторе.";
             DockPanel.SetDock(motifTools,Dock.Top);previewPanel.Children.Add(motifTools);
-            var clickHint=new TextBlock {Text="Выбор / поворот: выберите рисунок и тяните кружок. + Заполнитель: клик создаёт мини-ячейку и перестраивает соседей.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,5)};
+            var clickHint=new TextBlock {Text="Клик по гальке — заменить рисунок. Ctrl+клик — только выбрать; кружок — повернуть. + Заполнитель: клик в свободном месте создаёт мини-ячейку.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,5)};
             DockPanel.SetDock(clickHint,Dock.Top);previewPanel.Children.Add(clickHint);
             _preview.MotifNotice+=text=>{clickHint.Text=text;ShowMessage(text,false);};
             var selectedTools = new DockPanel { Margin = new Thickness(0,0,0,5), Visibility = Visibility.Collapsed };

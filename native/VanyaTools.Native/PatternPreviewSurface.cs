@@ -37,7 +37,7 @@ namespace VanyaTools.Native
             _session = session; _frame = initialFrame;
             ClipToBounds = true; Focusable = true;
             RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.HighQuality);
-            ToolTip = "Колесо — масштаб; средняя/правая кнопка или пробел + перетаскивание — перемещение. У главного принта: углы — размер, кружок — поворот. В гальке и крокодиле щёлкните рисунок и тяните оранжевый кружок для поворота внутри ячейки.";
+            ToolTip = "Колесо — масштаб; средняя/правая кнопка или пробел + перетаскивание — перемещение. У главного принта: углы — размер, кружок — поворот. В гальке и крокодиле клик заменяет рисунок из готового набора; Ctrl+клик только выбирает. Оранжевый кружок — поворот внутри ячейки.";
         }
 
         internal void Update(PatternFrame frame, PatternDraft draft, double heroAngle)

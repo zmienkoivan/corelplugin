@@ -39,7 +39,7 @@ internal static class BottleEditorChecks
             check(d.Frame.Bottle.TopDiameter==20 && d.Frame.Bottle.BottomDiameter==20 && d.Frame.Bottle.Height==64 && d.Options.SizeMm==17 && d.Options.GapMm==2,"BIC dimensions or print defaults are wrong");
             var size=PatternTransform.Fit(session.Hero.Size,d.Hero);
             check(Math.Abs(size.RotatedHeight-35)<.001 && size.RotatedWidth<size.RotatedHeight && window.Settings.HeroGap==3,"The BIC logo is not 35 mm high, vertical, with a 3 mm margin");
-            check(preview.SupportsMotifEditing && Field<int>(preview,"_motifTool")==2,"Bottle pebbles still hide the click editing tools");
+            check(preview.SupportsMotifEditing && Field<int>(preview,"_motifTool")==0,"Bottle pebbles do not open in click replacement / rotation mode");
             Call(window,"ApplyBicPreset");deadline=DateTime.UtcNow.AddSeconds(20);do{Render(root);Thread.Sleep(5);}while((window.Draft==null || !Field<Button>(window,"_apply").IsEnabled) && DateTime.UtcNow<deadline);
             check(window.Draft!=null && window.Settings.BottleHeight==64 && window.Settings.Layout.SizeMm==17,"The BIC template button failed to restore its parameters");
             int applies=0;window.ApplyRequested+=_=>applies++;Field<Button>(window,"_apply").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Field<Button>(window,"_apply").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));

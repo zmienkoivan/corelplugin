@@ -97,10 +97,12 @@ namespace VanyaTools.Native
         {double n=(value%period+period)%period;return n<.00005 || period-n<.00005?0:n;}
         private static PatternPoint CellCenter(PatternPoint[] cell)=>new PatternPoint(cell.Average(p=>p.X),cell.Average(p=>p.Y));
 
-        private bool ApplyMotifTurn(string key,double delta)
+        private bool ApplyMotifTurn(string key,double delta)=>FitMotifGroup(key,delta,false);
+
+        private bool FitMotifGroup(string key,double delta,bool refit)
         {
             var indices=Enumerable.Range(0,_motifKeys.Length).Where(i=>_motifKeys[i]==key).ToArray();if(indices.Length==0)return false;
-            if(Math.Abs(delta)<1e-6){var original=_draft.Items.ToList();foreach(int i in indices)original[i]=PatternMotifRotation.Copy(_baseMotifs[i]);return CommitMotifItems(original);}
+            if(Math.Abs(delta)<1e-6 && !refit){var original=_draft.Items.ToList();foreach(int i in indices)original[i]=PatternMotifRotation.Copy(_baseMotifs[i]);return CommitMotifItems(original);}
             var group=new HashSet<int>(indices);var candidates=new List<PatternPlacement>();double scale=Double.PositiveInfinity;
             foreach(int i in indices)
             {
