@@ -31,6 +31,8 @@ namespace VanyaTools.Native
 
         internal event Action<double, double> HeroPositionChanged;
         internal event Action<double, double> HeroTransformChanged;
+        internal System.Windows.Media.Imaging.BitmapSource PreviewImage(PatternAsset asset)=>
+            _details.TryGetValue(asset.Id,out var detail)?detail:asset.Preview;
 
         internal PatternPreviewSurface(PatternEditorSession session, PatternFrame initialFrame)
         {

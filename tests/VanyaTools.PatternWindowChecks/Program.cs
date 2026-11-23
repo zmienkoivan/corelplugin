@@ -25,7 +25,9 @@ internal static class Program
     [STAThread] private static int Main()
     {
         string previous=Environment.GetEnvironmentVariable("TEMP"),temporary=System.IO.Path.Combine(System.IO.Path.GetTempPath(),"Vanya-pattern-ui-"+Guid.NewGuid().ToString("N"));System.IO.Directory.CreateDirectory(temporary);Environment.SetEnvironmentVariable("TEMP",temporary);
-        try{WindowActions();RetryButton();ClicksAndCellColors();MultipleInsertion();BottleEditorChecks.Run(Check);MotifReplacementChecks.Run(Check);Console.WriteLine("Pattern window checks passed: "+_checks+". Synthetic WPF and managed Corel stand-in only; no network or live document.");return 0;}
+        if(Environment.GetEnvironmentVariable("VANYA_PATTERN_LIVE_ONLY")=="1")
+        {try{PatternProjectLiveChecks.Run(Check);Console.WriteLine("Live pattern project checks passed: "+_checks);return 0;}catch(Exception e){Console.Error.WriteLine(e);return 1;}finally{Environment.SetEnvironmentVariable("TEMP",previous);System.IO.Directory.Delete(temporary,true);}}
+        try{WindowActions();RetryButton();ClicksAndCellColors();MultipleInsertion();BottleEditorChecks.Run(Check);MotifReplacementChecks.Run(Check);PatternProjectChecks.Run(Check);PatternBic3DChecks.Run(Check);if(Environment.GetEnvironmentVariable("VANYA_PATTERN_LIVE")=="1")PatternProjectLiveChecks.Run(Check);Console.WriteLine("Pattern window checks passed: "+_checks+". Live Corel checks: "+(Environment.GetEnvironmentVariable("VANYA_PATTERN_LIVE")=="1")+"; no network or AI requests.");return 0;}
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
         finally{Environment.SetEnvironmentVariable("TEMP",previous);System.IO.Directory.Delete(temporary,true);}
     }

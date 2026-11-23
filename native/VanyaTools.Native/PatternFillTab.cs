@@ -8,7 +8,7 @@ using System.Windows.Media.Imaging;
 
 namespace VanyaTools.Native
 {
-    internal sealed class PatternFillTab : UserControl
+    internal sealed partial class PatternFillTab : UserControl
     {
         private readonly PatternFillService _service = new PatternFillService();
         private readonly Action<string, bool> _status;
@@ -59,17 +59,23 @@ namespace VanyaTools.Native
             })), _forgetHero));
             _hero = Note("Главный принт не выбран");
             panel.Children.Add(_hero);
-            panel.Children.Add(Button("Добавить выделение в набор", (_, __) => Run(() =>
+            panel.Children.Add(Button("Добавить основные рисунки из выделения", (_, __) => Run(() =>
             {
                 int count = _service.AddMotifs();
                 RefreshMotifs();
                 Report(count == 0 ? "Выделенные фигуры уже в наборе." : "Добавлено фигур · " + count, false);
+            })));
+            panel.Children.Add(Button("Добавить выделение как мини-заполнители", (_, __) => Run(() =>
+            {
+                _service.AddMotifs(true);RefreshMotifs();
+                Report("Выбранные картинки назначены мини-заполнителями. Роль можно изменить галочкой в списке.",false);
             })));
             _motifs = Note("");
             panel.Children.Add(_motifs);
             _motifList = new ListBox { SelectionMode = SelectionMode.Extended,
                 ItemTemplate = MotifTemplate(), MaxHeight = 160 };
             panel.Children.Add(_motifList);
+            panel.Children.Add(Note("Галочка «Мини» — упрощённый заполнитель, не больше ¼ основного рисунка."));
             _removeMotifs = Button("Удалить выбранные из набора", (_, __) =>
             {
                 var ids = _motifList.SelectedItems.Cast<PatternSource>().Select(source => source.Id).ToArray();
@@ -93,6 +99,7 @@ namespace VanyaTools.Native
 
             panel.Children.Add(DockerTheme.Primary(Button("Настроить паттерн…", (_, __) => Run(() => Edit(false)))));
             panel.Children.Add(Button("Паттерн для бутылки…", (_, __) => Run(() => Edit(true))));
+            panel.Children.Add(Button("Открыть проект паттерна…",(_,__)=>OpenProject()));
             _message = Note("");
             panel.Children.Add(_message);
         }
@@ -109,6 +116,13 @@ namespace VanyaTools.Native
         private static DataTemplate MotifTemplate()
         {
             var row = new FrameworkElementFactory(typeof(DockPanel));
+            var role=new FrameworkElementFactory(typeof(CheckBox));
+            role.SetValue(DockPanel.DockProperty,Dock.Right);role.SetValue(ContentControl.ContentProperty,"Мини");
+            role.SetValue(VerticalAlignmentProperty,VerticalAlignment.Center);
+            role.SetValue(MarginProperty,new Thickness(6,0,0,0));
+            role.SetValue(ToolTipProperty,"Использовать этот рисунок как мини-заполнитель вместо основного сюжета.");
+            role.SetBinding(System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty,new Binding(nameof(PatternSource.IsFiller)){Mode=BindingMode.TwoWay,UpdateSourceTrigger=UpdateSourceTrigger.PropertyChanged});
+            row.AppendChild(role);
             var preview = new FrameworkElementFactory(typeof(Image));
             preview.SetValue(Image.WidthProperty, 44d);
             preview.SetValue(Image.HeightProperty, 36d);
@@ -181,16 +195,7 @@ namespace VanyaTools.Native
             PatternEditorSession session;
             using (DockerUiWatchdog.Trace(Dispatcher, "Pattern preview capture"))
                 session = bottle ? _service.OpenBottleEditor() : _service.OpenEditor();
-            var window = new PatternFillWindow(session, bottle ? _bottleSettings : _settings);
-            var owner = PresentationSource.FromVisual(this) as HwndSource;
-            if (owner != null) new WindowInteropHelper(window).Owner = owner.Handle;
-            window.ApplyRequested += draft =>
-            {
-                using (DockerUiWatchdog.Trace(Dispatcher, "Pattern insertion"))
-                    Report("Вариант вставлен · объектов: " + _service.Apply(session,draft,keepEditor:true),false);
-            };
-            window.ShowDialog();
-            if(window.Settings!=null){if (bottle) _bottleSettings = window.Settings;else _settings = window.Settings;}
+            ShowEditor(session,bottle?_bottleSettings:_settings);
         }
 
         private void Run(Action action)

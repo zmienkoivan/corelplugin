@@ -21,7 +21,7 @@ namespace VanyaTools.Native
         internal double BottleTop = 70, BottleBottom = 70, BottleHeight = 100;
     }
 
-    internal sealed class PatternFillWindow : Window
+    internal sealed partial class PatternFillWindow : Window
     {
         private readonly PatternEditorSession _session;
         private readonly PatternPreviewSurface _preview;
@@ -60,11 +60,13 @@ namespace VanyaTools.Native
         internal PatternDraft Draft { get; private set; }
         internal PatternEditorSettings Settings { get; private set; }
 
-        internal PatternFillWindow(PatternEditorSession session, PatternEditorSettings initial)
+        internal PatternFillWindow(PatternEditorSession session,PatternEditorSettings initial):this(session,initial,null){}
+
+        internal PatternFillWindow(PatternEditorSession session, PatternEditorSettings initial,PatternProjectOpened project)
         {
             _session = session;
             _mirroredIds = new HashSet<int>(session.MirroredIds);
-            _frame = session.BottleMode ? BottleFrame(initial) : session.Seam;
+            _frame = project?.Draft.Frame ?? (session.BottleMode ? BottleFrame(initial) : session.Seam);
             _seed = initial.Layout.Seed;
             Title = session.BottleMode ? "Паттерн для бутылки · Vanya Tools" : "Паттерн по контуру · Vanya Tools";
             Width = Math.Min(session.BottleMode?1280:1180, SystemParameters.WorkArea.Width - 28);
@@ -91,13 +93,15 @@ namespace VanyaTools.Native
             DockPanel.SetDock(scroll, Dock.Left); root.Children.Add(scroll);
             _preview = new PatternPreviewSurface(session, _frame);
             var previewPanel = new DockPanel();
-            var navigation = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
+            var navigation = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
             navigation.Children.Add(Button("−", (_, __) => _preview.Zoom(1 / 1.2)));
             navigation.Children.Add(Button("+", (_, __) => _preview.Zoom(1.2)));
             var zoom = new TextBlock { MinWidth = 55, Text = "100%", TextAlignment = TextAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center };
             navigation.Children.Add(zoom);
             navigation.Children.Add(Button("Вписать", (_, __) => _preview.Fit()));
+            InitializeBic3D(navigation);
+            InitializeProject(navigation);
             navigation.ToolTip = "Колесо — зум; средняя/правая кнопка или пробел + перетаскивание — перемещение. Shift + колесо — по горизонтали.";
             DockPanel.SetDock(navigation, Dock.Top); previewPanel.Children.Add(navigation);
             var motifTools=new WrapPanel { Margin=new Thickness(0,0,0,5),Visibility=Visibility.Collapsed };
@@ -145,7 +149,10 @@ namespace VanyaTools.Native
                 try
                 {
                     if (_preview.RefineVisible((asset, side) => PatternFillService.RefinePreview(_session, asset, side)))
+                    {
                         _detailRefresh.Start();
+                        if(!_refresh.IsEnabled && Draft!=null)_bic3D?.Queue(Draft);
+                    }
                 }
                 catch (Exception error) { Log.Error("Pattern detail preview failed; keeping the overview.", error); }
                 zoom.Text = Math.Round(_preview.ZoomPercent) + "%";
@@ -261,12 +268,19 @@ namespace VanyaTools.Native
             {
                 _ready = false;
                 _refresh.Stop(); _detailRefresh.Stop();
+                _bic3D?.Close();
                 _closing.Cancel();
                 if (!_rendering) _closing.Dispose();
             };
             _ready = true;
-            ShowMessage("Готовлю предпросмотр…", false);
-            QueuePreview();
+            if(project==null){ShowMessage("Готовлю предпросмотр…",false);QueuePreview();}
+            else
+            {
+                Settings=initial;Draft=project.Draft;_projectPath=project.FilePath;
+                _preview.Update(_frame,Draft,initial.HeroAngle);_preview.RestoreProjectEdits(project.Edits,project.Ids);
+                _apply.IsEnabled=Draft.Items.Count>0 || Draft.Hero!=null;
+                ShowMessage("Проект открыт. Можно продолжить правку паттерна.",false);
+            }
         }
 
         private void ApplyBicPreset()
@@ -353,6 +367,8 @@ namespace VanyaTools.Native
             if (!_ready) return;
             _revision++;
             _apply.IsEnabled = false;
+            _saveProject.IsEnabled=false;
+            _bic3D?.Waiting();
             if (!_rendering && !_refresh.IsEnabled) _refresh.Start();
         }
 
@@ -411,6 +427,8 @@ namespace VanyaTools.Native
                 _preview.Update(frame, draft, next.HeroAngle);
                 Settings = next;
                 Draft = draft;
+                _saveProject.IsEnabled=!_projectBusy;
+                _bic3D?.Queue(draft);
                 int fallback = draft.Motifs.Count(asset => asset.OutlineFallback);
                 if (useHero && _session.Hero.OutlineFallback) fallback++;
                 int used = draft.Items.Select(item => item.Motif).Distinct().Count();
@@ -430,7 +448,7 @@ namespace VanyaTools.Native
             catch (OperationCanceledException) when (!_ready) { }
             catch (Exception error)
             {
-                if (_ready && revision == _revision) ShowMessage(error.Message, true);
+                if (_ready && revision == _revision){ShowMessage(error.Message,true);_bic3D?.Failed(error.Message);}
             }
             finally
             {

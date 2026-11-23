@@ -10,12 +10,15 @@ using System.Windows.Media.Imaging;
 
 namespace VanyaTools.Native
 {
-    internal sealed class PatternSource
+    internal sealed class PatternSource : System.ComponentModel.INotifyPropertyChanged
     {
         internal readonly object Shape;
         internal readonly int Id;
         public string Label { get; }
-        internal bool IncludeMirror, IsFiller;
+        internal bool IncludeMirror;
+        private bool _isFiller;
+        public bool IsFiller {get=>_isFiller;set{if(_isFiller==value)return;_isFiller=value;PropertyChanged?.Invoke(this,new System.ComponentModel.PropertyChangedEventArgs(nameof(IsFiller)));}}
+        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
         internal BitmapSource Filler;
         public BitmapSource Preview => Filler;
 
@@ -92,8 +95,17 @@ namespace VanyaTools.Native
         private bool _resultWasBottle;
 
         internal IReadOnlyList<PatternSource> Motifs => _motifs;
+        internal void UseProjectSources(PatternEditorSession session)
+        {
+            _motifs.Clear();_motifDocument=session.Document;
+            foreach(var asset in session.Motifs)_motifs.Add(new PatternSource(asset.Shape,asset.Id,asset.Label){IsFiller=asset.IsFiller,IncludeMirror=session.MirroredIds.Contains(asset.Id)});
+            _hero=session.Hero==null?null:new PatternSource(session.Hero.Shape,session.Hero.Id,session.Hero.Label);
+            _heroDocument=session.Hero==null?null:session.Document;
+        }
 
-        internal int AddMotifs()
+        internal int AddMotifs()=>AddMotifs(false);
+
+        internal int AddMotifs(bool filler)
         {
             var selection = CaptureSelection(out object doc, MaximumMotifs, "Выделите от 1 до 64 объектов узора. Группа считается одним элементом.");
             bool sameDocument = SameObject(doc, _motifDocument);
@@ -102,7 +114,10 @@ namespace VanyaTools.Native
             if (ids.Count > MaximumMotifs) throw new InvalidOperationException("В наборе помещается до 64 фигур. Удалите лишние из списка.");
             if (!sameDocument) _motifs.Clear();
             _motifDocument = doc;
+            foreach(var source in added)source.IsFiller=filler;
             _motifs.AddRange(added);
+            var selectedIds=new HashSet<int>(selection.Select(s=>s.Id));
+            foreach(var source in _motifs.Where(s=>selectedIds.Contains(s.Id)))source.IsFiller=filler;
             return added.Length;
         }
 
@@ -270,7 +285,7 @@ namespace VanyaTools.Native
             if (width < 0 || height < 0 || !Finite(width + height) || Math.Max(width, height) <= .0001)
                 throw new InvalidOperationException("Один из элементов узора имеет нулевой размер.");
             var asset = new PatternAsset { Shape = captured.Shape, Id = captured.Id, Label = captured.Label,
-                Size = new PatternPoint(width, height) };
+                Size = new PatternPoint(width, height), IsFiller = captured.IsFiller };
             string temporary = Path.Combine(Path.GetTempPath(), "Vanya-Pattern-" + Guid.NewGuid().ToString("N"));
             string path = SportArtworkPreview.Sidecar(temporary);
             try
@@ -558,7 +573,7 @@ namespace VanyaTools.Native
             }
         }
 
-        private static object GetOutline(object target)
+        internal static object GetOutline(object target)
         {
             try
             {
@@ -576,7 +591,7 @@ namespace VanyaTools.Native
             }
         }
 
-        private static PatternFrame ReadFrame(object outline)
+        internal static PatternFrame ReadFrame(object outline)
         {
             dynamic curve = outline;
             double left, bottom, width, height;
