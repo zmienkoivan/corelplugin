@@ -39,8 +39,35 @@ namespace VanyaTools.Native
         }
         internal static object Curve(object document,PathGeometry geometry,double left,double top,double trapping=0,StickerPrintPlateMemory memory=null)
         {
+            var groups=StickerPrintPlatePartition.Groups(geometry,trapping);
+            var sources=groups.Select(group=>Source(document,group,left,top)).ToArray();
+            memory?.Mark("native source curve built");
+            dynamic curve;
+            if(Math.Abs(trapping)<1e-9)curve=sources[0];
+            else
+            {
+                curve=((dynamic)document).CreateCurve();
+                foreach(dynamic source in sources)
+                {
+                    dynamic part=source.Contour(Math.Abs(trapping),trapping>0?CorelConstants.CdrContourOutside:CorelConstants.CdrContourInside,
+                        CorelConstants.CdrContourRoundCap,CorelConstants.CdrContourCornerRound,0d);
+                    // A negative choke may erase one small isolated island.
+                    if(part==null || Convert.ToInt32(part.Nodes.Count)==0)continue;
+                    if(!Convert.ToBoolean(part.Closed))throw new InvalidOperationException("Не удалось замкнуть контур печатной плашки.");
+                    curve.AppendCurve(part);
+                    if(Convert.ToInt32(curve.Nodes.Count)>200000)throw new InvalidOperationException("После треппинга слишком много узлов. Создайте плашку частями.");
+                }
+            }
+            Log.Info("Printing-plate trapping batches: paths="+geometry.Figures.Count+", batches="+groups.Count+".");
+            if(curve==null || Convert.ToInt32(curve.Nodes.Count)==0 || !Convert.ToBoolean(curve.Closed) || Math.Abs(Convert.ToDouble(curve.Area))<.000001)
+                throw new InvalidOperationException("Треппинг полностью убрал плашку. Уменьшите отрицательный треппинг.");
+            if(Convert.ToInt32(curve.Nodes.Count)>200000)throw new InvalidOperationException("После треппинга слишком много узлов. Создайте плашку частями.");
+            return (object)curve;
+        }
+        private static object Source(object document,System.Collections.Generic.IReadOnlyList<PathFigure> figures,double left,double top)
+        {
             dynamic curve=((dynamic)document).CreateCurve();
-            foreach(var figure in geometry.Figures)
+            foreach(var figure in figures)
             {
                 dynamic path=curve.CreateSubPath(left+figure.StartPoint.X,top-figure.StartPoint.Y);
                 foreach(var segment in figure.Segments)
@@ -51,13 +78,6 @@ namespace VanyaTools.Native
                 }
                 path.Closed=true;
             }
-            memory?.Mark("native source curve built");
-            if(Math.Abs(trapping)>1e-9)
-                curve=curve.Contour(Math.Abs(trapping),trapping>0?CorelConstants.CdrContourOutside:CorelConstants.CdrContourInside,
-                    CorelConstants.CdrContourRoundCap,CorelConstants.CdrContourCornerRound,0d);
-            if(curve==null || Convert.ToInt32(curve.Nodes.Count)==0 || !Convert.ToBoolean(curve.Closed) || Math.Abs(Convert.ToDouble(curve.Area))<.000001)
-                throw new InvalidOperationException("Треппинг полностью убрал плашку. Уменьшите отрицательный треппинг.");
-            if(Convert.ToInt32(curve.Nodes.Count)>200000)throw new InvalidOperationException("После треппинга слишком много узлов. Создайте плашку частями.");
             return (object)curve;
         }
     }

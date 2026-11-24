@@ -7,6 +7,8 @@ using System.Windows.Media;
 public sealed class PlateApp
 {
     public string Failure;public PlateDocument Document;public object ActiveDocument=>Document;
+    public int DockerRefreshes;public List<int> ContourBatchNodes=new List<int>();
+    public void Refresh(){if(Optimization || Document.Groups!=0)throw new Exception("Object list refreshed while document updates were suppressed");DockerRefreshes++;}
     public List<PlateShape> Selected=new List<PlateShape>(),Temporary=new List<PlateShape>(),Outputs=new List<PlateShape>();
     public List<string> CapturedNames=new List<string>();public List<int> InputCounts=new List<int>();public bool Optimization;public PlateWindow ActiveWindow=new PlateWindow();public PlatePalettes Palettes=new PlatePalettes();
     public List<string> RequestedColors = new List<string>();
@@ -50,6 +52,7 @@ public sealed class PlateCurve
     public PlateCurve(PlateApp owner=null){app=owner;}
     public List<PlateSubPath> Paths=new List<PlateSubPath>();
     public PlateSubPath CreateSubPath(double x,double y){var path=new PlateSubPath();path.Points.Add(new Point(x,y));Paths.Add(path);return path;}
+    public void AppendCurve(PlateCurve other){foreach(var source in other.Paths){var path=new PlateSubPath{Closed=source.Closed};path.Points.AddRange(source.Points);Paths.Add(path);}}
     public PlateNodes Nodes=>new PlateNodes{Count=Paths.Sum(p=>p.Points.Count)};
     public bool Closed=>Paths.Count>0 && Paths.All(p=>p.Closed);
     public double Area=>Geometry.GetArea();
@@ -64,6 +67,7 @@ public sealed class PlateCurve
     public PlateCurve Contour(double offset,int direction,int cap,int corner,double miter)
     {
         if(app?.Failure=="contour")throw new InvalidOperationException("Synthetic native contour failure");
+        app?.ContourBatchNodes.Add(Nodes.Count);
         if(offset<=0 || (direction!=0 && direction!=1) || cap!=1 || corner!=2 || miter!=0)throw new Exception("Wrong native contour parameters");
         var g=Geometry;var pen=new Pen(Brushes.Black,offset*2){LineJoin=PenLineJoin.Round};
         var rim=g.GetWidenedPathGeometry(pen,.0025,ToleranceType.Absolute);
@@ -142,7 +146,7 @@ public sealed class PlateTile
     }
 }
 public sealed class PlateWindow{public PlateView ActiveView=new PlateView();public void Refresh(){}}
-public sealed class PlateView{public bool SimulateOverprints;}
+public sealed class PlateView{public bool Ignore;private bool preview;public bool SimulateOverprints{get=>preview;set{if(!Ignore)preview=value;}}}
 public sealed class PlatePalette
 {
     public string Identifier="50af2116-63b7-4f63-8baa-b6bdd41010eb";

@@ -15,7 +15,7 @@ internal static class Program
     private static void Reject(Action work,string text){bool failed=false;try{work();}catch(Exception){failed=true;}Check(failed,text);}
     [STAThread]private static int Main()
     {
-        try{RasterCaptureMemoryChecks.Run(Check);Model();Geometry();Ui();Palette();Pdf();Service();Console.WriteLine("Sticker printing-plate checks passed: "+checks+". Synthetic alpha and fake Corel; no customer files.");return 0;}
+        try{RasterCaptureMemoryChecks.Run(Check);PartitionChecks.Run(Check);Model();Geometry();Ui();Preview();Palette();Pdf();Service();Console.WriteLine("Sticker printing-plate checks passed: "+checks+". Synthetic alpha and fake Corel; no customer files.");return 0;}
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }
     private static void Model()
@@ -125,6 +125,33 @@ internal static class Program
         var stale=new PlateApp();stale.Palettes.LegacyWhite=true;stale.Palettes.IgnoreRefresh=true;
         Reject(()=>StickerPrintSpotColor.Show(stale),"A stale paper-white preview was reported as updated");
     }
+    private static void Preview()
+    {
+        var app=new PlateApp();var originals=app.Selected.ToArray();
+        foreach(bool enabled in new[]{true,false,true})
+        {
+            StickerPrintPlatePreview.Set(app,enabled);
+            Check(StickerPrintPlatePreview.Read(app)==enabled,"Preview switch did not follow Corel's display mode");
+            Check(app.Outputs.Count==0 && app.Selected.SequenceEqual(originals) && !app.Document.Dirty,
+                "Display-only preview changed artwork, selection or printing plates");
+        }
+        app.ActiveWindow.ActiveView.Ignore=true;
+        Reject(()=>StickerPrintPlatePreview.Set(app,false),"An ignored preview change was reported as applied");
+        app.Document=null;
+        Check(!StickerPrintPlatePreview.Read(app),"Preview read failed without a document");
+        Reject(()=>StickerPrintPlatePreview.Set(app,true),"Preview was enabled without an open document");
+
+        bool mode=true;int writes=0,creates=0;
+        var ui=new StickerPrintPlateControls((k,t,d)=>creates++,()=>{},readPreview:()=>mode,setPreview:value=>{writes++;mode=value;});
+        ui.Measure(new Size(360,500));ui.Arrange(new Rect(0,0,360,500));ui.UpdateLayout();
+        var preview=Descendants(ui).OfType<CheckBox>().Single();
+        preview.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+        Check(preview.IsChecked==true && writes==0,"Opening the panel silently changed overprint preview");
+        preview.IsChecked=false;preview.RaiseEvent(new RoutedEventArgs(CheckBox.ClickEvent));
+        Check(!mode && writes==1 && creates==0,"Preview checkbox generated plates or failed to change the display mode");
+        mode=true;preview.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+        Check(preview.IsChecked==true && writes==1,"Preview checkbox did not reflect a display change outside the panel");
+    }
     private static void Pdf()
     {
         var settings=new FakePdfSettings();PrintPdfSpotSettings.Require(settings);Check(settings.OutputSpotColorsAs==0 && settings.Overprints,"Printer PDF lost spot/overprint settings");
@@ -141,6 +168,7 @@ internal static class Program
             Check(originals.All(s=>app.Selected.Contains(s)) && app.Selected.Contains(plate),"Printer selection lost artwork or the new plate");
             Check(app.Document.Unit==1 && app.Document.ReferencePoint==9 && !app.Optimization && app.Document.Groups==0,"Corel state was not restored");
             Check(app.Temporary.All(s=>s.Deleted) && originals.All(s=>!s.Deleted),"Temporary capture leaked or source was deleted");
+            Check(app.DockerRefreshes==1,"New WHITE/CLEAR layers did not refresh the object list");
             Equal(plate.LeftX,15-trap,"Source placement / signed trap");
         }
         var pair=new PlateApp();StickerPrintPlateService.Create(pair,StickerPrintPlateKind.White,-.1);StickerPrintPlateService.Create(pair,StickerPrintPlateKind.Clear,.1);

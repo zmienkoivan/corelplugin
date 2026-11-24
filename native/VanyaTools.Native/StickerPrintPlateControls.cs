@@ -9,7 +9,7 @@ namespace VanyaTools.Native
     internal sealed class StickerPrintPlateControls:StackPanel
     {
         internal StickerPrintPlateControls(Action<StickerPrintPlateKind,double,int> create, Action showPalette,
-            StickerPrintPlateSettings settings=null)
+            StickerPrintPlateSettings settings=null,Func<bool> readPreview=null,Action<bool> setPreview=null)
         {
             settings=settings??new StickerPrintPlateSettings();
             var group=DockerLayout.ToolGroup("3. Подложка и лак","Выделите рисунок. Минус ужимает плашку, плюс расширяет. Треппинг — от −0,50 до +0,50 мм, шаг 0,05 мм.");Children.Add(group);
@@ -18,6 +18,20 @@ namespace VanyaTools.Native
                 ToolTip = "Показать плашечные цвета WHITE и CLEAR в палитре CorelDRAW, как CUT. Выделение не требуется." };
             paletteButton.Click += (_, __) => showPalette();
             group.Children.Add(paletteButton);
+            if(readPreview!=null && setPreview!=null)
+            {
+                var preview=new CheckBox{Content="Полупрозрачный просмотр наложений",Margin=new Thickness(2,0,2,5),
+                    ToolTip="Экранное отображение WHITE/CLEAR поверх рисунка. Плотность печатной краски не меняется. На сложных страницах просмотр может потреблять больше памяти."};
+                void Synchronize()
+                {
+                    try{preview.IsChecked=readPreview();}
+                    catch(Exception error){Log.Error("Could not read overprint preview mode.",error);}
+                }
+                preview.Click+=(_,__)=>{try{setPreview(preview.IsChecked==true);}finally{Synchronize();}};
+                preview.Loaded+=(_,__)=>Synchronize();
+                preview.MouseEnter+=(_,__)=>Synchronize();
+                group.Children.Add(preview);
+            }
             bool showing = false;
             Loaded += (_, __) => {
                 if (showing) return;

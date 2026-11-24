@@ -389,6 +389,11 @@ namespace VanyaTools.Native
             {
                 StickerPrintSpotColor.Show();
                 SetStatus("Палитра WHITE/CLEAR открыта. Цвета доступны для ручной заливки и обводки.", false);
+            }),readPreview:StickerPrintPlatePreview.Read,setPreview:enabled=>RunSafe(()=>
+            {
+                StickerPrintPlatePreview.Set(enabled);
+                SetStatus(enabled?"Просмотр наложений включён. Печатная плотность WHITE/CLEAR сохранена.":
+                    "Просмотр наложений выключен. Печатная плотность WHITE/CLEAR сохранена.",false);
             })));
 
             var tabTools = DockerLayout.ToolGroup("4. Язычки", "Выделите контур и добавьте маркеры — их можно двигать. " +

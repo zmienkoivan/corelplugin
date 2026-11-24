@@ -81,6 +81,7 @@ namespace VanyaTools.Native
                 }
                 if(!success && cleanup==null)doc.Dirty=dirty;
                 if(!optimized)try{app.ActiveWindow.Refresh();}catch(Exception error){Log.Error("Could not refresh the printing plate preview.",error);}
+                if(!optimized)try{app.Refresh();}catch(Exception error){Log.Error("Could not refresh the printing plate object list.",error);}
                 memory.Mark(success?"completed":"failed");
                 if(cleanup!=null)throw new InvalidOperationException("Не удалось полностью убрать временные объекты. Проверьте документ; изменения не скрыты.",cleanup);
             }
