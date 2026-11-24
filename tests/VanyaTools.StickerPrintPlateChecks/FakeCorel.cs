@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
+using System.Windows.Media;
 public sealed class PlateApp
 {
     public string Failure;public PlateDocument Document;public object ActiveDocument=>Document;
@@ -20,7 +21,7 @@ public sealed class PlateDocument
     public PlateApp App;public int Unit=1,ReferencePoint=9,Groups;public bool Dirty;public PlateLayer BaseLayer,ActiveLayer;public PlatePage ActivePage;
     public PlateDocument(PlateApp app){App=app;BaseLayer=new PlateLayer(this);ActiveLayer=BaseLayer;ActivePage=new PlatePage(this);}
     public void BeginCommandGroup(string name){Groups++;}public void EndCommandGroup(){Groups--;}
-    public PlateCurve CreateCurve()=>new PlateCurve();
+    public PlateCurve CreateCurve()=>new PlateCurve(App);
 }
 public sealed class PlatePage
 {
@@ -45,9 +46,33 @@ public sealed class PlateLayer
 }
 public sealed class PlateCurve
 {
+    private readonly PlateApp app;
+    public PlateCurve(PlateApp owner=null){app=owner;}
     public List<PlateSubPath> Paths=new List<PlateSubPath>();
     public PlateSubPath CreateSubPath(double x,double y){var path=new PlateSubPath();path.Points.Add(new Point(x,y));Paths.Add(path);return path;}
+    public PlateNodes Nodes=>new PlateNodes{Count=Paths.Sum(p=>p.Points.Count)};
+    public bool Closed=>Paths.Count>0 && Paths.All(p=>p.Closed);
+    public double Area=>Geometry.GetArea();
+    public PathGeometry Geometry
+    {
+        get
+        {
+            var g=new PathGeometry{FillRule=FillRule.EvenOdd};
+            foreach(var path in Paths){var f=new PathFigure{StartPoint=path.Points[0],IsClosed=path.Closed,IsFilled=true};f.Segments.Add(new PolyLineSegment(path.Points.Skip(1),true));g.Figures.Add(f);}return g;
+        }
+    }
+    public PlateCurve Contour(double offset,int direction,int cap,int corner,double miter)
+    {
+        if(app?.Failure=="contour")throw new InvalidOperationException("Synthetic native contour failure");
+        if(offset<=0 || (direction!=0 && direction!=1) || cap!=1 || corner!=2 || miter!=0)throw new Exception("Wrong native contour parameters");
+        var g=Geometry;var pen=new Pen(Brushes.Black,offset*2){LineJoin=PenLineJoin.Round};
+        var rim=g.GetWidenedPathGeometry(pen,.0025,ToleranceType.Absolute);
+        var output=System.Windows.Media.Geometry.Combine(g,rim,direction==1?GeometryCombineMode.Union:GeometryCombineMode.Exclude,null,.0025,ToleranceType.Absolute).GetFlattenedPathGeometry(.0025,ToleranceType.Absolute);
+        var result=new PlateCurve(app);
+        foreach(var figure in output.Figures){var path=result.CreateSubPath(figure.StartPoint.X,figure.StartPoint.Y);path.Closed=figure.IsClosed;foreach(var segment in figure.Segments.OfType<PolyLineSegment>())path.Points.AddRange(segment.Points);}return result;
+    }
 }
+public sealed class PlateNodes{public int Count;}
 public sealed class PlateSubPath{public List<Point> Points=new List<Point>();public bool Closed;public void AppendLineSegment(double x,double y){Points.Add(new Point(x,y));}}
 public sealed class PlateShape
 {

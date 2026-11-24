@@ -45,6 +45,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.ColorProofLegendChecks/VanyaTools.ColorProofLegendChecks.csproj --configuration Release
 
+      - name: Check printing plates and capture memory budget
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.StickerPrintPlateChecks/VanyaTools.StickerPrintPlateChecks.csproj --configuration Release
+
       - name: Check raster insertion
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.RasterInsertionChecks/VanyaTools.RasterInsertionChecks.csproj --configuration Release

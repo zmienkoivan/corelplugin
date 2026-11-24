@@ -15,7 +15,7 @@ internal static class Program
     private static void Reject(Action work,string text){bool failed=false;try{work();}catch(Exception){failed=true;}Check(failed,text);}
     [STAThread]private static int Main()
     {
-        try{Model();Geometry();Ui();Palette();Pdf();Service();Console.WriteLine("Sticker printing-plate checks passed: "+checks+". Synthetic alpha and fake Corel; no customer files.");return 0;}
+        try{RasterCaptureMemoryChecks.Run(Check);Model();Geometry();Ui();Palette();Pdf();Service();Console.WriteLine("Sticker printing-plate checks passed: "+checks+". Synthetic alpha and fake Corel; no customer files.");return 0;}
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }
     private static void Model()
@@ -41,7 +41,9 @@ internal static class Program
         var source=Mask();var bytes=new byte[100*80*4];source.CopyPixels(bytes,400,0);
         foreach(double trap in new[]{-.5,-.1,0,.1,.5})
         {
-            var g=StickerPrintPlateGeometry.Build(source,10,8,trap);
+            var traced=StickerPrintPlateGeometry.Build(source,10,8);
+            var native=(PlateCurve)StickerPrintPlateGeometry.Curve(new PlateApp().Document,traced,0,0,trap);
+            var g=native.Geometry;g.Transform=new ScaleTransform(1,-1);
             Equal(g.Bounds.Left,1-trap,"Outer left offset");Equal(g.Bounds.Right,9+trap,"Outer right offset");
             Check(Contains(g,new Point(2,2)) && !Contains(g,new Point(4.05,4)),"Hole was filled or artwork lost");
             if(trap>=-.1)Check(Contains(g,new Point(5,4)),"Disconnected artwork island was removed");
@@ -50,7 +52,7 @@ internal static class Program
         }
         var after=new byte[bytes.Length];source.CopyPixels(after,400,0);Check(bytes.SequenceEqual(after),"Geometry changed source alpha");
         var thin=BitmapSource.Create(1,10,96,96,PixelFormats.Bgra32,null,Enumerable.Repeat((byte)255,40).ToArray(),4);
-        Reject(()=>StickerPrintPlateGeometry.Build(thin,.1,1,-.1),"Collapsed choke returned an empty plate");
+        Reject(()=>StickerPrintPlateGeometry.Curve(new PlateApp().Document,StickerPrintPlateGeometry.Build(thin,.1,1),0,0,-.1),"Collapsed choke returned an empty plate");
     }
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
     {yield return root;for(int i=0;i<VisualTreeHelper.GetChildrenCount(root);i++)foreach(var c in Descendants(VisualTreeHelper.GetChild(root,i)))yield return c;}
@@ -144,6 +146,14 @@ internal static class Program
         var pair=new PlateApp();StickerPrintPlateService.Create(pair,StickerPrintPlateKind.White,-.1);StickerPrintPlateService.Create(pair,StickerPrintPlateKind.Clear,.1);
         Check(pair.Outputs.Count==2 && pair.Selected.Count==3 && pair.InputCounts.All(n=>n==1),"Second button used the old plate as artwork or lost it from print selection");
         Check(pair.Document.ActivePage.Layers.First()==pair.Outputs[0].Layer && pair.Document.ActivePage.Layers.Last()==pair.Outputs[1].Layer,"Combined order is not WHITE / artwork / CLEAR");
+        foreach(bool preview in new[]{false,true})
+        {
+            var display=new PlateApp();display.ActiveWindow.ActiveView.SimulateOverprints=preview;
+            StickerPrintPlateService.Create(display,StickerPrintPlateKind.White,-.1);
+            StickerPrintPlateService.Create(display,StickerPrintPlateKind.Clear,.1);
+            Check(display.ActiveWindow.ActiveView.SimulateOverprints==preview,"Printing plates changed the user's overprint preview mode");
+            Check(display.Outputs.All(s=>s.OverprintFill),"Preserving display mode disabled print overprints");
+        }
         foreach(var kind in new[]{StickerPrintPlateKind.White,StickerPrintPlateKind.Clear})foreach(int tint in new[]{10,37,100}){
             var tinted=new PlateApp();StickerPrintPlateService.Create(tinted,kind,0,tint);
             var plate=tinted.Outputs.Single();
@@ -165,7 +175,7 @@ internal static class Program
         Check(!main.Deleted && !cut.Deleted && !white.Deleted && !technicalGroup.Deleted && !root.Deleted,"Nested source pruning changed originals");
         Check(grouped.Selected.Contains(root) && grouped.Selected.Contains(ignored) && grouped.Selected.Count==3,"Group creation did not restore the whole original selection");
         Check(grouped.Temporary.All(s=>s.Deleted),"Nested capture cleanup leaked a duplicate");
-        foreach(string failure in new[]{"spot","alpha","fill","overprint","duplicate","layer-order"})
+        foreach(string failure in new[]{"spot","alpha","fill","overprint","duplicate","layer-order","contour"})
         {
             var app=new PlateApp{Failure=failure};var originals=app.Selected.ToArray();Reject(()=>StickerPrintPlateService.Create(app,StickerPrintPlateKind.White,-.1),"Controlled failure accepted: "+failure);
             Check(originals.All(s=>!s.Deleted) && app.Selected.SequenceEqual(originals) && app.Document.Groups==0 && app.Document.Unit==1 && !app.Optimization,"Failure damaged source or Corel state: "+failure);

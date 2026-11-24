@@ -7,7 +7,7 @@ namespace VanyaTools.Native
 {
     internal static class StickerPrintPlateGeometry
     {
-        internal static PathGeometry Build(BitmapSource image,double widthMm,double heightMm,double trapping)
+        internal static PathGeometry Build(BitmapSource image,double widthMm,double heightMm)
         {
             if(image==null || !(widthMm>0) || !(heightMm>0))throw new ArgumentException("Нет силуэта рисунка.");
             int width=image.PixelWidth,height=image.PixelHeight;
@@ -30,20 +30,14 @@ namespace VanyaTools.Native
                 var figure=new PathFigure{StartPoint=new Point(loop[0].X*sx,loop[0].Y*sy),IsClosed=true,IsFilled=true};
                 figure.Segments.Add(new PolyLineSegment(loop.Skip(1).Select(p=>new Point(p.X*sx,p.Y*sy)),true));geometry.Figures.Add(figure);
             }
-            Geometry result=geometry;
-            if(Math.Abs(trapping)>1e-9)
-            {
-                var pen=new Pen(Brushes.Black,Math.Abs(trapping)*2){LineJoin=PenLineJoin.Round,StartLineCap=PenLineCap.Round,EndLineCap=PenLineCap.Round};
-                var rim=geometry.GetWidenedPathGeometry(pen,.0025,ToleranceType.Absolute);
-                result=Geometry.Combine(geometry,rim,trapping>0?GeometryCombineMode.Union:GeometryCombineMode.Exclude,null,.0025,ToleranceType.Absolute);
-            }
-            var flattened=result.GetFlattenedPathGeometry(.0025,ToleranceType.Absolute);
-            if(flattened.GetArea(.0025,ToleranceType.Absolute)<.000001)throw new InvalidOperationException("Ужатие полностью убрало плашку. Уменьшите отрицательный треппинг.");
-            int nodes=flattened.Figures.Sum(f=>1+f.Segments.Sum(s=>s is PolyLineSegment p?p.Points.Count:1));
+            // The alpha trace already consists of lines. Do not widen/combine
+            // thousands of raster-derived loops in WPF's native scanner: a
+            // complex sticker can fail there with MILERR_SCANNER_FAILED.
+            int nodes=geometry.Figures.Sum(f=>1+f.Segments.Sum(s=>s is PolyLineSegment p?p.Points.Count:1));
             if(nodes>200000)throw new InvalidOperationException("Слишком много узлов печатной плашки. Создайте её частями.");
-            flattened.Freeze();return flattened;
+            geometry.Freeze();return geometry;
         }
-        internal static object Curve(object document,PathGeometry geometry,double left,double top)
+        internal static object Curve(object document,PathGeometry geometry,double left,double top,double trapping=0,StickerPrintPlateMemory memory=null)
         {
             dynamic curve=((dynamic)document).CreateCurve();
             foreach(var figure in geometry.Figures)
@@ -57,6 +51,13 @@ namespace VanyaTools.Native
                 }
                 path.Closed=true;
             }
+            memory?.Mark("native source curve built");
+            if(Math.Abs(trapping)>1e-9)
+                curve=curve.Contour(Math.Abs(trapping),trapping>0?CorelConstants.CdrContourOutside:CorelConstants.CdrContourInside,
+                    CorelConstants.CdrContourRoundCap,CorelConstants.CdrContourCornerRound,0d);
+            if(curve==null || Convert.ToInt32(curve.Nodes.Count)==0 || !Convert.ToBoolean(curve.Closed) || Math.Abs(Convert.ToDouble(curve.Area))<.000001)
+                throw new InvalidOperationException("Треппинг полностью убрал плашку. Уменьшите отрицательный треппинг.");
+            if(Convert.ToInt32(curve.Nodes.Count)>200000)throw new InvalidOperationException("После треппинга слишком много узлов. Создайте плашку частями.");
             return (object)curve;
         }
     }

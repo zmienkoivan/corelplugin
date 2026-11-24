@@ -19,12 +19,14 @@ namespace VanyaTools.Native
             object color=StickerPrintSpotColor.Create(application,kind,tint),page=(object)doc.ActivePage,oldLayer=(object)doc.ActiveLayer;
             int oldUnit=Convert.ToInt32(doc.Unit),oldRef=Convert.ToInt32(doc.ReferencePoint);bool optimized=Convert.ToBoolean(app.Optimization),dirty=Convert.ToBoolean(doc.Dirty);
             var temporary=new List<object>();object layer=null,plate=null;bool started=false,success=false;
+            var memory=new StickerPrintPlateMemory(kind);
             try
             {
                 doc.BeginCommandGroup("Vanya Tools · "+StickerPrintPlateModel.Ink(kind));started=true;doc.Unit=CorelConstants.CdrMillimeter;doc.ReferencePoint=CorelConstants.CdrBottomLeft;app.Optimization=true;
                 double x,y,w,h;input.GetBoundingBox(out x,out y,out w,out h,true);int dpi=StickerPrintPlateModel.CaptureDpi(w,h);
                 RasterCaptureMemory.EnsureAvailable((long)Math.Ceiling(w*dpi/25.4)*(long)Math.Ceiling(h*dpi/25.4));
                 dynamic copies=input.Duplicate(0,0);temporary.AddRange(Items((object)copies.Shapes));
+                memory.Mark("selection duplicated");
                 if(Convert.ToInt32(copies.Count)!=Convert.ToInt32(input.Count))throw new InvalidOperationException("Corel не скопировал всё выделение для печатной плашки.");
                 dynamic surviving=app.CreateShapeRange();
                 foreach(object copy in temporary.ToArray())
@@ -34,11 +36,16 @@ namespace VanyaTools.Native
                 temporary.Clear();temporary.Add((object)working);
                 dynamic raster=working.ConvertToBitmapEx(CorelConstants.CdrRgbColorImage,true,true,dpi,CorelConstants.CdrNormalAntiAliasing,true);
                 temporary.Clear();temporary.Add((object)raster);
+                memory.Mark("raster created");
                 var bitmap=NativeBitmapPixelReader.Read((object)raster.Bitmap,dpi,StickerPrintPlateModel.MaxPixels,false);
+                memory.Mark("pixels read");
                 double left=Convert.ToDouble(raster.LeftX),top=Convert.ToDouble(raster.TopY),width=Convert.ToDouble(raster.SizeWidth),height=Convert.ToDouble(raster.SizeHeight);
                 raster.Delete();temporary.Clear();
-                var geometry=StickerPrintPlateGeometry.Build(bitmap,width,height,trapping);
-                object curve=StickerPrintPlateGeometry.Curve((object)doc,geometry,left,top);
+                memory.Mark("temporary raster deleted");
+                var geometry=StickerPrintPlateGeometry.Build(bitmap,width,height);
+                memory.Mark("plate geometry built");
+                object curve=StickerPrintPlateGeometry.Curve((object)doc,geometry,left,top,trapping,memory);
+                memory.Mark("native trapping applied");
                 // The editable WHITE plane sits below page artwork; CLEAR stays
                 // above it. Both retain named spot inks and explicit overprint.
                 layer=(object)((dynamic)page).CreateLayer(StickerPrintPlateModel.Ink(kind)+(kind==StickerPrintPlateKind.White?" · подложка":" · лак"));
@@ -51,8 +58,12 @@ namespace VanyaTools.Native
                 if(!Convert.ToBoolean(output.OverprintFill))throw new InvalidOperationException("Corel не включил наложение плашечной заливки.");
                 output.Name=StickerPrintPlateModel.Ink(kind)+" · "+tint+"% · "+trapping.ToString("+0.00;-0.00;0.00",CultureInfo.CurrentCulture)+" мм";
                 RestoreSelection(originals);output.AddToSelection();
-                try{app.ActiveWindow.ActiveView.SimulateOverprints=true;}catch(Exception error){Log.Error("Could not enable overprint preview for WHITE/CLEAR.",error);}
-                success=true;Log.Info("Created "+StickerPrintPlateModel.Ink(kind)+" printing plate; trapping="+trapping.ToString(CultureInfo.InvariantCulture)+" mm; capture="+dpi+" DPI; nodes="+geometry.Figures.Count+" loops.");
+                memory.Mark("spot plate created");
+                // Preserve the user's display mode. OverprintFill controls the
+                // print separation independently; enabling simulation here can
+                // rasterize/cache every bitmap on a crowded document page.
+                memory.Mark("overprint preview preserved");
+                success=true;Log.Info("Created "+StickerPrintPlateModel.Ink(kind)+" printing plate; trapping="+trapping.ToString(CultureInfo.InvariantCulture)+" mm; capture="+dpi+" DPI; paths="+geometry.Figures.Count+"; nodes="+Convert.ToInt32(((dynamic)curve).Nodes.Count)+".");
                 return "Создана "+StickerPrintPlateModel.Ink(kind)+" · заливка "+tint+"% · треппинг "+trapping.ToString("+0.00;-0.00;0.00",CultureInfo.CurrentCulture)+" мм";
             }
             finally
@@ -70,6 +81,7 @@ namespace VanyaTools.Native
                 }
                 if(!success && cleanup==null)doc.Dirty=dirty;
                 if(!optimized)try{app.ActiveWindow.Refresh();}catch(Exception error){Log.Error("Could not refresh the printing plate preview.",error);}
+                memory.Mark(success?"completed":"failed");
                 if(cleanup!=null)throw new InvalidOperationException("Не удалось полностью убрать временные объекты. Проверьте документ; изменения не скрыты.",cleanup);
             }
         }
