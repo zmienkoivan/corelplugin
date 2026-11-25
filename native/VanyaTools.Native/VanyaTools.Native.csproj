@@ -5,8 +5,8 @@
     <OutputType>Library</OutputType>
     <RootNamespace>VanyaTools.Native</RootNamespace>
     <AssemblyName>VanyaTools.Native</AssemblyName>
-    <Version>1.2.83</Version>
-    <InformationalVersion>1.2.83</InformationalVersion>
+    <Version>1.2.84</Version>
+    <InformationalVersion>1.2.84</InformationalVersion>
     <PlatformTarget>x64</PlatformTarget>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>

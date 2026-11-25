@@ -243,6 +243,8 @@ namespace VanyaTools.Native
                                 (message, isError) => SetStatus(message, isError)) },
                         new TabItem { Header = "ИИ промпт", Content = photoTools(SimpleAiMode.Prompt) },
                         new TabItem { Header = "ИИ стили", Content = photoTools(SimpleAiMode.AiStyles) },
+                        new TabItem { Header = "Вышивка", ToolTip = "Эскизы и мокапы машинной вышивки одним запросом 4K", Content =
+                            new EmbroideryTab(() => aiTools.GetToken(), () => AiSelectionCapture.Capture(2048, 4000000), SetStatus) },
                         new TabItem { Header = "Стили", ToolTip = "Обычные эффекты фото без интернета", Content =
                             photoTools(SimpleAiMode.LocalStyles) }
                     }

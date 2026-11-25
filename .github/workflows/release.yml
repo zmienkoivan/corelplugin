@@ -133,6 +133,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.PrintPdfTextChecks/VanyaTools.PrintPdfTextChecks.csproj --configuration Release
 
+      - name: Check embroidery sheet and request recovery
+        shell: pwsh
+        run: dotnet run --project tests/VanyaTools.EmbroideryChecks/VanyaTools.EmbroideryChecks.csproj --configuration Release
+
       - name: Check update availability probe
         shell: pwsh
         run: dotnet run --project tests/VanyaTools.UpdateAvailabilityChecks/VanyaTools.UpdateAvailabilityChecks.csproj --configuration Release
