@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Diagnostics;
 using PdfSharp.Pdf;
 using PdfSharp.Pdf.Advanced;
 using PdfSharp.Pdf.IO;
@@ -39,12 +40,19 @@ namespace VanyaTools.FilmPdf
                     throw new IOException("The output must be a new file distinct from the input.");
                 double width = Double.Parse(args[2], CultureInfo.InvariantCulture) * 72 / 25.4;
                 double height = Double.Parse(args[3], CultureInfo.InvariantCulture) * 72 / 25.4;
+                var timing = Stopwatch.StartNew();
+                // Keep the validated bytes locked against modification until
+                // the preserve copy is complete. No second graph parse is
+                // necessary for an unchanged, byte-for-byte copy.
+                using (var preserved = mode == "preserve" ? new FileStream(input, FileMode.Open, FileAccess.Read, FileShare.Read) : null)
                 using (PdfDocument document = PdfReader.Open(input, mode == "preserve" ? PdfDocumentOpenMode.Import : PdfDocumentOpenMode.Modify))
                 {
                     if (document.PageCount != 1) throw new InvalidDataException("Expected one film page.");
                     CheckSize(document.Pages[0], width, height);
                     PdfTextCurvesGuard.Check(document);
                     PdfPrintContentGuard.Check(document.Pages[0]);
+                    Console.WriteLine("Print PDF helper: phase=input validation, elapsed_ms=" + timing.ElapsedMilliseconds);
+                    timing.Restart();
                     if (mode != "preserve")
                     {
                         if (selected != null) ProfileAttachment.Apply(document, selected);
@@ -63,12 +71,18 @@ namespace VanyaTools.FilmPdf
                         ownedOutput = output;
                         if (mode == "preserve")
                         {
-                            using (var source = File.OpenRead(input)) source.CopyTo(target);
+                            preserved.CopyTo(target);
+                            if (target.Length != preserved.Length) throw new IOException("PDF copy is incomplete.");
                         }
                         else document.Save(target, false);
                     }
                 }
+                Console.WriteLine("Print PDF helper: phase=write, mode=" + mode + ", elapsed_ms=" + timing.ElapsedMilliseconds);
                 // Read back the finished graph, not the discarded ICC stream bytes.
+                // Rewritten outputs need read-back validation; preserve has
+                // already validated the exact locked bytes that were copied.
+                timing.Restart();
+                if (mode != "preserve")
                 using (PdfDocument document = PdfReader.Open(output, printJob ? PdfDocumentOpenMode.Modify : PdfDocumentOpenMode.Import))
                 {
                     if (document.PageCount != 1) throw new InvalidDataException("Film page count changed.");
@@ -82,6 +96,7 @@ namespace VanyaTools.FilmPdf
                         foreach (PdfObject item in document.Internals.GetAllObjects()) Check(item, visited);
                     }
                 }
+                Console.WriteLine("Print PDF helper: phase=output validation, elapsed_ms=" + timing.ElapsedMilliseconds);
                 completed = true;
                 return 0;
             }

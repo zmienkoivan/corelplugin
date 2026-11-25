@@ -107,7 +107,9 @@ namespace VanyaTools.Native
                 process.Start();
                 Task<string> error = process.StandardError.ReadToEndAsync(), text = process.StandardOutput.ReadToEndAsync();
                 await completed.Task;
-                string detail = await error; await text;
+                string detail = await error, phases = await text;
+                foreach (string line in phases.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                    if (line.StartsWith("Print PDF helper: ", StringComparison.Ordinal)) Log.Info(line);
                 if (process.ExitCode != 0 || !File.Exists(output))
                     throw new InvalidOperationException(process.ExitCode == 3
                         ? "PDF не отправлен: часть текста не переведена в кривые. " + detail.Trim()

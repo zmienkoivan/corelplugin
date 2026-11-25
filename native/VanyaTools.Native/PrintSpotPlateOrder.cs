@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 
 namespace VanyaTools.Native
 {
@@ -20,14 +21,17 @@ namespace VanyaTools.Native
 
         internal static int Prepare(object application, object exportPage)
         {
+            var timing=Stopwatch.StartNew();
             var plates = new List<Plate>(); var seen = new HashSet<int>();
             foreach (dynamic layer in Items((object)((dynamic)exportPage).Layers))
                 if (Convert.ToBoolean(layer.Printable) && Convert.ToBoolean(layer.Visible))
-                    foreach (object root in Items((object)layer.Shapes)) Collect(root, plates, seen, 0);
+                    foreach (object root in Items((object)layer.Shapes)) Collect(root, plates, seen, 0,false,false);
+            Log.Info("Print spot scan: objects="+seen.Count+", plates="+plates.Count+", elapsed_ms="+timing.ElapsedMilliseconds);
             if (plates.Count == 0) return 0;
 
             foreach (string ink in new[] { "WHITE", "CLEAR" })
             {
+                timing.Restart();
                 var selected = plates.Where(p => p.Ink == ink).ToArray();
                 if (selected.Length == 0) continue;
                 dynamic target = ((dynamic)exportPage).CreateLayer("Vanya · " + ink + " · печать");
@@ -53,31 +57,37 @@ namespace VanyaTools.Native
                         !Convert.ToBoolean(shape.OverprintFill))
                         throw Failure("При подготовке " + ink + " изменились геометрия, плотность или наложение");
                 }
+                Log.Info("Print spot move: ink="+ink+", plates="+selected.Length+", elapsed_ms="+timing.ElapsedMilliseconds);
             }
             Log.Info("Print spot planes prepared after artwork: WHITE=" + plates.Count(p => p.Ink == "WHITE") +
                 ", CLEAR=" + plates.Count(p => p.Ink == "CLEAR") + "; source CDR untouched.");
             return plates.Count;
         }
 
-        private static void Collect(object value, List<Plate> result, HashSet<int> seen, int depth)
+        private static void Collect(object value, List<Plate> result, HashSet<int> seen, int depth,bool clipped,bool affected)
         {
             if (depth > 128 || seen.Count >= 100000) throw Failure("Слишком сложная вложенность печатных плашек");
             if (!seen.Add(Id(value))) return;
             dynamic shape = value;
+            if(!Convert.ToBoolean(shape.Visible))return;
+            object clip=PowerClip(value);
             Plate plate = Read(value);
             if (plate != null)
             {
-                // Extracting a child could discard its group's transparency or
-                // PowerClip. Do not silently alter the effective printing mask.
-                if (depth != 0 || PowerClip(value) != null)
-                    throw Failure("Плашка " + plate.Ink + " находится внутри группы или PowerClip. Разместите её отдельным объектом на своём слое");
+                // Ordinary grouping is organizational; MoveToLayer retains the
+                // leaf's world coordinates, which are verified after the move.
+                // Clipping and inherited visual effects require a separate mask.
+                if(clipped || clip!=null)throw Failure("Плашка "+plate.Ink+" ограничена PowerClip. Сохраните маску плашки отдельной кривой перед отправкой");
+                if(affected)throw Failure("На группу плашки "+plate.Ink+" наложены прозрачность или эффекты. Подготовьте отдельную печатную плашку с учётом этих эффектов");
                 result.Add(plate);
             }
             if (Convert.ToInt32(shape.Type) == CorelConstants.CdrGroupShape)
-                foreach (object child in Items((object)shape.Shapes)) Collect(child, result, seen, depth + 1);
-            object clip = PowerClip(value);
+            {
+                bool inherited=affected || Convert.ToInt32(shape.Transparency.Type)!=0 || Convert.ToInt32(shape.Effects.Count)!=0;
+                foreach (object child in Items((object)shape.Shapes)) Collect(child, result, seen, depth + 1,clipped,inherited);
+            }
             if (clip != null)
-                foreach (object child in Items((object)((dynamic)clip).Shapes)) Collect(child, result, seen, depth + 1);
+                foreach (object child in Items((object)((dynamic)clip).Shapes)) Collect(child, result, seen, depth + 1,true,affected);
         }
 
         private static Plate Read(object value)

@@ -43,9 +43,34 @@ internal static class SpotOrderChecks
                 var page = new ExportPage(new ExportApp()); var layer = page.CreateLayer("Art"); var child = layer.Add("WHITE");
                 layer.Shapes.Remove(child); var root = layer.Add(null);
                 if (clipped) root.PowerClip = new ExportClip { Shapes = new List<ExportShape> { child } };
-                else { root.Type = 7; root.Shapes.Add(child); }
-                Reject(() => PrintSpotPlateOrder.Prepare(page.App, page), "Nested plate lost group/PowerClip context");
-                Check(page.Layers.Count == 1 && layer.Shapes.Single() == root, "Rejected nesting partially changed output");
+                else { root.Type = 7; root.Shapes.Add(child);child.Parent=root; }
+                if(clipped){Reject(() => PrintSpotPlateOrder.Prepare(page.App, page), "PowerClip context was discarded");Check(page.Layers.Count == 1 && layer.Shapes.Single() == root, "Rejected clipping partially changed output");}
+                else{Check(PrintSpotPlateOrder.Prepare(page.App,page)==1,"Ordinary grouped plate was rejected");Check(child.Parent==null && child.Layer!=layer && root.Shapes.Count==0,"Grouped plate was not extracted to its print layer");}
+            }
+            foreach (string variant in new[] { "plain", "hidden", "transparency", "effect" })
+            {
+                var page = new ExportPage(new ExportApp()); var layer = page.CreateLayer("Art");
+                var outer = layer.Add(null); outer.Type = 7;
+                var inner = layer.Add(null); inner.Type = 7; layer.Shapes.Remove(inner); outer.Shapes.Add(inner); inner.Parent = outer;
+                var white = layer.Add("WHITE", 80); var clear = layer.Add("CLEAR", 60); var art = layer.Add(null);
+                foreach (var item in new[] { white, clear, art }) { layer.Shapes.Remove(item); inner.Shapes.Add(item); item.Parent = inner; }
+                if (variant == "hidden") outer.Visible = false;
+                if (variant == "transparency") outer.Transparency.Type = 1;
+                if (variant == "effect") inner.Effects.Count = 1;
+                if (variant == "plain")
+                {
+                    Check(PrintSpotPlateOrder.Prepare(page.App, page) == 2, "Deeply grouped technical inks rejected");
+                    Check(inner.Shapes.SequenceEqual(new[] { art }) && art.Parent == inner, "Artwork grouping changed");
+                    Check(white.Fill.UniformColor.Tint == 80 && clear.Fill.UniformColor.Tint == 60 && white.OverprintFill && clear.OverprintFill, "Nested plate density or overprint changed");
+                }
+                else if (variant == "hidden") Check(PrintSpotPlateOrder.Prepare(page.App, page) == 0 && page.Layers.Count == 1, "Hidden group became printable");
+                else { Reject(() => PrintSpotPlateOrder.Prepare(page.App, page), "Inherited appearance discarded: " + variant); Check(page.Layers.Count == 1 && inner.Shapes.Count == 3, "Failed preflight partially moved nested plates"); }
+            }
+            foreach(int dpi in new[]{150,300})foreach(bool lossless in new[]{false,true})
+            {
+                var settings=PrintRasterResolution.Settings(dpi,lossless).ToDictionary(x=>x.Key,x=>x.Value);
+                Check((bool)settings["DownsampleColor"] && (bool)settings["DownsampleGray"] && (int)settings["ColorResolution"]==dpi && (int)settings["GrayResolution"]==dpi,"Selected print DPI was disabled by lossless compression");
+                Check((int)settings["BitmapCompression"]==(lossless?3:2) && (int)settings["MonoResolution"]==1200,"Compression or monochrome line-art quality changed");
             }
             foreach (string failure in new[] { "move", "geometry", "tint", "overprint", "printable" })
             {
@@ -87,7 +112,7 @@ public sealed class ExportLayer
 public sealed class ExportShape
 {
     private static int next; public int StaticID = ++next, Type = 3;
-    public ExportLayer Layer; public ExportFill Fill = new ExportFill(); public ExportOutline Outline = new ExportOutline();
+    public ExportLayer Layer;public ExportShape Parent;public bool Visible=true;public ExportTransparency Transparency=new ExportTransparency();public ExportEffects Effects=new ExportEffects(); public ExportFill Fill = new ExportFill(); public ExportOutline Outline = new ExportOutline();
     public List<ExportShape> Shapes = new List<ExportShape>(); public ExportClip PowerClip;
     public double X = 10, Y = 20, Width = 30, Height = 40;
     private bool overprint;
@@ -105,6 +130,7 @@ public sealed class ExportRange
         if (app.Failure == "move") return;
         foreach (var shape in app.ReverseEnumeration ? items.AsEnumerable().Reverse() : items)
         {
+            if(shape.Parent!=null){shape.Parent.Shapes.Remove(shape);shape.Parent=null;}
             shape.Layer.Shapes.Remove(shape); shape.Layer = target; target.Shapes.Add(shape);
             if (app.Failure == "geometry") shape.X++;
             if (app.Failure == "tint") shape.Fill.UniformColor.Tint = 1;
@@ -115,3 +141,5 @@ public sealed class ExportFill { public int Type; public ExportColor UniformColo
 public sealed class ExportColor { public bool IsSpot; public string SpotColorName; public double Tint; }
 public sealed class ExportOutline { public int Type; }
 public sealed class ExportClip { public List<ExportShape> Shapes; }
+public sealed class ExportTransparency { public int Type; }
+public sealed class ExportEffects { public int Count; }

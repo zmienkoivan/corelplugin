@@ -222,15 +222,10 @@ namespace VanyaTools.Native
         {
             // Values verified against CdrPDFVBALib in CorelDRAW 2026.
             // PDF 1.7 preserves transparency; only bitmap resolution is capped.
-            return new List<KeyValuePair<string, object>> {
+            var settings=new List<KeyValuePair<string, object>> {
                 Pair("pdfVersion", 8), // pdfVersion17
                 Pair("PublishRange", selected ? 2 : 1), // pdfSelection / pdfCurrentPage
                 Pair("UsePageBoundingBox", !selected), // selection gets its own bounds, including outside the page
-                Pair("BitmapCompression", lossless ? 3 : 2), // pdfZIP (lossless) / pdfJPEG
-                Pair("JPEGQualityFactor", 95),
-                Pair("DownsampleColor", !lossless), Pair("ColorResolution", dpi),
-                Pair("DownsampleGray", !lossless), Pair("GrayResolution", dpi),
-                Pair("DownsampleMono", !lossless), Pair("MonoResolution", 1200),
                 Pair("TextAsCurves", true), Pair("CompressText", true),
                 Pair("Encoding", 1), // pdfBinary
                 Pair("ComplexFillsAsBitmaps", false),
@@ -248,6 +243,8 @@ namespace VanyaTools.Native
                 Pair("Linearize", false), Pair("EncryptType", 0),
                 Pair("PrintPermissions", 2) // pdfPrintPermissionHighResolution
             };
+            settings.InsertRange(3,PrintRasterResolution.Settings(dpi,lossless));
+            return settings;
         }
 
         private static KeyValuePair<string, object> Pair(string name, object value) =>
